@@ -1,5 +1,8 @@
 # PR Preview Environments — Requirements & Design
 
+For local prerequisites, setup commands, and verification steps, see
+[Development setup](DEVELOPMENT_SETUP.md).
+
 ## 1. Overview
 
 A self-hosted service that automatically builds and deploys an isolated, publicly
