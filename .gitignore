@@ -1,0 +1,29 @@
+# Go build outputs and test artifacts.
+/bin/
+/tmp/
+/dist/
+*.exe
+*.exe~
+*.test
+*.out
+*.prof
+/coverage/
+/coverage.xml
+
+# templ-generated Go and development artifacts.
+*_templ.go
+*_templ.txt
+/.templ/
+
+# Local configuration and secrets; retain the documented example.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor and operating-system files.
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
