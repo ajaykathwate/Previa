@@ -1,2 +1,2 @@
-// Package auth will let repo owners sign in with GitHub and stay authenticated across dashboard requests.
+// Package auth handles GitHub sign-in, server-side sessions, and CSRF protection.
 package auth

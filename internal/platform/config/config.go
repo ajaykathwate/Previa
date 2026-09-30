@@ -15,6 +15,7 @@ import (
 // Config holds the application configuration loaded from the process environment.
 // It contains secrets and must not be logged.
 type Config struct {
+	AppBaseURL              string `envconfig:"APP_BASE_URL" default:"http://localhost:8080"`
 	HTTPAddr                string `envconfig:"HTTP_ADDR" default:"127.0.0.1:8080"`
 	DatabaseURL             string `envconfig:"DATABASE_URL" required:"true"`
 	GitHubAppID             int64  `envconfig:"GITHUB_APP_ID" required:"true"`
@@ -45,6 +46,19 @@ func Load() (Config, error) {
 var domainLabel = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
 
 func (c Config) validate() error {
+	base, err := url.Parse(c.AppBaseURL)
+	if err != nil || base == nil || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" || (base.Path != "" && base.Path != "/") || (base.Scheme != "http" && base.Scheme != "https") {
+		return errors.New("APP_BASE_URL must be an HTTP(S) origin without credentials, query, or path")
+	}
+	if base.Scheme == "http" && base.Hostname() != "localhost" && base.Hostname() != "127.0.0.1" && base.Hostname() != "::1" {
+		return errors.New("APP_BASE_URL must use HTTPS except on localhost")
+	}
+	if base.Port() != "" {
+		port, err := strconv.Atoi(base.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return errors.New("APP_BASE_URL port must be between 1 and 65535")
+		}
+	}
 	for _, field := range []struct{ name, value string }{
 		{"GITHUB_APP_PRIVATE_KEY_PATH", c.GitHubAppPrivateKeyPath},
 		{"GITHUB_WEBHOOK_SECRET", c.GitHubWebhookSecret},

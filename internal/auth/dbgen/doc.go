@@ -1,2 +1,2 @@
-// Package dbgen will contain sqlc-generated database access for auth.
+// Package dbgen contains sqlc-generated database access for auth.
 package dbgen

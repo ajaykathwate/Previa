@@ -2,8 +2,23 @@ package dashboard
 
 import "github.com/ajaykathwatee/previa/internal/platform/ui"
 
-templ page() {
+templ page(username string, loggedIn bool) {
 	@ui.Layout("Home") {
 		<h1>Hello, preview platform updated</h1>
+		if loggedIn {
+			<p>Signed in as { username }</p>
+			<a href="/protected">Protected page</a>
+			<a href="/auth/logout">Log out</a>
+		} else {
+			<a href="/auth/github/login">Login with GitHub</a>
+		}
+	}
+}
+
+templ protectedPage(username string) {
+	@ui.Layout("Protected page") {
+		<h1>Protected page</h1>
+		<p>Signed in as { username }</p>
+		<a href="/">Home</a>
 	}
 }

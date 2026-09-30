@@ -1,0 +1,23 @@
+package auth
+
+import "github.com/ajaykathwatee/previa/internal/platform/ui"
+
+templ errorPage(message string) {
+	@ui.Layout("Sign-in") {
+		<h1>Sign-in</h1>
+		<p>{ message }</p>
+		<a href="/auth/github/login">Try signing in again</a>
+		<a href="/">Back to home</a>
+	}
+}
+
+templ logoutPage(token string) {
+	@ui.Layout("Log out") {
+		<h1>Log out</h1>
+		<form method="post" action="/auth/logout">
+			<input type="hidden" name="csrf_token" value={ token }/>
+			<button type="submit">Confirm logout</button>
+		</form>
+		<a href="/">Cancel</a>
+	}
+}

@@ -1,5 +1,10 @@
 version: "2"
-# Add one entry per feature when its schema and queries are implemented.
-# Use db/migrations for schema, internal/<feature>/queries.sql for queries,
-# and internal/<feature>/dbgen for generated Go using sql_package: pgx/v5.
-sql: []
+sql:
+  - engine: postgresql
+    schema: db/migrations
+    queries: internal/auth/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: internal/auth/dbgen
+        sql_package: pgx/v5

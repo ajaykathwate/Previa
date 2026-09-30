@@ -9,6 +9,7 @@ import (
 func validEnvironment(t *testing.T) {
 	t.Helper()
 	for key, value := range map[string]string{
+		"APP_BASE_URL":                "http://localhost:8080",
 		"DATABASE_URL":                "postgres://previa:password@localhost:5432/previa?sslmode=disable",
 		"GITHUB_APP_ID":               "123456",
 		"GITHUB_APP_PRIVATE_KEY_PATH": "/path/to/app.pem",
@@ -42,6 +43,12 @@ func TestLoad(t *testing.T) {
 
 func TestLoadRejectsInvalidEnvironment(t *testing.T) {
 	for _, tt := range []struct{ key, value string }{
+		{"APP_BASE_URL", "http://example.com"},
+		{"APP_BASE_URL", "https://example.com/path"},
+		{"APP_BASE_URL", "https://user:pass@example.com"},
+		{"APP_BASE_URL", "http://localhost:0"},
+		{"APP_BASE_URL", "https://example.com?query=value"},
+		{"APP_BASE_URL", "https://example.com?"},
 		{"DATABASE_URL", "https://localhost/previa"},
 		{"DATABASE_URL", "postgres://localhost"},
 		{"DATABASE_URL", "postgres:///previa"},

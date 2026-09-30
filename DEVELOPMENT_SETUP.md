@@ -165,6 +165,9 @@ followed by `HTTP server listening`. The server checks PostgreSQL before accepti
 requests; connection failures stop startup. Set `HTTP_ADDR` to change the listen
 address (default `127.0.0.1:8080`).
 
+For GitHub OAuth App registration, callback configuration, and the full sign-in
+test flow, follow [Test GitHub sign-in locally](docs/AUTH_TESTING.md).
+
 For live reload, stop the server and run:
 
 ```sh

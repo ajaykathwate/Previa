@@ -7,13 +7,17 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/dashboard"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/web"
+	"github.com/alexedwards/scs/pgxstore"
+	"github.com/go-chi/chi/v5"
 )
 
 // RunServer loads configuration, checks the database, and serves HTTP until canceled.
@@ -28,10 +32,18 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	}
 	defer pool.Close()
 	logger.Info("database health check passed")
+	store := pgxstore.New(pool)
+	defer store.StopCleanup()
+	sessions := auth.NewSessionManager(store, strings.HasPrefix(strings.ToLower(cfg.AppBaseURL), "https://"), logger)
+	authHandler := auth.NewHandler(cfg, sessions, auth.NewRepository(pool), auth.NewGitHubOAuth(cfg), logger)
 
 	router := httpx.NewRouter(logger)
-	dashboard.Mount(router)
 	router.Handle("/static/*", web.StaticHandler())
+	router.Group(func(r chi.Router) {
+		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
+		authHandler.Mount(r)
+		dashboard.Mount(r, authHandler, auth.RequireUser)
+	})
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           router,

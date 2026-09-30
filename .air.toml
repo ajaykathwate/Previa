@@ -3,12 +3,12 @@ tmp_dir = "tmp"
 env_files = [".env"]
 
 [build]
-  cmd = "go tool -modfile=tools/go.mod templ generate && go build -o ./tmp/server ./cmd/server"
+  cmd = "make generate && go build -o ./tmp/server ./cmd/server"
   entrypoint = ["./tmp/server"]
-  include_ext = ["go", "templ", "css", "js"]
-  include_file = ["go.mod", "go.sum"]
+  include_ext = ["go", "templ", "css", "js", "sql"]
+  include_file = ["go.mod", "go.sum", "sqlc.yaml"]
   exclude_dir = ["tmp", ".git", "tools"]
-  exclude_regex = ["_templ\\.go$", "_test\\.go$"]
+  exclude_regex = ["_templ\\.go$", "_test\\.go$", "internal/auth/dbgen/.*\\.go$"]
   exclude_unchanged = true
   delay = 500
   stop_on_error = true
