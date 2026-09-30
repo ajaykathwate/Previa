@@ -13,6 +13,7 @@ import (
 type anonymousSession struct{}
 
 func (anonymousSession) Username(context.Context) (string, bool) { return "", false }
+func (anonymousSession) CSRFToken(context.Context) string        { return "" }
 
 func TestHomeUsesLayout(t *testing.T) {
 	r := chi.NewRouter()

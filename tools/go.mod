@@ -7,6 +7,7 @@ tool (
 	github.com/air-verse/air
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	github.com/pressly/goose/v3/cmd/goose
+	github.com/riverqueue/river/cmd/river
 	github.com/sqlc-dev/sqlc/cmd/sqlc
 )
 
@@ -175,6 +176,7 @@ require (
 	github.com/ldez/tagliatelle v0.8.0 // indirect
 	github.com/ldez/usetesting v0.5.0 // indirect
 	github.com/leonklingele/grouper v1.1.2 // indirect
+	github.com/lmittmann/tint v1.2.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/macabu/inamedparam v0.2.0 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
@@ -225,6 +227,13 @@ require (
 	github.com/quasilyte/stdinfo v0.0.0-20220114132959-f7386bf02567 // indirect
 	github.com/raeperd/recvcheck v0.3.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/riverqueue/river v0.47.0 // indirect
+	github.com/riverqueue/river/cmd/river v0.47.0 // indirect
+	github.com/riverqueue/river/riverdriver v0.47.0 // indirect
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.47.0 // indirect
+	github.com/riverqueue/river/riverdriver/riversqlite v0.47.0 // indirect
+	github.com/riverqueue/river/rivershared v0.47.0 // indirect
+	github.com/riverqueue/river/rivertype v0.47.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/riza-io/grpc-go v0.2.0 // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
@@ -259,6 +268,10 @@ require (
 	github.com/tdewolff/parse/v2 v2.8.12 // indirect
 	github.com/tetafro/godot v1.5.6 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
+	github.com/tidwall/gjson v1.19.0 // indirect
+	github.com/tidwall/match v1.2.0 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/timakin/bodyclose v0.0.0-20260723120731-857993a2939c // indirect
 	github.com/timonwong/loggercheck v0.12.0 // indirect
 	github.com/tomarrell/wrapcheck/v2 v2.12.0 // indirect

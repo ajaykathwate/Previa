@@ -15,6 +15,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
+	"github.com/ajaykathwatee/previa/internal/platform/queue"
 	"github.com/ajaykathwatee/previa/web"
 	"github.com/alexedwards/scs/pgxstore"
 	"github.com/go-chi/chi/v5"
@@ -36,6 +37,11 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	defer store.StopCleanup()
 	sessions := auth.NewSessionManager(store, strings.HasPrefix(strings.ToLower(cfg.AppBaseURL), "https://"), logger)
 	authHandler := auth.NewHandler(cfg, sessions, auth.NewRepository(pool), auth.NewGitHubOAuth(cfg), logger)
+	producer, err := queue.NewProducer(pool, logger)
+	if err != nil {
+		return err
+	}
+	pings := queue.NewService(pool, producer)
 
 	router := httpx.NewRouter(logger)
 	router.Handle("/static/*", web.StaticHandler())
@@ -43,6 +49,7 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
 		authHandler.Mount(r)
 		dashboard.Mount(r, authHandler, auth.RequireUser)
+		dashboard.MountPing(r, pings, auth.RequireUser, logger)
 	})
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

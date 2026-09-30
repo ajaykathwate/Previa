@@ -47,7 +47,7 @@ go mod download -modfile=tools/go.mod
 - Review `.env` and replace placeholder credentials for the integrations you use.
   `.env.example` explains each variable and its format. Keep secrets and private
   keys out of Git.
-- Tool versions (Goose, templ, sqlc, golangci-lint, and Air) are pinned in
+- Tool versions (Goose, River CLI, templ, sqlc, golangci-lint, and Air) are pinned in
   `tools/go.mod`; invoke them with `go tool -modfile=tools/go.mod <tool>`.
 
 ## 3. Start Docker and PostgreSQL
@@ -86,8 +86,8 @@ make migrate-up
 docker compose -f deploy/docker-compose.yml exec -T postgres psql -U previa -d previa -c '\dt'
 ```
 
-**Expected:** Goose applies pending migrations (or reports none pending).
-The table list shows the application tables and Goose's `goose_db_version` table.
+**Expected:** Goose and River apply pending migrations (or report none pending).
+The table list shows application tables, `goose_db_version`, and River's `river_*` tables.
 Re-running `make migrate-up` is safe; it applies only pending migrations.
 
 The migration Make targets load `.env` automatically, falling back to `.env.example`
@@ -100,6 +100,7 @@ set -a
 . ./.env
 set +a
 GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" go tool -modfile=tools/go.mod goose -env=none -dir db/migrations up
+go tool -modfile=tools/go.mod river migrate-up --line main --database-url "$DATABASE_URL"
 ```
 
 Use that same environment prefix with `status` in place of `up` to inspect applied
@@ -146,7 +147,7 @@ Manual equivalents of the main Make targets:
 | `make lint` | Generate templates, then `go vet ./...` and `go tool -modfile=tools/go.mod golangci-lint run` |
 | `make generate` | `go tool -modfile=tools/go.mod templ generate`; sqlc generation is conditional as described above |
 | `make run-server` | Generate templates, then `go run ./cmd/server` |
-| `make run-worker` | `go run ./cmd/worker` |
+| `make run-worker` | Generate templates, then `go run ./cmd/worker` |
 | `make dev` | `go tool -modfile=tools/go.mod air -c .air.toml` |
 
 ## 6. Run the application
@@ -168,6 +169,20 @@ address (default `127.0.0.1:8080`).
 For GitHub OAuth App registration, callback configuration, and the full sign-in
 test flow, follow [Test GitHub sign-in locally](docs/AUTH_TESTING.md).
 
+Start the worker in a second terminal:
+
+```sh
+set -a
+. ./.env
+set +a
+make run-worker
+```
+
+**Expected:** `database health check passed`, then `River worker started`.
+The server inserts jobs; the separate worker processes them. Keep both running
+against the same database. `MAX_CONCURRENT_BUILDS` sets concurrency per worker
+process. Stop the worker with `Ctrl+C`; it drains active work before exiting.
+
 For live reload, stop the server and run:
 
 ```sh
@@ -179,6 +194,7 @@ rebuilds, and restarts the server on changes. Polling supports WSL-mounted direc
 Generated template files are excluded from watching to prevent rebuild loops.
 Refresh the browser after a rebuild to see the change. Check the terminal for startup
 or compilation errors. Use `Ctrl+C` to stop the process.
+Air reloads the server; restart the worker separately after changes to worker code.
 
 ## 7. Daily workflow and shutdown
 
@@ -194,7 +210,8 @@ or compilation errors. Use `Ctrl+C` to stop the process.
 
   This removes the container and retains its data volume. Avoid `down -v` unless
   you intend to delete the local database. `make migrate-down` rolls back the most
-  recent migration; the initial migration's rollback drops the application tables.
+  recent application migration; the initial migration's rollback drops application
+  tables. It does not roll back River's independently managed schema.
 
 ## Troubleshooting
 

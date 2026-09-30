@@ -28,6 +28,9 @@ func (h *Handler) Username(ctx context.Context) (string, bool) {
 	return u.Username, ok
 }
 
+// CSRFToken exposes the token through dashboard's consumer-defined interface.
+func (h *Handler) CSRFToken(ctx context.Context) string { return CSRFToken(ctx) }
+
 // CSRFToken returns the session-bound token for forms and HTMX request headers.
 func CSRFToken(ctx context.Context) string {
 	token, _ := ctx.Value(csrfKey).(string)

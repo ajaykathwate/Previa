@@ -2,13 +2,19 @@ package dashboard
 
 import "github.com/ajaykathwatee/previa/internal/platform/ui"
 
-templ page(username string, loggedIn bool) {
+templ page(username string, loggedIn bool, csrfToken string) {
 	@ui.Layout("Home") {
 		<h1>Hello, preview platform updated</h1>
 		if loggedIn {
 			<p>Signed in as { username }</p>
 			<a href="/protected">Protected page</a>
 			<a href="/auth/logout">Log out</a>
+			<form method="post" action="/queue/ping">
+				<input type="hidden" name="csrf_token" value={ csrfToken }/>
+				<label for="pr-key">Ping PR key</label>
+				<input id="pr-key" name="pr_key" value="demo:pr:1" required maxlength="128"/>
+				<button type="submit">Enqueue ping</button>
+			</form>
 		} else {
 			<a href="/auth/github/login">Login with GitHub</a>
 		}

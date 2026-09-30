@@ -2,7 +2,7 @@ GO ?= go
 TOOLS = $(GO) tool -modfile=tools/go.mod
 ENV_FILE ?= .env
 
-.PHONY: generate build test lint run-server run-worker dev migrate-up migrate-down
+.PHONY: generate build test lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 generate:
 	$(TOOLS) templ generate
@@ -28,7 +28,7 @@ run-server: generate
 dev:
 	$(TOOLS) air -c .air.toml
 
-run-worker:
+run-worker: generate
 	$(GO) run ./cmd/worker
 
 # DATABASE_URL from the environment takes precedence over the local env file.
@@ -43,3 +43,15 @@ migrate-up migrate-down:
 	fi; \
 	: "$${DATABASE_URL:?DATABASE_URL must be set}"; \
 	GOOSE_DRIVER=postgres GOOSE_DBSTRING="$$DATABASE_URL" $(TOOLS) goose -env=none -dir db/migrations $(patsubst migrate-%,%,$@)
+	@if [ '$@' = migrate-up ]; then $(MAKE) river-migrate-up; fi
+
+# River owns its schema and migration history, independently of Goose.
+river-migrate-up river-status:
+	@set -eu; \
+	if [ -z "$${DATABASE_URL:-}" ]; then \
+		if [ -f "$(ENV_FILE)" ]; then . "./$(ENV_FILE)"; \
+		elif [ "$(ENV_FILE)" = '.env' ]; then . ./.env.example; \
+		else echo 'Environment file not found' >&2; exit 1; fi; \
+	fi; \
+	: "$${DATABASE_URL:?DATABASE_URL must be set}"; \
+	$(TOOLS) river $(if $(filter river-status,$@),migrate-list,migrate-up) --line main --database-url "$$DATABASE_URL"
