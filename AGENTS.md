@@ -42,3 +42,14 @@ unbuilt feature, stub it behind a minimal interface rather than building it.
   silently skipping.
 - Summarize what you created/changed and why, and flag any deviation
   you made from README.md/DESIGN.md and why.
+
+## Session continuity
+- At the start of a session, read `HANDOFF.md` and check `git status`.
+- Use the handoff to locate relevant files. Read only the code and the
+  README.md/DESIGN.md sections needed for the requested task.
+- Verify handoff details against the current files before acting; code and
+  the project source-of-truth documents take precedence.
+- Before ending a task, update `HANDOFF.md` when project state, decisions,
+  verification results, or next steps have changed.
+- Keep `HANDOFF.md` under 100 lines. Replace stale details rather than
+  appending a conversation log. Never put credentials or secrets in it.
