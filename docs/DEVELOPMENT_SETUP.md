@@ -48,7 +48,8 @@ go mod download -modfile=tools/go.mod
   `.env.example` groups shared, server-only, and worker-only settings. The server
   needs `DATABASE_URL`, OAuth client ID/secret, and `SESSION_SECRET` (at least 32
   characters); HTTP address/origin have local defaults. The worker needs only
-  `DATABASE_URL` and positive `MAX_CONCURRENT_BUILDS`. Keep secrets out of Git.
+  `DATABASE_URL` and positive `MAX_CONCURRENT_BUILDS`; optional `BUILD_TIMEOUT`
+  defaults to `12m`. Keep secrets out of Git.
 - Tool versions (Goose, templ, sqlc, golangci-lint, and Air) are pinned in
   `tools/go.mod`; invoke them with `go tool -modfile=tools/go.mod <tool>`.
 
@@ -171,7 +172,7 @@ requests; connection failures stop startup. Set `HTTP_ADDR` to change the listen
 address (default `127.0.0.1:8080`).
 
 For GitHub OAuth App registration, callback configuration, and the full sign-in
-test flow, follow [Test GitHub sign-in locally](docs/AUTH_TESTING.md).
+test flow, follow [Test GitHub sign-in locally](AUTH_TESTING.md).
 
 Start the worker in a second terminal:
 

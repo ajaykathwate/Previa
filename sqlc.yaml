@@ -8,3 +8,19 @@ sql:
         package: dbgen
         out: internal/auth/dbgen
         sql_package: pgx/v5
+  - engine: postgresql
+    schema: db/migrations
+    queries: internal/webhooks/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: internal/webhooks/dbgen
+        sql_package: pgx/v5
+  - engine: postgresql
+    schema: db/migrations
+    queries: internal/environments/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: internal/environments/dbgen
+        sql_package: pgx/v5

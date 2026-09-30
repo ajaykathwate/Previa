@@ -3,7 +3,6 @@ package queue
 import (
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/jackc/pgx/v5"
@@ -38,9 +37,11 @@ func workerConfig(cfg config.WorkerConfig, logger *slog.Logger, workers *river.W
 		Queues: map[string]river.QueueConfig{
 			PingQueue: {MaxWorkers: cfg.MaxConcurrentBuilds},
 		},
-		Workers:              workers,
-		JobTimeout:           10 * time.Second,
-		RescueStuckJobsAfter: time.Minute,
+		Workers: workers,
+		// The scan floor is not a blanket rescue deadline: River also consults
+		// each registered worker's Timeout before rescuing that job kind.
+		JobTimeout:           PingTimeout,
+		RescueStuckJobsAfter: RescueScanFloor,
 		MaxAttempts:          5,
 	}
 }

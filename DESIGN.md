@@ -391,6 +391,12 @@ High. Concurrency and zero-gap swapping.
 - **Latest wins:** intermediate commits may never deploy; only the newest matters.
 - **Orphan protection:** any container labeled for this PR but not referenced by the current record is removed by the reconciler.
 
+Implementation status and the proposed durable publication boundary are kept
+separate: see [the current generation-ordering implementation](docs/GENERATION_ORDERING.md)
+and [the durable publication design](docs/DESIGN_DURABLE_PUBLICATION.md). The target
+design moves external routing/reporting calls out of the transaction while retaining
+generation fencing and recovery across crashes.
+
 ---
 
 ## 14. Teardown on PR close

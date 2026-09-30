@@ -1,2 +1,3 @@
-// Package environments will manage preview builds, updates at a stable URL, and teardown when pull requests close.
+// Package environments provides generation-fenced job orchestration and resource
+// cleanup behind runtime and publication interfaces.
 package environments

@@ -12,7 +12,9 @@ instructions, see [DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md).
 - GitHub OAuth login, persisted users, server-side sessions, login rotation,
   protected routes, CSRF protection, and logout.
 - River v0.47.0 producer in the server and a separate worker process. The only
-  executable job kind is `ping`; no build, deployment, or teardown jobs are added.
+  configured production job kind is `ping`. Generation-fenced build/teardown workers
+  are implemented behind runtime/publication interfaces and exercised in DB tests;
+  actual Docker, routing, GitHub, and webhook HTTP adapters remain unbuilt.
 - Authenticated, CSRF-protected `POST /queue/ping`, exposed through the home page's
   ping form. It returns HTTP 202 with `job_id` and `duplicate`.
 
@@ -21,8 +23,9 @@ instructions, see [DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md).
 Copy `.env.example` once if `.env` does not exist. Never commit `.env` or private keys.
 Each process loads only its own settings: `SharedConfig` supplies `DATABASE_URL`,
 `ServerConfig` adds HTTP/OAuth/session settings, and `WorkerConfig` adds queue
-concurrency. River uses the same database connection. The worker needs no OAuth
-variables. Real OAuth credentials are required for browser sign-in.
+concurrency and an optional build timeout. River uses the same database connection.
+The worker needs no OAuth variables. Real OAuth credentials are required for browser
+sign-in.
 
 | Variable | Local value / source | Why it exists and when it is used |
 | --- | --- | --- |
@@ -32,7 +35,8 @@ variables. Real OAuth credentials are required for browser sign-in.
 | `GITHUB_OAUTH_CLIENT_ID` | Your GitHub **OAuth App** Client ID | Server starts the sign-in flow. Obtain it using the steps below. |
 | `GITHUB_OAUTH_CLIENT_SECRET` | Your OAuth App client secret | Server exchanges the authorization code; never expose it in browser code. |
 | `SESSION_SECRET` | Generate with `openssl rand -hex 32` | Signs OAuth state; must be at least 32 characters. SCS stores opaque session tokens in PostgreSQL. |
-| `MAX_CONCURRENT_BUILDS` | `2` (positive integer) | Currently sets the `ping` queue's maximum concurrent jobs **per worker process**; will also configure the build queue when implemented. |
+| `MAX_CONCURRENT_BUILDS` | `2` (positive integer) | Sets the queue worker concurrency limit per worker process. |
+| `BUILD_TIMEOUT` | `12m` by default; optionally set e.g. `15m` | Worker-only build execution budget; positive duration up to 24h, with 1m additional completion/cleanup grace. |
 
 Commands above print newly generated secrets: copy them into `.env`, not into Git.
 Keep `.env` as shell assignments; quote values containing shell special characters.
@@ -56,7 +60,7 @@ GitHub App, webhook, preview domain, encryption, TTL, and DNS settings listed in
 README Section 4.8 will be added to the relevant process when their features are
 implemented. They are absent from the config structs and `.env.example`; existing
 values in a local `.env` are ignored. HTTP/OAuth/session settings are server-only;
-`MAX_CONCURRENT_BUILDS` is worker-only; `DATABASE_URL` is shared.
+`MAX_CONCURRENT_BUILDS` and `BUILD_TIMEOUT` are worker-only; `DATABASE_URL` is shared.
 
 ## Processes and their purpose
 
@@ -129,7 +133,7 @@ Air reloads the server only. Restart `make run-worker` manually after worker cha
    `attempt=1`, and a non-null `finalized_at`. An HTTP 202 alone proves insertion,
    not execution. Use `Ctrl+C` to stop server/worker when finished.
 
-### See queued jobs without a dashboard
+### Inspect queued jobs in PostgreSQL
 
 Open an interactive SQL console:
 
@@ -151,7 +155,7 @@ SELECT queue, state, count(*) FROM river_job GROUP BY queue, state ORDER BY queu
 - Enter `\watch 2` after a query to refresh every two seconds; `Ctrl+C` stops watching.
 - Inspect failures: `SELECT id, state, errors FROM river_job WHERE cardinality(errors) > 0;`
 - Exit with `\q`. A PostgreSQL GUI connected using `DATABASE_URL` can inspect the
-  same tables. River UI, the Sidekiq-style option, is discussed for approval below.
+  same tables. For the River job-management UI, see the local-only instructions below.
 - Typical states: `available` waits for a worker, `running` executes, `completed`
   succeeded, `retryable` awaits another attempt, `discarded` exhausted attempts,
   and `cancelled` was permanently cancelled.
@@ -168,15 +172,20 @@ SELECT queue, state, count(*) FROM river_job GROUP BY queue, state ORDER BY queu
 
 The shared uniqueness policy selects only the `pr_key` argument, excludes kind and
 queue, and covers `available`, `pending`, `running`, `retryable`, and `scheduled`.
-Future PR job kinds must use the same JSON field/tag and policy to participate.
+Build/teardown use that policy and capture PR generation in job arguments. An
+active job hands off to the latest requested generation atomically on completion.
 Insertion uses River `InsertTx`; uncommitted jobs are invisible to workers and
-rollback removes them. Future environment-state updates must share that same
-transaction with their job insertion. This phase has no environment transition.
+rollback removes them. Generation recording, guarded environment results, cleanup,
+and per-kind timeouts are explained in [GENERATION_ORDERING.md](docs/GENERATION_ORDERING.md).
 Retries use River's default backoff, with five attempts for ping; invalid ping
 arguments cancel permanently. Ping is idempotent. Future jobs must also tolerate
 re-execution because workers provide at-least-once processing.
 
 ## Verification performed
+
+- Goose migration 3 adds PR/result generations and deployed SHA. Ordering tests
+  use real PostgreSQL/River and simulated runtime/publication adapters; see the
+  generation document for scope and test coverage.
 
 - Live server → separate worker → PostgreSQL: job **10** was accepted over HTTP,
   processed, and recorded as `completed`, attempt **1**, with a finalization time.
@@ -197,23 +206,6 @@ re-execution because workers provide at-least-once processing.
   idempotence tests also pass; temporary test schemas are removed.
 - Server and worker were stopped after verification; PostgreSQL was left running.
 
-## Proposals requiring approval — not implemented
-
-1. **Add River UI for job inspection.** River provides a self-hosted job dashboard:
-   [official River UI documentation](https://riverqueue.com/docs/river-ui).
-   Proposed local setup: pin a release, run it as a separate process/container on
-   `127.0.0.1:8081`, and connect it to the same database. A container must use the
-   Compose database hostname `postgres`, not host `localhost`. Review authentication
-   and who may retry/cancel jobs before exposing it outside localhost.
-2. **Define deployment-wide concurrency before adding worker replicas.** The present
-   cap is per queue per process. If later infrastructure needs one global build cap,
-   agree on coordination or River's global concurrency offering before scaling.
-3. **Before real environment jobs, define duplicate-event handling and per-kind
-   timeouts.** Cross-kind uniqueness prevents simultaneous jobs for a PR, but does
-   not itself preserve a newer SHA or guarantee a teardown follows a running build.
-   That behavior belongs with environment state/reconciliation. The ten-second ping
-   timeout and one-minute rescue threshold must also be revisited for long builds.
-
 River owns its schema using its pinned migrations, following the
 [official migration workflow](https://riverqueue.com/docs/migrations). No conflicting
-architecture or additional production job kinds were introduced.
+architecture was introduced; external build/teardown adapters remain unregistered.

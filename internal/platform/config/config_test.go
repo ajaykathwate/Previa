@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validEnvironment(t *testing.T) {
@@ -16,6 +17,7 @@ func validEnvironment(t *testing.T) {
 		"GITHUB_OAUTH_CLIENT_SECRET": "client-secret",
 		"SESSION_SECRET":             strings.Repeat("s", 32),
 		"MAX_CONCURRENT_BUILDS":      "2",
+		"BUILD_TIMEOUT":              "12m",
 	} {
 		t.Setenv(key, value)
 	}
@@ -33,7 +35,7 @@ func unsetEnvironment(t *testing.T, keys ...string) {
 
 func TestLoadServer(t *testing.T) {
 	validEnvironment(t)
-	unsetEnvironment(t, "MAX_CONCURRENT_BUILDS", "APP_BASE_URL", "HTTP_ADDR")
+	unsetEnvironment(t, "MAX_CONCURRENT_BUILDS", "BUILD_TIMEOUT", "APP_BASE_URL", "HTTP_ADDR")
 	cfg, err := LoadServer()
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +45,7 @@ func TestLoadServer(t *testing.T) {
 	}
 	// The server must also ignore invalid settings owned by the worker.
 	t.Setenv("MAX_CONCURRENT_BUILDS", "not-a-number")
+	t.Setenv("BUILD_TIMEOUT", "invalid")
 	if _, err := LoadServer(); err != nil {
 		t.Fatal(err)
 	}
@@ -52,11 +55,12 @@ func TestLoadWorkerWithoutServerOrFutureSettings(t *testing.T) {
 	validEnvironment(t)
 	unrelated := []string{"APP_BASE_URL", "HTTP_ADDR", "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "SESSION_SECRET", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH", "GITHUB_WEBHOOK_SECRET", "PREVIEW_BASE_DOMAIN", "SECRETS_ENCRYPTION_KEY", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN"}
 	unsetEnvironment(t, unrelated...)
+	unsetEnvironment(t, "BUILD_TIMEOUT")
 	cfg, err := LoadWorker()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DatabaseURL != os.Getenv("DATABASE_URL") || cfg.MaxConcurrentBuilds != 2 {
+	if cfg.DatabaseURL != os.Getenv("DATABASE_URL") || cfg.MaxConcurrentBuilds != 2 || cfg.BuildTimeout != 12*time.Minute {
 		t.Fatal("worker configuration not loaded")
 	}
 	for _, key := range unrelated {
@@ -116,6 +120,10 @@ func TestLoadWorkerRejectsInvalidEnvironment(t *testing.T) {
 		{"MAX_CONCURRENT_BUILDS", "0"},
 		{"MAX_CONCURRENT_BUILDS", "-1"},
 		{"MAX_CONCURRENT_BUILDS", "1.5"},
+		{"BUILD_TIMEOUT", "0s"},
+		{"BUILD_TIMEOUT", "-1m"},
+		{"BUILD_TIMEOUT", "25h"},
+		{"BUILD_TIMEOUT", "invalid"},
 	} {
 		t.Run(tt.key+"/"+tt.value, func(t *testing.T) {
 			validEnvironment(t)
@@ -177,5 +185,14 @@ func TestLoadDoesNotExposeDatabaseCredentials(t *testing.T) {
 	}
 	if shared != (SharedConfig{}) {
 		t.Fatal("failed shared load returned partial configuration")
+	}
+}
+
+func TestCustomBuildTimeout(t *testing.T) {
+	validEnvironment(t)
+	t.Setenv("BUILD_TIMEOUT", "15m")
+	cfg, err := LoadWorker()
+	if err != nil || cfg.BuildTimeout != 15*time.Minute {
+		t.Fatalf("custom build timeout not loaded: %v", err)
 	}
 }

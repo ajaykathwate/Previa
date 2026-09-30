@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"regexp"
+	"time"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -51,6 +52,8 @@ type PingWorker struct {
 	river.WorkerDefaults[PingArgs]
 	Logger *slog.Logger
 }
+
+func (w *PingWorker) Timeout(*river.Job[PingArgs]) time.Duration { return PingTimeout }
 
 func (w *PingWorker) Work(ctx context.Context, job *river.Job[PingArgs]) error {
 	if err := ValidatePRKey(job.Args.PRKey); err != nil {

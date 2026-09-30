@@ -1,7 +1,10 @@
 # PR Preview Environments — Requirements & Design
 
 For local prerequisites, setup commands, and verification steps, see
-[Development setup](DEVELOPMENT_SETUP.md).
+[Development setup](docs/DEVELOPMENT_SETUP.md). The implemented generation fence
+and proposed durable publication architecture are documented in
+[the current ordering guide](docs/GENERATION_ORDERING.md) and
+[the publication design](docs/DESIGN_DURABLE_PUBLICATION.md).
 
 ## 1. Overview
 

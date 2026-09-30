@@ -25,15 +25,17 @@ type EnvSecret struct {
 }
 
 type Environment struct {
-	ID            int64
-	PullRequestID int64
-	ContainerID   pgtype.Text
-	ImageTag      pgtype.Text
-	Subdomain     string
-	Status        string
-	CreatedAt     pgtype.Timestamptz
-	LastActiveAt  pgtype.Timestamptz
-	ExpiresAt     pgtype.Timestamptz
+	ID                int64
+	PullRequestID     int64
+	ContainerID       pgtype.Text
+	ImageTag          pgtype.Text
+	Subdomain         string
+	Status            string
+	CreatedAt         pgtype.Timestamptz
+	LastActiveAt      pgtype.Timestamptz
+	ExpiresAt         pgtype.Timestamptz
+	AppliedGeneration int64
+	HeadSha           pgtype.Text
 }
 
 type Installation struct {
@@ -51,6 +53,7 @@ type PullRequest struct {
 	State           string
 	GithubCommentID pgtype.Int8
 	CreatedAt       pgtype.Timestamptz
+	Generation      int64
 }
 
 type Repo struct {

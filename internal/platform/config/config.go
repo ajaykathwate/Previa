@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kelseyhightower/envconfig"
 )
@@ -29,7 +30,8 @@ type ServerConfig struct {
 // WorkerConfig contains only settings used to execute queued jobs.
 type WorkerConfig struct {
 	SharedConfig
-	MaxConcurrentBuilds int `envconfig:"MAX_CONCURRENT_BUILDS" required:"true"`
+	MaxConcurrentBuilds int           `envconfig:"MAX_CONCURRENT_BUILDS" required:"true"`
+	BuildTimeout        time.Duration `envconfig:"BUILD_TIMEOUT" default:"12m"`
 }
 
 // LoadShared reads database/queue connection settings, including for migrations.
@@ -67,6 +69,9 @@ func LoadWorker() (WorkerConfig, error) {
 	}
 	if cfg.MaxConcurrentBuilds <= 0 {
 		return WorkerConfig{}, errors.New("MAX_CONCURRENT_BUILDS must be positive")
+	}
+	if cfg.BuildTimeout <= 0 || cfg.BuildTimeout > 24*time.Hour {
+		return WorkerConfig{}, errors.New("BUILD_TIMEOUT must be greater than zero and at most 24h")
 	}
 	return cfg, nil
 }

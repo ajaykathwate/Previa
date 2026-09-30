@@ -4,95 +4,84 @@ Last updated: 2026-09-30
 
 ## Start here
 
-- `README.md` — requirements and technology choices.
-- `DESIGN.md` — implementation design; Section 20 describes package layout.
-- `DEVELOPMENT_SETUP.md` — local prerequisites, PostgreSQL, migrations, and Go commands.
-- `TEMP.md` — configuration sources, processes, queue checks, and approval proposals.
-- `Makefile`, `.env.example`, `deploy/docker-compose.yml` — actual local commands,
-  configuration keys, and PostgreSQL service definition.
+- `README.md` and `DESIGN.md` are source of truth; read only task-relevant sections.
+- Check `git status` before acting; verify this handoff against current code.
+- `docs/DEVELOPMENT_SETUP.md`, `.env.example`, `Makefile`, and `deploy/docker-compose.yml`
+  describe setup. `TEMP.md` explains process/configuration and records verification.
+- `docs/GENERATION_ORDERING.md` explains the generation SQL, job handoff, cleanup,
+  timeout/rescue policy, tests, and boundaries requiring future adapters.
+- `docs/DESIGN_DURABLE_PUBLICATION.md` is the target outbox/publication architecture;
+  `GENERATION_ORDERING.md` remains the record of the current implementation.
+- Feature packages stay flat; shared infrastructure is under `internal/platform`.
+  Do not build later-phase features without a task asking for them.
 
-Read only the sections relevant to the current task. Check `git status` first;
-this handoff is a navigation aid, not a substitute for checking the working tree.
+## Run and verify
 
-## Repository conventions
+- Go/toolchain dependencies are pinned. `make generate`, `make build`, `make test`,
+  and `make lint` wrap generation/build/tests/vet/golangci-lint.
+- PostgreSQL 17 runs through Compose. `make migrate-up` applies Goose then River.
+  Current application schema: Goose 3; River 007 (River v0.47.0).
+- River migrations use `cmd/river-migrate` / `internal/app/river_migrate.go` and
+  DATABASE_URL from environment; Goose uses GOOSE_DBSTRING. No credential flags.
+- Set TEST_DATABASE_URL for DB tests. New ordering tests create/drop isolated schemas.
+- Export `.env`, then run `make run-server` and `make run-worker` separately.
+  `make dev` runs Air for server reload only; generated dbgen/templ output is excluded.
+- Config: SharedConfig has DATABASE_URL (also River's connection); ServerConfig adds
+  HTTP/OAuth/session settings; WorkerConfig adds MAX_CONCURRENT_BUILDS and optional
+  BUILD_TIMEOUT (default 12m). Unbuilt integrations have no config fields.
+- `docs/UNDERSTAND_CODEBASE.md` is the current codebase map;
+  `docs/DEVELOPMENT_SETUP.md` is the local setup guide. `README.md` links the setup guide.
 
-- Go project; package by feature, shared infrastructure under
-  `internal/platform/` (see `DESIGN.md` Section 20).
-- Go tool dependencies are pinned in `tools/go.mod`; Make targets wrap common
-  build, test, lint, generate, run, and migration commands.
-- Keep secrets in ignored `.env` or external key files; never commit them.
+## Completed foundation and authentication
 
-## Current development setup
+- Thin cmd entrypoints; app constructs dependencies and handles graceful shutdown.
+  Server and worker DB pools are health-checked on startup.
+- chi request IDs/logging/recovery; templ shell; embedded local HTMX 2.0.11 assets.
+- GitHub OAuth, users keyed by GitHub ID, signed state, login rotation, SCS pgxstore,
+  RequireUser, session CSRF, logout. Session lifetime 24h, idle timeout 30m.
+- OAuth callback: http://localhost:8080/auth/github/callback. Configure server-only
+  OAuth ID/secret and SESSION_SECRET. Browser checks: `docs/AUTH_TESTING.md`.
+- `/protected` requires login; home shows login/username/logout and a ping form.
+  POST /queue/ping requires login+CSRF; returns job_id/duplicate. Ping round-trip tested.
+- Default production server/worker still expose/process only ping. Webhook HTTP,
+  Docker runtime, Traefik, GitHub publication, provisioning, and reconciliation
+  remain unimplemented. New ordering code uses small interfaces for these dependencies.
 
-- PostgreSQL 17 is provided by `deploy/docker-compose.yml`; the default local
-  connection is in `.env.example`.
-- Run `make migrate-up` for Goose application migrations then River's own migrations.
-- Run `make build`, `make test`, and `make lint` for standard Go checks.
-- Set `TEST_DATABASE_URL` to the local database URL to run database integration
-  tests rather than having them skip.
+## Generation ordering core (DESIGN Sections 7 and 13)
 
-## Session notes
+- `0003_pr_generation.sql`: PR generation BIGINT, environment applied_generation,
+  and deployed head_sha. Existing PRs start at zero; first recorded event becomes 1.
+- `webhooks.Service.ProcessPR` accepts validated opened/synchronize/closed events.
+  Its sqlc UPSERT increments generation exactly once per committed invocation and
+  enqueues via River InsertTx in the same transaction. No HTTP/signature handler added.
+- `environments/jobs.go`: immutable generation/SHA/state args for build/teardown,
+  separate queues, same PR-only uniqueness. New desired state lives on the PR row
+  while an older job is active. Finish locks PR, completes old job, and inserts the
+  latest successor atomically; terminal worker errors use the same handoff.
+- `environments/queries.sql` ApplyResult uses MATERIALIZED CTE SELECT ... WHERE
+  generation=expected FOR UPDATE on the PR, then UPDATE environments ... RETURNING.
+  A stale result performs no environment write. The PR lock stays held through
+  the publication callback, preventing a newer event between guard and registration.
+- `service.go` guards success/failure, skips stale queued builds, logs supersession,
+  and preserves the old preview on current rebuild failure. `cleanup.go` explicitly
+  removes obsolete containers then owned images, preserving referenced/newer resources.
+  Runtime resource discovery/removal and Publisher operations are interfaces; real
+  adapters must be idempotent, cancellation-aware, labeled, and compensate failures.
+- `worker.go` registers build/teardown workers when real adapters exist. Build budget
+  comes from BUILD_TIMEOUT + 1m completion grace; teardown 2m + 1m; ping 5s.
+  River rescue scan floor is 30s; River also honors each registered worker's Timeout.
+  All maintenance-capable workers must register the same kinds/timeouts.
+- DB transactions do not make external effects atomic. Crash reconciliation,
+  including exhausted crash-recovery jobs, still belongs to the future adapters/
+  Section 15. See generation documentation for exact integration requirements.
 
-- Completed GitHub OAuth login and sessions after Phase 3, following DESIGN.md
-  Sections 2 and 3. No repo installation or actual dashboard data is built.
-- Completed Phase 4 continuation: River queue/worker foundation per Section 7.
-  Only `ping` is implemented; no build/deploy/teardown jobs or environment behavior.
-- River runtime/pgx driver are pinned to v0.47.0; the unused CLI tool was removed.
-  `cmd/river-migrate` delegates to `internal/app/river_migrate.go`, using River
-  migration APIs and DATABASE_URL from the environment. Make targets use this
-  adapter; Goose keeps GOOSE_DBSTRING. No connection URL is passed in arguments.
-  Local River schema is version 007; Goose remains version 2.
-- `internal/platform/queue` constructs insert-only server and executing worker
-  clients, owns PingArgs/PingWorker, and enqueues through a pgx transaction.
-  `ActivePRUniqueOpts` uses tagged JSON `pr_key`, excludes kind/queue, and covers
-  available/pending/running/retryable/scheduled. Future PR jobs must share this policy.
-- `internal/app/worker.go` loads config, health-checks DB, starts River, and drains
-  on signals; `cmd/worker/main.go` stays thin. Run `make run-worker` alongside server.
-  The isolated ping queue cap is MAX_CONCURRENT_BUILDS per worker process; run one
-  worker locally. Ping timeout 10s, rescue threshold 1m, max attempts 5/default backoff.
-- Home has an authenticated ping form. `POST /queue/ping` uses RequireUser and
-  session CSRF, validates the synthetic PR key, returns 202 with job_id/duplicate.
-  See `internal/dashboard/ping_handler.go` and auth/queue integration tests.
-- `internal/app/server.go` loads config, opens the DB pool (startup ping), mounts
-  routes, and runs the HTTP server with graceful shutdown. `cmd/server/main.go`
-  owns signals and logging; construction stays in app.
-- `internal/platform/httpx` builds chi with request IDs, slog logging, and panic
-  recovery. Middleware tests verify recovered status and shared request IDs.
-- `internal/platform/ui/layout.templ` is the HTML shell. The placeholder dashboard
-  shows a login link or the current GitHub username and logout link.
-- `web/assets.go` embeds `web/static`; HTMX 2.0.11 is served locally at
-  `/static/htmx.min.js` with upstream license and checksum recorded alongside it.
-- Config now has SharedConfig (DATABASE_URL for state and queue), ServerConfig
-  (HTTP address/origin, OAuth ID/secret, session secret), and WorkerConfig (queue
-  concurrency). LoadServer/LoadWorker read only their process settings. Unbuilt
-  integrations have no fields; .env.example groups variables by process.
-  Export `.env` before run targets; HTTP_ADDR defaults to `127.0.0.1:8080`.
-- `internal/auth` owns OAuth handlers, profile fetch, user repository, signed state,
-  SCS sessions, RequireUser, session-bound CSRF, routes, and error/logout templates.
-- `APP_BASE_URL` defaults to `http://localhost:8080`; the exact OAuth App callback
-  is `http://localhost:8080/auth/github/callback`. Configure the OAuth ID/secret and
-  a random SESSION_SECRET in `.env`; no GitHub App installation is needed for login.
-- `0002_auth.sql` adds avatars and the SCS sessions schema/index. Run
-  `make migrate-up`. sqlc generates user upsert/lookup and session inspection;
-  SCS pgxstore owns session CRUD, hashes stored tokens, and cleans expired rows.
-- Session lifetime is 24h with a 30m idle timeout. Cookies are HttpOnly/Lax and
-  Secure for HTTPS (HTTP permitted only locally). Login rotates tokens; logout
-  uses GET confirmation then CSRF-protected POST `/auth/logout` and deletes sessions.
-- `/protected` demonstrates RequireUser; callback returns home; OAuth tokens discarded.
-- `make dev` runs Air with `.env`; generation includes templ and sqlc. It watches
-  Go/templ/CSS/JS/SQL and excludes generated output to avoid reload loops.
-- `docs/AUTH_TESTING.md` covers setup, manual browser login, error cases, tests,
-  and a checklist for all eight Section 2 steps.
-- Build, all-package PostgreSQL tests, vet, and lint pass. Config tests check
-  process isolation, absent/invalid unrelated settings, required values, and errors.
-  New migration tests apply all seven River migrations in an isolated test schema,
-  verify status/idempotence, and remove the schema afterward.
-- Live worker verification used ONLY DATABASE_URL and MAX_CONCURRENT_BUILDS in
-  its environment: DB health check and startup passed; graceful shutdown passed.
-- Live migration verification: make migrate-up succeeded; 39 ps auxww snapshots
-  observed both actual Goose and River adapter binaries without the DB URL/password
-  in arguments. river-status reports 007 applied. No runtime processes left running
-  by this check; PostgreSQL remains up. TEMP.md records remaining approval proposals.
-- Prior live queue round-trip: server → separate worker → job 10 completed on
-  attempt 1. Queue/auth tests retain transaction, uniqueness, concurrency, login,
-  and CSRF coverage. Real GitHub consent still requires the user's app/browser.
+## Verification
+
+- Application migration 3 applied locally; no real containers/images were built.
+- PostgreSQL/River tests cover late success/failure, close during build, stale queued
+  work, cleanup retry/order, old-preview preservation, both lock-race directions,
+  exact concurrent increments, enqueue rollback, and captured generation/handoff.
+- Real River rescuer test verifies expired ping/build/teardown handling while a
+  legitimately slow build remains running. Build/tests/vet/lint passed.
+- Earlier checks confirmed worker startup with OAuth unset and migration credentials
+  absent from 39 ps auxww samples. PostgreSQL remains running; no app processes left.
