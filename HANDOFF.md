@@ -1,6 +1,6 @@
 # Project handoff
 
-Last updated: 2026-09-29
+Last updated: 2026-09-30
 
 ## Project
 
@@ -41,7 +41,26 @@ this handoff is a navigation aid, not a substitute for checking the working tree
 
 ## Session notes
 
-- No active implementation task is recorded here. Treat the user's latest
-  request as authoritative and verify the current code before making assumptions.
+- Completed the minimal HTTP/UI skeleton after Phase 2. Read DESIGN.md Section 17
+  for the dashboard pattern; only the hello page was requested.
+- `internal/app/server.go` loads config, opens the DB pool (startup ping), mounts
+  routes, and runs the HTTP server with graceful shutdown. `cmd/server/main.go`
+  owns signals and logging; construction stays in app.
+- `internal/platform/httpx` builds chi with request IDs, slog logging, and panic
+  recovery. Middleware tests verify recovered status and shared request IDs.
+- `internal/platform/ui/layout.templ` is the HTML shell; `internal/dashboard`
+  owns the root route and hello template. A handler test verifies the layout.
+- `web/assets.go` embeds `web/static`; HTMX 2.0.11 is served locally at
+  `/static/htmx.min.js` with upstream license and checksum recorded alongside it.
+- `HTTP_ADDR` defaults to `127.0.0.1:8080`. Export `.env` variables before
+  `make run-server`; template generation runs automatically.
+- `make dev` starts pinned Air using `.air.toml`, loading `.env` and polling
+  Go/templ/CSS/JS changes. Each rebuild generates templates; generated Go files
+  are excluded from watching. Refresh the browser after rebuilds.
+- Verified build, all unit tests, vet, and lint; localhost returned HTTP 200 and
+  served the exact local HTMX bytes. Air regenerated templates and restarted
+  after a temporary template edit; the changed page was served successfully.
+- Scope stops at the skeleton: auth, dashboard data, and other features are
+  unimplemented. Await the user's next task rather than extending them.
 - When a task changes project state, decisions, verification results, or next
   steps, refresh this file before handing off. Keep it brief and under 100 lines.

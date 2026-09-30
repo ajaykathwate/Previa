@@ -141,12 +141,13 @@ Manual equivalents of the main Make targets:
 
 | Make command | Underlying command |
 | --- | --- |
-| `make build` | `go build ./...` |
-| `make test` | `go test ./...` |
-| `make lint` | `go vet ./...`, then `go tool -modfile=tools/go.mod golangci-lint run` |
+| `make build` | Generate templates, then `go build ./...` |
+| `make test` | Generate templates, then `go test ./...` |
+| `make lint` | Generate templates, then `go vet ./...` and `go tool -modfile=tools/go.mod golangci-lint run` |
 | `make generate` | `go tool -modfile=tools/go.mod templ generate`; sqlc generation is conditional as described above |
-| `make run-server` | `go run ./cmd/server` |
+| `make run-server` | Generate templates, then `go run ./cmd/server` |
 | `make run-worker` | `go run ./cmd/worker` |
+| `make dev` | `go tool -modfile=tools/go.mod air -c .air.toml` |
 
 ## 6. Run the application
 
@@ -159,17 +160,22 @@ set +a
 make run-server
 ```
 
-In a second terminal, open the repository root, load the same configuration,
-and start the worker:
+Open <http://localhost:8080/>. Successful startup logs `database health check passed`
+followed by `HTTP server listening`. The server checks PostgreSQL before accepting
+requests; connection failures stop startup. Set `HTTP_ADDR` to change the listen
+address (default `127.0.0.1:8080`).
+
+For live reload, stop the server and run:
 
 ```sh
-set -a
-. ./.env
-set +a
-make run-worker
+make dev
 ```
 
-Check each terminal for startup errors. Use `Ctrl+C` to stop a running process.
+Air loads `.env`, watches Go, templ, CSS, and JavaScript files, regenerates templates,
+rebuilds, and restarts the server on changes. Polling supports WSL-mounted directories.
+Generated template files are excluded from watching to prevent rebuild loops.
+Refresh the browser after a rebuild to see the change. Check the terminal for startup
+or compilation errors. Use `Ctrl+C` to stop the process.
 
 ## 7. Daily workflow and shutdown
 

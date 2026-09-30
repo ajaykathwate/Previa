@@ -15,6 +15,7 @@ import (
 // Config holds the application configuration loaded from the process environment.
 // It contains secrets and must not be logged.
 type Config struct {
+	HTTPAddr                string `envconfig:"HTTP_ADDR" default:"127.0.0.1:8080"`
 	DatabaseURL             string `envconfig:"DATABASE_URL" required:"true"`
 	GitHubAppID             int64  `envconfig:"GITHUB_APP_ID" required:"true"`
 	GitHubAppPrivateKeyPath string `envconfig:"GITHUB_APP_PRIVATE_KEY_PATH" required:"true"`

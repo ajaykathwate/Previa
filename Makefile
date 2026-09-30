@@ -2,7 +2,7 @@ GO ?= go
 TOOLS = $(GO) tool -modfile=tools/go.mod
 ENV_FILE ?= .env
 
-.PHONY: generate build test lint run-server run-worker migrate-up migrate-down
+.PHONY: generate build test lint run-server run-worker dev migrate-up migrate-down
 
 generate:
 	$(TOOLS) templ generate
@@ -12,19 +12,21 @@ generate:
 		$(TOOLS) sqlc generate; \
 	fi
 
-build:
+build: generate
 	$(GO) build ./...
 
-test:
+test: generate
 	$(GO) test ./...
 
-lint:
+lint: generate
 	$(GO) vet ./...
 	$(TOOLS) golangci-lint run
 
-# Entry points are empty until the server and worker are implemented.
-run-server:
+run-server: generate
 	$(GO) run ./cmd/server
+
+dev:
+	$(TOOLS) air -c .air.toml
 
 run-worker:
 	$(GO) run ./cmd/worker
