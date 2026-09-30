@@ -2,12 +2,6 @@
 
 Last updated: 2026-09-30
 
-## Project
-
-Previa is a self-hosted service intended to build isolated preview environments
-for GitHub pull requests. Requirements and selected stack are in `README.md`;
-feature behavior, edge cases, and package structure are in `DESIGN.md`.
-
 ## Start here
 
 - `README.md` — requirements and technology choices.
@@ -43,8 +37,10 @@ this handoff is a navigation aid, not a substitute for checking the working tree
   Sections 2 and 3. No repo installation or actual dashboard data is built.
 - Completed Phase 4 continuation: River queue/worker foundation per Section 7.
   Only `ping` is implemented; no build/deploy/teardown jobs or environment behavior.
-- River runtime, pgx driver, and CLI are pinned to v0.47.0. River owns its schema
-  and migration history; `make river-migrate-up` / `make river-status` use its CLI.
+- River runtime/pgx driver are pinned to v0.47.0; the unused CLI tool was removed.
+  `cmd/river-migrate` delegates to `internal/app/river_migrate.go`, using River
+  migration APIs and DATABASE_URL from the environment. Make targets use this
+  adapter; Goose keeps GOOSE_DBSTRING. No connection URL is passed in arguments.
   Local River schema is version 007; Goose remains version 2.
 - `internal/platform/queue` constructs insert-only server and executing worker
   clients, owns PingArgs/PingWorker, and enqueues through a pgx transaction.
@@ -66,7 +62,11 @@ this handoff is a navigation aid, not a substitute for checking the working tree
   shows a login link or the current GitHub username and logout link.
 - `web/assets.go` embeds `web/static`; HTMX 2.0.11 is served locally at
   `/static/htmx.min.js` with upstream license and checksum recorded alongside it.
-- Export `.env` before run targets; HTTP_ADDR defaults to `127.0.0.1:8080`.
+- Config now has SharedConfig (DATABASE_URL for state and queue), ServerConfig
+  (HTTP address/origin, OAuth ID/secret, session secret), and WorkerConfig (queue
+  concurrency). LoadServer/LoadWorker read only their process settings. Unbuilt
+  integrations have no fields; .env.example groups variables by process.
+  Export `.env` before run targets; HTTP_ADDR defaults to `127.0.0.1:8080`.
 - `internal/auth` owns OAuth handlers, profile fetch, user repository, signed state,
   SCS sessions, RequireUser, session-bound CSRF, routes, and error/logout templates.
 - `APP_BASE_URL` defaults to `http://localhost:8080`; the exact OAuth App callback
@@ -83,15 +83,16 @@ this handoff is a navigation aid, not a substitute for checking the working tree
   Go/templ/CSS/JS/SQL and excludes generated output to avoid reload loops.
 - `docs/AUTH_TESTING.md` covers setup, manual browser login, error cases, tests,
   and a checklist for all eight Section 2 steps.
-- Build, tests (including PostgreSQL), vet, and lint passed. Live checks verified
-  home/login redirects, callback URI, state rejection, and CSRF rejection.
-  GitHub exchange/profile are simulated in automated tests; real consent requires
-  the user's OAuth App and browser. Test DB rows are cleaned up/rolled back.
-- Queue live check: server HTTP enqueue → separate worker → DB job 10 completed,
-  attempt 1/finalized_at set. Temporary test session/user cleaned; ping row retained.
-  Queue tests verify transaction rollback/visibility, cross-kind/queue uniqueness,
-  terminal release, concurrency, completion, permanent cancellation; auth test checks
-  ping login/CSRF/key validation. All-package DB tests and vet/lint passed again.
-  Server/worker stopped; local PostgreSQL remains running. Air reloads server only.
-- No dedicated unit tests for entrypoints/app orchestration; live startup/shutdown
-  exercised them. TEMP.md contains proposed follow-ups only, awaiting approval.
+- Build, all-package PostgreSQL tests, vet, and lint pass. Config tests check
+  process isolation, absent/invalid unrelated settings, required values, and errors.
+  New migration tests apply all seven River migrations in an isolated test schema,
+  verify status/idempotence, and remove the schema afterward.
+- Live worker verification used ONLY DATABASE_URL and MAX_CONCURRENT_BUILDS in
+  its environment: DB health check and startup passed; graceful shutdown passed.
+- Live migration verification: make migrate-up succeeded; 39 ps auxww snapshots
+  observed both actual Goose and River adapter binaries without the DB URL/password
+  in arguments. river-status reports 007 applied. No runtime processes left running
+  by this check; PostgreSQL remains up. TEMP.md records remaining approval proposals.
+- Prior live queue round-trip: server → separate worker → job 10 completed on
+  attempt 1. Queue/auth tests retain transaction, uniqueness, concurrency, login,
+  and CSRF coverage. Real GitHub consent still requires the user's app/browser.

@@ -45,7 +45,7 @@ migrate-up migrate-down:
 	GOOSE_DRIVER=postgres GOOSE_DBSTRING="$$DATABASE_URL" $(TOOLS) goose -env=none -dir db/migrations $(patsubst migrate-%,%,$@)
 	@if [ '$@' = migrate-up ]; then $(MAKE) river-migrate-up; fi
 
-# River owns its schema and migration history, independently of Goose.
+# River owns its schema/history. The adapter reads DATABASE_URL from the environment.
 river-migrate-up river-status:
 	@set -eu; \
 	if [ -z "$${DATABASE_URL:-}" ]; then \
@@ -54,4 +54,5 @@ river-migrate-up river-status:
 		else echo 'Environment file not found' >&2; exit 1; fi; \
 	fi; \
 	: "$${DATABASE_URL:?DATABASE_URL must be set}"; \
-	$(TOOLS) river $(if $(filter river-status,$@),migrate-list,migrate-up) --line main --database-url "$$DATABASE_URL"
+	export DATABASE_URL; \
+	$(GO) run ./cmd/river-migrate $(if $(filter river-status,$@),status,up)

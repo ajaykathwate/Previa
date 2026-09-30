@@ -23,11 +23,11 @@ import (
 
 // RunServer loads configuration, checks the database, and serves HTTP until canceled.
 func RunServer(ctx context.Context, logger *slog.Logger) error {
-	cfg, err := config.Load()
+	cfg, err := config.LoadServer()
 	if err != nil {
 		return fmt.Errorf("configure server: %w", err)
 	}
-	pool, err := database.NewPool(ctx, cfg)
+	pool, err := database.NewPool(ctx, cfg.SharedConfig)
 	if err != nil {
 		return fmt.Errorf("initialize server database: %w", err)
 	}

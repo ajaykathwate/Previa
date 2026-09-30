@@ -14,11 +14,11 @@ import (
 
 // RunWorker checks the database and runs River until canceled, draining on shutdown.
 func RunWorker(ctx context.Context, logger *slog.Logger) error {
-	cfg, err := config.Load()
+	cfg, err := config.LoadWorker()
 	if err != nil {
 		return fmt.Errorf("configure worker: %w", err)
 	}
-	pool, err := database.NewPool(ctx, cfg)
+	pool, err := database.NewPool(ctx, cfg.SharedConfig)
 	if err != nil {
 		return fmt.Errorf("initialize worker database: %w", err)
 	}

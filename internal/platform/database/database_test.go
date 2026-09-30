@@ -12,7 +12,7 @@ import (
 
 func TestNewPoolRejectsInvalidConfiguration(t *testing.T) {
 	for _, databaseURL := range []string{"", "postgres://localhost:invalid/db"} {
-		pool, err := NewPool(t.Context(), config.Config{DatabaseURL: databaseURL})
+		pool, err := NewPool(t.Context(), config.SharedConfig{DatabaseURL: databaseURL})
 		if pool != nil {
 			pool.Close()
 			t.Fatal("unexpected pool for invalid configuration")
@@ -26,7 +26,7 @@ func TestNewPoolRejectsInvalidConfiguration(t *testing.T) {
 func TestNewPoolHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	pool, err := NewPool(ctx, config.Config{DatabaseURL: "postgres://localhost/previa?sslmode=disable"})
+	pool, err := NewPool(ctx, config.SharedConfig{DatabaseURL: "postgres://localhost/previa?sslmode=disable"})
 	if pool != nil {
 		pool.Close()
 		t.Fatal("unexpected pool with canceled context")
@@ -49,7 +49,7 @@ func TestPoolIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	pool, err := NewPool(ctx, config.Config{DatabaseURL: databaseURL})
+	pool, err := NewPool(ctx, config.SharedConfig{DatabaseURL: databaseURL})
 	if err != nil {
 		t.Fatal(err)
 	}

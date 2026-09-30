@@ -9,39 +9,75 @@ import (
 func validEnvironment(t *testing.T) {
 	t.Helper()
 	for key, value := range map[string]string{
-		"APP_BASE_URL":                "http://localhost:8080",
-		"DATABASE_URL":                "postgres://previa:password@localhost:5432/previa?sslmode=disable",
-		"GITHUB_APP_ID":               "123456",
-		"GITHUB_APP_PRIVATE_KEY_PATH": "/path/to/app.pem",
-		"GITHUB_WEBHOOK_SECRET":       "webhook-secret",
-		"GITHUB_OAUTH_CLIENT_ID":      "client-id",
-		"GITHUB_OAUTH_CLIENT_SECRET":  "client-secret",
-		"PREVIEW_BASE_DOMAIN":         "preview.example.com",
-		"SESSION_SECRET":              strings.Repeat("s", 32),
-		"SECRETS_ENCRYPTION_KEY":      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-		"MAX_CONCURRENT_BUILDS":       "2",
-		"ENV_TTL_HOURS":               "24",
-		"DNS_PROVIDER_API_TOKEN":      "dns-token",
+		"APP_BASE_URL":               "http://localhost:8080",
+		"HTTP_ADDR":                  "127.0.0.1:8080",
+		"DATABASE_URL":               "postgres://previa:password@localhost:5432/previa?sslmode=disable",
+		"GITHUB_OAUTH_CLIENT_ID":     "client-id",
+		"GITHUB_OAUTH_CLIENT_SECRET": "client-secret",
+		"SESSION_SECRET":             strings.Repeat("s", 32),
+		"MAX_CONCURRENT_BUILDS":      "2",
 	} {
 		t.Setenv(key, value)
 	}
 }
 
-func TestLoad(t *testing.T) {
-	validEnvironment(t)
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.GitHubAppID != 123456 || cfg.MaxConcurrentBuilds != 2 || cfg.EnvTTLHours != 24 {
-		t.Fatal("numeric configuration was not loaded correctly")
-	}
-	if cfg.DatabaseURL != os.Getenv("DATABASE_URL") || cfg.GitHubAppPrivateKeyPath != "/path/to/app.pem" || cfg.PreviewBaseDomain != "preview.example.com" || cfg.GitHubWebhookSecret != "webhook-secret" || cfg.GitHubOAuthClientID != "client-id" || cfg.GitHubOAuthClientSecret != "client-secret" || cfg.SessionSecret != strings.Repeat("s", 32) || cfg.SecretsEncryptionKey != os.Getenv("SECRETS_ENCRYPTION_KEY") || cfg.DNSProviderAPIToken != "dns-token" {
-		t.Fatal("string configuration was not loaded correctly")
+func unsetEnvironment(t *testing.T, keys ...string) {
+	t.Helper()
+	for _, key := range keys {
+		t.Setenv(key, "") // Restore the original environment at cleanup, even if unset here.
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
-func TestLoadRejectsInvalidEnvironment(t *testing.T) {
+func TestLoadServer(t *testing.T) {
+	validEnvironment(t)
+	unsetEnvironment(t, "MAX_CONCURRENT_BUILDS", "APP_BASE_URL", "HTTP_ADDR")
+	cfg, err := LoadServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DatabaseURL != os.Getenv("DATABASE_URL") || cfg.GitHubOAuthClientID != "client-id" || cfg.GitHubOAuthClientSecret != "client-secret" || cfg.SessionSecret != strings.Repeat("s", 32) || cfg.AppBaseURL != "http://localhost:8080" || cfg.HTTPAddr != "127.0.0.1:8080" {
+		t.Fatal("server configuration/defaults were not loaded correctly")
+	}
+	// The server must also ignore invalid settings owned by the worker.
+	t.Setenv("MAX_CONCURRENT_BUILDS", "not-a-number")
+	if _, err := LoadServer(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadWorkerWithoutServerOrFutureSettings(t *testing.T) {
+	validEnvironment(t)
+	unrelated := []string{"APP_BASE_URL", "HTTP_ADDR", "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "SESSION_SECRET", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH", "GITHUB_WEBHOOK_SECRET", "PREVIEW_BASE_DOMAIN", "SECRETS_ENCRYPTION_KEY", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN"}
+	unsetEnvironment(t, unrelated...)
+	cfg, err := LoadWorker()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DatabaseURL != os.Getenv("DATABASE_URL") || cfg.MaxConcurrentBuilds != 2 {
+		t.Fatal("worker configuration not loaded")
+	}
+	for _, key := range unrelated {
+		t.Setenv(key, "invalid")
+	}
+	if _, err := LoadWorker(); err != nil {
+		t.Fatalf("worker read unrelated setting: %v", err)
+	}
+}
+
+func TestLoadServerIgnoresFutureSettings(t *testing.T) {
+	validEnvironment(t)
+	for _, key := range []string{"GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH", "GITHUB_WEBHOOK_SECRET", "PREVIEW_BASE_DOMAIN", "SECRETS_ENCRYPTION_KEY", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN"} {
+		t.Setenv(key, "invalid")
+	}
+	if _, err := LoadServer(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadServerRejectsInvalidEnvironment(t *testing.T) {
 	for _, tt := range []struct{ key, value string }{
 		{"APP_BASE_URL", "http://example.com"},
 		{"APP_BASE_URL", "https://example.com/path"},
@@ -55,69 +91,91 @@ func TestLoadRejectsInvalidEnvironment(t *testing.T) {
 		{"DATABASE_URL", "postgres://localhost:70000/previa"},
 		{"DATABASE_URL", "postgres://localhost:0/previa"},
 		{"DATABASE_URL", "postgres://localhost/previa#fragment"},
-		{"GITHUB_APP_ID", "0"},
-		{"GITHUB_APP_ID", "-1"},
-		{"GITHUB_APP_ID", "not-a-number"},
-		{"GITHUB_APP_PRIVATE_KEY_PATH", " "},
-		{"GITHUB_WEBHOOK_SECRET", ""},
-		{"GITHUB_OAUTH_CLIENT_ID", ""},
-		{"GITHUB_OAUTH_CLIENT_SECRET", ""},
-		{"PREVIEW_BASE_DOMAIN", "https://preview.example.com"},
-		{"PREVIEW_BASE_DOMAIN", "*.example.com"},
-		{"PREVIEW_BASE_DOMAIN", "example.com:443"},
-		{"PREVIEW_BASE_DOMAIN", "-preview.example.com"},
-		{"PREVIEW_BASE_DOMAIN", "preview..com"},
-		{"PREVIEW_BASE_DOMAIN", "localhost"},
-		{"PREVIEW_BASE_DOMAIN", strings.Repeat("a", 64) + ".com"},
+		{"GITHUB_OAUTH_CLIENT_ID", " "},
+		{"GITHUB_OAUTH_CLIENT_SECRET", " "},
 		{"SESSION_SECRET", "too-short"},
-		{"SECRETS_ENCRYPTION_KEY", "not-base64!"},
-		{"SECRETS_ENCRYPTION_KEY", "c2hvcnQ="},
-		{"MAX_CONCURRENT_BUILDS", "0"},
-		{"MAX_CONCURRENT_BUILDS", "-2"},
-		{"MAX_CONCURRENT_BUILDS", "1.5"},
-		{"ENV_TTL_HOURS", "0"},
-		{"ENV_TTL_HOURS", "-1"},
-		{"ENV_TTL_HOURS", "99999999999999999999999999"},
-		{"DNS_PROVIDER_API_TOKEN", " "},
 	} {
 		t.Run(tt.key+"/"+tt.value, func(t *testing.T) {
 			validEnvironment(t)
 			t.Setenv(tt.key, tt.value)
-			cfg, err := Load()
+			cfg, err := LoadServer()
 			if err == nil || !strings.Contains(err.Error(), tt.key) {
 				t.Fatalf("expected error mentioning %s, got %v", tt.key, err)
 			}
-			if cfg != (Config{}) {
+			if cfg != (ServerConfig{}) {
 				t.Fatal("failed load returned partial configuration")
 			}
 		})
 	}
 }
 
-func TestLoadRequiresEveryVariable(t *testing.T) {
-	for _, key := range []string{
-		"DATABASE_URL", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH",
-		"GITHUB_WEBHOOK_SECRET", "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET",
-		"PREVIEW_BASE_DOMAIN", "SESSION_SECRET", "SECRETS_ENCRYPTION_KEY",
-		"MAX_CONCURRENT_BUILDS", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN",
+func TestLoadWorkerRejectsInvalidEnvironment(t *testing.T) {
+	for _, tt := range []struct{ key, value string }{
+		{"DATABASE_URL", "postgres:///previa"},
+		{"DATABASE_URL", "postgres://localhost:70000/previa"},
+		{"MAX_CONCURRENT_BUILDS", "0"},
+		{"MAX_CONCURRENT_BUILDS", "-1"},
+		{"MAX_CONCURRENT_BUILDS", "1.5"},
 	} {
-		t.Run(key, func(t *testing.T) {
+		t.Run(tt.key+"/"+tt.value, func(t *testing.T) {
 			validEnvironment(t)
-			if err := os.Unsetenv(key); err != nil {
-				t.Fatal(err)
+			t.Setenv(tt.key, tt.value)
+			cfg, err := LoadWorker()
+			if err == nil || !strings.Contains(err.Error(), tt.key) {
+				t.Fatalf("expected %s error, got %v", tt.key, err)
 			}
-			if _, err := Load(); err == nil || !strings.Contains(err.Error(), key) {
+			if cfg != (WorkerConfig{}) {
+				t.Fatal("failed load returned partial configuration")
+			}
+		})
+	}
+}
+
+func TestRequiredSettingsByProcess(t *testing.T) {
+	for _, key := range []string{"DATABASE_URL", "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "SESSION_SECRET"} {
+		t.Run("server/"+key, func(t *testing.T) {
+			validEnvironment(t)
+			unsetEnvironment(t, key)
+			if _, err := LoadServer(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("expected missing %s error, got %v", key, err)
+			}
+		})
+	}
+	for _, key := range []string{"DATABASE_URL", "MAX_CONCURRENT_BUILDS"} {
+		t.Run("worker/"+key, func(t *testing.T) {
+			validEnvironment(t)
+			unsetEnvironment(t, key)
+			if _, err := LoadWorker(); err == nil || !strings.Contains(err.Error(), key) {
 				t.Fatalf("expected missing %s error, got %v", key, err)
 			}
 		})
 	}
 }
 
+func TestLoadSharedNeedsOnlyDatabase(t *testing.T) {
+	validEnvironment(t)
+	unsetEnvironment(t, "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "SESSION_SECRET", "MAX_CONCURRENT_BUILDS")
+	cfg, err := LoadShared()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DatabaseURL != os.Getenv("DATABASE_URL") {
+		t.Fatal("database configuration not loaded")
+	}
+}
+
 func TestLoadDoesNotExposeDatabaseCredentials(t *testing.T) {
 	validEnvironment(t)
 	t.Setenv("DATABASE_URL", "postgres://user:private-password@localhost:invalid/previa")
-	_, err := Load()
-	if err == nil || strings.Contains(err.Error(), "private-password") {
-		t.Fatal("invalid database configuration must fail without exposing credentials")
+	_, serverErr := LoadServer()
+	_, workerErr := LoadWorker()
+	shared, sharedErr := LoadShared()
+	for _, err := range []error{serverErr, workerErr, sharedErr} {
+		if err == nil || strings.Contains(err.Error(), "private-password") {
+			t.Fatal("invalid database configuration must fail without exposing credentials")
+		}
+	}
+	if shared != (SharedConfig{}) {
+		t.Fatal("failed shared load returned partial configuration")
 	}
 }

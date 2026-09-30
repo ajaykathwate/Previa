@@ -29,7 +29,7 @@ type Handler struct {
 	secure   bool
 }
 
-func NewHandler(cfg config.Config, sessions *scs.SessionManager, users userRepository, provider identityProvider, logger *slog.Logger) *Handler {
+func NewHandler(cfg config.ServerConfig, sessions *scs.SessionManager, users userRepository, provider identityProvider, logger *slog.Logger) *Handler {
 	key := sha256.Sum256([]byte("previa/oauth-state/" + cfg.SessionSecret))
 	return &Handler{sessions: sessions, users: users, provider: provider, logger: logger,
 		stateKey: key[:], origin: strings.TrimSuffix(cfg.AppBaseURL, "/"), secure: strings.HasPrefix(strings.ToLower(cfg.AppBaseURL), "https://")}

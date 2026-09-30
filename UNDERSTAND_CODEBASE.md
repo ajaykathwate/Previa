@@ -51,7 +51,7 @@ created merely because their folders exist.
 | [go.mod](go.mod) | Application module name (`github.com/ajaykathwatee/previa`), Go version (`1.26.5`), and dependency versions. Direct dependencies are pgx v5.10.0 and envconfig v1.4.0. |
 | [go.sum](go.sum) | Checksums used to verify downloaded application dependencies. Go maintains it; it contains no application logic. |
 | [Makefile](Makefile) | Short commands for generation, builds, tests, linting, entry points, and migrations. Uses the tools module to run pinned tools. |
-| [.env.example](.env.example) | Documented sample values for all 12 application environment variables. Its database URL matches local Compose credentials. Secrets are placeholders. |
+| [.env.example](.env.example) | Sample environment values grouped into shared, server-only, and worker-only settings. Its database URL matches local Compose credentials. Secrets are placeholders. |
 | [.gitignore](.gitignore) | Keeps local environment files, private keys, build outputs, coverage files, generated templ files, and editor files out of normal Git additions. Keeps `.env.example` visible. |
 | [.air.toml](.air.toml) | Air live-reload settings: watch source files, run generation, build `tmp/server`, and restart it. The server currently exits immediately because its entry point is empty. |
 | [.golangci.yml](.golangci.yml) | Minimal configuration selecting golangci-lint's version-2 configuration format; no custom lint rules are specified. |
@@ -164,17 +164,17 @@ groups infrastructure that multiple features will use.
 | File | Purpose and current contents |
 | --- | --- |
 | [config/doc.go](internal/platform/config/doc.go) | Package description. |
-| [config/config.go](internal/platform/config/config.go) | `Config` struct, `Load()`, and validation. Uses envconfig to read all 12 required process environment variables. Validates database URL, positive IDs/limits, domain, session-secret length, and encryption-key encoding. |
+| [config/config.go](internal/platform/config/config.go) | `SharedConfig`, `ServerConfig`, and `WorkerConfig` with separate loaders. Validates database URL, HTTP origin, OAuth values, session-secret length, and worker concurrency. Unbuilt integrations have no configuration fields. |
 | [config/config_test.go](internal/platform/config/config_test.go) | Tests valid loading, missing values, invalid values, and avoiding database-password exposure in validation errors. |
 | [database/doc.go](internal/platform/database/doc.go) | Package description. |
 | [database/database.go](internal/platform/database/database.go) | `NewPool(ctx, cfg)` parses the database URL, creates a pgx pool, and checks connectivity. Closes the pool if startup fails. `HealthCheck` pings with a maximum five-second wait. Callers must close successful pools. |
 | [database/database_test.go](internal/platform/database/database_test.go) | Tests invalid config, cancellation, nil pools, and live connection/health behavior. Live tests require `TEST_DATABASE_URL`. |
 | [database/migrations_test.go](internal/platform/database/migrations_test.go) | Live tests of the migrated schema: uniqueness, foreign keys, expiry, statuses, and the active-environment rule. Test fixture rows are rolled back. Requires `TEST_DATABASE_URL`. |
 
-`config.Load()` reads exported variables; it does not read `.env`, open the
-GitHub private-key file, contact GitHub, or decrypt secrets. The encryption key
-must be base64 encoding of 32 bytes, and the session secret must have at least
-32 characters. The full variable explanations are in [.env.example](.env.example).
+`config.LoadServer()` and `config.LoadWorker()` read exported variables; they do
+not read `.env`. Both use `DATABASE_URL`; only the server needs OAuth credentials
+and a session secret of at least 32 characters. Only the worker needs queue
+concurrency. The variable explanations are in [.env.example](.env.example).
 
 ### Shared packages reserved for later
 
@@ -279,7 +279,8 @@ Run these from the repository root:
 
 Migration targets use an exported `DATABASE_URL` first, then `.env`, then
 `.env.example` when `.env` is absent. `ENV_FILE=.env.local` selects another local
-file. These targets need the database URL, not a successful call to `config.Load()`.
+file. These targets need only the database connection. Goose reads `GOOSE_DBSTRING`;
+the River migration adapter reads `DATABASE_URL`. Neither puts the URL in arguments.
 
 ```sh
 # Start the database and apply its schema.

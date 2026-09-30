@@ -73,7 +73,7 @@ func newTestBrowser(t *testing.T, store scs.Store, users userRepository, provide
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := NewSessionManager(store, false, logger)
-	h := NewHandler(config.Config{AppBaseURL: "http://localhost:8080", SessionSecret: strings.Repeat("s", 32)}, s, users, provider, logger)
+	h := NewHandler(config.ServerConfig{AppBaseURL: "http://localhost:8080", SessionSecret: strings.Repeat("s", 32)}, s, users, provider, logger)
 	r := chi.NewRouter()
 	r.Use(s.LoadAndSave, h.LoadUser, h.CSRF)
 	h.Mount(r)

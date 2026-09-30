@@ -17,7 +17,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 func TestGitHubExchangeAndIdentity(t *testing.T) {
 	for _, scenario := range []string{"success", "exchange-down", "identity-down", "invalid-identity"} {
 		t.Run(scenario, func(t *testing.T) {
-			g := NewGitHubOAuth(config.Config{AppBaseURL: "http://localhost:8080", GitHubOAuthClientID: "client-id", GitHubOAuthClientSecret: "client-secret"})
+			g := NewGitHubOAuth(config.ServerConfig{AppBaseURL: "http://localhost:8080", GitHubOAuthClientID: "client-id", GitHubOAuthClientSecret: "client-secret"})
 			if g.oauth.RedirectURL != "http://localhost:8080/auth/github/callback" || len(g.oauth.Scopes) != 0 {
 				t.Fatal("unexpected redirect or excessive OAuth scopes")
 			}

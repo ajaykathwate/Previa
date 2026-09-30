@@ -21,7 +21,7 @@ func TestMigrationConstraintsIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	pool, err := NewPool(ctx, config.Config{DatabaseURL: databaseURL})
+	pool, err := NewPool(ctx, config.SharedConfig{DatabaseURL: databaseURL})
 	if err != nil {
 		t.Fatal(err)
 	}

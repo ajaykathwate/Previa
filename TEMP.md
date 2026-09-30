@@ -19,10 +19,10 @@ instructions, see [DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md).
 ## Configuration: what to put in `.env`
 
 Copy `.env.example` once if `.env` does not exist. Never commit `.env` or private keys.
-The shared configuration loader validates all the variables below for **both**
-server and worker, including settings reserved for later features. Those later
-settings can retain the example placeholders for this local queue exercise.
-Real OAuth credentials are required to sign in through GitHub.
+Each process loads only its own settings: `SharedConfig` supplies `DATABASE_URL`,
+`ServerConfig` adds HTTP/OAuth/session settings, and `WorkerConfig` adds queue
+concurrency. River uses the same database connection. The worker needs no OAuth
+variables. Real OAuth credentials are required for browser sign-in.
 
 | Variable | Local value / source | Why it exists and when it is used |
 | --- | --- | --- |
@@ -33,13 +33,6 @@ Real OAuth credentials are required to sign in through GitHub.
 | `GITHUB_OAUTH_CLIENT_SECRET` | Your OAuth App client secret | Server exchanges the authorization code; never expose it in browser code. |
 | `SESSION_SECRET` | Generate with `openssl rand -hex 32` | Signs OAuth state; must be at least 32 characters. SCS stores opaque session tokens in PostgreSQL. |
 | `MAX_CONCURRENT_BUILDS` | `2` (positive integer) | Currently sets the `ping` queue's maximum concurrent jobs **per worker process**; will also configure the build queue when implemented. |
-| `GITHUB_APP_ID` | Example `123456`; later replace with GitHub App ID | Reserved for repository installation/API access; separate from OAuth sign-in. Must be positive. |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | Example `/path/to/github-app.private-key.pem` | Reserved for signing GitHub App authentication. No key file is opened by the ping flow. |
-| `GITHUB_WEBHOOK_SECRET` | Example placeholder; later generate a random secret | Reserved for validating incoming GitHub webhook signatures. |
-| `PREVIEW_BASE_DOMAIN` | Example `preview.example.com` | Reserved for preview hostnames; domain only, no scheme, port, or wildcard. |
-| `SECRETS_ENCRYPTION_KEY` | Generate with `openssl rand -base64 32` | Reserved for encrypting stored preview application secrets; exactly 32 decoded bytes. Example key is unsuitable for real secrets. |
-| `ENV_TTL_HOURS` | `24` (positive integer) | Reserved for preview expiry scheduling. |
-| `DNS_PROVIDER_API_TOKEN` | Example placeholder; later your DNS provider's API token | Reserved for wildcard certificate DNS challenges. No DNS calls are made by ping jobs. |
 
 Commands above print newly generated secrets: copy them into `.env`, not into Git.
 Keep `.env` as shell assignments; quote values containing shell special characters.
@@ -57,25 +50,13 @@ Keep `.env` as shell assignments; quote values containing shell special characte
 
 The detailed login checks are in [docs/AUTH_TESTING.md](docs/AUTH_TESTING.md).
 
-### Obtain settings for later integrations when those features are built
+### Settings for future integrations
 
-- **GitHub App:** GitHub → Settings → Developer settings → GitHub Apps → your app
-  (or New GitHub App). Copy the numeric App ID. Under Private keys, generate/download
-  a PEM and set its local path in `.env`. Keep the PEM ignored and access restricted.
-  Generate a webhook secret with `openssl rand -hex 32`, then use the same value in
-  the app's Webhook secret field and `.env`. Webhook URL/permissions depend on the
-  future integration; this phase does not provide a webhook endpoint.
-- **Preview domain:** select a subdomain of a domain you control, such as
-  `preview.your-domain.com`. Obtain/manage the parent domain through your registrar
-  and DNS provider. DNS and wildcard certificate setup belong to the routing phase.
-- **DNS token:** sign in to the DNS provider managing that domain, open its API
-  token/credentials settings, and create a token scoped to the required DNS zone
-  and record operations. Exact fields depend on the provider chosen for routing.
-- **Encryption key:** run `openssl rand -base64 32` once and store the result
-  securely. Preserve it when encrypted secrets are eventually stored; changing
-  the key without a migration would make those secrets unreadable.
-- **Concurrency / TTL:** choose positive integers yourself. They are operational
-  limits, not values obtained from GitHub or another service.
+GitHub App, webhook, preview domain, encryption, TTL, and DNS settings listed in
+README Section 4.8 will be added to the relevant process when their features are
+implemented. They are absent from the config structs and `.env.example`; existing
+values in a local `.env` are ignored. HTTP/OAuth/session settings are server-only;
+`MAX_CONCURRENT_BUILDS` is worker-only; `DATABASE_URL` is shared.
 
 ## Processes and their purpose
 
@@ -86,7 +67,7 @@ The detailed login checks are in [docs/AUTH_TESTING.md](docs/AUTH_TESTING.md).
 | `make run-server` | HTTP requests, OAuth, sessions, and job insertion | Browser access and enqueueing; does not execute jobs. |
 | `make run-worker` | Claims and executes queued ping jobs | Completion, retries, and River maintenance. Without it, jobs remain queued. |
 | `make dev` (Air) | Generates templates, builds, and restarts the server on changes | Optional alternative to `make run-server`; do not run both on the same port. |
-| `make migrate-up` | Runs Goose, then River's own migration tool | One-time schema changes after checkout/update; not a background process. |
+| `make migrate-up` | Runs Goose, then the environment-based River migration adapter | One-time schema changes after checkout/update; not a background process. |
 | `make generate` | Generates templ and sqlc Go code | Build preparation; already included in build/run targets. |
 
 River's maintenance/leader services run inside the worker, not as a separate
@@ -104,7 +85,9 @@ Air reloads the server only. Restart `make run-worker` manually after worker cha
    ```
 
    Expected: PostgreSQL is healthy; Goose and River apply pending migrations or
-   report none pending. River currently has migrations 001–007. River owns its
+   report none pending. River currently has migrations 001–007. The adapter reads `DATABASE_URL` from
+   the environment; Goose uses `GOOSE_DBSTRING`. Neither receives credentials in
+   process arguments. River owns its
    `river_*` tables/history independently of Goose. `make migrate-down` only
    rolls back an application migration; it does not remove River's tables.
 
@@ -204,8 +187,14 @@ re-execution because workers provide at-least-once processing.
   uniqueness, terminal-state release, transaction visibility/rollback, concurrency,
   and permanent cancellation. HTTP tests verify login/CSRF and key validation.
 - `make migrate-up` was rerun successfully with nothing pending; `river-status`
-  reports version 007. Entrypoints/app orchestration have no dedicated unit tests;
-  their startup and shutdown were exercised through the live processes.
+  reports version 007. Entrypoints have no dedicated unit tests; app migration
+  orchestration has integration tests. Worker startup/shutdown were exercised live.
+- Config split verified with a worker environment containing only `DATABASE_URL`
+  and `MAX_CONCURRENT_BUILDS`: startup, DB health check, and shutdown passed.
+- Migration credential check: 39 `ps auxww` snapshots observed both actual Goose
+  and River migration binaries while `make migrate-up` succeeded. Neither the
+  database URL nor password appeared in arguments. Fresh-schema migration and
+  idempotence tests also pass; temporary test schemas are removed.
 - Server and worker were stopped after verification; PostgreSQL was left running.
 
 ## Proposals requiring approval — not implemented
@@ -216,18 +205,10 @@ re-execution because workers provide at-least-once processing.
    `127.0.0.1:8081`, and connect it to the same database. A container must use the
    Compose database hostname `postgres`, not host `localhost`. Review authentication
    and who may retry/cancel jobs before exposing it outside localhost.
-2. **Validate configuration per process/feature.** Both binaries currently require
-   OAuth and future integration settings through the shared loader. Separating the
-   required subsets would let the worker need only database and queue configuration
-   and avoid placeholders for unbuilt integrations.
-3. **Keep migration credentials out of process arguments.** River's pinned CLI
-   receives `--database-url`; commands are not echoed, but local process inspection
-   can reveal arguments. Use PostgreSQL environment settings or a small migration
-   wrapper before running migrations with sensitive shared-database credentials.
-4. **Define deployment-wide concurrency before adding worker replicas.** The present
+2. **Define deployment-wide concurrency before adding worker replicas.** The present
    cap is per queue per process. If later infrastructure needs one global build cap,
    agree on coordination or River's global concurrency offering before scaling.
-5. **Before real environment jobs, define duplicate-event handling and per-kind
+3. **Before real environment jobs, define duplicate-event handling and per-kind
    timeouts.** Cross-kind uniqueness prevents simultaneous jobs for a PR, but does
    not itself preserve a newer SHA or guarantee a teardown follows a running build.
    That behavior belongs with environment state/reconciliation. The ten-second ping

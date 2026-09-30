@@ -45,9 +45,11 @@ go mod download -modfile=tools/go.mod
 - `.env` is Git-ignored. Its default `DATABASE_URL` matches the local Compose database:
   `postgres://previa:change-me@localhost:5432/previa?sslmode=disable`.
 - Review `.env` and replace placeholder credentials for the integrations you use.
-  `.env.example` explains each variable and its format. Keep secrets and private
-  keys out of Git.
-- Tool versions (Goose, River CLI, templ, sqlc, golangci-lint, and Air) are pinned in
+  `.env.example` groups shared, server-only, and worker-only settings. The server
+  needs `DATABASE_URL`, OAuth client ID/secret, and `SESSION_SECRET` (at least 32
+  characters); HTTP address/origin have local defaults. The worker needs only
+  `DATABASE_URL` and positive `MAX_CONCURRENT_BUILDS`. Keep secrets out of Git.
+- Tool versions (Goose, templ, sqlc, golangci-lint, and Air) are pinned in
   `tools/go.mod`; invoke them with `go tool -modfile=tools/go.mod <tool>`.
 
 ## 3. Start Docker and PostgreSQL
@@ -100,11 +102,13 @@ set -a
 . ./.env
 set +a
 GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" go tool -modfile=tools/go.mod goose -env=none -dir db/migrations up
-go tool -modfile=tools/go.mod river migrate-up --line main --database-url "$DATABASE_URL"
+go run ./cmd/river-migrate up
 ```
 
-Use that same environment prefix with `status` in place of `up` to inspect applied
-migrations. Application configuration reads exported variables, not `.env` directly;
+Use that same Goose environment prefix with `status` in place of `up` to inspect
+application migrations; use `go run ./cmd/river-migrate status` or `make river-status`
+for River. The River adapter reads `DATABASE_URL` directly; Goose reads
+`GOOSE_DBSTRING`. Neither command receives the connection string as an argument. Application configuration reads exported variables, not `.env` directly;
 repeat the export block in each new terminal that needs them. Keep `.env` in shell
 assignment syntax and quote values containing spaces or shell special characters.
 

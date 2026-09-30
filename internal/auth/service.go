@@ -32,7 +32,7 @@ type GitHubOAuth struct {
 	client *http.Client
 }
 
-func NewGitHubOAuth(cfg config.Config) *GitHubOAuth {
+func NewGitHubOAuth(cfg config.ServerConfig) *GitHubOAuth {
 	return &GitHubOAuth{
 		oauth: oauth2.Config{
 			ClientID: cfg.GitHubOAuthClientID, ClientSecret: cfg.GitHubOAuthClientSecret,

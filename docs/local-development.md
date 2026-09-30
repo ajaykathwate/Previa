@@ -90,10 +90,12 @@ Use `ENV_FILE=.env.local` to select a different local file. Env files are source
 as shell files: quote values containing shell metacharacters or whitespace.
 
 The Go config loader only reads process environment variables. To load local
-values into your shell, use `set -a; . ./.env; set +a`. All 12 application variables
-are required. The private-key path is loaded but not opened in this phase.
-`SESSION_SECRET` must have at least 32 characters; `SECRETS_ENCRYPTION_KEY` must
-decode from base64 to exactly 32 bytes. The example values are placeholders.
+values into your shell, use `set -a; . ./.env; set +a`. The server requires
+`DATABASE_URL`, `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, and
+`SESSION_SECRET` (at least 32 characters). HTTP address/origin have local defaults.
+The worker requires only `DATABASE_URL` and a positive `MAX_CONCURRENT_BUILDS`.
+Future integrations add their settings when implemented. `.env.example` groups
+variables by process; its credentials are placeholders.
 
 ## Verify the schema and pool
 

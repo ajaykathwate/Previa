@@ -12,7 +12,7 @@ import (
 
 // NewPool constructs a pool from configuration and checks that it can connect.
 // The caller owns the returned pool and must close it when shutting down.
-func NewPool(ctx context.Context, cfg config.Config) (*pgxpool.Pool, error) {
+func NewPool(ctx context.Context, cfg config.SharedConfig) (*pgxpool.Pool, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, errors.New("create database pool: DATABASE_URL must not be empty")
 	}

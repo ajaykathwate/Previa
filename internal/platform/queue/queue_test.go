@@ -159,7 +159,7 @@ func TestPingRoundTripIntegration(t *testing.T) {
 	if err != nil || before.State != rivertype.JobStateAvailable {
 		t.Fatalf("job did not wait for worker startup: %+v %v", before, err)
 	}
-	worker, err := NewWorker(pool, config.Config{MaxConcurrentBuilds: 2}, logger)
+	worker, err := NewWorker(pool, config.WorkerConfig{MaxConcurrentBuilds: 2}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestQueueConcurrencyIntegration(t *testing.T) {
 	gated := &gatedWorker{started: make(chan int64, 10), release: make(chan struct{})}
 	workers := river.NewWorkers()
 	river.AddWorker(workers, gated)
-	worker, err := river.NewClient(riverpgxv5.New(pool), workerConfig(config.Config{MaxConcurrentBuilds: 2}, logger, workers))
+	worker, err := river.NewClient(riverpgxv5.New(pool), workerConfig(config.WorkerConfig{MaxConcurrentBuilds: 2}, logger, workers))
 	if err != nil {
 		t.Fatal(err)
 	}
