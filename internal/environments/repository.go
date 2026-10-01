@@ -2,6 +2,7 @@ package environments
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -12,19 +13,37 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Artifact struct{ ContainerID, ImageTag string }
-type Result struct {
-	Status   string
-	Artifact Artifact
+type Artifact struct {
+	ContainerID string `json:"container_id,omitempty"`
+	ImageTag    string `json:"image_tag,omitempty"`
 }
+
+type Result struct {
+	Status        string   `json:"status"`
+	Artifact      Artifact `json:"artifact,omitempty"`
+	ErrorCode     string   `json:"error_code,omitempty"`
+	ReportFailure bool     `json:"report_failure,omitempty"`
+}
+
 type Snapshot struct {
 	Generation, AppliedGeneration int64
-	Status                        string
-	Artifact                      Artifact
+	Status, State, HeadSHA        string
+	Artifact, PendingArtifact     Artifact
+	PendingGeneration             int64
 }
-type Repository struct{ pool *pgxpool.Pool }
 
-func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
+type Repository struct {
+	pool       *pgxpool.Pool
+	operations *OperationBroker
+}
+
+func NewRepository(pool *pgxpool.Pool, operations ...*OperationBroker) *Repository {
+	r := &Repository{pool: pool}
+	if len(operations) > 0 {
+		r.operations = operations[0]
+	}
+	return r
+}
 
 // Snapshot is an optimization only. Apply always performs its own locked SQL guard.
 func (r *Repository) Snapshot(ctx context.Context, id int64) (Snapshot, error) {
@@ -37,27 +56,40 @@ func (r *Repository) Snapshot(ctx context.Context, id int64) (Snapshot, error) {
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Snapshot{}, fmt.Errorf("read environment: %w", err)
 	}
-	return Snapshot{Generation: pr.Generation, AppliedGeneration: e.AppliedGeneration, Status: e.Status, Artifact: Artifact{e.ContainerID.String, e.ImageTag.String}}, nil
+	s := Snapshot{Generation: pr.Generation, State: pr.State, HeadSHA: pr.HeadSha}
+	if err == nil {
+		s.AppliedGeneration = e.AppliedGeneration
+		s.Status = e.Status
+		s.Artifact = Artifact{ContainerID: e.ContainerID.String, ImageTag: e.ImageTag.String}
+		s.PendingArtifact = Artifact{ContainerID: e.PendingContainerID.String, ImageTag: e.PendingImageTag.String}
+		if e.PendingGeneration.Valid {
+			s.PendingGeneration = e.PendingGeneration.Int64
+		}
+	}
+	return s, nil
 }
 
-// Apply atomically checks the locked PR generation and writes the environment.
-// publish executes only after the guarded UPDATE returns a row, while that same
-// PR lock is still held. A newer webhook cannot commit between the guard and
-// router registration/reporting. A false result means superseded, not an error.
-func (r *Repository) Apply(ctx context.Context, request Request, result Result, publish func(context.Context, Artifact) error) (applied bool, err error) {
+// Apply checks the generation, updates only database state, and creates durable
+// publication intent plus a River wake-up in the same short transaction. External
+// systems are never called from this method or while its PR lock is held.
+func (r *Repository) Apply(ctx context.Context, request Request, result Result) (applied bool, err error) {
 	if err := request.validate(); err != nil {
 		return false, err
 	}
 	if result.Status != "running" && result.Status != "failed" && result.Status != "torn_down" {
 		return false, errors.New("invalid environment result status")
 	}
+	if r.operations == nil {
+		return false, errors.New("environment operation broker is not configured")
+	}
 	err = database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
 		previous, err := q.ApplyResult(ctx, dbgen.ApplyResultParams{
 			PrID: request.PullRequestID, ExpectedGeneration: request.Generation,
-			ResultStatus: result.Status, HeadSha: request.HeadSHA,
-			ContainerID: pgtype.Text{String: result.Artifact.ContainerID, Valid: result.Artifact.ContainerID != ""},
-			ImageTag:    pgtype.Text{String: result.Artifact.ImageTag, Valid: result.Artifact.ImageTag != ""},
+			ResultStatus: result.Status,
+			ContainerID:  pgtype.Text{String: result.Artifact.ContainerID, Valid: result.Artifact.ContainerID != ""},
+			ImageTag:     pgtype.Text{String: result.Artifact.ImageTag, Valid: result.Artifact.ImageTag != ""},
+			HeadSha:      request.HeadSHA,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			latest, readErr := q.ReadRequest(ctx, request.PullRequestID)
@@ -72,12 +104,33 @@ func (r *Repository) Apply(ctx context.Context, request Request, result Result, 
 		if err != nil {
 			return fmt.Errorf("apply guarded environment result: %w", err)
 		}
-		if publish != nil {
-			if err := publish(ctx, Artifact{previous.ContainerID.String, previous.ImageTag.String}); err != nil {
-				return fmt.Errorf("publish current result: %w", err)
+		applied = true
+		prior := Artifact{ContainerID: previous.ContainerID.String, ImageTag: previous.ImageTag.String}
+		priorPending := Artifact{ContainerID: previous.PendingContainerID.String, ImageTag: previous.PendingImageTag.String}
+		var kind OperationKind
+		payload := OperationPayload{Request: request, Result: result, Previous: prior}
+		switch result.Status {
+		case "running":
+			kind = ActivateRoute
+			payload.Artifact = result.Artifact
+			payload.PreviousPending = priorPending
+		case "failed":
+			if result.ReportFailure {
+				kind = ReportStatus
+				payload.ErrorCode = result.ErrorCode
+			}
+		case "torn_down":
+			kind = RemoveRoute
+			payload.Artifact = priorPending
+		}
+		if kind != "" {
+			key := operationIdempotencyKey(request, kind, "")
+			if _, err := r.operations.EnqueueTx(ctx, tx, OperationSpec{
+				Request: request, Kind: kind, IdempotencyKey: key, Payload: payload,
+			}); err != nil {
+				return fmt.Errorf("persist %s operation: %w", kind, err)
 			}
 		}
-		applied = true
 		return nil
 	})
 	if err != nil {
@@ -86,19 +139,127 @@ func (r *Repository) Apply(ctx context.Context, request Request, result Result, 
 	return applied, nil
 }
 
-// Cleanup serializes resource deletion against publication. The adapter must
-// delete only this PR's resources with generation <= request.Generation and
-// preserve keep, even when it belongs to an older generation still serving traffic.
-func (r *Repository) Cleanup(ctx context.Context, request Request, clean func(context.Context, Request, Artifact) error) error {
+// ScheduleResourceCleanup snapshots runtime inventory before entering a DB
+// transaction. The transaction only verifies ownership/references and persists
+// cleanup operations; deletion is performed later by an operation worker.
+func (r *Repository) ScheduleResourceCleanup(ctx context.Context, request Request, resources []Resource) error {
 	return database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
-		if _, err := q.LockRequest(ctx, request.PullRequestID); err != nil {
-			return fmt.Errorf("lock PR for cleanup: %w", err)
+		latest, err := q.LockRequest(ctx, request.PullRequestID)
+		if err != nil {
+			return fmt.Errorf("lock PR to schedule resource cleanup: %w", err)
 		}
-		e, err := q.ReadEnvironment(ctx, request.PullRequestID)
+		env, err := q.ReadEnvironment(ctx, request.PullRequestID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("read retained artifact: %w", err)
+			return fmt.Errorf("read active resources before cleanup: %w", err)
 		}
-		return clean(ctx, request, Artifact{e.ContainerID.String, e.ImageTag.String})
+		current := NewRequest(latest.ID, latest.Generation, latest.HeadSha, latest.State)
+		keep := []Artifact{{ContainerID: env.ContainerID.String, ImageTag: env.ImageTag.String}}
+		if env.PendingGeneration.Valid {
+			keep = append(keep, Artifact{ContainerID: env.PendingContainerID.String, ImageTag: env.PendingImageTag.String})
+		}
+		protected, err := listProtectedArtifacts(ctx, q, request.PullRequestID)
+		if err != nil {
+			return err
+		}
+		keep = append(keep, protected...)
+		for _, resource := range resources {
+			if resource.PullRequestID != request.PullRequestID || resource.Generation <= 0 || resource.Generation > current.Generation {
+				continue
+			}
+			if artifactReferenced(resource.Artifact, keep) {
+				continue
+			}
+			if err := r.enqueueCleanupTx(ctx, tx, current, resource); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+func listProtectedArtifacts(ctx context.Context, q *dbgen.Queries, pullRequestID int64) ([]Artifact, error) {
+	payloads, err := q.ListProtectingOperationPayloads(ctx, pullRequestID)
+	if err != nil {
+		return nil, fmt.Errorf("list artifacts protected by route operations: %w", err)
+	}
+	var protected []Artifact
+	for _, raw := range payloads {
+		var payload OperationPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, fmt.Errorf("decode protected route operation payload: %w", err)
+		}
+		protected = append(protected, payload.Artifact, payload.PreviousPending, payload.Previous)
+	}
+	return protected, nil
+}
+
+func (r *Repository) enqueueCleanupTx(ctx context.Context, tx pgx.Tx, request Request, resource Resource) error {
+	if resource.Artifact.ContainerID == "" && resource.Artifact.ImageTag == "" {
+		return nil
+	}
+	discriminator := fmt.Sprintf("generation:%d:container:%s:image:%s", resource.Generation, resource.Artifact.ContainerID, resource.Artifact.ImageTag)
+	payload := OperationPayload{Request: request, Resource: resource}
+	key := operationIdempotencyKey(request, CleanupArtifact, discriminator)
+	if _, err := r.operations.EnqueueTx(ctx, tx, OperationSpec{
+		Request: request, Kind: CleanupArtifact, IdempotencyKey: key, Payload: payload,
+	}); err != nil {
+		return fmt.Errorf("persist cleanup operation: %w", err)
+	}
+	return nil
+}
+
+func artifactReferenced(resource Artifact, references []Artifact) bool {
+	for _, ref := range references {
+		if resource.ContainerID != "" && resource.ContainerID == ref.ContainerID {
+			return true
+		}
+		if resource.ImageTag != "" && resource.ImageTag == ref.ImageTag {
+			return true
+		}
+	}
+	return false
+}
+
+// RecoverOperations recreates missing River wake-up jobs for due durable
+// operations and releases expired operation leases. It is safe to run alongside
+// workers: active River jobs deduplicate by operation ID, and claims are atomic.
+func (r *Repository) RecoverOperations(ctx context.Context, batchSize int32) (requeued int, err error) {
+	if batchSize <= 0 {
+		return 0, errors.New("operation recovery batch size must be positive")
+	}
+	if r.operations == nil {
+		return 0, errors.New("operation broker is not configured")
+	}
+	err = database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
+		q := dbgen.New(tx)
+		rows, err := q.ListOperationsForRecovery(ctx, batchSize)
+		if err != nil {
+			return fmt.Errorf("list operations for recovery: %w", err)
+		}
+		for _, row := range rows {
+			if row.State == string(OperationRunning) {
+				if _, err := q.ReleaseExpiredOperationLease(ctx, row.ID); err != nil {
+					return fmt.Errorf("release expired operation lease %d: %w", row.ID, err)
+				}
+				row, err = q.GetOperation(ctx, row.ID)
+				if err != nil {
+					return fmt.Errorf("reload recovered operation: %w", err)
+				}
+			}
+			state := OperationState(row.State)
+			if state != OperationPending && state != OperationRetryable {
+				continue
+			}
+			if err := r.operations.enqueueJobTx(ctx, tx, row.ID, OperationKind(row.Kind)); err != nil {
+				return err
+			}
+			requeued++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return requeued, nil
 }

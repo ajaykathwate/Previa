@@ -1,12 +1,12 @@
 # PR generation ordering
 
-**Status:** this document describes the generation-fencing implementation that
-currently exists and its test evidence. Its current `Repository.Apply` path keeps
-the PR lock while calling the publication interface. Do not connect real external
-adapters to that callback as-is. The target durable publication design replaces
-that boundary with short transactions and durable outbox operations; see
-[DESIGN_DURABLE_PUBLICATION.md](DESIGN_DURABLE_PUBLICATION.md). Keep this file as
-the record of current behavior until that design is implemented.
+**Status:** generation fencing and the database/River durable-publication
+foundation are implemented. `Repository.Apply` commits environment state plus an
+outbox row and River wake-up in one short transaction; external operations run in
+a separate worker boundary. Real Docker, route, GitHub-reporting adapters and
+production reconciliation scheduling remain unimplemented. See
+[DESIGN_DURABLE_PUBLICATION.md](DESIGN_DURABLE_PUBLICATION.md) for architecture
+and adapter requirements.
 
 The ordering core is implemented behind the runtime and publication interfaces in
 `internal/environments`. The HTTP webhook receiver, Docker build/runtime adapter,
@@ -62,8 +62,8 @@ WITH current_request AS MATERIALIZED (
     FOR UPDATE OF e
 )
 UPDATE environments e
-SET status = $result_status,
-    applied_generation = $expected_generation,
+SET status = CASE $result_status WHEN 'running' THEN 'publishing' ... END,
+    pending_generation = $expected_generation,
     ...
 FROM previous
 WHERE e.id = previous.id
@@ -82,16 +82,14 @@ completion commits. A simple `UPDATE environments ... FROM pull_requests` withou
 locking the PR would not protect against a concurrently updated desired state.
 
 Zero returned rows for an outdated generation means superseded: no environment
-write and no publication callback. A missing active environment for a still-current
+write and no publication intent. A missing active environment for a still-current
 request is an error; provisioning is a prerequisite, not silently created here.
-
-`Repository.Apply` retains that lock while calling `Publisher.Publish`. Thus the
-pre-registration gate also covers router registration and the final GitHub report:
-a newer event cannot commit between the SQL guard and these operations. Calls must
-be bounded and idempotent. External routing/GitHub operations are not made atomic
-by a PostgreSQL transaction: the adapter must compensate partial failures, and
-crash recovery/reconciliation remains a responsibility of the future adapters and
-Section 15 housekeeping. No real external adapters are registered in this phase.
+For successful builds, the transaction stores a pending candidate and inserts the
+route operation and River wake-up atomically. It does not set that candidate active
+until an external operation succeeds and a second short guarded transaction
+finalizes it. `OperationWorker` invokes its executor between those transactions,
+without a PR row lock. The executor contract requires idempotency and route
+generation fencing; those external guarantees await real adapters.
 
 ## Why close and newer commits win
 
@@ -103,8 +101,7 @@ Section 15 housekeeping. No real external adapters are registered in this phase.
 - A still-queued older build checks the generation before calling the runtime and
   skips building. Cleanup can still discover artifacts left by a prior attempt.
 - A failed current rebuild records failure while preserving the previous container,
-  image, and deployed SHA. Its publication receives the previous artifact so the
-  old preview stays routed while the newest commit's failure is reported.
+  image, and deployed SHA. A durable report operation is created separately.
 
 ## Uniqueness without dropping the latest request
 
@@ -129,20 +126,24 @@ after a worker loses its claim.
 
 ## Cleanup ownership
 
-`cleanup.go` contains the actual removal sequence; the runtime adapter supplies
-resource discovery and container/image API calls. It:
+`Service.cleanup` inventories resources outside a transaction and schedules cleanup;
+the durable cleanup operation worker invokes its executor outside transactions.
+The intended adapter behavior is:
 
-1. Locks the PR and reads the currently referenced artifact.
+1. Locks the PR briefly to read the currently referenced active and pending artifacts.
 2. Finds resources labeled with this PR and a generation at or below the obsolete
    request's generation, including partial builds/images left by previous attempts.
 3. Preserves the referenced preview and all resources from newer generations.
-4. Removes each obsolete container, then its owned image. Missing resources must be
-   treated as already removed by the adapter. Images need generation-specific tags.
-5. Returns cleanup errors for retry instead of silently completing with a leak.
+4. Persists cleanup work transactionally. The operation worker removes each
+   obsolete container, then its owned image, outside the transaction. Missing
+   resources must be treated as already removed by the adapter. Images need
+   generation-specific tags.
+5. Retryable cleanup errors remain durably represented with bounded exponential
+   backoff; terminal errors are stored as safe codes for operator visibility.
 
-A final cleanup failure is recorded as a discarded job. Later current-generation
-cleanup also covers older unreferenced resources; persistent runtime outages require
-reconciliation/operator recovery rather than being reported as successful cleanup.
+The durable operation row survives River job retention. The bounded reconciler can
+re-enqueue due operations and inventory PR-owned resources, but it is not yet wired
+to a production timer or real runtime adapter.
 
 ## Timeouts and rescue
 
@@ -180,4 +181,7 @@ Ordering integration tests create and remove isolated schemas. Coverage includes
 late success/failure, close during a build, stale queued work, cleanup retries,
 failed rebuild preservation, both directions of the SQL/event lock race,
 concurrent generation increments, enqueue rollback, captured arguments, real River
-success/close/terminal-error handoffs, and per-kind rescue behavior.
+success/close/terminal-error handoffs, per-kind rescue behavior, durable operation
+retry/finalization/recovery, pending-artifact protection, and proof that blocked
+external publication does not block a new PR event. Recovery coverage deletes an
+operation wake-up and expires a lease before verifying that recovery recreates work.

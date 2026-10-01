@@ -12,11 +12,12 @@ tests remain in [GENERATION_ORDERING.md](GENERATION_ORDERING.md).
 Use PostgreSQL as the durable source of desired PR state and environment state.
 Use River for at-least-once delivery of durable work. Keep generation checks and
 database mutations inside short transactions. Perform builds and external
-publication calls outside those transactions. Record every external action as a
-durable operation/outbox item in the same transaction that makes the action
-necessary. Make adapters idempotent and generation-aware, and run reconciliation
-to bring Docker and routing back to the committed database state after partial
-failure or a crash.
+publication calls outside those transactions. The transactional River job is the
+durable work record for build/teardown requests; route, reporting, and cleanup
+side effects each get a durable operation/outbox record plus a River wake-up job
+in the transaction that makes that action necessary. Make adapters idempotent and
+generation-aware, and run reconciliation to bring Docker and routing back to the
+committed database state after partial failure or a crash.
 
 The generation number is the fencing token. No result from generation `g` may
 replace state accepted for a later generation. The PR row remains the authority
@@ -31,28 +32,34 @@ no design can promise simultaneous commits across these independent systems.
 
 ## The current implementation
 
-The current code has a correct database generation fence, but it also performs
-publication from inside the transaction that holds the PR row lock:
+The repository now has the database-only foundation for the target lifecycle:
 
 1. A validated PR event increments `pull_requests.generation` and enqueues a River
    build/teardown job in one PostgreSQL transaction.
 2. A worker captures the PR ID, generation, SHA, and state. It skips work that is
    already stale and builds outside a database transaction.
-3. `ApplyResult` locks the PR row and updates the environment only if the captured
-   generation remains current.
-4. `Repository.Apply` calls `Publisher.Publish` before the same transaction commits.
-5. The worker cleans up superseded resources. On job completion, a transaction
-   releases the active unique job and enqueues the newest PR generation if needed.
+3. `ApplyResult` locks the PR row and atomically changes environment state only if
+   the captured generation remains current. A successful build becomes a pending
+   candidate; the previous active artifact remains recorded until activation is
+   finalized.
+4. `Repository.Apply` inserts the durable external-operation row and its River
+   wake-up job in the same transaction as that state transition. It performs no
+   external calls. Operations have idempotency keys, retry/terminal states, attempt
+   counts, availability time, and expiring leases.
+5. `OperationWorker` claims an operation in a short transaction, calls an
+   `OperationExecutor` with no database transaction open, then finalizes the result
+   in another short generation-checked transaction. External adapters are still
+   absent; in particular route executors must implement the generation-fencing
+   contract before they can be connected.
+6. `Reconciler` recovers due operation wake-ups and schedules cleanup for
+   unreferenced resources returned by a resource inventory interface. No production
+   inventory, route inspection, or periodic runner is wired yet.
 
-The SQL guard prevents an old worker from writing a stale environment result. The
-lock also prevents an event from committing between the generation check and the
-publisher call. However, the transaction remains open during external work. This
-can hold a connection and lock while a router or GitHub API is slow. If an external
-operation succeeds but the PostgreSQL commit fails, the external system and the
-database disagree. If a process crashes after an external operation, PostgreSQL
-cannot roll that operation back. The current runtime and publisher are interfaces,
-not registered production adapters; the risk must be addressed before connecting
-them. See `Repository.Apply` and `internal/environments/queries.sql`.
+This removes the long-held PR lock and makes accepted external intent durable. It
+does not claim exactly-once execution or an atomic PostgreSQL/external commit. Those
+properties come from idempotent adapters, external fencing, and reconciliation;
+the interfaces and database state machine are ready, but those real-system guarantees
+are not validated until the adapters exist.
 
 ## Required guarantees
 
@@ -89,11 +96,21 @@ event increments it exactly once, including close/reopen events. Webhook deliver
 deduplication must happen before processing so a retried GitHub delivery does not
 create a second logical generation.
 
-Environment rows describe the last accepted/active deployment and its artifact.
-They should also make pending deployment state explicit when the real lifecycle is
-built. A candidate is not the active deployment merely because Docker produced a
-container. Persist the candidate's generation, SHA, container/image identity, and
-lifecycle state before asking the router to use it.
+Environment rows describe the last accepted/active deployment and separately store
+pending deployment state. A candidate is not the active deployment merely because
+Docker produced a container. Persist the candidate's generation, SHA,
+container/image identity, and lifecycle state before asking the router to use it.
+
+The foundation uses these environment states: `queued` means a PR exists but has
+no active candidate; `publishing` m eans a healthy candidate is pending route
+activation; `running` means the candidate's activation operation committed; `failed`
+means the current build attempt failed while prior active and pending artifacts
+remain protected;
+`tearing_down` means a close has committed and route removal is pending; and
+`torn_down` means route removal was accepted and teardown state was committed.
+Pending candidate identity is stored separately from active artifact identity.
+The status and pending columns are implemented now; production transitions still
+depend on real build and route adapters.
 
 ### River jobs
 
@@ -306,36 +323,40 @@ For a close event, the close generation is newer than any in-flight build. The s
 fence rejects the candidate; teardown's generation-fenced route removal is the
 latest desired route state.
 
-## What can be implemented now
+## Foundation implemented before product integrations
 
-These changes do not require a real Docker runtime or router and can be built and
-tested against PostgreSQL, River, and deterministic fakes:
+These database/queue pieces are implemented and tested against PostgreSQL, River,
+and deterministic fakes:
 
-1. Document the desired/active/pending environment states and allowed transitions.
-2. Add durable publication-operation schema and sqlc queries, including uniqueness,
-   attempts, lease recovery, status history, and stale-generation predicates.
-3. Add a transactional operation scheduler that inserts the outbox row and River
-   job in the same transaction.
-4. Split current `Repository.Apply` responsibilities: short fenced DB transition
-   and operation creation only; no external `Publisher.Publish` call in the DB
-   transaction.
-5. Add operation workers that claim/finish rows, apply backoff, preserve terminal
-   failures, and reject stale generations. Keep the actual external adapter behind
-   a consumer-defined interface.
-6. Define idempotency/fencing contracts for route activation, reporting, and
-   cleanup. The route contract must specify what strictness the adapter provides.
-7. Add reconciler queries and a fake-system reconciler that repairs missing jobs,
-   incomplete operations, and orphaned labeled resources.
-8. Add failure-injection tests for worker crashes/timeouts at every table row in the
-   failure matrix, duplicate operation delivery, and B/close arriving during each
-   publication stage.
-9. Add operational visibility: operation age, retries, terminal failures, and
-   reconciliation outcomes in structured logs/metrics, without exposing secrets.
+- Environment rows distinguish pending candidates from active artifacts and use
+  `publishing`/`tearing_down` while external transitions are pending.
+- Migration `0004_durable_operations.sql` adds the operation state machine,
+  idempotency key, payload references, attempts, availability, lease, and safe
+  error-code fields. sqlc queries support claim, completion, retry, supersession,
+  recovery, activation, and teardown.
+- `OperationBroker` inserts an operation and River wake-up in the caller's
+  transaction. `Repository.Apply` performs only the generation-fenced state change
+  and durable intent insertion; it makes no external call.
+- `OperationWorker` leases work, applies per-kind timeouts and capped exponential
+  retry delay, calls the executor outside a DB transaction, and finalizes with a
+  short guarded transaction. Terminal failures remain in PostgreSQL with safe
+  error codes. Build failure reports are emitted only on the terminal River attempt;
+  intermediate attempts do not publish a final failure.
+- Executor contracts define idempotency, route generation fencing, and resource
+  cleanup. No concrete Docker, router, or GitHub executor is selected.
+- `Reconciler` can recover due operation wake-ups and schedule removal of
+  unreferenced resources from an inventory interface. It is bounded and restart
+  safe at the durable-operation boundary, but is not wired to a production timer.
+- Integration coverage proves generation/outbox behavior, latest generation wins,
+  PR close defeats an in-flight build, cleanup retries, operation retry/finalize,
+  and a blocked external call does not block a concurrent PR event.
+- Structured logs include operation identity, kind, PR, generation, and safe error
+  code. Metrics, alerting, exhaustive crash-point injection, and operator controls
+  remain before production use.
 
 The existing event-generation transaction, captured River arguments, job handoff,
-atomic SQL fence, and generation-order tests should remain. They are useful
-foundations, but the publisher must no longer execute inside the environment-result
-transaction once this design is implemented.
+atomic SQL fence, and generation-order tests remain. `Repository.Apply` no longer
+calls a publisher inside the environment-result transaction.
 
 ## What must be implemented with the build/runtime/routing features
 
@@ -358,9 +379,10 @@ with database-only fakes:
   publication step, inject process/provider failures, and verify that the latest
   generation wins and obsolete resources are eventually removed.
 
-Do not connect the real runtime to the current `Publisher.Publish` callback as it
-stands. First implement the short-transaction outbox boundary and the route
-fencing contract, then build the adapters against those interfaces.
+Do not connect a real runtime until the selected adapters implement these
+contracts. The short-transaction outbox boundary exists; route fencing semantics
+still need to be selected and validated with the actual routing design before
+production use.
 
 ## Guarantees and explicit limits
 

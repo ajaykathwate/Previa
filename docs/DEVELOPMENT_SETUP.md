@@ -90,7 +90,8 @@ docker compose -f deploy/docker-compose.yml exec -T postgres psql -U previa -d p
 ```
 
 **Expected:** Goose and River apply pending migrations (or report none pending).
-The table list shows application tables, `goose_db_version`, and River's `river_*` tables.
+The table list shows application tables (including `environment_operations` after
+Goose migration 4), `goose_db_version`, and River's `river_*` tables.
 Re-running `make migrate-up` is safe; it applies only pending migrations.
 
 The migration Make targets load `.env` automatically, falling back to `.env.example`
@@ -139,9 +140,11 @@ set +a
 TEST_DATABASE_URL="$DATABASE_URL" go test -count=1 -v ./...
 ```
 
-**Expected:** `TestPoolIntegration` and `TestMigrationConstraintsIntegration` pass
-rather than skip. The schema test rolls back its inserted data. `-count=1` forces
-a fresh run instead of using cached results.
+**Expected:** `TestPoolIntegration`, `TestMigrationConstraintsIntegration`, and
+environment ordering/outbox integration tests pass rather than skip. The schema
+tests create isolated schemas and remove them afterward. These tests use fake
+external systems; they do not build Docker images or create routes. `-count=1`
+forces a fresh run instead of using cached results.
 
 Manual equivalents of the main Make targets:
 

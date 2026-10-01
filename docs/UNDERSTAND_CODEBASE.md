@@ -12,10 +12,11 @@ Previa is a Go application for creating temporary preview environments for GitHu
 pull requests. The repository currently has a working HTTP server with GitHub
 OAuth sessions, PostgreSQL persistence, and a separate River worker. The browser
 home page and protected ping form provide a small runnable example. Generation-
-fenced build/teardown orchestration is implemented and tested behind interfaces,
-but the real webhook HTTP adapter, Docker runtime, router publication, and GitHub
-status/comment adapters are not yet connected. Do not infer that a preview build
-can currently be deployed end to end.
+generation-fenced build/teardown orchestration and the durable-publication
+database/River foundation are implemented and tested behind interfaces. The real
+webhook HTTP adapter, Docker runtime, router publication, GitHub reporting, and
+production reconciliation runner are not connected. Do not infer that a preview
+build can currently be deployed end to end.
 
 The code follows `cmd → internal/app → feature/platform packages`. Feature code
 is grouped by feature with flat package files; shared infrastructure lives under
@@ -36,13 +37,13 @@ queries into feature `dbgen` packages.
 | `internal/auth/` | GitHub OAuth, user upsert, sessions, CSRF, and logout. |
 | `internal/dashboard/` | Home page and ping form. |
 | `internal/webhooks/` | PR state/generation persistence and transactional enqueueing; HTTP validation/signature endpoint is not connected yet. |
-| `internal/environments/` | Generation-aware build/teardown jobs, result gating, cleanup, and worker contracts. External runtime/publication operations are interfaces. |
+| `internal/environments/` | Generation-aware build/teardown jobs, fenced active/pending state, durable operation outbox, operation worker/recovery, and reconciler interfaces. External adapters are not wired. |
 | `db/migrations/` | Goose-managed application schema migrations. |
 | `internal/*/dbgen/` | sqlc-generated database code for feature queries. |
 | `deploy/docker-compose.yml` | Local PostgreSQL service and persistent data volume. |
 | `DEVELOPMENT_SETUP.md` | Full local prerequisites, configuration, migrations, run commands, and checks. |
 | `TEMP.md` | Operational notes, process configuration, queue checks, and verification record. |
-| `docs/DESIGN_DURABLE_PUBLICATION.md` | Proposed durable, generation-fenced publication architecture and staged implementation boundary. |
+| `docs/DESIGN_DURABLE_PUBLICATION.md` | Durable, generation-fenced publication decision, implemented foundation, and remaining adapter boundary. |
 
 ## Processes and configuration
 
@@ -63,13 +64,15 @@ credentials through command-line flags. `.env.example` groups settings by proces
 
 The configured live queue job is `ping`, enqueued through the authenticated,
 CSRF-protected `POST /queue/ping` endpoint. River uniqueness is keyed by PR key
-across relevant active states. Build and teardown job implementations capture a
-monotonic PR generation. A result is accepted only while that generation remains
-current, with the PR lock held through the database update/publication boundary;
-stale work exits cleanly and disposes of resources it created. Current details and
-tests are in [GENERATION_ORDERING.md](GENERATION_ORDERING.md); the proposed
-short-transaction/outbox architecture is in
-[DESIGN_DURABLE_PUBLICATION.md](DESIGN_DURABLE_PUBLICATION.md).
+across relevant active states. Build and teardown jobs capture monotonic PR
+generations. Environment result writes are fenced in SQL; successful candidates
+remain pending until a durable publication operation is finalized. `Repository.Apply`
+inserts the operation row and River wake-up transactionally, while the operation
+executor runs outside the DB transaction. Operation worker and reconciler contracts
+are implemented but not registered in production because the Docker/router/GitHub
+adapters do not exist. Current details and tests are in
+[GENERATION_ORDERING.md](GENERATION_ORDERING.md); architecture and remaining
+integration requirements are in [DESIGN_DURABLE_PUBLICATION.md](DESIGN_DURABLE_PUBLICATION.md).
 
 ## Local commands
 

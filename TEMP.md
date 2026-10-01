@@ -12,9 +12,15 @@ instructions, see [DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md).
 - GitHub OAuth login, persisted users, server-side sessions, login rotation,
   protected routes, CSRF protection, and logout.
 - River v0.47.0 producer in the server and a separate worker process. The only
-  configured production job kind is `ping`. Generation-fenced build/teardown workers
-  are implemented behind runtime/publication interfaces and exercised in DB tests;
-  actual Docker, routing, GitHub, and webhook HTTP adapters remain unbuilt.
+  configured production job kind is `ping`. Generation-fenced build/teardown and
+  durable environment-operation workers are implemented behind interfaces and
+  exercised in PostgreSQL tests; they are not registered in the production worker.
+  Docker, routing, GitHub reporting, and webhook HTTP adapters remain unbuilt.
+- Goose migration 4 adds `environment_operations`, pending candidate fields, and
+  the durable publication state machine. `Repository.Apply` atomically stores a
+  generation-guarded state transition, operation row, and River wake-up. Operation
+  calls run outside database transactions; final database writes are generation
+  checked. The bounded reconciler contract exists but is not scheduled in app.
 - Authenticated, CSRF-protected `POST /queue/ping`, exposed through the home page's
   ping form. It returns HTTP 202 with `job_id` and `duplicate`.
 
@@ -69,7 +75,7 @@ values in a local `.env` are ignored. HTTP/OAuth/session settings are server-onl
 | Docker daemon / Docker Desktop | Runs the local PostgreSQL container | Local database availability. |
 | Compose `postgres` service | Persists users, sessions, application state, and River jobs | Both server and worker; queued work survives process restarts. |
 | `make run-server` | HTTP requests, OAuth, sessions, and job insertion | Browser access and enqueueing; does not execute jobs. |
-| `make run-worker` | Claims and executes queued ping jobs | Completion, retries, and River maintenance. Without it, jobs remain queued. |
+| `make run-worker` | Claims and executes queued ping jobs | Completion, retries, and River maintenance. Environment publication workers are not yet registered. |
 | `make dev` (Air) | Generates templates, builds, and restarts the server on changes | Optional alternative to `make run-server`; do not run both on the same port. |
 | `make migrate-up` | Runs Goose, then the environment-based River migration adapter | One-time schema changes after checkout/update; not a background process. |
 | `make generate` | Generates templ and sqlc Go code | Build preparation; already included in build/run targets. |
@@ -133,7 +139,7 @@ Air reloads the server only. Restart `make run-worker` manually after worker cha
    `attempt=1`, and a non-null `finalized_at`. An HTTP 202 alone proves insertion,
    not execution. Use `Ctrl+C` to stop server/worker when finished.
 
-### Inspect queued jobs in PostgreSQL
+### Inspect queued jobs and durable environment operations in PostgreSQL
 
 Open an interactive SQL console:
 
@@ -150,17 +156,24 @@ FROM river_job
 ORDER BY id DESC LIMIT 20;
 
 SELECT queue, state, count(*) FROM river_job GROUP BY queue, state ORDER BY queue, state;
+
+SELECT id, pull_request_id, generation, kind, state, attempts, available_at,
+       lease_expires_at, last_error_code
+FROM environment_operations
+ORDER BY id DESC LIMIT 20;
 ```
 
 - Enter `\watch 2` after a query to refresh every two seconds; `Ctrl+C` stops watching.
 - Inspect failures: `SELECT id, state, errors FROM river_job WHERE cardinality(errors) > 0;`
 - Exit with `\q`. A PostgreSQL GUI connected using `DATABASE_URL` can inspect the
-  same tables. For the River job-management UI, see the local-only instructions below.
+  same tables. No River UI is included; inspect these PostgreSQL tables directly.
 - Typical states: `available` waits for a worker, `running` executes, `completed`
   succeeded, `retryable` awaits another attempt, `discarded` exhausted attempts,
   and `cancelled` was permanently cancelled.
 - River removes completed jobs after its retention period (default 24 hours), so
   `river_job` is an operational view rather than a permanent audit log.
+  `environment_operations` retains publication intent/outcome beyond River
+  retention and is the durable inspection point for that work.
 
 ### Check uniqueness and transaction behavior
 
@@ -175,15 +188,18 @@ queue, and covers `available`, `pending`, `running`, `retryable`, and `scheduled
 Build/teardown use that policy and capture PR generation in job arguments. An
 active job hands off to the latest requested generation atomically on completion.
 Insertion uses River `InsertTx`; uncommitted jobs are invisible to workers and
-rollback removes them. Generation recording, guarded environment results, cleanup,
-and per-kind timeouts are explained in [GENERATION_ORDERING.md](docs/GENERATION_ORDERING.md).
+rollback removes them. Generation recording, guarded environment results, durable
+operations, retry policy, and remaining adapter work are explained in
+[GENERATION_ORDERING.md](docs/GENERATION_ORDERING.md) and
+[DESIGN_DURABLE_PUBLICATION.md](docs/DESIGN_DURABLE_PUBLICATION.md).
 Retries use River's default backoff, with five attempts for ping; invalid ping
 arguments cancel permanently. Ping is idempotent. Future jobs must also tolerate
 re-execution because workers provide at-least-once processing.
 
 ## Verification performed
 
-- Goose migration 3 adds PR/result generations and deployed SHA. Ordering tests
+- Goose migrations 3 and 4 add PR/result generations, deployed SHA, pending
+  candidate fields, and durable operation records. Ordering tests
   use real PostgreSQL/River and simulated runtime/publication adapters; see the
   generation document for scope and test coverage.
 
@@ -195,8 +211,8 @@ re-execution because workers provide at-least-once processing.
   tests passed. Queue tests cover completion, cross-kind/cross-queue active
   uniqueness, terminal-state release, transaction visibility/rollback, concurrency,
   and permanent cancellation. HTTP tests verify login/CSRF and key validation.
-- `make migrate-up` was rerun successfully with nothing pending; `river-status`
-  reports version 007. Entrypoints have no dedicated unit tests; app migration
+- `make migrate-up` applied Goose migration 4 successfully; `river-status`
+  reports River version 007. Entrypoints have no dedicated unit tests; app migration
   orchestration has integration tests. Worker startup/shutdown were exercised live.
 - Config split verified with a worker environment containing only `DATABASE_URL`
   and `MAX_CONCURRENT_BUILDS`: startup, DB health check, and shutdown passed.
@@ -205,6 +221,11 @@ re-execution because workers provide at-least-once processing.
   database URL nor password appeared in arguments. Fresh-schema migration and
   idempotence tests also pass; temporary test schemas are removed.
 - Server and worker were stopped after verification; PostgreSQL was left running.
+
+The current run also covers outbox rollback, durable operation retry/finalization,
+lost-wakeup/expired-lease recovery, pending-artifact protection, and proves that an
+external executor held behind a fake does not block a new PR event. It does not
+validate real router generation fencing or external-system recovery.
 
 River owns its schema using its pinned migrations, following the
 [official migration workflow](https://riverqueue.com/docs/migrations). No conflicting

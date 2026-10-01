@@ -22,7 +22,7 @@ func (w *BuildWorker) Work(ctx context.Context, job *river.Job[BuildArgs]) error
 	if err := request.validate(); err != nil {
 		return river.JobCancel(err)
 	}
-	err := w.Service.Build(ctx, request)
+	err := w.Service.build(ctx, request, job.Attempt >= job.MaxAttempts)
 	return finishJob(ctx, w.Broker, request, job, err)
 }
 
@@ -46,7 +46,7 @@ func (w *TeardownWorker) Work(ctx context.Context, job *river.Job[TeardownArgs])
 	return finishJob(ctx, w.Broker, request, job, err)
 }
 
-// RegisterWorkers is used when real runtime/publisher adapters are available.
+// RegisterWorkers is used when a real runtime adapter is available.
 // The production app does not register no-op build workers for missing adapters.
 func RegisterWorkers(workers *river.Workers, service *Service, broker *Broker) {
 	river.AddWorker(workers, &BuildWorker{Service: service, Broker: broker})

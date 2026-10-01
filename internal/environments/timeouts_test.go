@@ -13,7 +13,7 @@ import (
 
 func TestPerKindTimeoutsAndRescue(t *testing.T) {
 	f := newFixture(t)
-	s, err := env.NewService(f.repo, newRuntime(), &fakePublisher{}, f.logger, 15*time.Minute)
+	s, err := env.NewService(f.repo, newRuntime(), f.logger, 15*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

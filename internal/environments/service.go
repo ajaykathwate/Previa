@@ -22,29 +22,21 @@ type Runtime interface {
 }
 
 type Resource struct {
-	PullRequestID, Generation int64
-	Artifact                  Artifact
-}
-
-// Publisher is the boundary for routing/reporting, not a Docker/GitHub adapter.
-// Publish is called under the PR row lock, only for a current result. It must be
-// idempotent, preserve the previous route for failed builds, and compensate any
-// partial route change when returning an error. It must honor context deadlines.
-type Publisher interface {
-	Publish(context.Context, Request, Result, Artifact) error
+	PullRequestID int64    `json:"pull_request_id"`
+	Generation    int64    `json:"generation"`
+	Artifact      Artifact `json:"artifact"`
 }
 
 type Service struct {
 	repo         *Repository
 	runtime      Runtime
-	publisher    Publisher
 	logger       *slog.Logger
 	buildTimeout time.Duration
 }
 
-func NewService(repo *Repository, runtime Runtime, publisher Publisher, logger *slog.Logger, buildTimeout time.Duration) (*Service, error) {
-	if repo == nil || runtime == nil || publisher == nil || logger == nil {
-		return nil, errors.New("environment service requires repository, runtime, publisher, and logger")
+func NewService(repo *Repository, runtime Runtime, logger *slog.Logger, buildTimeout time.Duration) (*Service, error) {
+	if repo == nil || runtime == nil || logger == nil {
+		return nil, errors.New("environment service requires repository, runtime, and logger")
 	}
 	if buildTimeout == 0 {
 		buildTimeout = queue.DefaultBuildTimeout
@@ -52,13 +44,17 @@ func NewService(repo *Repository, runtime Runtime, publisher Publisher, logger *
 	if buildTimeout < 0 || buildTimeout > 24*time.Hour {
 		return nil, errors.New("invalid build timeout")
 	}
-	return &Service{repo: repo, runtime: runtime, publisher: publisher, logger: logger, buildTimeout: buildTimeout}, nil
+	return &Service{repo: repo, runtime: runtime, logger: logger, buildTimeout: buildTimeout}, nil
 }
 
 func (s *Service) cleanup(ctx context.Context, request Request) error {
 	cleanupCtx, cancel := context.WithTimeout(ctx, queue.CompletionGrace)
 	defer cancel()
-	if err := s.repo.Cleanup(cleanupCtx, request, s.removeSupersededResources); err != nil {
+	resources, err := s.runtime.Resources(cleanupCtx, request.PullRequestID)
+	if err != nil {
+		return fmt.Errorf("discover generation resources: %w", err)
+	}
+	if err := s.repo.ScheduleResourceCleanup(cleanupCtx, request, resources); err != nil {
 		return fmt.Errorf("clean generation resources: %w", err)
 	}
 	return nil
@@ -71,6 +67,10 @@ func (s *Service) superseded(ctx context.Context, request Request) error {
 }
 
 func (s *Service) Build(ctx context.Context, request Request) error {
+	return s.build(ctx, request, false)
+}
+
+func (s *Service) build(ctx context.Context, request Request, finalAttempt bool) error {
 	if err := request.validate(); err != nil {
 		return err
 	}
@@ -92,19 +92,17 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	cancel()
 	result := Result{Status: "running", Artifact: artifact}
 	if buildErr != nil {
-		result = Result{Status: "failed"}
+		result = Result{Status: "failed", ErrorCode: "build_failed", ReportFailure: finalAttempt}
 	}
 	if buildErr == nil && (artifact.ContainerID == "" || artifact.ImageTag == "") {
 		buildErr = errors.New("runtime returned an incomplete artifact")
-		result = Result{Status: "failed"}
+		result = Result{Status: "failed", ErrorCode: "incomplete_artifact", ReportFailure: finalAttempt}
 	}
 	// This is the pre-registration gate. Cancellation/timeouts still get a bounded
 	// chance to record a CURRENT failure and clean up, never a stale final state.
 	completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), queue.CompletionGrace)
 	defer completeCancel()
-	applied, err := s.repo.Apply(completeCtx, request, result, func(ctx context.Context, previous Artifact) error {
-		return s.publisher.Publish(ctx, request, result, previous)
-	})
+	applied, err := s.repo.Apply(completeCtx, request, result)
 	if err != nil {
 		return errors.Join(err, s.cleanup(completeCtx, request))
 	}
@@ -115,7 +113,13 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	if buildErr != nil {
 		return errors.Join(fmt.Errorf("build current generation: %w", buildErr), cleanupErr)
 	}
-	return cleanupErr
+	if cleanupErr != nil {
+		// The candidate and publication operation are already durable. Retrying the
+		// build could create a different artifact for the same idempotency key;
+		// reconciliation can rediscover cleanup work without rebuilding it.
+		s.logger.WarnContext(ctx, "post-build cleanup scheduling failed", "pr_id", request.PullRequestID, "generation", request.Generation, "error", cleanupErr)
+	}
+	return nil
 }
 
 func (s *Service) Teardown(ctx context.Context, request Request) error {
@@ -136,9 +140,7 @@ func (s *Service) Teardown(ctx context.Context, request Request) error {
 		return s.cleanup(ctx, request)
 	}
 	result := Result{Status: "torn_down"}
-	applied, err := s.repo.Apply(ctx, request, result, func(ctx context.Context, previous Artifact) error {
-		return s.publisher.Publish(ctx, request, result, previous)
-	})
+	applied, err := s.repo.Apply(ctx, request, result)
 	if err != nil {
 		return err
 	}

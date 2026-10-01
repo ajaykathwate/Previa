@@ -25,17 +25,39 @@ type EnvSecret struct {
 }
 
 type Environment struct {
-	ID                int64
-	PullRequestID     int64
-	ContainerID       pgtype.Text
-	ImageTag          pgtype.Text
-	Subdomain         string
-	Status            string
-	CreatedAt         pgtype.Timestamptz
-	LastActiveAt      pgtype.Timestamptz
-	ExpiresAt         pgtype.Timestamptz
-	AppliedGeneration int64
-	HeadSha           pgtype.Text
+	ID                 int64
+	PullRequestID      int64
+	ContainerID        pgtype.Text
+	ImageTag           pgtype.Text
+	Subdomain          string
+	Status             string
+	CreatedAt          pgtype.Timestamptz
+	LastActiveAt       pgtype.Timestamptz
+	ExpiresAt          pgtype.Timestamptz
+	AppliedGeneration  int64
+	HeadSha            pgtype.Text
+	PendingContainerID pgtype.Text
+	PendingImageTag    pgtype.Text
+	PendingGeneration  pgtype.Int8
+	PendingHeadSha     pgtype.Text
+}
+
+type EnvironmentOperation struct {
+	ID             int64
+	PullRequestID  int64
+	Generation     int64
+	Kind           string
+	IdempotencyKey string
+	Payload        []byte
+	State          string
+	Attempts       int32
+	AvailableAt    pgtype.Timestamptz
+	LeaseOwner     pgtype.Text
+	LeaseExpiresAt pgtype.Timestamptz
+	LastErrorCode  pgtype.Text
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	CompletedAt    pgtype.Timestamptz
 }
 
 type Installation struct {

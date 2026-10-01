@@ -11,31 +11,104 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const activatePendingEnvironment = `-- name: ActivatePendingEnvironment :one
+WITH locked AS MATERIALIZED (
+    SELECT e.id, e.container_id, e.image_tag
+    FROM environments e
+    JOIN pull_requests pr ON pr.id = e.pull_request_id
+    WHERE e.pull_request_id = $2
+      AND pr.generation = $1
+      AND pr.state = 'open'
+      AND e.pending_generation = $1
+      AND e.pending_container_id IS NOT NULL
+      AND e.pending_image_tag IS NOT NULL
+    FOR UPDATE OF pr, e
+)
+UPDATE environments e
+SET status = 'running',
+    applied_generation = $1,
+    container_id = e.pending_container_id,
+    image_tag = e.pending_image_tag,
+    head_sha = e.pending_head_sha,
+    pending_container_id = NULL,
+    pending_image_tag = NULL,
+    pending_generation = NULL,
+    pending_head_sha = NULL,
+    last_active_at = now()
+FROM locked
+WHERE e.id = locked.id
+RETURNING locked.container_id AS previous_container_id,
+          locked.image_tag AS previous_image_tag,
+          e.container_id AS active_container_id,
+          e.image_tag AS active_image_tag,
+          e.head_sha AS active_head_sha
+`
+
+type ActivatePendingEnvironmentParams struct {
+	ExpectedGeneration int64
+	PrID               int64
+}
+
+type ActivatePendingEnvironmentRow struct {
+	PreviousContainerID pgtype.Text
+	PreviousImageTag    pgtype.Text
+	ActiveContainerID   pgtype.Text
+	ActiveImageTag      pgtype.Text
+	ActiveHeadSha       pgtype.Text
+}
+
+func (q *Queries) ActivatePendingEnvironment(ctx context.Context, arg ActivatePendingEnvironmentParams) (ActivatePendingEnvironmentRow, error) {
+	row := q.db.QueryRow(ctx, activatePendingEnvironment, arg.ExpectedGeneration, arg.PrID)
+	var i ActivatePendingEnvironmentRow
+	err := row.Scan(
+		&i.PreviousContainerID,
+		&i.PreviousImageTag,
+		&i.ActiveContainerID,
+		&i.ActiveImageTag,
+		&i.ActiveHeadSha,
+	)
+	return i, err
+}
+
 const applyResult = `-- name: ApplyResult :one
 WITH current_request AS MATERIALIZED (
     SELECT pr.id FROM pull_requests pr
     WHERE pr.id = $6 AND pr.generation = $2
     FOR UPDATE
 ), previous AS MATERIALIZED (
-    SELECT e.id, e.pull_request_id, e.container_id, e.image_tag, e.subdomain, e.status, e.created_at, e.last_active_at, e.expires_at, e.applied_generation, e.head_sha FROM environments e
+    SELECT e.id, e.pull_request_id, e.container_id, e.image_tag, e.subdomain, e.status, e.created_at, e.last_active_at, e.expires_at, e.applied_generation, e.head_sha, e.pending_container_id, e.pending_image_tag, e.pending_generation, e.pending_head_sha FROM environments e
     JOIN current_request p ON p.id = e.pull_request_id
     WHERE e.status <> 'torn_down'
     FOR UPDATE OF e
 )
 UPDATE environments e
-SET status = $1,
-    applied_generation = $2,
-    container_id = CASE $1::text
-        WHEN 'running' THEN $3::text
-        WHEN 'torn_down' THEN NULL ELSE e.container_id END,
-    image_tag = CASE $1::text
-        WHEN 'running' THEN $4::text
-        WHEN 'torn_down' THEN NULL ELSE e.image_tag END,
-    head_sha = CASE WHEN $1::text = 'running'
-        THEN $5::text ELSE e.head_sha END
+SET status = CASE $1::text
+        WHEN 'running' THEN 'publishing'
+        WHEN 'torn_down' THEN 'tearing_down'
+        ELSE 'failed' END,
+    applied_generation = CASE WHEN $1::text = 'failed'
+        THEN $2::bigint ELSE e.applied_generation END,
+    pending_container_id = CASE WHEN $1::text = 'running'
+        THEN $3::text
+        WHEN $1::text = 'failed' THEN e.pending_container_id
+        ELSE NULL END,
+    pending_image_tag = CASE WHEN $1::text = 'running'
+        THEN $4::text
+        WHEN $1::text = 'failed' THEN e.pending_image_tag
+        ELSE NULL END,
+    pending_generation = CASE WHEN $1::text = 'running'
+        THEN $2::bigint
+        WHEN $1::text = 'failed' THEN e.pending_generation
+        ELSE NULL END,
+    pending_head_sha = CASE WHEN $1::text = 'running'
+        THEN $5::text
+        WHEN $1::text = 'failed' THEN e.pending_head_sha
+        ELSE NULL END
 FROM previous
 WHERE e.id = previous.id
-RETURNING previous.container_id, previous.image_tag
+RETURNING previous.container_id, previous.image_tag,
+          previous.pending_container_id, previous.pending_image_tag,
+          previous.pending_generation, previous.pending_head_sha
 `
 
 type ApplyResultParams struct {
@@ -48,13 +121,18 @@ type ApplyResultParams struct {
 }
 
 type ApplyResultRow struct {
-	ContainerID pgtype.Text
-	ImageTag    pgtype.Text
+	ContainerID        pgtype.Text
+	ImageTag           pgtype.Text
+	PendingContainerID pgtype.Text
+	PendingImageTag    pgtype.Text
+	PendingGeneration  pgtype.Int8
+	PendingHeadSha     pgtype.Text
 }
 
 // Lock the source-of-truth row, not only the environment. PostgreSQL rechecks
 // the generation predicate after waiting for a concurrent event's row lock.
-// Keep this lock until the result and its publication have committed.
+// Keep this lock only through the state transition and durable operation enqueue.
+// External network IO is always performed by a separate River worker.
 func (q *Queries) ApplyResult(ctx context.Context, arg ApplyResultParams) (ApplyResultRow, error) {
 	row := q.db.QueryRow(ctx, applyResult,
 		arg.ResultStatus,
@@ -65,8 +143,358 @@ func (q *Queries) ApplyResult(ctx context.Context, arg ApplyResultParams) (Apply
 		arg.PrID,
 	)
 	var i ApplyResultRow
-	err := row.Scan(&i.ContainerID, &i.ImageTag)
+	err := row.Scan(
+		&i.ContainerID,
+		&i.ImageTag,
+		&i.PendingContainerID,
+		&i.PendingImageTag,
+		&i.PendingGeneration,
+		&i.PendingHeadSha,
+	)
 	return i, err
+}
+
+const claimOperation = `-- name: ClaimOperation :one
+UPDATE environment_operations
+SET state = 'running', attempts = attempts + 1, lease_owner = $2,
+    lease_expires_at = now() + $3::interval,
+    updated_at = now(), last_error_code = NULL
+WHERE id = $1 AND available_at <= now()
+  AND (state IN ('pending', 'retryable')
+       OR (state = 'running' AND (lease_expires_at <= now() OR lease_owner = $2)))
+RETURNING id, pull_request_id, generation, kind, idempotency_key, payload,
+          state, attempts, available_at, lease_owner, lease_expires_at,
+          last_error_code, created_at, updated_at, completed_at
+`
+
+type ClaimOperationParams struct {
+	ID            int64
+	LeaseOwner    pgtype.Text
+	LeaseDuration pgtype.Interval
+}
+
+func (q *Queries) ClaimOperation(ctx context.Context, arg ClaimOperationParams) (EnvironmentOperation, error) {
+	row := q.db.QueryRow(ctx, claimOperation, arg.ID, arg.LeaseOwner, arg.LeaseDuration)
+	var i EnvironmentOperation
+	err := row.Scan(
+		&i.ID,
+		&i.PullRequestID,
+		&i.Generation,
+		&i.Kind,
+		&i.IdempotencyKey,
+		&i.Payload,
+		&i.State,
+		&i.Attempts,
+		&i.AvailableAt,
+		&i.LeaseOwner,
+		&i.LeaseExpiresAt,
+		&i.LastErrorCode,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const createOperation = `-- name: CreateOperation :one
+INSERT INTO environment_operations (
+    pull_request_id, generation, kind, idempotency_key, payload
+)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (idempotency_key) DO NOTHING
+RETURNING id, pull_request_id, generation, kind, idempotency_key, payload,
+          state, attempts, available_at, lease_owner, lease_expires_at,
+          last_error_code, created_at, updated_at, completed_at
+`
+
+type CreateOperationParams struct {
+	PullRequestID  int64
+	Generation     int64
+	Kind           string
+	IdempotencyKey string
+	Payload        []byte
+}
+
+func (q *Queries) CreateOperation(ctx context.Context, arg CreateOperationParams) (EnvironmentOperation, error) {
+	row := q.db.QueryRow(ctx, createOperation,
+		arg.PullRequestID,
+		arg.Generation,
+		arg.Kind,
+		arg.IdempotencyKey,
+		arg.Payload,
+	)
+	var i EnvironmentOperation
+	err := row.Scan(
+		&i.ID,
+		&i.PullRequestID,
+		&i.Generation,
+		&i.Kind,
+		&i.IdempotencyKey,
+		&i.Payload,
+		&i.State,
+		&i.Attempts,
+		&i.AvailableAt,
+		&i.LeaseOwner,
+		&i.LeaseExpiresAt,
+		&i.LastErrorCode,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const finalizePendingTeardown = `-- name: FinalizePendingTeardown :one
+WITH locked AS MATERIALIZED (
+    SELECT e.id, e.container_id, e.image_tag,
+           e.pending_container_id, e.pending_image_tag
+    FROM environments e
+    JOIN pull_requests pr ON pr.id = e.pull_request_id
+    WHERE e.pull_request_id = $2
+      AND pr.generation = $1
+      AND pr.state IN ('closed', 'merged')
+      AND e.status = 'tearing_down'
+    FOR UPDATE OF pr, e
+)
+UPDATE environments e
+SET status = 'torn_down',
+    applied_generation = $1,
+    container_id = NULL,
+    image_tag = NULL,
+    head_sha = NULL,
+    pending_container_id = NULL,
+    pending_image_tag = NULL,
+    pending_generation = NULL,
+    pending_head_sha = NULL
+FROM locked
+WHERE e.id = locked.id
+RETURNING locked.container_id, locked.image_tag,
+          locked.pending_container_id, locked.pending_image_tag
+`
+
+type FinalizePendingTeardownParams struct {
+	ExpectedGeneration int64
+	PrID               int64
+}
+
+type FinalizePendingTeardownRow struct {
+	ContainerID        pgtype.Text
+	ImageTag           pgtype.Text
+	PendingContainerID pgtype.Text
+	PendingImageTag    pgtype.Text
+}
+
+func (q *Queries) FinalizePendingTeardown(ctx context.Context, arg FinalizePendingTeardownParams) (FinalizePendingTeardownRow, error) {
+	row := q.db.QueryRow(ctx, finalizePendingTeardown, arg.ExpectedGeneration, arg.PrID)
+	var i FinalizePendingTeardownRow
+	err := row.Scan(
+		&i.ContainerID,
+		&i.ImageTag,
+		&i.PendingContainerID,
+		&i.PendingImageTag,
+	)
+	return i, err
+}
+
+const findOperationByKey = `-- name: FindOperationByKey :one
+SELECT id, pull_request_id, generation, kind, idempotency_key, payload,
+       state, attempts, available_at, lease_owner, lease_expires_at,
+       last_error_code, created_at, updated_at, completed_at
+FROM environment_operations WHERE idempotency_key = $1
+`
+
+func (q *Queries) FindOperationByKey(ctx context.Context, idempotencyKey string) (EnvironmentOperation, error) {
+	row := q.db.QueryRow(ctx, findOperationByKey, idempotencyKey)
+	var i EnvironmentOperation
+	err := row.Scan(
+		&i.ID,
+		&i.PullRequestID,
+		&i.Generation,
+		&i.Kind,
+		&i.IdempotencyKey,
+		&i.Payload,
+		&i.State,
+		&i.Attempts,
+		&i.AvailableAt,
+		&i.LeaseOwner,
+		&i.LeaseExpiresAt,
+		&i.LastErrorCode,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getOperation = `-- name: GetOperation :one
+SELECT id, pull_request_id, generation, kind, idempotency_key, payload,
+       state, attempts, available_at, lease_owner, lease_expires_at,
+       last_error_code, created_at, updated_at, completed_at
+FROM environment_operations WHERE id = $1
+`
+
+func (q *Queries) GetOperation(ctx context.Context, id int64) (EnvironmentOperation, error) {
+	row := q.db.QueryRow(ctx, getOperation, id)
+	var i EnvironmentOperation
+	err := row.Scan(
+		&i.ID,
+		&i.PullRequestID,
+		&i.Generation,
+		&i.Kind,
+		&i.IdempotencyKey,
+		&i.Payload,
+		&i.State,
+		&i.Attempts,
+		&i.AvailableAt,
+		&i.LeaseOwner,
+		&i.LeaseExpiresAt,
+		&i.LastErrorCode,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const listOperationsForRecovery = `-- name: ListOperationsForRecovery :many
+SELECT id, pull_request_id, generation, kind, idempotency_key, payload,
+       state, attempts, available_at, lease_owner, lease_expires_at,
+       last_error_code, created_at, updated_at, completed_at
+FROM environment_operations
+WHERE (state IN ('pending', 'retryable') AND available_at <= now())
+   OR (state = 'running' AND lease_expires_at <= now())
+ORDER BY available_at, id
+LIMIT $1
+`
+
+func (q *Queries) ListOperationsForRecovery(ctx context.Context, batchSize int32) ([]EnvironmentOperation, error) {
+	rows, err := q.db.Query(ctx, listOperationsForRecovery, batchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EnvironmentOperation
+	for rows.Next() {
+		var i EnvironmentOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.PullRequestID,
+			&i.Generation,
+			&i.Kind,
+			&i.IdempotencyKey,
+			&i.Payload,
+			&i.State,
+			&i.Attempts,
+			&i.AvailableAt,
+			&i.LeaseOwner,
+			&i.LeaseExpiresAt,
+			&i.LastErrorCode,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProtectingOperationPayloads = `-- name: ListProtectingOperationPayloads :many
+SELECT payload FROM environment_operations
+WHERE pull_request_id = $1
+  AND kind IN ('activate_route', 'remove_route')
+  AND state IN ('pending', 'running', 'retryable', 'failed')
+ORDER BY id
+`
+
+func (q *Queries) ListProtectingOperationPayloads(ctx context.Context, pullRequestID int64) ([][]byte, error) {
+	rows, err := q.db.Query(ctx, listProtectingOperationPayloads, pullRequestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items [][]byte
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		items = append(items, payload)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPullRequestsForReconciliation = `-- name: ListPullRequestsForReconciliation :many
+SELECT id, head_sha, state, generation
+FROM pull_requests
+WHERE id > $1
+ORDER BY id
+LIMIT $2
+`
+
+type ListPullRequestsForReconciliationParams struct {
+	AfterID   int64
+	BatchSize int32
+}
+
+type ListPullRequestsForReconciliationRow struct {
+	ID         int64
+	HeadSha    string
+	State      string
+	Generation int64
+}
+
+func (q *Queries) ListPullRequestsForReconciliation(ctx context.Context, arg ListPullRequestsForReconciliationParams) ([]ListPullRequestsForReconciliationRow, error) {
+	rows, err := q.db.Query(ctx, listPullRequestsForReconciliation, arg.AfterID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPullRequestsForReconciliationRow
+	for rows.Next() {
+		var i ListPullRequestsForReconciliationRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.HeadSha,
+			&i.State,
+			&i.Generation,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockCurrentOperationLease = `-- name: LockCurrentOperationLease :one
+SELECT id FROM environment_operations
+WHERE id = $1
+  AND state = 'running'
+  AND lease_owner = $2
+  AND lease_expires_at > now()
+FOR UPDATE
+`
+
+type LockCurrentOperationLeaseParams struct {
+	ID         int64
+	LeaseOwner pgtype.Text
+}
+
+func (q *Queries) LockCurrentOperationLease(ctx context.Context, arg LockCurrentOperationLeaseParams) (int64, error) {
+	row := q.db.QueryRow(ctx, lockCurrentOperationLease, arg.ID, arg.LeaseOwner)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const lockRequest = `-- name: LockRequest :one
@@ -92,17 +520,112 @@ func (q *Queries) LockRequest(ctx context.Context, id int64) (LockRequestRow, er
 	return i, err
 }
 
+const markOperationFailed = `-- name: MarkOperationFailed :execrows
+UPDATE environment_operations
+SET state = 'failed', lease_owner = NULL, lease_expires_at = NULL,
+    completed_at = now(), updated_at = now(), last_error_code = $3
+WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND lease_expires_at > now()
+`
+
+type MarkOperationFailedParams struct {
+	ID            int64
+	LeaseOwner    pgtype.Text
+	LastErrorCode pgtype.Text
+}
+
+func (q *Queries) MarkOperationFailed(ctx context.Context, arg MarkOperationFailedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markOperationFailed, arg.ID, arg.LeaseOwner, arg.LastErrorCode)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markOperationRetryable = `-- name: MarkOperationRetryable :execrows
+UPDATE environment_operations
+SET state = 'retryable',
+    available_at = now() + $3::interval,
+    lease_owner = NULL,
+    lease_expires_at = NULL, last_error_code = $4, updated_at = now()
+WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND lease_expires_at > now()
+`
+
+type MarkOperationRetryableParams struct {
+	ID            int64
+	LeaseOwner    pgtype.Text
+	Backoff       pgtype.Interval
+	LastErrorCode pgtype.Text
+}
+
+func (q *Queries) MarkOperationRetryable(ctx context.Context, arg MarkOperationRetryableParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markOperationRetryable,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Backoff,
+		arg.LastErrorCode,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markOperationSucceeded = `-- name: MarkOperationSucceeded :execrows
+UPDATE environment_operations
+SET state = 'succeeded', lease_owner = NULL, lease_expires_at = NULL,
+    completed_at = now(), updated_at = now(), last_error_code = NULL
+WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND lease_expires_at > now()
+`
+
+type MarkOperationSucceededParams struct {
+	ID         int64
+	LeaseOwner pgtype.Text
+}
+
+func (q *Queries) MarkOperationSucceeded(ctx context.Context, arg MarkOperationSucceededParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markOperationSucceeded, arg.ID, arg.LeaseOwner)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markOperationSuperseded = `-- name: MarkOperationSuperseded :execrows
+UPDATE environment_operations
+SET state = 'superseded', lease_owner = NULL, lease_expires_at = NULL,
+    completed_at = now(), updated_at = now(), last_error_code = NULL
+WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND lease_expires_at > now()
+`
+
+type MarkOperationSupersededParams struct {
+	ID         int64
+	LeaseOwner pgtype.Text
+}
+
+func (q *Queries) MarkOperationSuperseded(ctx context.Context, arg MarkOperationSupersededParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markOperationSuperseded, arg.ID, arg.LeaseOwner)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const readEnvironment = `-- name: ReadEnvironment :one
-SELECT container_id, image_tag, head_sha, status, applied_generation
+SELECT container_id, image_tag, head_sha, status, applied_generation,
+       pending_container_id, pending_image_tag, pending_generation, pending_head_sha
 FROM environments WHERE pull_request_id = $1 ORDER BY id DESC LIMIT 1
 `
 
 type ReadEnvironmentRow struct {
-	ContainerID       pgtype.Text
-	ImageTag          pgtype.Text
-	HeadSha           pgtype.Text
-	Status            string
-	AppliedGeneration int64
+	ContainerID        pgtype.Text
+	ImageTag           pgtype.Text
+	HeadSha            pgtype.Text
+	Status             string
+	AppliedGeneration  int64
+	PendingContainerID pgtype.Text
+	PendingImageTag    pgtype.Text
+	PendingGeneration  pgtype.Int8
+	PendingHeadSha     pgtype.Text
 }
 
 func (q *Queries) ReadEnvironment(ctx context.Context, pullRequestID int64) (ReadEnvironmentRow, error) {
@@ -114,6 +637,10 @@ func (q *Queries) ReadEnvironment(ctx context.Context, pullRequestID int64) (Rea
 		&i.HeadSha,
 		&i.Status,
 		&i.AppliedGeneration,
+		&i.PendingContainerID,
+		&i.PendingImageTag,
+		&i.PendingGeneration,
+		&i.PendingHeadSha,
 	)
 	return i, err
 }
@@ -139,4 +666,19 @@ func (q *Queries) ReadRequest(ctx context.Context, id int64) (ReadRequestRow, er
 		&i.Generation,
 	)
 	return i, err
+}
+
+const releaseExpiredOperationLease = `-- name: ReleaseExpiredOperationLease :execrows
+UPDATE environment_operations
+SET state = 'retryable', lease_owner = NULL, lease_expires_at = NULL,
+    updated_at = now(), last_error_code = 'lease_expired'
+WHERE id = $1 AND state = 'running' AND lease_expires_at <= now()
+`
+
+func (q *Queries) ReleaseExpiredOperationLease(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseExpiredOperationLease, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
