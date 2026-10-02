@@ -1,0 +1,85 @@
+/* Progressive reveal effects, animation keyframes, and reduced motion. */
+.reveal {
+  animation: rise-in .8s cubic-bezier(.2,.65,.3,1) both;
+}
+
+.delay-1 {
+  animation-delay: .1s;
+}
+
+.delay-2 {
+  animation-delay: .2s;
+}
+
+.delay-3 {
+  animation-delay: .3s;
+}
+
+.scroll-pending {
+  opacity: 0;
+  transform: translateY(16px);
+}
+
+.scroll-pending.is-visible {
+  opacity: 1;
+  transform: none;
+  transition: opacity .6s ease, transform .6s ease;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+}
+
+@keyframes preview-float {
+  0%,100% {
+    transform: translateY(0) rotate(-5deg);
+  }
+
+  50% {
+    transform: translateY(-9px) rotate(-4deg);
+  }
+
+}
+
+@keyframes confirmation-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .workflow-card:hover, .hero-cta:hover, .hero-cta:active {
+    transform: none;
+  }
+
+  .scroll-pending {
+    opacity: 1;
+    transform: none;
+  }
+
+}

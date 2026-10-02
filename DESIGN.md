@@ -859,6 +859,10 @@ v1.13.2 (MIT), a community shadcn-style Go/Templ project. This is not official
 React shadcn/ui or the v2 beta. No component JavaScript is currently required.
 Keep upstream provenance and local changes in `web/components/README.md`; updates
 are reviewed and pinned, not automatic. Worker startup does not require Tailwind.
+Shared palette/font tokens live in `web/styles/theme.css`; `site.css` composes
+base, home, workspace, confirmation and motion styles into the same compiled asset.
+Optional `web/tests/browser` regression tooling uses pinned Playwright v1.58.2 and
+Node.js 20+ only for development; the application has no Node.js runtime dependency.
 See `docs/UI_ARCHITECTURE.md` for the implemented presentation boundary.
 
 ### sqlc and migrations in a feature-based layout

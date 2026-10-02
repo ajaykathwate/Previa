@@ -2,12 +2,12 @@ package layouts
 
 import "github.com/ajaykathwatee/previa/web/components"
 
-templ App(title string, username string, csrfToken string) {
+templ App(title string, username string, csrfToken string, active components.NavItem) {
 	@Document(title) {
 		<div class="app-shell">
-			@components.Sidebar(title == "Dashboard")
+			@components.Sidebar(active)
 			<div class="app-column">
-				@components.AppNavbar(username, title)
+				@components.AppNavbar(username, title, active)
 				<main id="content" tabindex="-1" class="app-content">
 					{ children... }
 				</main>

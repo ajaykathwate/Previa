@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test test-browser browser-install lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -53,6 +53,14 @@ build: assets generate
 
 test: assets generate
 	$(GO) test ./...
+
+# Optional browser tooling is isolated from normal Go/application commands.
+browser-install:
+	npm ci --prefix web/tests/browser
+	npm exec --prefix web/tests/browser -- playwright install chromium
+
+test-browser: assets generate
+	RUN_BROWSER_TESTS=1 $(GO) test -count=1 -v ./web/tests/browser
 
 lint: assets generate
 	$(GO) vet ./...

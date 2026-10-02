@@ -320,3 +320,32 @@ rerun; existing HTTP auth/session/CSRF tests passed. No database schema changed.
   the final watcher uses the already-established Air polling mechanism.
 - Final `make build test lint` passed: build, existing tests, vet, and golangci-lint
   (zero issues). `git diff --check` passed; generated component signatures are current.
+
+## Approved UI maintainability improvements
+
+- Consolidated repeated CSS rules and exact existing palette/font values. `site.css`
+  now composes base, home, workspace, confirmation and motion sources; the build still
+  emits one embedded stylesheet. Workspace header/sidebar dimensions share variables.
+  Approved colors, typography, responsive appearance and modal behavior are preserved.
+- Split the existing plain browser script into private initializers for motion,
+  navigation, confirmation dialogs, account menus and queue forms. No framework,
+  browser module loader, frontend service or runtime dependency was introduced.
+- Replaced title-based navigation selection with `components.NavItem`. Overview is
+  selected explicitly; session details has no selected Overview. A layout regression
+  test confirms changing a page title cannot change selection.
+- Added optional locked Playwright v1.58.2 tooling under `web/tests/browser`. This
+  requires Node.js 20+ only when running browser checks. Normal application commands
+  remain Node-free. `make browser-install` prepares dependencies/browser once;
+  `make test-browser` runs a temporary test-only Go server without DB/OAuth credentials.
+  Both Air watchers exclude test dependencies/artifacts. Generated assets stay ignored.
+- All eight Chromium browser scenarios passed: access control, responsive sticky
+  navigation, mobile anchors, modal focus/scroll/dismissals, real CSRF/session logout,
+  queue pending/duplicate/network/server errors, reduced motion and no-JS behavior.
+  External GitHub/user/queue providers are fakes; real GitHub/DB integrations were not
+  rerun. Expired-session POSTs correctly fail CSRF before RequireUser runs; tests
+  preserve that existing middleware order. Anchor tests wait for the hash-change event.
+- All eight captured PNGs match their pre-refactor captures byte-for-byte. This is a
+  targeted visual check, not a claim of coverage for every possible browser/state.
+  `make build test lint` passed (build/tests/vet/golangci-lint, zero issues), and
+  `git diff --check` passed. Root README.md is unchanged; setup/UI/design/code-map docs
+  and HANDOFF are updated. No additional architectural changes need approval here.

@@ -1,0 +1,144 @@
+/* Shared typography, navigation primitives, and focus states. */
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 100px;
+}
+
+body {
+  margin: 0;
+}
+
+a, button, summary {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.site-container {
+  width: min(1200px, calc(100% - 96px));
+  margin-inline: auto;
+}
+
+.skip-link {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 100;
+  padding: 12px 20px;
+  background: #172326;
+  color: white;
+  border-radius: 8px;
+  transform: translateY(-160%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.eyebrow {
+  display: block;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: .15em;
+  line-height: 1.6;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 13px;
+  font-weight: 750;
+  font-size: 29px;
+  letter-spacing: -.06em;
+  color: #18272a;
+}
+
+.brand-period {
+  color: #e5643b;
+}
+
+.brand-mark {
+  position: relative;
+  display: block;
+  width: 27px;
+  height: 31px;
+}
+
+.brand-mark span {
+  position: absolute;
+  width: 24px;
+  height: 11px;
+  border-radius: 2px;
+  transform: skewY(-24deg);
+  left: 1px;
+  background: #e86e43;
+}
+
+.brand-mark span:nth-child(1) {
+  top: 0;
+  opacity: .4;
+}
+
+.brand-mark span:nth-child(2) {
+  top: 9px;
+  opacity: .7;
+}
+
+.brand-mark span:nth-child(3) {
+  top: 18px;
+}
+
+h1 em, h2 em {
+  font-family: var(--font-editorial);
+  font-weight: 400;
+  letter-spacing: -.055em;
+  color: #d56845;
+}
+
+.text-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 13px;
+  font-size: 14px;
+  font-weight: 550;
+  color: #34484a;
+  text-decoration: none;
+}
+
+.text-link:hover {
+  color: #ca5931;
+}
+
+.text-link svg, .text-link span {
+  transition: transform .2s;
+}
+
+.text-link:hover svg, .text-link:hover span {
+  transform: translate(3px, -2px);
+}
+
+.branch-icon {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+
+@media (max-width: 900px) {
+  .site-container {
+    width: calc(100% - 48px);
+  }
+
+}
+
+@media (max-width: 650px) {
+  .site-container {
+    width: calc(100% - 40px);
+  }
+
+  .brand {
+    font-size: 26px;
+  }
+
+}

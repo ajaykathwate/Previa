@@ -9,7 +9,7 @@ import (
 )
 
 templ Index(username string, csrfToken string) {
-	@layouts.App("Dashboard", username, csrfToken) {
+	@layouts.App("Dashboard", username, csrfToken, components.NavOverview) {
 		<div class="dashboard-heading"><div><span class="eyebrow">WORKSPACE OVERVIEW</span><h1>Your next change,<br/><em>a clearer perspective.</em></h1><p>Welcome back, { username }. This is your home for pull-request previews.</p></div><a href="/protected" class="identity-badge"><span class="status-dot" aria-hidden="true"></span>Signed in with GitHub</a></div>
 		<section id="repositories" tabindex="-1" class="workspace-panel repository-panel" aria-labelledby="repositories-title">
 			<div class="workspace-panel-top"><div><span class="eyebrow">START WITH YOUR SOURCE</span><h2 id="repositories-title">Repositories</h2></div><span class="upcoming-badge">Coming next</span></div>

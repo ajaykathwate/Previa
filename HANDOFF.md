@@ -84,8 +84,8 @@ Last updated: 2026-10-02
 
 ## Verification
 
-- Modal browser checks passed: focus/page/scroll, dismissals, simulated logout, mobile,
-  reduced motion/no-JS. Template polling and build/tests/vet/lint passed; see TEMP.md.
+- UI cleanup passed build/tests/vet/lint and eight durable browser scenarios; baseline
+  screenshots match. Optional `make browser-install`/`make test-browser`; see TEMP.md.
 - Goose schema is locally at migration 4; migrations 3 and 4 also apply in
   isolated-schema integration tests. No real containers/images/routes were created.
 - PostgreSQL/River tests cover late success/failure, close during build, stale queued
@@ -96,4 +96,4 @@ Last updated: 2026-10-02
 - Real River rescuer test verifies expired ping/build/teardown handling while a
   legitimately slow build remains running. Build/tests/vet/lint passed.
 - Earlier worker/OAuth-unset and credential-free migration checks passed.
-  PostgreSQL remains running; UI smoke server stopped. Root README unchanged.
+  UI uses shared theme tokens, named JS initializers and explicit NavItem; README unchanged.

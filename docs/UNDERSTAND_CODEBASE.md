@@ -35,7 +35,7 @@ queries into feature `dbgen` packages.
 | `internal/platform/queue/` | River client, ping job, queue registration, and per-kind timeout policy. |
 | `internal/platform/httpx/` | chi router and shared HTTP middleware. |
 | `web/layouts/`, `web/pages/` | Public HTML shell, authenticated app shell, and home/auth/dashboard pages; no backend imports. |
-| `web/components/`, `web/styles/` | Stable templUI component source, official Tailwind entry CSS and theme tokens. |
+| `web/components/`, `web/styles/` | Stable templUI source, explicit navigation keys, Tailwind CSS with shared theme tokens and base/home/workspace/confirmation/motion sources. |
 | `web/assets.go`, `web/static/` | Embedded browser assets, including generated CSS, local HTMX, and progressive menu/queue-form JavaScript. |
 | `internal/auth/` | GitHub OAuth, user upsert, sessions, CSRF, and logout. |
 | `internal/dashboard/` | Public home, protected dashboard/session routes, and CSRF-protected ping action. |
@@ -109,3 +109,9 @@ Build/test/lint/server targets prepare assets; Air does so before every rebuild.
 Worker startup generates Go code but does not install or run Tailwind.
 Component source is copied from templUI v1.13.2; generated Templ Go and CSS are
 ignored. Update dependencies deliberately, retaining license/provenance.
+
+Optional browser regression checks live in `web/tests/browser`: run
+`make browser-install` once (Node.js 20+), then `make test-browser`. The temporary
+Go fixture uses actual auth/session/CSRF middleware with fake external providers;
+no database or credentials are required. Ordinary Go tests skip these checks.
+See `web/tests/browser/README.md` for coverage and troubleshooting.

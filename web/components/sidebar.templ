@@ -1,17 +1,22 @@
 package components
 
-templ SidebarContent(active bool) {
+templ SidebarContent(active NavItem) {
 	<div class="sidebar-label">WORKSPACE</div>
 	<nav aria-label="Workspace navigation" class="sidebar-nav">
 		<a
 			href="/dashboard"
-			if active {
+			if active == NavOverview {
 				aria-current="page"
 			}
-		><span class="nav-symbol" aria-hidden="true">◈</span>Overview<span class="active-dot" aria-hidden="true"></span></a>
+		>
+			<span class="nav-symbol" aria-hidden="true">◈</span>Overview
+			if active == NavOverview {
+				<span class="active-dot" aria-hidden="true"></span>
+			}
+		</a>
 		<a href="/dashboard#repositories"><span class="nav-symbol" aria-hidden="true">⌘</span>Repositories<span class="nav-upcoming">Soon</span></a>
-<a href="/dashboard#environments"><span class="nav-symbol" aria-hidden="true">◎</span>Environments<span class="nav-upcoming">Soon</span></a>
-<a href="/dashboard#builds"><span class="nav-symbol" aria-hidden="true">↗</span>Builds<span class="nav-upcoming">Soon</span></a>
+		<a href="/dashboard#environments"><span class="nav-symbol" aria-hidden="true">◎</span>Environments<span class="nav-upcoming">Soon</span></a>
+		<a href="/dashboard#builds"><span class="nav-symbol" aria-hidden="true">↗</span>Builds<span class="nav-upcoming">Soon</span></a>
 		<a href="/dashboard#queue-check"><span class="nav-symbol" aria-hidden="true">↗</span>Developer tools</a>
 	</nav>
 	<div class="sidebar-note">
@@ -24,7 +29,7 @@ templ SidebarContent(active bool) {
 	</div>
 }
 
-templ Sidebar(active bool) {
+templ Sidebar(active NavItem) {
 	<aside class="app-sidebar">
 		<div class="sidebar-brand">
 			@Brand()

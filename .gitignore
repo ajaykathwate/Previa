@@ -29,3 +29,7 @@
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Optional browser test dependencies and screenshots.
+/web/tests/browser/node_modules/
+/web/tests/browser/artifacts/

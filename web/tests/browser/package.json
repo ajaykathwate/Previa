@@ -1,0 +1,7 @@
+{
+  "name": "previa-browser-tests",
+  "private": true,
+  "description": "Optional browser regression tooling; not an application dependency",
+  "engines": {"node": ">=20"},
+  "devDependencies": {"playwright": "1.58.2"}
+}

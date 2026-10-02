@@ -44,4 +44,34 @@
   --input: oklch(0.922 0 0);
   --ring: #c85d37;
   --radius: 0.625rem;
+
+  /* Approved composition tokens: exact existing palette and font stacks. */
+  --ui-white: #fff;
+  --ui-text-muted: #66735c;
+  --ui-surface-card: #fffefb;
+  --ui-text-strong: #30402b;
+  --ui-text-heading: #3c4d30;
+  --ui-accent-forest: #728451;
+  --ui-border: #e0e5d5;
+  --ui-border-shell: #e1e5d7;
+  --ui-border-muted: #dce2cf;
+  --ui-border-panel: #dfe5d5;
+  --ui-border-page: #e7e6df;
+  --ui-action: #b94e2d;
+  --ui-action-hover: #a84223;
+  --ui-action-shadow: #b9532f;
+  --ui-action-glow: #cf6e3c20;
+  --ui-art-grid: #aeb8b51b;
+  --ui-art-branch: #bcc4ad;
+  --ui-text-on-forest: #a3b09c;
+  --ui-surface-sidebar: #f0f2e9;
+  --ui-text-navigation: #344631;
+  --ui-text-link: #526745;
+  --ui-surface-badge: #f0f4e9;
+  --ui-surface-icon: #edf2e5;
+  --ui-border-footer: #e9eddf;
+  --font-editorial: Georgia, 'Times New Roman', serif;
+  --font-illustration: Georgia, serif;
+  --font-code: ui-monospace, monospace;
+
 }

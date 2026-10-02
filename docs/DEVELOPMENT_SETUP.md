@@ -358,3 +358,23 @@ change. It uses polling for WSL-mounted folders, needs no `.env`/database, and d
 not start an HTTP server. Stop with Ctrl+C. Use `make dev` instead when you also
 want server reload; one watcher is sufficient. `make templates` regenerates only
 the presentation code once. `make generate` also generates sqlc database code.
+
+## Optional browser regression checks
+
+These checks require Node.js 20+ only for development; running the application,
+Tailwind, and ordinary Go checks still requires no Node.js.
+
+```sh
+make browser-install
+make test-browser
+```
+
+- Run the first command once to install locked Playwright v1.58.2 and Chromium.
+- The second prepares assets/templates and starts a temporary test-only server.
+  **Expected:** all eight browser scenarios pass and the server stops automatically.
+- No Postgres, `.env`, or GitHub credentials are needed. GitHub and queue providers
+  are fakes; session rotation, CSRF and logout use the actual middleware.
+- On Linux, missing browser system libraries may require Playwright's OS dependency
+  installation. See [browser checks](../web/tests/browser/README.md) for commands,
+  screenshots and troubleshooting. These checks do not validate real GitHub consent
+  or PostgreSQL integrations.

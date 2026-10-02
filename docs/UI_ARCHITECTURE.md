@@ -2,7 +2,8 @@
 
 The server renders Templ pages and serves embedded assets. HTMX is loaded locally;
 existing forms retain their ordinary HTTP behavior. There is no React application,
-Node.js dependency, or frontend service.
+Node.js runtime dependency, or frontend service. Optional browser tests use Node.js
+only as development tooling.
 
 ## Ownership and dependencies
 
@@ -34,13 +35,21 @@ adds public navigation for standalone pages; `layouts.App` composes the shared
 navbar, sidebar, mobile workspace navigation, and authenticated content slot.
 Authentication remains in handlers/middleware, never in templates.
 
-`web/styles/site.css` defines the landing-page and application-shell composition,
-responsive layouts, hover transforms, and CSS entrance/ambient animations. Reduced
+`web/styles/site.css` imports `base.css`, `home.css`, `workspace.css`,
+`confirmation.css`, and `motion.css`. Each owns its base and responsive rules;
+`theme.css` centralizes the approved palette and fonts without changing their values.
+The existing pipeline still produces one embedded stylesheet. Duplicate selector
+declarations are consolidated rather than overridden by later blocks. Reduced
 motion disables animations and transforms. Decorative workflow illustrations are
 explicitly labeled as concepts; dashboard identity and queue results use actual
 server values. No invented metrics or activity are displayed.
 
-`web/static/js/ui.js` progressively enhances native account menus with outside-click
+`layouts.App` receives an explicit `components.NavItem`; page titles do not decide
+which navigation item is active. Only Overview and no-selection exist today.
+
+`web/static/js/ui.js` has private initializers for motion, navigation, confirmation
+dialogs, account menus, and queue forms. It remains one plain browser script.
+It progressively enhances native account menus with outside-click
 and Escape dismissal and the existing queue form with inline pending/success/error
 feedback. Logout remains a normal CSRF-protected POST. The script adds no application
 dependency or frontend service; without it, menus and HTTP forms remain usable.
@@ -132,3 +141,16 @@ Run `make generate`, then `go build ./...`. For template-only work, run
 on changes. If the build passes but diagnostics remain, reload the editor
 workspace/restart its Go and Templ language servers, and check it uses this
 repository and its required Go toolchain. Do not hand-edit generated Go files.
+
+## Repeatable browser verification
+
+`web/tests/browser` contains an opt-in Go HTTP fixture and Playwright v1.58.2 checks.
+Run `make browser-install` once with Node.js 20+, then `make test-browser`. Ordinary
+build/test/lint commands require no Node.js and skip the browser fixture. Air excludes
+this directory so installed dependencies and screenshots do not trigger rebuilds.
+The fixture uses real authentication/session/CSRF middleware with an in-memory
+session store and fake GitHub/user/queue providers. It needs no application server,
+Postgres, OAuth credentials, or `.env`; it never enters the production application.
+Checks cover responsive/sticky navigation, mobile anchors, modal focus/dismissal,
+logout/session deletion, CSRF failures, queue feedback, motion and no-JavaScript
+behavior. See [browser test instructions](../web/tests/browser/README.md).
