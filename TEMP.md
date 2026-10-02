@@ -104,23 +104,17 @@ Air reloads the server only. Restart `make run-worker` manually after worker cha
 2. **Terminal A — server:**
 
    ```sh
-   set -a
-   . ./.env
-   set +a
    make run-server
    ```
 
    Expected: `database health check passed`, then `HTTP server listening`.
-   `set -a` exports assignments when sourcing `.env`; `set +a` turns that off.
-   Repeat the export block in every new terminal. `make dev` can replace the
-   final command if you want server live reload.
+   The run target loads `.env` automatically; already exported variables take
+   precedence. Use `ENV_FILE=.env.local` to select another file. Direct `go run`
+   still needs manual exports. Use `make dev` for server live reload.
 
 3. **Terminal B — worker:**
 
    ```sh
-   set -a
-   . ./.env
-   set +a
    make run-worker
    ```
 

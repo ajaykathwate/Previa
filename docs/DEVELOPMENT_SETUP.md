@@ -77,10 +77,18 @@ can pass startup validation but cannot complete GitHub sign-in. These credential
 come from an **OAuth App**, separate from a repository-integration GitHub App.
 See [GitHub's registration instructions](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app).
 
-### Loading configuration into a terminal
+### Loading configuration
 
-The server and worker read environment variables, not `.env` files directly.
-From the repository root, load the file once in each terminal that runs them:
+Run `make run-server` or `make run-worker` directly: each target loads `.env` and
+exports its values for that process. Already exported variables take precedence;
+if you previously loaded an older `.env` into your shell, open a fresh terminal
+or reload it before launching. Use `make run-server ENV_FILE=.env.local` (or the
+worker equivalent) to select another file. A missing default `.env` uses only the
+inherited environment; a missing explicitly selected file stops with an error.
+Run targets do not fall back to placeholder credentials in `.env.example`.
+
+The Go binaries still read environment variables directly. For **direct `go run`**
+or manual migration commands, load your trusted local file into the terminal:
 
 ```sh
 set -a
@@ -100,7 +108,8 @@ set +a
 
 | Command | Loads `.env` automatically? |
 | --- | --- |
-| `make run-server`, `make run-worker`, direct `go run` | No; use the export block once per terminal. |
+| `make run-server`, `make run-worker` | Yes; exported variables take precedence. |
+| Direct `go run` | No; use the export block once per terminal. |
 | `make dev` | Yes; Air loads `.env` on startup. Restart Air after configuration changes. |
 | `make migrate-up`, `make migrate-down`, `make river-migrate-up`, `make river-status` | Yes; an exported `DATABASE_URL` takes precedence. |
 | `make build`, `make lint`, `make generate` | No application configuration required. |
@@ -206,22 +215,17 @@ Manual equivalents of the main Make targets:
 | `make test` | Generate templates, then `go test ./...` |
 | `make lint` | Generate templates, then `go vet ./...` and `go tool -modfile=tools/go.mod golangci-lint run` |
 | `make generate` | `go tool -modfile=tools/go.mod templ generate`; sqlc generation is conditional as described above |
-| `make run-server` | Generate templates, then `go run ./cmd/server` |
-| `make run-worker` | Generate templates, then `go run ./cmd/worker` |
+| `make run-server` | Generate templates, load local env with exported overrides, then `go run ./cmd/server` |
+| `make run-worker` | Generate templates, load local env with exported overrides, then `go run ./cmd/worker` |
 | `make dev` | `go tool -modfile=tools/go.mod air -c .air.toml` |
 
 ## 6. Run the application
 
-In one terminal, load your configuration and start the server:
+In one terminal, start the server (configuration loads automatically):
 
 ```sh
-set -a
-. ./.env
-set +a
 make run-server
 ```
-
-Skip the first three lines if this terminal already has the current `.env` values.
 
 Open <http://localhost:8080/>. Successful startup logs `database health check passed`
 followed by `HTTP server listening`. The server checks PostgreSQL before accepting
@@ -234,9 +238,6 @@ test flow, follow [Test GitHub sign-in locally](AUTH_TESTING.md).
 Start the worker in a second terminal:
 
 ```sh
-set -a
-. ./.env
-set +a
 make run-worker
 ```
 
@@ -262,11 +263,11 @@ Air reloads the server; restart the worker separately after changes to worker co
 
 - Start or resume PostgreSQL with the Compose `up -d --wait postgres` command above.
 - After pulling changes, run `make migrate-up`; run `make generate` when needed.
-- Start the server with `make dev` for automatic `.env` loading and live reload,
-  or use `make run-server` after loading `.env` once in that terminal. Start
-  `make run-worker` in a second terminal after loading `.env` there once.
-- After editing `.env`, reload it in terminals using manual exports and restart
-  affected processes. For `make dev`, restart Air to load the changed file.
+- Start the server with `make dev` for live reload or `make run-server` without
+  reload. Start `make run-worker` in a second terminal; no manual env export needed.
+- After editing `.env`, restart affected processes; each run command reloads the
+  file. Previously exported shell values still take precedence: use a fresh
+  terminal or reload manual exports if necessary. Restart Air after config edits.
 - Make changes, then run `make build`, `make lint`, and `make test`. For database
   changes, also run the integration command from step 5.
 - Stop the local database when finished:
@@ -300,9 +301,9 @@ Air reloads the server; restart the worker separately after changes to worker co
 - **Go version or tool errors:** confirm `go version` meets both modules' requirement
   and re-run their dependency downloads. The first tool invocation may take time to
   compile; a separate global tool installation is unnecessary.
-- **Missing configuration or stale values:** load `.env` in the terminal running
-  the command, and restart the process after changes. `make run-server` and
-  `make run-worker` do not load the file automatically.
+- **Missing configuration or stale values:** check `.env` (or `ENV_FILE`) and
+  restart the process after changes. Exported variables override file values;
+  use a fresh terminal if old exports remain. Direct `go run` needs manual exports.
 - **GitHub sign-in fails:** replace OAuth placeholders and check the registered
   callback matches `APP_BASE_URL` plus `/auth/github/callback`. Use `localhost`
   consistently in the browser for the documented local setup. Follow

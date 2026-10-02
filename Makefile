@@ -2,6 +2,22 @@ GO ?= go
 TOOLS = $(GO) tool -modfile=tools/go.mod
 ENV_FILE ?= .env
 
+# Load trusted shell assignments for local runs, preserving exported overrides.
+# export -p emits shell-quoted declarations; restore those without logging values.
+# A missing default .env allows deployments to use only their process environment.
+define load_run_env
+set -eu; \
+previa_exports=$$(export -p); \
+previa_env_file="$(ENV_FILE)"; \
+case "$$previa_env_file" in /*|./*|../*) ;; *) previa_env_file="./$$previa_env_file" ;; esac; \
+if [ -f "$$previa_env_file" ]; then \
+	set -a; . "$$previa_env_file"; set +a; \
+elif [ "$(ENV_FILE)" != '.env' ]; then \
+	echo 'Environment file not found' >&2; exit 1; \
+fi; \
+eval "$$previa_exports";
+endef
+
 .PHONY: generate build test lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 generate:
@@ -23,13 +39,13 @@ lint: generate
 	$(TOOLS) golangci-lint run
 
 run-server: generate
-	$(GO) run ./cmd/server
+	@$(load_run_env) exec $(GO) run ./cmd/server
 
 dev:
 	$(TOOLS) air -c .air.toml
 
 run-worker: generate
-	$(GO) run ./cmd/worker
+	@$(load_run_env) exec $(GO) run ./cmd/worker
 
 # DATABASE_URL from the environment takes precedence over the local env file.
 # Fall back to .env.example for a fresh local checkout. Files use shell syntax.

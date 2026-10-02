@@ -24,15 +24,15 @@ Last updated: 2026-10-02
 - River migrations use `cmd/river-migrate` / `internal/app/river_migrate.go` and
   DATABASE_URL from environment; Goose uses GOOSE_DBSTRING. No credential flags.
 - Set TEST_DATABASE_URL for DB tests. New ordering tests create/drop isolated schemas.
-- Export `.env`, then run `make run-server` and `make run-worker` separately.
+- `make run-server` and `make run-worker` load `.env` with exported overrides.
   `make dev` runs Air for server reload only; generated dbgen/templ output is excluded.
 - Config: SharedConfig has DATABASE_URL (also River's connection); ServerConfig adds
   HTTP/OAuth/session settings; WorkerConfig adds MAX_CONCURRENT_BUILDS and optional
   BUILD_TIMEOUT (default 12m). Unbuilt integrations have no config fields.
 - `docs/UNDERSTAND_CODEBASE.md` is the current codebase map;
   `docs/DEVELOPMENT_SETUP.md` is the local setup guide. `README.md` links the setup guide.
-- Setup guide includes config sources, OAuth registration, and env loading once per
-  terminal (or after edits); Air/migration targets load the file automatically.
+- Setup guide includes config sources, OAuth registration, and automatic Make env
+  loading; direct Go commands still need exports. Restart processes after edits.
   AGENTS.md requires keeping it in sync with relevant configuration/setup changes.
 
 ## Completed foundation and authentication
@@ -85,7 +85,7 @@ Last updated: 2026-10-02
 
 ## Verification
 
-- Setup-doc update: `make build test lint` passed; DB integration tests not rerun.
+- Make env-loader smoke checks/build/tests/vet/lint passed; DB tests not rerun.
 - Goose schema is locally at migration 4; migrations 3 and 4 also apply in
   isolated-schema integration tests. No real containers/images/routes were created.
 - PostgreSQL/River tests cover late success/failure, close during build, stale queued

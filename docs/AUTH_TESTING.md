@@ -29,12 +29,10 @@ From the repository root:
 ```sh
 docker compose -f deploy/docker-compose.yml up -d --wait postgres
 make migrate-up
-set -a
-. ./.env
-set +a
 make run-server
 ```
 
+The run target loads `.env`; exported variables take precedence.
 Expect the database health-check and HTTP listening messages. Use `make dev` for
 reloads; Air loads `.env` itself. Restart it after changing credentials in `.env`.
 

@@ -89,8 +89,9 @@ with an empty application database. `make migrate-up` uses exported
 Use `ENV_FILE=.env.local` to select a different local file. Env files are sourced
 as shell files: quote values containing shell metacharacters or whitespace.
 
-The Go config loader only reads process environment variables. To load local
-values into your shell, use `set -a; . ./.env; set +a`. The server requires
+`make run-server` and `make run-worker` load `.env` automatically, with exported
+variables taking precedence; `ENV_FILE=.env.local` selects another file. Direct
+`go run` still needs `set -a; . ./.env; set +a`. The server requires
 `DATABASE_URL`, `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, and
 `SESSION_SECRET` (at least 32 characters). HTTP address/origin have local defaults.
 The worker requires only `DATABASE_URL` and a positive `MAX_CONCURRENT_BUILDS`.

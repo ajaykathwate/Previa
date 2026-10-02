@@ -82,8 +82,8 @@ normal flow is:
 ```sh
 docker compose -f deploy/docker-compose.yml up -d --wait postgres
 make migrate-up
-make run-server   # terminal 1, after exporting .env
-make run-worker   # terminal 2, after exporting .env
+make run-server   # terminal 1; loads .env automatically
+make run-worker   # terminal 2; loads .env automatically
 ```
 
 Useful checks are `make generate`, `make build`, `make lint`, and `make test`.
