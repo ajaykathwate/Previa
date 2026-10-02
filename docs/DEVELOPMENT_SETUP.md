@@ -7,7 +7,7 @@ in Bash or Zsh (on Windows, use WSL2 with Docker integration enabled).
 ## 1. Prerequisites
 
 - Go **1.26.5 or newer**, as required by `go.mod` and `tools/go.mod`.
-- Git and GNU Make.
+- Git, GNU Make, and OpenSSL (to generate the local OAuth-state secret).
 - Docker Engine with the Compose plugin, or Docker Desktop running Linux containers.
 - Internet access for the first dependency and container image downloads.
 
@@ -44,14 +44,67 @@ go mod download -modfile=tools/go.mod
 - Successful downloads normally produce no output; the tools module may take longer.
 - `.env` is Git-ignored. Its default `DATABASE_URL` matches the local Compose database:
   `postgres://previa:change-me@localhost:5432/previa?sslmode=disable`.
-- Review `.env` and replace placeholder credentials for the integrations you use.
-  `.env.example` groups shared, server-only, and worker-only settings. The server
-  needs `DATABASE_URL`, OAuth client ID/secret, and `SESSION_SECRET` (at least 32
-  characters); HTTP address/origin have local defaults. The worker needs only
-  `DATABASE_URL` and positive `MAX_CONCURRENT_BUILDS`; optional `BUILD_TIMEOUT`
-  defaults to `12m`. Keep secrets out of Git.
+- Replace the OAuth and session-secret placeholders before testing sign-in.
+  Keep secrets out of Git; do not print or share the contents of `.env`.
 - Tool versions (Goose, templ, sqlc, golangci-lint, and Air) are pinned in
   `tools/go.mod`; invoke them with `go tool -modfile=tools/go.mod <tool>`.
+
+The current configuration is:
+
+| Variable | How to obtain or choose it | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | Keep the example for the included Compose database. Change its credentials/host port together with Compose if needed. | Application data, sessions, and River jobs; shared by server, worker, and migrations. |
+| `HTTP_ADDR` | Keep `127.0.0.1:8080` locally. | Server listen address. |
+| `APP_BASE_URL` | Keep `http://localhost:8080` locally. | Browser origin for OAuth redirects, CSRF origin checks, and cookie security. |
+| `GITHUB_OAUTH_CLIENT_ID` | Copy from your GitHub OAuth App settings (steps below). | Identifies dashboard sign-in. |
+| `GITHUB_OAUTH_CLIENT_SECRET` | Generate in the same OAuth App's settings. | Exchanges the OAuth authorization code for a token. |
+| `SESSION_SECRET` | Run `openssl rand -hex 32` and copy the output into `.env`. | Signs OAuth state; must contain at least 32 characters. |
+| `MAX_CONCURRENT_BUILDS` | Keep `2` initially; must be a positive integer. | Per-worker queue concurrency. |
+| `BUILD_TIMEOUT` | Keep `12m` initially; a positive Go duration, at most `24h`. | Build execution budget, with a separate completion grace. |
+
+Register dashboard sign-in once:
+
+1. Open GitHub **Settings → Developer settings → OAuth Apps → New OAuth App**.
+2. Choose an application name and set **Homepage URL** to `http://localhost:8080`.
+3. Set **Authorization callback URL** to exactly
+   `http://localhost:8080/auth/github/callback`.
+4. Register the application, copy its Client ID, and generate a client secret.
+5. Fill `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET` in `.env`, then
+   generate and fill `SESSION_SECRET` as described above.
+
+**Expected:** the three placeholder values have been replaced. OAuth placeholders
+can pass startup validation but cannot complete GitHub sign-in. These credentials
+come from an **OAuth App**, separate from a repository-integration GitHub App.
+See [GitHub's registration instructions](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app).
+
+### Loading configuration into a terminal
+
+The server and worker read environment variables, not `.env` files directly.
+From the repository root, load the file once in each terminal that runs them:
+
+```sh
+set -a
+. ./.env
+set +a
+```
+
+- `set -a`: automatically export variables assigned afterward to child processes.
+- `. ./.env`: execute the local file's assignments in the current shell.
+- `set +a`: turn automatic exporting off; the loaded variables remain exported.
+- Repeat only in a new terminal or after editing `.env`; stopping/restarting a
+  command in the same terminal does not clear the variables. Restart the server
+  or worker after reloading changed values, since running processes retain their
+  existing environment.
+- Keep `.env` in shell assignment syntax and quote values containing spaces or
+  shell special characters. Source only your trusted local configuration file.
+
+| Command | Loads `.env` automatically? |
+| --- | --- |
+| `make run-server`, `make run-worker`, direct `go run` | No; use the export block once per terminal. |
+| `make dev` | Yes; Air loads `.env` on startup. Restart Air after configuration changes. |
+| `make migrate-up`, `make migrate-down`, `make river-migrate-up`, `make river-status` | Yes; an exported `DATABASE_URL` takes precedence. |
+| `make build`, `make lint`, `make generate` | No application configuration required. |
+| `make test` | Database integration tests need an explicitly set `TEST_DATABASE_URL`. |
 
 ## 3. Start Docker and PostgreSQL
 
@@ -110,9 +163,8 @@ go run ./cmd/river-migrate up
 Use that same Goose environment prefix with `status` in place of `up` to inspect
 application migrations; use `go run ./cmd/river-migrate status` or `make river-status`
 for River. The River adapter reads `DATABASE_URL` directly; Goose reads
-`GOOSE_DBSTRING`. Neither command receives the connection string as an argument. Application configuration reads exported variables, not `.env` directly;
-repeat the export block in each new terminal that needs them. Keep `.env` in shell
-assignment syntax and quote values containing spaces or shell special characters.
+`GOOSE_DBSTRING`. Neither command receives the connection string as an argument.
+If you already loaded `.env` in this terminal, skip the export block.
 
 ## 5. Build and check the project
 
@@ -169,6 +221,8 @@ set +a
 make run-server
 ```
 
+Skip the first three lines if this terminal already has the current `.env` values.
+
 Open <http://localhost:8080/>. Successful startup logs `database health check passed`
 followed by `HTTP server listening`. The server checks PostgreSQL before accepting
 requests; connection failures stop startup. Set `HTTP_ADDR` to change the listen
@@ -208,6 +262,11 @@ Air reloads the server; restart the worker separately after changes to worker co
 
 - Start or resume PostgreSQL with the Compose `up -d --wait postgres` command above.
 - After pulling changes, run `make migrate-up`; run `make generate` when needed.
+- Start the server with `make dev` for automatic `.env` loading and live reload,
+  or use `make run-server` after loading `.env` once in that terminal. Start
+  `make run-worker` in a second terminal after loading `.env` there once.
+- After editing `.env`, reload it in terminals using manual exports and restart
+  affected processes. For `make dev`, restart Air to load the changed file.
 - Make changes, then run `make build`, `make lint`, and `make test`. For database
   changes, also run the integration command from step 5.
 - Stop the local database when finished:
@@ -241,3 +300,10 @@ Air reloads the server; restart the worker separately after changes to worker co
 - **Go version or tool errors:** confirm `go version` meets both modules' requirement
   and re-run their dependency downloads. The first tool invocation may take time to
   compile; a separate global tool installation is unnecessary.
+- **Missing configuration or stale values:** load `.env` in the terminal running
+  the command, and restart the process after changes. `make run-server` and
+  `make run-worker` do not load the file automatically.
+- **GitHub sign-in fails:** replace OAuth placeholders and check the registered
+  callback matches `APP_BASE_URL` plus `/auth/github/callback`. Use `localhost`
+  consistently in the browser for the documented local setup. Follow
+  [the sign-in checks](AUTH_TESTING.md).

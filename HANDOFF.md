@@ -1,6 +1,6 @@
 # Project handoff
 
-Last updated: 2026-09-30
+Last updated: 2026-10-02
 
 ## Start here
 
@@ -31,6 +31,9 @@ Last updated: 2026-09-30
   BUILD_TIMEOUT (default 12m). Unbuilt integrations have no config fields.
 - `docs/UNDERSTAND_CODEBASE.md` is the current codebase map;
   `docs/DEVELOPMENT_SETUP.md` is the local setup guide. `README.md` links the setup guide.
+- Setup guide includes config sources, OAuth registration, and env loading once per
+  terminal (or after edits); Air/migration targets load the file automatically.
+  AGENTS.md requires keeping it in sync with relevant configuration/setup changes.
 
 ## Completed foundation and authentication
 
@@ -82,6 +85,7 @@ Last updated: 2026-09-30
 
 ## Verification
 
+- Setup-doc update: `make build test lint` passed; DB integration tests not rerun.
 - Goose schema is locally at migration 4; migrations 3 and 4 also apply in
   isolated-schema integration tests. No real containers/images/routes were created.
 - PostgreSQL/River tests cover late success/failure, close during build, stale queued
