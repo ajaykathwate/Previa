@@ -110,7 +110,8 @@ Low to Medium. Simple in concept; security settings matter.
 2. Middleware loads the session on every dashboard request and attaches the user to the request context; unauthenticated requests to protected routes redirect to login.
 3. Rotate the session ID at login to prevent session fixation.
 4. Set both an idle timeout and an absolute lifetime.
-5. Logout deletes the server-side record and clears the cookie.
+5. Logout asks for confirmation in a modal over the current screen; confirming
+   submits a CSRF-protected POST that deletes the server-side record and clears the cookie.
 6. State-changing dashboard actions (for example "tear down now") require a CSRF token.
 
 ### Design decisions and edge cases
@@ -776,8 +777,9 @@ preview/
 │   ├── assets.go                   # embeds and serves static assets
 │   ├── layouts/                    # shared HTML shells (base.templ)
 │   ├── pages/                      # pages/fragments grouped by feature
-│   │   ├── auth/                   # error/logout; successful OAuth uses redirects
-│   │   └── dashboard/              # home/protected pages; future screens added as needed
+│   │   ├── auth/                   # error pages; logout uses a shared modal
+│   │   ├── home/                   # public landing page
+│   │   └── dashboard/              # authenticated dashboard/session; future screens as needed
 │   ├── components/                 # local, reusable UI; no backend imports
 │   ├── styles/                     # Tailwind entry CSS and theme tokens
 │   └── static/                     # local HTMX, generated CSS, browser assets

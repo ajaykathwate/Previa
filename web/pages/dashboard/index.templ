@@ -1,50 +1,86 @@
 package dashboard
 
 import (
-	"github.com/ajaykathwatee/previa/web/layouts"
+	"github.com/ajaykathwatee/previa/web/components"
 	"github.com/ajaykathwatee/previa/web/components/button"
 	"github.com/ajaykathwatee/previa/web/components/card"
 	"github.com/ajaykathwatee/previa/web/components/input"
+	"github.com/ajaykathwatee/previa/web/layouts"
 )
 
-templ Home(username string, loggedIn bool, csrfToken string) {
-	@layouts.Base("Home") {
-		<div class="mx-auto max-w-2xl space-y-6">
-			<h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">Hello, preview platform updated</h1>
-			@card.Card() {
-				@card.Header() {
-					if loggedIn {
-						<p class="text-muted-foreground">Signed in as { username }</p>
-					} else {
-						@card.Description() { Sign in to access the preview platform. }
+templ Index(username string, csrfToken string) {
+	@layouts.App("Dashboard", username, csrfToken) {
+		<div class="dashboard-heading"><div><span class="eyebrow">WORKSPACE OVERVIEW</span><h1>Your next change,<br/><em>a clearer perspective.</em></h1><p>Welcome back, { username }. This is your home for pull-request previews.</p></div><a href="/protected" class="identity-badge"><span class="status-dot" aria-hidden="true"></span>Signed in with GitHub</a></div>
+		<section id="repositories" tabindex="-1" class="workspace-panel repository-panel" aria-labelledby="repositories-title">
+			<div class="workspace-panel-top"><div><span class="eyebrow">START WITH YOUR SOURCE</span><h2 id="repositories-title">Repositories</h2></div><span class="upcoming-badge">Coming next</span></div>
+			<div class="repository-empty">
+				<div class="empty-source-icon" aria-hidden="true">
+					@components.BranchIcon()
+				</div><span class="eyebrow">THE STARTING POINT FOR EVERY PREVIEW</span>
+				<h3>Give your code a place to come to life.</h3>
+				<p>Repository connections are coming next. You'll explicitly choose which repositories Previa can access through a GitHub App installation.</p><button type="button" class="upcoming-action" disabled aria-describedby="repository-availability">Connect a repository <span aria-hidden="true">↗</span></button>
+				<p id="repository-availability" class="availability-note">Not available yet. Signing in only verifies your identity.</p>
+			</div>
+			<div class="repository-footer">
+				<span>GitHub identity connected</span>
+				<a href="/#workflow" class="text-link">
+					How the workflow fits together
+					@components.Arrow()
+				</a>
+			</div>
+		</section>
+		<div class="workspace-feature-grid">
+			<section id="environments" tabindex="-1" aria-labelledby="environments-title">
+				@card.Card(card.Props{Class: "feature-placeholder"}) {
+					@card.Header() {
+						<div class="feature-card-heading"><span class="feature-icon" aria-hidden="true">◎</span><span class="upcoming-badge">Upcoming</span></div>
+						<h2 id="environments-title">Environments</h2>
 					}
-				}
-				@card.Content() {
-					<div class="flex flex-wrap gap-3">
-						if loggedIn {
-							@button.Button(button.Props{Href: "/protected"}) { Protected page }
-							@button.Button(button.Props{Href: "/auth/logout", Variant: button.VariantOutline}) { Log out }
-						} else {
-							@button.Button(button.Props{Href: "/auth/github/login"}) { Login with GitHub }
-						}
-					</div>
-				}
-			}
-			if loggedIn {
-				@card.Card() {
-					@card.Header() { <h2 class="text-lg font-semibold">Queue ping</h2> }
 					@card.Content() {
-						<form method="post" action="/queue/ping" class="space-y-4">
-							<input type="hidden" name="csrf_token" value={ csrfToken }/>
-							<div class="space-y-2">
-								<label for="pr-key" class="text-sm font-medium">Ping PR key</label>
-								@input.Input(input.Props{ID: "pr-key", Name: "pr_key", Value: "demo:pr:1", Required: true, Attributes: templ.Attributes{"maxlength": "128"}})
-							</div>
-							@button.Button(button.Props{Type: button.TypeSubmit}) { Enqueue ping }
-						</form>
+						<p>A shared place to explore each pull request.</p>
+						<div class="feature-empty"><span class="empty-rule" aria-hidden="true"></span><strong>Live previews will appear here.</strong><p>Environment creation and preview links will be available after repository integration and runtime support are built.</p></div>
 					}
 				}
-			}
+			</section>
+			<section id="builds" tabindex="-1" aria-labelledby="builds-title">
+				@card.Card(card.Props{Class: "feature-placeholder"}) {
+					@card.Header() {
+						<div class="feature-card-heading"><span class="feature-icon" aria-hidden="true">↗</span><span class="upcoming-badge">Upcoming</span></div>
+						<h2 id="builds-title">Builds</h2>
+					}
+					@card.Content() {
+						<p>Follow the journey from commit to preview.</p>
+						<div class="feature-empty"><span class="empty-rule" aria-hidden="true"></span><strong>Build history will live here.</strong><p>Build execution, progress, and logs are not connected yet. No build has been started by signing in.</p></div>
+					}
+				}
+			</section>
 		</div>
+		<section id="queue-check" tabindex="-1" class="developer-tools" aria-labelledby="tools-title">
+			<details class="tools-disclosure">
+				<summary><span><span class="eyebrow">FOR LOCAL DEVELOPMENT</span><strong id="tools-title">Developer tools</strong><span class="tools-subtitle">Check the existing queue without creating a preview.</span></span><span class="tools-chevron" aria-hidden="true">⌄</span></summary>
+				<div class="tools-content">
+					<div>
+						<h2>Send a queue ping</h2>
+						<p>This diagnostic inserts a job into River. Run the worker alongside the server to process it. The result below confirms enqueueing, not completion.</p>
+						<a href="/protected" class="text-link">
+							View your session
+							@components.Arrow()
+						</a>
+					</div>
+					<form method="post" action="/queue/ping" class="queue-form" data-queue-form>
+						<input type="hidden" name="csrf_token" value={ csrfToken }/>
+						<div class="space-y-2">
+							<label for="pr-key">Ping PR key</label>
+							@input.Input(input.Props{ID: "pr-key", Name: "pr_key", Value: "demo:pr:1", Required: true, Attributes: templ.Attributes{"maxlength": "128", "aria-describedby": "ping-help"}})
+							<p id="ping-help" class="field-help">A diagnostic key, not a repository connection.</p>
+						</div>
+						@button.Button(button.Props{Type: button.TypeSubmit, Class: "queue-submit"}) {
+							Send a ping
+						}
+						<p class="queue-result" data-queue-result role="status" aria-live="polite" aria-atomic="true"></p>
+					</form>
+				</div>
+			</details>
+		</section>
 	}
 }

@@ -13,7 +13,10 @@ License: [LICENSE.templui](LICENSE.templui) (MIT).
 - Input retains native input markup and styling. Its optional password-toggle
   feature, icons, and script loader are omitted because no current page uses them.
   Password inputs therefore behave as native inputs without a visibility toggle.
-- `navbar.templ` is application-specific composition, not copied library code.
+- `navbar.templ`, `app_navbar.templ`, and `sidebar.templ` are application-specific
+  composition, not copied library code. `confirmation.templ` is an application-owned
+  native dialog shell and logout form; it reuses the local button primitive. Native details/summary menus are enhanced
+  by `web/static/js/ui.js` for Escape and outside-click dismissal.
 - Theme tokens in `web/styles/theme.css` are adapted from the same upstream
   release. Official Tailwind CSS v4.1.18 compiles the CSS independently.
 

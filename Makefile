@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate assets build test lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -33,8 +33,15 @@ assets: $(TAILWIND)
 		mv "$$previa_css" web/static/css/app.css; \
 	fi
 
-generate:
-	$(TOOLS) templ generate
+# Templates must exist before Go/editor tooling can resolve component functions.
+templates:
+	$(TOOLS) templ generate -path web
+
+# Optional template-only watcher; does not start the server or require .env.
+watch-templates:
+	$(TOOLS) air -c .air.templ.toml
+
+generate: templates
 	@if grep -Eq '^sql: \[\][[:space:]]*$$' sqlc.yaml; then \
 		echo 'sqlc: skipped (no schema or queries yet)'; \
 	else \

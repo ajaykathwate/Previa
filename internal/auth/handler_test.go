@@ -130,10 +130,13 @@ func TestLoginRotationProtectedRouteAndLogout(t *testing.T) {
 	users := &fakeUsers{}
 	provider := &fakeProvider{identity: Identity{ID: 42, Username: "octocat", AvatarURL: "https://example.com/avatar"}}
 	b, _, _ := newTestBrowser(t, store, users, provider)
-	if w := b.request(http.MethodGet, "/", ""); !strings.Contains(w.Body.String(), "Login with GitHub") {
+	if w := b.request(http.MethodGet, "/", ""); !strings.Contains(w.Body.String(), "Get started with GitHub") {
 		t.Fatal("anonymous page has no login link")
 	}
 	oldCookie := b.cookies["previa_session"].Value
+	if w := b.request(http.MethodGet, "/dashboard", ""); w.Code != 303 || w.Header().Get("Location") != "/auth/github/login" {
+		t.Fatal("anonymous dashboard request was not redirected")
+	}
 	if w := b.request(http.MethodGet, "/protected", ""); w.Code != 303 || w.Header().Get("Location") != "/auth/github/login" {
 		t.Fatal("anonymous protected request was not redirected")
 	}
@@ -143,7 +146,7 @@ func TestLoginRotationProtectedRouteAndLogout(t *testing.T) {
 		t.Fatalf("unsafe state cookie: %+v", stateCookie)
 	}
 	w := b.request(http.MethodGet, "/auth/github/callback?code=valid&state="+state, "")
-	if w.Code != 303 || w.Header().Get("Location") != "/" {
+	if w.Code != 303 || w.Header().Get("Location") != "/dashboard" {
 		t.Fatalf("callback failed: %d %s", w.Code, w.Body)
 	}
 	newCookie := b.cookies["previa_session"]
@@ -153,13 +156,22 @@ func TestLoginRotationProtectedRouteAndLogout(t *testing.T) {
 	if _, found, err := store.Find(storeToken(oldCookie)); err != nil || found {
 		t.Fatalf("old session remains: %v %v", found, err)
 	}
-	if w := b.request(http.MethodGet, "/", ""); !strings.Contains(w.Body.String(), "octocat") || strings.Contains(w.Body.String(), "Login with GitHub") {
+	if w := b.request(http.MethodGet, "/dashboard", ""); w.Code != 200 || !strings.Contains(w.Body.String(), "octocat") || !strings.Contains(w.Body.String(), "Workspace navigation") {
 		t.Fatal("logged-in dashboard does not show username")
+	}
+	if w := b.request(http.MethodGet, "/", ""); !strings.Contains(w.Body.String(), "Open your dashboard") || strings.Contains(w.Body.String(), "Get started with GitHub") {
+		t.Fatal("signed-in public home does not link to the dashboard")
 	}
 	if w := b.request(http.MethodGet, "/protected", ""); w.Code != 200 {
 		t.Fatalf("protected route status = %d", w.Code)
 	}
-	form := b.request(http.MethodGet, "/auth/logout", "")
+	if w := b.request(http.MethodGet, "/auth/logout", ""); w.Code != 303 || w.Header().Get("Location") != "/dashboard?confirm=logout" {
+		t.Fatal("legacy logout link did not open confirmation on dashboard")
+	}
+	form := b.request(http.MethodGet, "/dashboard", "")
+	if !strings.Contains(form.Body.String(), `<dialog id="logout-confirmation"`) || !strings.Contains(form.Body.String(), `aria-haspopup="dialog"`) {
+		t.Fatal("dashboard has no logout confirmation dialog")
+	}
 	match := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(form.Body.String())
 	if len(match) != 2 {
 		t.Fatalf("missing logout CSRF token: %s", form.Body)
@@ -180,6 +192,9 @@ func TestLoginRotationProtectedRouteAndLogout(t *testing.T) {
 	}
 	if _, found, err := store.Find(storeToken(newCookie.Value)); err != nil || found {
 		t.Fatalf("logout did not delete server-side session: %v %v", found, err)
+	}
+	if w := b.request(http.MethodGet, "/dashboard", ""); w.Code != 303 {
+		t.Fatal("logged-out user can access dashboard")
 	}
 	b.cookies["previa_session"] = newCookie
 	if w := b.request(http.MethodGet, "/protected", ""); w.Code != 303 {

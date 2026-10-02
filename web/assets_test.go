@@ -9,7 +9,7 @@ import (
 
 func TestEmbeddedBrowserAssets(t *testing.T) {
 	h := StaticHandler()
-	for _, path := range []string{"/static/css/app.css", "/static/htmx.min.js"} {
+	for _, path := range []string{"/static/css/app.css", "/static/htmx.min.js", "/static/js/ui.js"} {
 		t.Run(path, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))

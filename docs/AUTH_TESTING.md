@@ -45,23 +45,27 @@ sqlc-generated queries in `internal/auth/dbgen`.
 ## 3. Exercise the complete flow
 
 1. Open `http://localhost:8080/` in a private browser window. Expect
-   **Login with GitHub**.
+   **Get started with GitHub**.
 2. Open `/protected` while logged out. Expect a redirect into GitHub sign-in.
    Return home to start the flow manually if desired.
-3. Click **Login with GitHub**. The GitHub authorization request includes the client
+3. Click **Get started with GitHub**. The GitHub authorization request includes the client
    ID, exact callback URI, and random state. No additional OAuth scopes are requested:
    the public profile provides the ID, username, and avatar.
 4. Approve the GitHub consent screen. GitHub sends a temporary code and the matching
    state to `/auth/github/callback`. The server verifies state, exchanges the code,
-   fetches `/user`, upserts the local user, rotates the session, and redirects home.
-5. Expect your GitHub username on the page. `/protected` now displays that username.
+   fetches `/user`, upserts the local user, rotates the session, and redirects to `/dashboard`.
+5. Expect the dashboard navbar, workspace sidebar, and your GitHub username.
+   The account menu opens session details and the logout confirmation. `/protected`
+   also displays your username; `/dashboard` is protected by the same middleware.
 6. In browser developer tools, inspect cookies. `previa_session` is opaque,
    HttpOnly, SameSite=Lax, and has a different value after login. The short-lived
    `previa_oauth_state` cookie is cleared by the callback. Secure is enabled for
    HTTPS; local HTTP development uses non-Secure cookies.
 7. Restart the server and refresh `/protected`. The DB-backed session remains valid.
-8. Click **Log out**, then **Confirm logout**. Confirmation submits a CSRF-protected
-   POST. Expect the home page's login link to return. The authenticated session row
+8. Open the account menu and click **Log out**. Expect a centered modal over the
+   same page. Cancel or Escape closes it and preserves the session; focus returns
+   to the account menu. Reopen it and click **Confirm logout**. Confirmation submits a CSRF-protected
+   POST. Expect the home page's Get started button to return. The authenticated session row
    is deleted and its cookie cleared; `/protected` redirects to login again.
 
 Sessions have a 30-minute idle timeout and a 24-hour absolute lifetime. Activity
@@ -115,5 +119,5 @@ The real GitHub consent screen is checked manually using steps 1–3.
 | 4 | `golang.org/x/oauth2` exchanges the code with GitHub server to server. |
 | 5 | `go-github` fetches the authenticated `/user` identity: numeric ID, username, avatar. |
 | 6 | sqlc upserts `users` on the unique numeric `github_id`, updating mutable profile fields. |
-| 7 | SCS rotates the session token before storing the user ID and redirects to `/`. |
+| 7 | SCS rotates the session token before storing the user ID and redirects to `/dashboard`. |
 | 8 | The temporary OAuth token/client are discarded after fetching identity. |

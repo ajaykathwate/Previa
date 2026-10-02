@@ -1,0 +1,36 @@
+package components
+
+templ SidebarContent(active bool) {
+	<div class="sidebar-label">WORKSPACE</div>
+	<nav aria-label="Workspace navigation" class="sidebar-nav">
+		<a
+			href="/dashboard"
+			if active {
+				aria-current="page"
+			}
+		><span class="nav-symbol" aria-hidden="true">◈</span>Overview<span class="active-dot" aria-hidden="true"></span></a>
+		<a href="/dashboard#repositories"><span class="nav-symbol" aria-hidden="true">⌘</span>Repositories<span class="nav-upcoming">Soon</span></a>
+<a href="/dashboard#environments"><span class="nav-symbol" aria-hidden="true">◎</span>Environments<span class="nav-upcoming">Soon</span></a>
+<a href="/dashboard#builds"><span class="nav-symbol" aria-hidden="true">↗</span>Builds<span class="nav-upcoming">Soon</span></a>
+		<a href="/dashboard#queue-check"><span class="nav-symbol" aria-hidden="true">↗</span>Developer tools</a>
+	</nav>
+	<div class="sidebar-note">
+		<span class="eyebrow">A little room to grow</span>
+		<p>One place for the work between a pull request and a merge.</p>
+		<a href="/#workflow">
+			Explore the vision
+			@Arrow()
+		</a>
+	</div>
+}
+
+templ Sidebar(active bool) {
+	<aside class="app-sidebar">
+		<div class="sidebar-brand">
+			@Brand()
+			<span class="version-label">EARLY ACCESS</span>
+		</div>
+		@SidebarContent(active)
+		<div class="sidebar-bottom"><span class="status-dot" aria-hidden="true"></span>Built to be yours.<span>Self-hosted by design</span></div>
+	</aside>
+}

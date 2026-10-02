@@ -1,0 +1,17 @@
+# Template-only editor workflow. Polling also supports WSL-mounted directories.
+root = "."
+tmp_dir = "tmp/templ-watch"
+
+[build]
+  cmd = "make templates"
+  entrypoint = ["true"]
+  include_ext = ["templ"]
+  exclude_dir = ["tmp", "bin", ".git", "tools"]
+  exclude_unchanged = true
+  delay = 300
+  stop_on_error = true
+  poll = true
+  poll_interval = 500
+
+[misc]
+  clean_on_exit = false

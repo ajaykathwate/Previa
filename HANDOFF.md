@@ -25,7 +25,7 @@ Last updated: 2026-10-02
   DATABASE_URL from environment; Goose uses GOOSE_DBSTRING. No credential flags.
 - Set TEST_DATABASE_URL for DB tests. New ordering tests create/drop isolated schemas.
 - `make run-server` and `make run-worker` load `.env` with exported overrides.
-  `make dev` runs Air for server reload only; generated dbgen/templ output is excluded.
+  `make dev` reloads server; `make watch-templates` polls templates only (no env needed).
 - Config: SharedConfig has DATABASE_URL (also River's connection); ServerConfig adds
   HTTP/OAuth/session settings; WorkerConfig adds MAX_CONCURRENT_BUILDS and optional
   BUILD_TIMEOUT (default 12m). Unbuilt integrations have no config fields.
@@ -43,8 +43,8 @@ Last updated: 2026-10-02
   RequireUser, session CSRF, logout. Session lifetime 24h, idle timeout 30m.
 - OAuth callback: http://localhost:8080/auth/github/callback. Configure server-only
   OAuth ID/secret and SESSION_SECRET. Browser checks: `docs/AUTH_TESTING.md`.
-- `/protected` requires login; home shows login/username/logout and a ping form.
-  POST /queue/ping requires login+CSRF; returns job_id/duplicate. Ping round-trip tested.
+- `/` is public; GitHub sign-in redirects to protected `/dashboard` (sticky navbar/sidebar).
+  `/protected` shows session details; logout is a shared modal with a CSRF-protected POST.
 - Default production server/worker still expose/process only ping. Webhook HTTP,
   Docker runtime, Traefik, GitHub publication, and environment provisioning remain
   unimplemented. A bounded reconciliation contract exists but is not wired to a
@@ -84,8 +84,8 @@ Last updated: 2026-10-02
 
 ## Verification
 
-- UI build/tests/vet/lint and HTTP/CSS/Air template+CSS reload checks passed.
-  CSS CLI checksums verified; browser visual/OAuth-provider/DB suite not rerun.
+- Modal browser checks passed: focus/page/scroll, dismissals, simulated logout, mobile,
+  reduced motion/no-JS. Template polling and build/tests/vet/lint passed; see TEMP.md.
 - Goose schema is locally at migration 4; migrations 3 and 4 also apply in
   isolated-schema integration tests. No real containers/images/routes were created.
 - PostgreSQL/River tests cover late success/failure, close during build, stale queued

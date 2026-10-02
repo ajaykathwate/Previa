@@ -1,0 +1,19 @@
+package layouts
+
+import "github.com/ajaykathwatee/previa/web/components"
+
+templ App(title string, username string, csrfToken string) {
+	@Document(title) {
+		<div class="app-shell">
+			@components.Sidebar(title == "Dashboard")
+			<div class="app-column">
+				@components.AppNavbar(username, title)
+				<main id="content" tabindex="-1" class="app-content">
+					{ children... }
+				</main>
+				<footer class="app-footer"><span>Previa workspace</span><span>A clearer view of what comes next.</span></footer>
+			</div>
+		</div>
+		@components.LogoutConfirmation(csrfToken)
+	}
+}

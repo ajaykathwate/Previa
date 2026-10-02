@@ -23,9 +23,12 @@ func TestHomeUsesLayout(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("unexpected response: %d %s", w.Code, w.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{"<!doctype html>", "Hello, preview platform", "/static/htmx.min.js", "/static/css/app.css", "Main navigation", "Login with GitHub"} {
+	for _, want := range []string{"<!doctype html>", "Review the branch.", "/static/htmx.min.js", "/static/css/app.css", "/static/js/ui.js", "Main navigation", "Get started with GitHub", "NOT A LIVE PREVIEW"} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Errorf("page missing %q", want)
 		}
+	}
+	if strings.Contains(w.Body.String(), "csrf_token") || strings.Contains(w.Body.String(), "data-queue-form") {
+		t.Fatal("public home exposes authenticated workspace actions")
 	}
 }

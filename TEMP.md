@@ -21,8 +21,8 @@ instructions, see [DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md).
   generation-guarded state transition, operation row, and River wake-up. Operation
   calls run outside database transactions; final database writes are generation
   checked. The bounded reconciler contract exists but is not scheduled in app.
-- Authenticated, CSRF-protected `POST /queue/ping`, exposed through the home page's
-  ping form. It returns HTTP 202 with `job_id` and `duplicate`.
+- Authenticated, CSRF-protected `POST /queue/ping`, exposed through the protected dashboard's
+  queue-check form. It returns HTTP 202 with `job_id` and `duplicate`.
 
 ## Configuration: what to put in `.env`
 
@@ -249,3 +249,74 @@ UI verification: build/tests/vet/lint passed; real HTTP CSS serving and Air relo
 for both template utilities and CSS source passed. Temporary edits restored and
 smoke server stopped. Browser visual review and external GitHub login were not
 rerun; existing HTTP auth/session/CSRF tests passed. No database schema changed.
+
+
+## Home page and dashboard presentation
+
+- `/` is a public landing page with a warm paper/terracotta/forest theme, original
+  CSS illustrations, responsive content, and reduced-motion support. Planned preview
+  workflows are labeled as concepts; there are no fabricated statistics or activity.
+- **Get started with GitHub** uses the existing OAuth flow. Its successful callback
+  now redirects to protected `/dashboard`; logout returns to the public home page.
+- The shared authenticated layout has desktop sidebar navigation, a mobile workspace
+  menu, and an account menu for session details/logout. Existing CSRF/session checks
+  stay in backend handlers/middleware. Dashboard identity comes from the session.
+- The existing ping endpoint is unchanged. The queue form displays returned job IDs
+  and duplicate status inline, with pending/error feedback; it does not claim worker
+  completion. Without JavaScript, the ordinary form still submits to the JSON endpoint.
+- No new integrations, dependencies, fake repositories, or preview functionality
+  were added. Root README.md is unchanged.
+- Chromium checks passed across 320–1440px; screenshots reviewed for desktop/mobile.
+  The browser used a temporary fake GitHub provider through the real session/CSRF
+  middleware to exercise redirects, dashboard access, logout, queue feedback,
+  keyboard menu dismissal, and reduced motion. The fixture was removed. Real GitHub
+  consent and PostgreSQL integration tests were not rerun for this presentation task.
+- Final `make build test lint` passed, including Go build, the existing test suite,
+  `go vet`, and golangci-lint (zero issues). `git diff --check` passed.
+
+## Approved dashboard refinement
+
+- Dashboard uses a sticky top navbar, fixed desktop sidebar, and collapsible mobile
+  navigation. Upcoming Repositories/Environments/Builds links target explanatory
+  dashboard sections; Connect a repository is disabled. No backend features or
+  fabricated activity were added. Developer tools keeps the queue check collapsed.
+- Home reveals sections once, pauses the hero offscreen/in hidden tabs, and honors
+  reduced motion. Content stays visible without JavaScript. Touch targets and
+  sticky-navigation anchor spacing were refined.
+- Existing colors and fonts are unchanged; AGENTS.md records the user-approved
+  visual theme as a rule for future work. No new runtime dependencies/configuration.
+- Browser verification passed at 320–1440px: sticky navbar while scrolling, mobile
+  anchor navigation, valid placeholder targets, queue success/error feedback, reveal
+  entry, offscreen hero pause, reduced motion, and no-JavaScript content visibility.
+  Desktop/mobile screenshots were reviewed. A temporary presentation fixture was
+  removed; external GitHub consent and DB integration were not rerun for this change.
+- Final `make build test lint` passed (Go build/tests/vet and golangci-lint, zero
+  issues). `git diff --check` passed. Root README.md remains unchanged.
+
+## Template diagnostics and modal confirmation
+
+- Reported undefined `BranchIcon`/dashboard `Index` diagnostics did not reproduce
+  in a direct Go build. Both generated functions were present with correct signatures.
+  Regenerated all presentation code; do not edit generated Go or remove functions
+  to accommodate stale editor diagnostics. Setup guide explains generation and
+  language-server recovery. Added `make templates` and an optional polling
+  `make watch-templates` (Air, no app configuration) for editor-only work.
+- Confirmation UI uses native dialog overlays, preserving the current screen.
+  Logout appears on both dashboard and session pages, with Cancel initial focus,
+  focus trapping/restoration, Escape/close/backdrop dismissal, and CSRF-protected
+  POST only on confirmation. The separate logout page was removed; old GET links
+  redirect to the dashboard and open the modal. Authentication semantics remain.
+- This UI rule is recorded in AGENTS.md; future confirmation prompts should reuse
+  the accessible modal shell. No new library, credentials, schema, or deployment
+  service is required. Root README.md is unchanged.
+- Browser checks passed for page/scroll preservation, no request on dismissal,
+  Cancel/Escape/backdrop, focus trapping/restoration, 320–1440px layouts, session-page
+  confirmation, legacy GET redirect, reduced motion, and native no-JS dialog controls
+  in Chromium. Confirmed logout used the real session/CSRF middleware with a fake
+  GitHub provider; session deletion and protected-route rejection passed. Temporary
+  preview/probe files were removed. Real GitHub and DB integration were not rerun.
+- Template-only Air watcher detected a temporary source change and generated its
+  Go component successfully. Original native fsnotify did not detect edits here;
+  the final watcher uses the already-established Air polling mechanism.
+- Final `make build test lint` passed: build, existing tests, vet, and golangci-lint
+  (zero issues). `git diff --check` passed; generated component signatures are current.

@@ -1,20 +1,22 @@
 package dashboard
 
 import (
-	"github.com/ajaykathwatee/previa/web/layouts"
 	"github.com/ajaykathwatee/previa/web/components/button"
 	"github.com/ajaykathwatee/previa/web/components/card"
+	"github.com/ajaykathwatee/previa/web/layouts"
 )
 
-templ Protected(username string) {
-	@layouts.Base("Protected page") {
+templ Protected(username string, csrfToken string) {
+	@layouts.App("Session", username, csrfToken) {
 		@card.Card(card.Props{Class: "mx-auto max-w-lg"}) {
 			@card.Header() {
-				<h1 class="text-2xl font-semibold tracking-tight">Protected page</h1>
+				<h1 class="text-2xl font-semibold tracking-tight">Your session</h1>
 				<p class="text-muted-foreground">Signed in as { username }</p>
 			}
 			@card.Content() {
-				@button.Button(button.Props{Href: "/", Variant: button.VariantOutline}) { Home }
+				@button.Button(button.Props{Href: "/dashboard", Variant: button.VariantOutline}) {
+					Back to dashboard
+				}
 			}
 		}
 	}

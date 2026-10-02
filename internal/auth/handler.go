@@ -81,11 +81,12 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	h.sessions.Put(r.Context(), "user_id", u.ID)
 	h.sessions.Put(r.Context(), "csrf_token", randomToken())
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }
 
-func (h *Handler) logoutPage(w http.ResponseWriter, r *http.Request) {
-	templ.Handler(authpages.Logout(CSRFToken(r.Context()))).ServeHTTP(w, r)
+// logoutConfirmation preserves old links without rendering a separate screen.
+func (h *Handler) logoutConfirmation(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/dashboard?confirm=logout", http.StatusSeeOther)
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {

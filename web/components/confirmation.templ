@@ -1,0 +1,29 @@
+package components
+
+import "github.com/ajaykathwatee/previa/web/components/button"
+
+// ConfirmationDialog keeps a decision over the current page. Actions are supplied
+// by the caller; authorization and CSRF validation remain in backend handlers.
+templ ConfirmationDialog(id string, title string, description string) {
+	<dialog id={ id } class="confirmation-dialog" aria-labelledby={ id + "-title" } aria-describedby={ id + "-description" } data-confirmation-dialog>
+		<button type="button" class="dialog-close" aria-label="Close confirmation" commandfor={ id } command="close" data-close-dialog><span aria-hidden="true">×</span></button>
+		<span class="eyebrow">PLEASE CONFIRM</span>
+		<h2 id={ id + "-title" }>{ title }</h2>
+		<p id={ id + "-description" }>{ description }</p>
+		{ children... }
+	</dialog>
+}
+
+templ LogoutConfirmation(csrfToken string) {
+	@ConfirmationDialog("logout-confirmation", "Log out of your workspace?", "This ends your Previa session. Your GitHub session is unchanged, and you can sign in again whenever you're ready.") {
+		<form method="post" action="/auth/logout" class="dialog-actions">
+			<input type="hidden" name="csrf_token" value={ csrfToken }/>
+			@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "logout-confirmation", "command": "close", "data-close-dialog": true}}) {
+				Cancel
+			}
+			@button.Button(button.Props{Type: button.TypeSubmit}) {
+				Confirm logout
+			}
+		</form>
+	}
+}

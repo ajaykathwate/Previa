@@ -10,5 +10,6 @@ import (
 func Mount(r chi.Router, users UserSession, requireUser func(http.Handler) http.Handler) {
 	h := &handler{users: users}
 	r.Get("/", h.home)
+	r.With(requireUser).Get("/dashboard", h.dashboard)
 	r.With(requireUser).Get("/protected", h.protected)
 }

@@ -28,6 +28,14 @@ unbuilt feature, stub it behind a minimal interface rather than building it.
 - Naming: standard Go naming (MixedCaps, no underscores, short receiver
   names, exported only what needs to be exported).
 
+## UI consistency
+- Preserve the approved warm paper, terracotta, and forest palette and the existing
+  system-sans/Georgia typography throughout the application. Use shared theme
+  tokens and presentation patterns; ask before changing the visual theme.
+- Confirmation prompts must open as accessible modals over the current screen,
+  not navigate to a separate confirmation page. Keep mutations CSRF-protected.
+- Label unbuilt features clearly. Do not invent metrics/activity or use dead links.
+
 ## Design principles
 - Apply SOLID and standard design patterns only where they solve a real
   problem this codebase has. Do not add a pattern (factory, strategy,

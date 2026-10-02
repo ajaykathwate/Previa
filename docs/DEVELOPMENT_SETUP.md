@@ -239,6 +239,15 @@ followed by `HTTP server listening`. The server checks PostgreSQL before accepti
 requests; connection failures stop startup. Set `HTTP_ADDR` to change the listen
 address (default `127.0.0.1:8080`).
 
+The root URL serves the public home page. Click **Get started with GitHub** to sign
+in; successful authentication opens `/dashboard`, with the account navbar and
+workspace sidebar. Upcoming navigation links lead to labeled placeholder sections.
+Open **Developer tools** to use the queue ping diagnostic; run the worker to process
+queued pings. The navbar remains visible while scrolling. The account menu leads
+to session details and a logout confirmation modal. Cancel or Escape keeps the
+current page and session; Confirm logout returns to the public home page.
+Unauthenticated requests to `/dashboard` redirect to GitHub sign-in.
+
 For GitHub OAuth App registration, callback configuration, and the full sign-in
 test flow, follow [Test GitHub sign-in locally](AUTH_TESTING.md).
 
@@ -261,7 +270,7 @@ make dev
 
 Air loads `.env`, watches Go, templ, CSS, JavaScript, SQL, Makefile, and shell
 sources, compiles CSS, regenerates templates, rebuilds, and restarts the server.
-Edit pages under `web/pages`, the shell under `web/layouts`, shared components
+Edit pages under `web/pages`, the shells under `web/layouts`, shared components
 under `web/components`, and CSS/theme source under `web/styles`. Polling supports WSL-mounted directories.
 Generated template files, compiled CSS, and `bin/` are excluded from watching
 to prevent rebuild loops. Worker startup does not need the Tailwind CLI.
@@ -324,3 +333,28 @@ Air reloads the server; restart the worker separately after changes to worker co
   do not bypass it. Edit CSS sources rather than generated `web/static/css/app.css`.
 - **Stylesheet missing after a manual build:** run `make assets` before compiling
   the server. The binary embeds assets at build time; restart it after rebuilding.
+
+### Editor reports undefined Templ components
+
+From the repository root, run:
+
+```sh
+make generate
+go build ./...
+```
+
+**Expected:** generated component functions match the source templates, and the
+Go build succeeds. Generated files are ignored and must exist locally for editor
+type checking. If diagnostics persist while the build passes, reload the editor
+workspace/restart its Go and Templ language servers; confirm the correct workspace
+and Go toolchain. For automatic template generation without running the app:
+
+```sh
+make watch-templates
+```
+
+**Expected:** Air reports watching/building and regenerates Go when `.templ` files
+change. It uses polling for WSL-mounted folders, needs no `.env`/database, and does
+not start an HTTP server. Stop with Ctrl+C. Use `make dev` instead when you also
+want server reload; one watcher is sufficient. `make templates` regenerates only
+the presentation code once. `make generate` also generates sqlc database code.
