@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/a-h/templ"
+	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
 )
 
 // UserSession supplies only the identity information the placeholder page needs.
@@ -17,10 +18,10 @@ type handler struct{ users UserSession }
 
 func (h *handler) home(w http.ResponseWriter, r *http.Request) {
 	username, loggedIn := h.users.Username(r.Context())
-	templ.Handler(page(username, loggedIn, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
+	templ.Handler(dashboardpages.Home(username, loggedIn, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
 }
 
 func (h *handler) protected(w http.ResponseWriter, r *http.Request) {
 	username, _ := h.users.Username(r.Context())
-	templ.Handler(protectedPage(username)).ServeHTTP(w, r)
+	templ.Handler(dashboardpages.Protected(username)).ServeHTTP(w, r)
 }

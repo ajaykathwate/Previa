@@ -20,7 +20,7 @@ build can currently be deployed end to end.
 
 The code follows `cmd → internal/app → feature/platform packages`. Feature code
 is grouped by feature with flat package files; shared infrastructure lives under
-`internal/platform`. SQL migrations define the database and sqlc generates typed
+`internal/platform`. All presentation is under `web/`; handlers remain feature-owned. SQL migrations define the database and sqlc generates typed
 queries into feature `dbgen` packages.
 
 ## Important files
@@ -33,7 +33,9 @@ queries into feature `dbgen` packages.
 | `internal/platform/database/` | pgx pool construction and health checks. |
 | `internal/platform/queue/` | River client, ping job, queue registration, and per-kind timeout policy. |
 | `internal/platform/httpx/` | chi router and shared HTTP middleware. |
-| `internal/platform/ui/` | Shared templ layout and navigation. |
+| `web/layouts/`, `web/pages/` | Shared HTML shell and feature-grouped pages; no backend imports. |
+| `web/components/`, `web/styles/` | Stable templUI component source, official Tailwind entry CSS and theme tokens. |
+| `web/assets.go`, `web/static/` | Embedded browser assets, including generated CSS and local HTMX. |
 | `internal/auth/` | GitHub OAuth, user upsert, sessions, CSRF, and logout. |
 | `internal/dashboard/` | Home page and ping form. |
 | `internal/webhooks/` | PR state/generation persistence and transactional enqueueing; HTTP validation/signature endpoint is not connected yet. |
@@ -95,3 +97,12 @@ expected results are documented in `DEVELOPMENT_SETUP.md`.
 Pinned tools live in the separate `tools` module and are invoked through
 `go tool -modfile=tools/go.mod`: templ, sqlc, Goose, Air, and golangci-lint.
 `make generate` produces templ/sqlc code; generated files are not edited by hand.
+
+## Presentation and assets
+
+See [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md). Official Tailwind v4.1.18 is a
+checksum-pinned standalone CLI; Node.js is unnecessary. `make assets` compiles CSS.
+Build/test/lint/server targets prepare assets; Air does so before every rebuild.
+Worker startup generates Go code but does not install or run Tailwind.
+Component source is copied from templUI v1.13.2; generated Templ Go and CSS are
+ignored. Update dependencies deliberately, retaining license/provenance.

@@ -7,7 +7,7 @@ in Bash or Zsh (on Windows, use WSL2 with Docker integration enabled).
 ## 1. Prerequisites
 
 - Go **1.26.5 or newer**, as required by `go.mod` and `tools/go.mod`.
-- Git, GNU Make, and OpenSSL (to generate the local OAuth-state secret).
+- Git, GNU Make, curl, a SHA-256 tool (`sha256sum` or `shasum`), and OpenSSL (to generate the local OAuth-state secret).
 - Docker Engine with the Compose plugin, or Docker Desktop running Linux containers.
 - Internet access for the first dependency and container image downloads.
 
@@ -21,7 +21,10 @@ docker compose version
 ```
 
 Each command should print its version. No separate PostgreSQL installation, Node.js,
-or globally installed Go development tools are required.
+or globally installed Go development tools are required. Official Tailwind CSS
+**v4.1.18** is downloaded once into ignored `bin/` by asset/build/server targets
+and verified against pinned SHA-256 digests. Linux/WSL2 and macOS x64/arm64 are
+supported; the first asset build downloads a roughly 115 MB binary on Linux x64.
 
 ## 2. Get the code and configuration
 
@@ -186,7 +189,10 @@ make test
 
 - `generate`: runs templ and, when query entries are configured in `sqlc.yaml`,
   sqlc. Expect generation to complete without errors.
-- `build`: compiles all packages; success normally has no additional output.
+- `assets`: `make assets` compiles official Tailwind from `web/styles/app.css`
+  into `web/static/css/app.css`, installing the pinned CLI on first use. Expect
+  Tailwind to report completion; no Node.js or CSS CDN is used.
+- `build`: prepares CSS, generates Go code, and compiles all packages.
 - `lint`: runs `go vet` and the pinned golangci-lint; expect no reported issues.
 - `test`: runs the existing suite; expect `ok` for tested packages and
   `[no test files]` for packages without tests. Database integration tests skip unless
@@ -211,11 +217,12 @@ Manual equivalents of the main Make targets:
 
 | Make command | Underlying command |
 | --- | --- |
-| `make build` | Generate templates, then `go build ./...` |
-| `make test` | Generate templates, then `go test ./...` |
-| `make lint` | Generate templates, then `go vet ./...` and `go tool -modfile=tools/go.mod golangci-lint run` |
+| `make assets` | Install pinned standalone Tailwind if needed, then compile/minify CSS |
+| `make build` | Compile CSS and generate Go code, then `go build ./...` |
+| `make test` | Compile CSS and generate Go code, then `go test ./...` |
+| `make lint` | Compile CSS and generate Go code, then `go vet ./...` and `go tool -modfile=tools/go.mod golangci-lint run` |
 | `make generate` | `go tool -modfile=tools/go.mod templ generate`; sqlc generation is conditional as described above |
-| `make run-server` | Generate templates, load local env with exported overrides, then `go run ./cmd/server` |
+| `make run-server` | Compile CSS, generate templates, load local env with exported overrides, then `go run ./cmd/server` |
 | `make run-worker` | Generate templates, load local env with exported overrides, then `go run ./cmd/worker` |
 | `make dev` | `go tool -modfile=tools/go.mod air -c .air.toml` |
 
@@ -252,9 +259,12 @@ For live reload, stop the server and run:
 make dev
 ```
 
-Air loads `.env`, watches Go, templ, CSS, and JavaScript files, regenerates templates,
-rebuilds, and restarts the server on changes. Polling supports WSL-mounted directories.
-Generated template files are excluded from watching to prevent rebuild loops.
+Air loads `.env`, watches Go, templ, CSS, JavaScript, SQL, Makefile, and shell
+sources, compiles CSS, regenerates templates, rebuilds, and restarts the server.
+Edit pages under `web/pages`, the shell under `web/layouts`, shared components
+under `web/components`, and CSS/theme source under `web/styles`. Polling supports WSL-mounted directories.
+Generated template files, compiled CSS, and `bin/` are excluded from watching
+to prevent rebuild loops. Worker startup does not need the Tailwind CLI.
 Refresh the browser after a rebuild to see the change. Check the terminal for startup
 or compilation errors. Use `Ctrl+C` to stop the process.
 Air reloads the server; restart the worker separately after changes to worker code.
@@ -308,3 +318,9 @@ Air reloads the server; restart the worker separately after changes to worker co
   callback matches `APP_BASE_URL` plus `/auth/github/callback`. Use `localhost`
   consistently in the browser for the documented local setup. Follow
   [the sign-in checks](AUTH_TESTING.md).
+
+- **Tailwind download/build failure:** check curl and SHA-256 tool availability,
+  GitHub release access, and `make assets`. A checksum mismatch stops installation;
+  do not bypass it. Edit CSS sources rather than generated `web/static/css/app.css`.
+- **Stylesheet missing after a manual build:** run `make assets` before compiling
+  the server. The binary embeds assets at build time; restart it after rebuilding.

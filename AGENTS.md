@@ -16,8 +16,12 @@ unbuilt feature, stub it behind a minimal interface rather than building it.
 - Follow standard Go idioms and `gofmt`/`goimports` formatting; run
   `go vet` and `golangci-lint run` before considering a task done.
 - Package by feature per DESIGN.md Section 20: a feature's handler, service,
-  repository, routes, and templates live together in its own package.
-  Don't reintroduce layered folders (global handlers/, routes/, store/).
+  repository, routes, and jobs live together in its own package.
+  Presentation is the exception: templates live in `web/pages/<feature>`, shared
+  shells in `web/layouts`, components in `web/components`, CSS source in
+  `web/styles`, and served assets in `web/static`. Presentation must not import
+  backend features; handlers pass display data. Do not reintroduce global
+  handlers/, routes/, or store/ layers.
 - Keep files flat inside a feature package; don't add handler/, service/
   subfolders inside one feature.
 - Errors: wrap with context (`fmt.Errorf("...: %w", err)`), don't discard.

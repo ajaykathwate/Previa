@@ -13,7 +13,7 @@ Last updated: 2026-10-02
 - `docs/DESIGN_DURABLE_PUBLICATION.md` records the durable-publication decision,
   implemented database/River foundation, and integrations still required.
 - Feature packages stay flat; shared infrastructure is under `internal/platform`.
-  Do not build later-phase features without a task asking for them.
+  Presentation lives under `web/`; see `docs/UI_ARCHITECTURE.md`.
 
 ## Run and verify
 
@@ -29,17 +29,16 @@ Last updated: 2026-10-02
 - Config: SharedConfig has DATABASE_URL (also River's connection); ServerConfig adds
   HTTP/OAuth/session settings; WorkerConfig adds MAX_CONCURRENT_BUILDS and optional
   BUILD_TIMEOUT (default 12m). Unbuilt integrations have no config fields.
-- `docs/UNDERSTAND_CODEBASE.md` is the current codebase map;
-  `docs/DEVELOPMENT_SETUP.md` is the local setup guide. `README.md` links the setup guide.
-- Setup guide includes config sources, OAuth registration, and automatic Make env
-  loading; direct Go commands still need exports. Restart processes after edits.
-  AGENTS.md requires keeping it in sync with relevant configuration/setup changes.
+- Code map: `docs/UNDERSTAND_CODEBASE.md`; setup: `docs/DEVELOPMENT_SETUP.md`.
+- Setup guide covers config sources/OAuth/Make env loading; direct Go needs exports.
+  AGENTS.md requires keeping it in sync. Restart processes after config edits.
 
 ## Completed foundation and authentication
 
 - Thin cmd entrypoints; app constructs dependencies and handles graceful shutdown.
   Server and worker DB pools are health-checked on startup.
-- chi request IDs/logging/recovery; templ shell; embedded local HTMX 2.0.11 assets.
+- chi middleware; all presentation in `web/` (pages/layouts/components/styles).
+  Official Tailwind v4.1.18 + copied stable templUI v1.13.2; local HTMX 2.0.11.
 - GitHub OAuth, users keyed by GitHub ID, signed state, login rotation, SCS pgxstore,
   RequireUser, session CSRF, logout. Session lifetime 24h, idle timeout 30m.
 - OAuth callback: http://localhost:8080/auth/github/callback. Configure server-only
@@ -85,7 +84,8 @@ Last updated: 2026-10-02
 
 ## Verification
 
-- Make env-loader smoke checks/build/tests/vet/lint passed; DB tests not rerun.
+- UI build/tests/vet/lint and HTTP/CSS/Air template+CSS reload checks passed.
+  CSS CLI checksums verified; browser visual/OAuth-provider/DB suite not rerun.
 - Goose schema is locally at migration 4; migrations 3 and 4 also apply in
   isolated-schema integration tests. No real containers/images/routes were created.
 - PostgreSQL/River tests cover late success/failure, close during build, stale queued
@@ -95,5 +95,5 @@ Last updated: 2026-10-02
   nonblocking external publication.
 - Real River rescuer test verifies expired ping/build/teardown handling while a
   legitimately slow build remains running. Build/tests/vet/lint passed.
-- Earlier checks confirmed worker startup with OAuth unset and migration credentials
-  absent from 39 ps auxww samples. PostgreSQL remains running; no app processes left.
+- Earlier worker/OAuth-unset and credential-free migration checks passed.
+  PostgreSQL remains running; UI smoke server stopped. Root README unchanged.

@@ -1,0 +1,12 @@
+@import "tailwindcss" source(none);
+@import "./theme.css";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@source "../layouts";
+@source "../pages";
+@source "../components";
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
+}

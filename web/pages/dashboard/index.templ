@@ -1,0 +1,50 @@
+package dashboard
+
+import (
+	"github.com/ajaykathwatee/previa/web/layouts"
+	"github.com/ajaykathwatee/previa/web/components/button"
+	"github.com/ajaykathwatee/previa/web/components/card"
+	"github.com/ajaykathwatee/previa/web/components/input"
+)
+
+templ Home(username string, loggedIn bool, csrfToken string) {
+	@layouts.Base("Home") {
+		<div class="mx-auto max-w-2xl space-y-6">
+			<h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">Hello, preview platform updated</h1>
+			@card.Card() {
+				@card.Header() {
+					if loggedIn {
+						<p class="text-muted-foreground">Signed in as { username }</p>
+					} else {
+						@card.Description() { Sign in to access the preview platform. }
+					}
+				}
+				@card.Content() {
+					<div class="flex flex-wrap gap-3">
+						if loggedIn {
+							@button.Button(button.Props{Href: "/protected"}) { Protected page }
+							@button.Button(button.Props{Href: "/auth/logout", Variant: button.VariantOutline}) { Log out }
+						} else {
+							@button.Button(button.Props{Href: "/auth/github/login"}) { Login with GitHub }
+						}
+					</div>
+				}
+			}
+			if loggedIn {
+				@card.Card() {
+					@card.Header() { <h2 class="text-lg font-semibold">Queue ping</h2> }
+					@card.Content() {
+						<form method="post" action="/queue/ping" class="space-y-4">
+							<input type="hidden" name="csrf_token" value={ csrfToken }/>
+							<div class="space-y-2">
+								<label for="pr-key" class="text-sm font-medium">Ping PR key</label>
+								@input.Input(input.Props{ID: "pr-key", Name: "pr_key", Value: "demo:pr:1", Required: true, Attributes: templ.Attributes{"maxlength": "128"}})
+							</div>
+							@button.Button(button.Props{Type: button.TypeSubmit}) { Enqueue ping }
+						</form>
+					}
+				}
+			}
+		</div>
+	}
+}

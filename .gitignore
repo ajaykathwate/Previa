@@ -14,6 +14,8 @@
 *_templ.go
 *_templ.txt
 /.templ/
+/web/static/css/app.css
+/web/static/css/app.css.*
 
 # Local configuration and secrets; retain the documented example.
 .env

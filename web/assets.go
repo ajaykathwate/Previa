@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-//go:embed static/*
+//go:embed static
 var assets embed.FS
 
 // StaticHandler serves embedded assets beneath /static/.

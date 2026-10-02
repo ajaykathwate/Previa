@@ -664,7 +664,7 @@ sequenceDiagram
 
 ## 20. Recommended folder structure: package by feature
 
-Splitting by layer (`web/handlers`, `web/routes`, `store/`) is hard to navigate. Adding one feature means touching four directories, and nothing tells you what belongs together. The Go community's answer is to **package by feature**: each feature is one folder that owns its handler, routes, business logic, database queries, templates and background jobs. Shared plumbing goes in one `platform/` folder.
+Backend code is **packaged by feature**: each feature owns its handler, routes, business logic, database queries and background jobs. Shared infrastructure lives under `internal/platform`. Presentation is the explicit exception: all pages, HTMX fragments, layouts, browser assets and reusable UI components live under `web/`, with pages grouped by feature. HTTP handlers remain in feature packages; there are no global handlers/routes/store layers.
 
 ### The tree
 
@@ -686,7 +686,6 @@ preview/
 │   │   ├── service.go              # login logic: verify state, upsert user
 │   │   ├── repository.go           # wraps generated queries for users/sessions
 │   │   ├── middleware.go           # RequireUser, CSRF
-│   │   ├── views.templ             # login page
 │   │   ├── queries.sql             # SQL owned by this feature
 │   │   ├── dbgen/                  # sqlc output (generated, never edited)
 │   │   └── auth_test.go
@@ -694,7 +693,7 @@ preview/
 │   ├── installations/              # FEATURE: GitHub App install + repo linking
 │   │   ├── handler.go  routes.go  service.go  repository.go
 │   │   ├── events.go               # handles installation / installation_repositories events
-│   │   ├── views.templ  queries.sql  dbgen/
+│   │   ├── queries.sql  dbgen/
 │   │
 │   ├── webhooks/                   # FEATURE: receive and dispatch GitHub events
 │   │   ├── handler.go              # read body, verify signature, dedupe by delivery ID
@@ -709,7 +708,6 @@ preview/
 │   │   ├── repository.go
 │   │   ├── jobs.go                 # build / rebuild / teardown River jobs
 │   │   ├── handler.go  routes.go   # dashboard actions (teardown now)
-│   │   ├── views.templ             # environment table + row components
 │   │   ├── queries.sql  dbgen/
 │   │
 │   ├── repoconfig/                 # FEATURE: .previewrc.yaml parse + validate
@@ -745,12 +743,12 @@ preview/
 │   │   ├── handler.go  routes.go  service.go  repository.go
 │   │   ├── crypto.go               # AES-GCM, key versioning
 │   │   ├── redact.go               # strip secret values from logs
-│   │   ├── views.templ  queries.sql  dbgen/
+│   │   ├── queries.sql  dbgen/
 │   │
 │   ├── buildlogs/                  # FEATURE: store + stream logs
 │   │   ├── store.go                # append lines with sequence numbers
 │   │   ├── handler.go  routes.go   # SSE endpoint
-│   │   ├── views.templ  queries.sql  dbgen/
+│   │   ├── queries.sql  dbgen/
 │   │
 │   ├── housekeeping/               # FEATURE: expiry, reconcile, prune
 │   │   ├── expire.go
@@ -760,7 +758,6 @@ preview/
 │   │
 │   ├── dashboard/                  # FEATURE: pages that compose other features
 │   │   ├── handler.go  routes.go
-│   │   ├── views.templ             # home, repo list page
 │   │
 │   └── platform/                   # SHARED infrastructure: knows nothing about features
 │       ├── config/                 # env var loading + validation
@@ -769,7 +766,6 @@ preview/
 │       ├── githubapp/              # App JWT, installation-token cache, API client
 │       ├── dockerx/                # Docker client construction
 │       ├── httpx/                  # middleware, error responses, HTMX helpers
-│       ├── ui/                     # layout.templ, nav, shared components
 │       ├── logging/                # slog setup + secret redaction
 │       └── metrics/                # Prometheus registry + shared metrics
 │
@@ -777,7 +773,14 @@ preview/
 │   └── migrations/                 # goose files: 0001_init.sql ...
 │
 ├── web/
-│   └── static/                     # htmx.min.js, compiled tailwind.css, favicon
+│   ├── assets.go                   # embeds and serves static assets
+│   ├── layouts/                    # shared HTML shells (base.templ)
+│   ├── pages/                      # pages/fragments grouped by feature
+│   │   ├── auth/                   # error/logout; successful OAuth uses redirects
+│   │   └── dashboard/              # home/protected pages; future screens added as needed
+│   ├── components/                 # local, reusable UI; no backend imports
+│   ├── styles/                     # Tailwind entry CSS and theme tokens
+│   └── static/                     # local HTMX, generated CSS, browser assets
 │
 ├── deploy/
 │   ├── docker-compose.yml
@@ -794,15 +797,17 @@ preview/
 
 ### The rules that make it stay clean
 
-**1. A feature owns everything about itself.** To change how teardown works, open `environments/`. To change the login page, open `auth/`. You never hunt across `handlers/`, `routes/` and `store/`.
+**1. A feature owns its backend behavior.** Teardown functionality lives in `internal/environments`; its pages and fragments belong in `web/pages/environments` when built. Auth HTTP/session behavior lives in `internal/auth`, while its presentation lives in `web/pages/auth`. Shared presentation stays in `web/layouts` and `web/components`.
 
 **2. Dependencies point one way.**
 
 ```
 cmd  ->  app  ->  features  ->  platform
+                    |
+                    +-> web/pages/<feature> -> web/layouts/components
 ```
 
-`platform` never imports a feature. A feature never imports another feature's internals.
+`platform` and presentation packages never import a feature. A feature never imports another feature's internals. Handlers pass primitive display values or page-owned view models; templates never fetch data, access sessions, or authorize actions. Use import aliases such as `authpages` for page packages that share a feature name.
 
 **3. Features talk through small interfaces defined by the consumer.** This is the Go idiom. Example: `environments` needs to post PR updates, so it defines what it needs:
 
@@ -823,7 +828,7 @@ type Reporter interface {
 
 ### Inside one feature: how a request flows
 
-Take "Tear down now" from the dashboard, entirely inside `environments/`:
+Take "Tear down now" from the dashboard, with backend behavior owned by `internal/environments` and presentation under `web/pages/environments`:
 
 ```
 routes.go       POST /environments/{id}/teardown  ->  handler.Teardown
@@ -832,10 +837,27 @@ service.go      checks ownership, validates the state transition,
                 in ONE transaction: mark tearing_down + enqueue teardown job
 repository.go  the SQL calls (backed by dbgen/)
 jobs.go         the teardown worker: calls runtime, then reporting
-views.templ     EnvironmentRow component returned to HTMX
+web/pages/environments/row.templ  EnvironmentRow component returned to HTMX
 ```
 
 Handler stays thin (HTTP in, HTTP out), service holds the decisions, repository holds the SQL. That's the same idea as Rails controller / model, minus the magic.
+
+### UI generation and styling
+
+All handwritten `.templ` files live under `web/`. Generated `*_templ.go` files
+stay beside their sources and are Git-ignored; run generation before compilation.
+Official Tailwind CSS v4.1.18 is installed as a checksum-verified standalone CLI
+by `deploy/install-tailwind.sh`. It compiles `web/styles/app.css` into the ignored
+`web/static/css/app.css`, scanning presentation sources explicitly. Build/server
+Make targets prepare assets before Go embeds them; Air does the same on source
+changes and excludes generated output to prevent rebuild loops.
+
+Button, input, card and alert source is selectively copied from stable templUI
+v1.13.2 (MIT), a community shadcn-style Go/Templ project. This is not official
+React shadcn/ui or the v2 beta. No component JavaScript is currently required.
+Keep upstream provenance and local changes in `web/components/README.md`; updates
+are reviewed and pinned, not automatic. Worker startup does not require Tailwind.
+See `docs/UI_ARCHITECTURE.md` for the implemented presentation boundary.
 
 ### sqlc and migrations in a feature-based layout
 

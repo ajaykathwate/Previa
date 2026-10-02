@@ -10,6 +10,7 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	authpages "github.com/ajaykathwatee/previa/web/pages/auth"
 	"github.com/alexedwards/scs/v2"
 )
 
@@ -84,7 +85,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) logoutPage(w http.ResponseWriter, r *http.Request) {
-	templ.Handler(logoutPage(CSRFToken(r.Context()))).ServeHTTP(w, r)
+	templ.Handler(authpages.Logout(CSRFToken(r.Context()))).ServeHTTP(w, r)
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -98,5 +99,5 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, status int, message string) {
-	templ.Handler(errorPage(message), templ.WithStatus(status)).ServeHTTP(w, r)
+	templ.Handler(authpages.Error(message), templ.WithStatus(status)).ServeHTTP(w, r)
 }

@@ -1,0 +1,25 @@
+package auth
+
+import (
+	"github.com/ajaykathwatee/previa/web/layouts"
+	"github.com/ajaykathwatee/previa/web/components/button"
+	"github.com/ajaykathwatee/previa/web/components/card"
+)
+
+templ Logout(token string) {
+	@layouts.Base("Log out") {
+		@card.Card(card.Props{Class: "mx-auto max-w-lg"}) {
+			@card.Header() {
+				<h1 class="text-2xl font-semibold tracking-tight">Log out</h1>
+				@card.Description() { Confirm that you want to end your session. }
+			}
+			@card.Content() {
+				<form method="post" action="/auth/logout" class="flex flex-wrap gap-3">
+					<input type="hidden" name="csrf_token" value={ token }/>
+					@button.Button(button.Props{Type: button.TypeSubmit}) { Confirm logout }
+					@button.Button(button.Props{Href: "/", Variant: button.VariantOutline}) { Cancel }
+				</form>
+			}
+		}
+	}
+}

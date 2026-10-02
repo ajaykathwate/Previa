@@ -1,0 +1,27 @@
+package auth
+
+import (
+	"github.com/ajaykathwatee/previa/web/layouts"
+	"github.com/ajaykathwatee/previa/web/components/alert"
+	"github.com/ajaykathwatee/previa/web/components/button"
+	"github.com/ajaykathwatee/previa/web/components/card"
+)
+
+templ Error(message string) {
+	@layouts.Base("Sign-in") {
+		@card.Card(card.Props{Class: "mx-auto max-w-lg"}) {
+			@card.Header() {
+				<h1 class="text-2xl font-semibold tracking-tight">Sign-in</h1>
+			}
+			@card.Content() {
+				@alert.Alert(alert.Props{Variant: alert.VariantDestructive}) {
+					@alert.Description() { { message } }
+				}
+			}
+			@card.Footer(card.FooterProps{Class: "flex flex-wrap gap-3"}) {
+				@button.Button(button.Props{Href: "/auth/github/login"}) { Try signing in again }
+				@button.Button(button.Props{Href: "/", Variant: button.VariantOutline}) { Back to home }
+			}
+		}
+	}
+}

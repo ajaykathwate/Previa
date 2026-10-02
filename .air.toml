@@ -3,12 +3,12 @@ tmp_dir = "tmp"
 env_files = [".env"]
 
 [build]
-  cmd = "make generate && go build -o ./tmp/server ./cmd/server"
+  cmd = "make assets generate && go build -o ./tmp/server ./cmd/server"
   entrypoint = ["./tmp/server"]
-  include_ext = ["go", "templ", "css", "js", "sql"]
-  include_file = ["go.mod", "go.sum", "sqlc.yaml"]
-  exclude_dir = ["tmp", ".git", "tools"]
-  exclude_regex = ["_templ\\.go$", "_test\\.go$", "internal/[^/]+/dbgen/.*\\.go$"]
+  include_ext = ["go", "templ", "css", "js", "sql", "sh"]
+  include_file = ["go.mod", "go.sum", "sqlc.yaml", "Makefile"]
+  exclude_dir = ["tmp", "bin", ".git", "tools"]
+  exclude_regex = ["_templ\\.go$", "_test\\.go$", "internal/[^/]+/dbgen/.*\\.go$", "web/static/css/app\\.css(\\..*)?$"]
   exclude_unchanged = true
   delay = 500
   stop_on_error = true

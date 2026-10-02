@@ -1,6 +1,7 @@
 GO ?= go
 TOOLS = $(GO) tool -modfile=tools/go.mod
 ENV_FILE ?= .env
+TAILWIND = ./bin/tailwindcss-v4.1.18
 
 # Load trusted shell assignments for local runs, preserving exported overrides.
 # export -p emits shell-quoted declarations; restore those without logging values.
@@ -18,7 +19,19 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate build test lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate assets build test lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+
+$(TAILWIND): deploy/install-tailwind.sh
+	sh deploy/install-tailwind.sh "$@"
+
+assets: $(TAILWIND)
+	@set -eu; mkdir -p web/static/css; \
+	previa_css=$$(mktemp web/static/css/app.css.XXXXXX); \
+	trap 'rm -f "$$previa_css"' EXIT HUP INT TERM; \
+	$(TAILWIND) -i web/styles/app.css -o "$$previa_css" --minify; \
+	if ! cmp -s "$$previa_css" web/static/css/app.css; then \
+		mv "$$previa_css" web/static/css/app.css; \
+	fi
 
 generate:
 	$(TOOLS) templ generate
@@ -28,17 +41,17 @@ generate:
 		$(TOOLS) sqlc generate; \
 	fi
 
-build: generate
+build: assets generate
 	$(GO) build ./...
 
-test: generate
+test: assets generate
 	$(GO) test ./...
 
-lint: generate
+lint: assets generate
 	$(GO) vet ./...
 	$(TOOLS) golangci-lint run
 
-run-server: generate
+run-server: assets generate
 	@$(load_run_env) exec $(GO) run ./cmd/server
 
 dev:

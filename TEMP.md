@@ -76,8 +76,9 @@ values in a local `.env` are ignored. HTTP/OAuth/session settings are server-onl
 | Compose `postgres` service | Persists users, sessions, application state, and River jobs | Both server and worker; queued work survives process restarts. |
 | `make run-server` | HTTP requests, OAuth, sessions, and job insertion | Browser access and enqueueing; does not execute jobs. |
 | `make run-worker` | Claims and executes queued ping jobs | Completion, retries, and River maintenance. Environment publication workers are not yet registered. |
-| `make dev` (Air) | Generates templates, builds, and restarts the server on changes | Optional alternative to `make run-server`; do not run both on the same port. |
+| `make dev` (Air) | Compiles CSS, generates templates, builds, and restarts the server on changes | Optional alternative to `make run-server`; do not run both on the same port. |
 | `make migrate-up` | Runs Goose, then the environment-based River migration adapter | One-time schema changes after checkout/update; not a background process. |
+| `make assets` | Compiles official Tailwind CSS v4.1.18 into embedded static CSS | Automatically included in server/build/test/lint; no background process or Node.js needed. |
 | `make generate` | Generates templ and sqlc Go code | Build preparation; already included in build/run targets. |
 
 River's maintenance/leader services run inside the worker, not as a separate
@@ -224,3 +225,27 @@ validate real router generation fencing or external-system recovery.
 River owns its schema using its pinned migrations, following the
 [official migration workflow](https://riverqueue.com/docs/migrations). No conflicting
 architecture was introduced; external build/teardown adapters remain unregistered.
+
+## UI organization and dependency decision
+
+- All templates now live under `web/pages`, `web/layouts`, and `web/components`.
+  Feature handlers/services/repos remain under `internal`; page packages do not
+  import them. This is the approved exception to feature template colocation.
+- Official Tailwind CSS v4.1.18 is installed automatically with pinned SHA-256
+  checksums. Stable templUI v1.13.2 supplies copied button/card/alert/input source;
+  neither official React shadcn/ui nor the shadcn-templ v2 beta is installed.
+- Native input behavior is retained; unused password-toggle JS/icons are omitted.
+  Source, license, and adaptations are documented in `web/components/README.md`.
+- `make dev` remains one server command: CSS compilation precedes generation and
+  rebuild; generated output is excluded from watching. `.env` loading is unchanged.
+- Component source ownership means upstream fixes require explicit review. v1
+  ongoing support and v2 compatibility are not guaranteed. Any beta adoption or
+  migration remains a future decision requiring approval; no such change is made.
+- `README.md` is intentionally unchanged per instruction; its older coarse layout
+  sketch differs from the approved DESIGN Section 20. No additional cleanup or
+  architectural expansion is proposed in this task.
+
+UI verification: build/tests/vet/lint passed; real HTTP CSS serving and Air reload
+for both template utilities and CSS source passed. Temporary edits restored and
+smoke server stopped. Browser visual review and external GitHub login were not
+rerun; existing HTTP auth/session/CSRF tests passed. No database schema changed.
