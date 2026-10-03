@@ -17,15 +17,25 @@ Prepared on 2026-10-03 against the current repository. Verify this summary again
   and ten-row pagination, shared layout/theme, logout modal and diagnostic tools.
 - Implemented behind tested interfaces: generation-fenced build/teardown,
   durable publication operations, cleanup and reconciliation contracts.
-- Production River worker executes ping only. Real preview builds, webhook HTTP
-  ingress, PR browsing and Docker/router/GitHub publication adapters are unbuilt.
+- Prompts 4–5 completed: signed transactional webhook ingress, source-ordering fences,
+  durable paginated PR discovery, repository/PR pages, owner policy controls and real
+  current activity views. See [WEBHOOKS_AND_PR_DISCOVERY.md](WEBHOOKS_AND_PR_DISCOVERY.md).
+- Production workers execute ping and App-configured PR discovery. Real preview builds
+  and Docker/router/GitHub publication adapters remain the next execution phase.
+- Browser walkthrough: [APP_USER_FLOW.md](APP_USER_FLOW.md).
 - Implemented as standalone domain APIs: Manual default and owner-enabled Automatic.
   Five-minute scheduling is tested behind interfaces; production runtime integration
   remains unbuilt. Comments/reviews do not trigger builds.
 - `ProcessPR` and `finishJob` now consult durable authorized intent. Production
   dispatch fails closed until capable execution/publication adapters are configured.
 
-## Recommended next phase
+## Retained control-plane implementation sequence
+
+Phase 1 audit: Prompts 1–5 were checked sequentially against code and tests.
+Prompt 3 needed lifetime environment uniqueness and admitted-build log clearing;
+those gaps are fixed. See [PHASE1_AUDIT.md](PHASE1_AUDIT.md). The user-requested
+master–detail UI (Phase 2) and open-only PR tracking (Phase 3) require separate
+confirmation and have not started.
 
 Build the **configuration, policy and PR control plane** in the five steps below.
 This closes the scheduling correctness gap before adding expensive execution.
@@ -37,8 +47,8 @@ execute all five at once. Each numbered prompt is one task with its own stop poi
 | 1 — complete | Standalone repo config fetch/parse/validation | Existing App authentication |
 | 2 — complete | Repository policy and durable authorized request model | Accepted build policy |
 | 3 — complete | Debounce, manual request coordination and intent-aware handoff | Prompt 2 |
-| 4 | Authenticated, durable GitHub webhook ingress | Prompt 3 |
-| 5 | Existing-PR discovery, repository/PR pages and owner controls | Prompts 1–4 |
+| 4 — complete | Authenticated, durable GitHub webhook ingress | Prompt 3 |
+| 5 — complete | Existing-PR discovery, repository/PR pages and owner controls | Prompts 1–4 |
 
 No prompt in this phase implements Docker builds, creates a real preview URL or
 registers fake production build workers. Production admission/dispatch must fail
@@ -83,7 +93,7 @@ End with actual verification, local testing steps and the exact scope still unbu
 ## Prompt 1 — Standalone repository configuration
 
 Completed as a standalone feature. Retained below as its implementation contract;
-the next implementation task is Prompt 4. Confirmed defaults/schema are documented
+the contract remains standalone. Confirmed defaults/schema are documented
 in [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md); do not ask to approve them again.
 
 > Read DESIGN.md Section 5 in full, README.md Section 2.3's `.previewrc.yaml`
@@ -132,7 +142,7 @@ in [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md); do not ask to approve them ag
 Completed as standalone persistence/domain APIs. Retained as the implementation
 contract; approved choices and verification are in [BUILD_INTENTS.md](BUILD_INTENTS.md).
 Prompt 3 subsequently connected request revision across the execution boundaries;
-next implementation: Prompt 4.
+the integration is now implemented.
 
 > Read `docs/BUILD_POLICY_AND_USER_FLOW.md` in full and DESIGN.md Sections 7 and 13.
 > Inspect current PR/event queries, environment job arguments and publication
@@ -180,7 +190,7 @@ next implementation: Prompt 4.
 
 Completed behind tested coordination/execution interfaces. Retained as the contract;
 [BUILD_SCHEDULING.md](BUILD_SCHEDULING.md) records schema, atomicity, tests and
-production boundaries. Next: Prompt 4; do not enable runtime dispatch with no-op adapters.
+production boundaries. Do not enable runtime dispatch with no-op adapters.
 
 > Continue from Prompt 2. Read DESIGN.md Sections 6, 7 and 13, and the build-policy,
 > generation-ordering and durable-publication docs. Implement coordination using
@@ -234,7 +244,7 @@ production boundaries. Next: Prompt 4; do not enable runtime dispatch with no-op
 > Stop with working coordination tests. Explain atomic eligibility/claim SQL and
 > successor logic. Clearly distinguish tested adapters from production capability.
 
-## Prompt 4 — Authenticated and durable GitHub webhook ingress
+## Prompt 4 — Authenticated and durable GitHub webhook ingress (completed)
 
 > Continue from Prompt 3. Read DESIGN.md Section 6 in full, Section 4's lifecycle
 > contract, and existing installation/event handler interfaces. Implement the
@@ -280,7 +290,7 @@ production boundaries. Next: Prompt 4; do not enable runtime dispatch with no-op
 > optional developer tooling, not a new deployed component. Do not claim real
 > delivery verification unless actually observed.
 
-## Prompt 5 — Existing PR discovery and repository/PR workspace
+## Prompt 5 — Existing PR discovery and repository/PR workspace (completed)
 
 > Continue from Prompts 1–4. Read the UI recommendations in
 > `docs/BUILD_POLICY_AND_USER_FLOW.md`, DESIGN.md Section 17, the current presentation

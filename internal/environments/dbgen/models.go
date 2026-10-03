@@ -89,6 +89,27 @@ type Installation struct {
 	Status               string
 	AccountLogin         string
 	Revision             int64
+	SourceUpdatedAt      pgtype.Timestamptz
+	CleanupPending       bool
+}
+
+type InstallationRepositoryEvent struct {
+	InstallationID  int64
+	GithubRepoID    int64
+	SourceUpdatedAt pgtype.Timestamptz
+	Removed         bool
+}
+
+type PrSync struct {
+	RepoID        int64
+	Revision      int64
+	State         string
+	NextPage      int32
+	Fetched       int32
+	RequestedAt   pgtype.Timestamptz
+	CompletedAt   pgtype.Timestamptz
+	LastSuccessAt pgtype.Timestamptz
+	Message       string
 }
 
 type PullRequest struct {
@@ -101,17 +122,26 @@ type PullRequest struct {
 	CreatedAt                   pgtype.Timestamptz
 	Generation                  int64
 	TeardownCompletedGeneration int64
+	Title                       string
+	Author                      string
+	HeadBranch                  string
+	HtmlUrl                     string
+	HeadRepoID                  pgtype.Int8
+	IsFork                      bool
+	SourceUpdatedAt             pgtype.Timestamptz
+	NeedsRefresh                bool
 }
 
 type Repo struct {
-	ID                int64
-	InstallationID    int64
-	FullName          string
-	DefaultConfigHash pgtype.Text
-	CreatedAt         pgtype.Timestamptz
-	GithubRepoID      pgtype.Int8
-	Accessible        bool
-	BuildMode         string
+	ID                 int64
+	InstallationID     int64
+	FullName           string
+	DefaultConfigHash  pgtype.Text
+	CreatedAt          pgtype.Timestamptz
+	GithubRepoID       pgtype.Int8
+	Accessible         bool
+	BuildMode          string
+	ObservationVersion int64
 }
 
 type Session struct {
@@ -126,4 +156,11 @@ type User struct {
 	Username  string
 	CreatedAt pgtype.Timestamptz
 	AvatarUrl string
+}
+
+type WebhookDelivery struct {
+	DeliveryID  string
+	EventType   string
+	PayloadHash string
+	ReceivedAt  pgtype.Timestamptz
 }

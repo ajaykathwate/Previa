@@ -107,3 +107,8 @@ river-migrate-up river-status:
 	: "$${DATABASE_URL:?DATABASE_URL must be set}"; \
 	export DATABASE_URL; \
 	$(GO) run ./cmd/river-migrate $(if $(filter river-status,$@),status,up)
+
+# Signs a local fixture in memory; secret is never a command argument.
+.PHONY: test-webhook
+test-webhook:
+	@$(load_run_env) python3 deploy/test-webhook.py

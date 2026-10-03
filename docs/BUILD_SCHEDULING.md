@@ -4,10 +4,10 @@
 
 Prompt 3 connects the tested control-plane interfaces: parsed PR events, repository
 policy, current build intent, River wake-ups, executable admission, worker handoff,
-result/publication guards and recovery. No webhook HTTP endpoint, UI action,
-Docker adapter, real router or GitHub report executor was added. Production still
-registers only ping; these preview coordination services are not constructed by
-`internal/app` yet.
+result/publication guards and recovery. Prompts 4–5 now construct observation coordination in the HTTP server, with signed
+transactional ingress and repository/PR policy UI. Workers execute ping and
+App-configured PR discovery. Real executable build/teardown, route and reporting
+workers remain unregistered; durable preview intent/wake-ups wait for capable adapters.
 
 `NewBroker` can persist coordination wake-ups but **cannot dispatch executable
 build/teardown work**. Its `RequestBuild`, `EnqueueTx` and `Dispatch` reject execution
@@ -23,7 +23,8 @@ production execution is not supported.
 - `opened`, `reopened`, `synchronize`, and `closed` are supported parsed actions.
   `closed` with `Merged: true` stores `merged`.
 - Every committed supported invocation increments PR generation once. Delivery
-  identity/authentication/out-of-order upstream handling remains Prompt 4.
+  identity/authentication/source ordering are implemented by Prompt 4; stale source
+  deliveries are acknowledged without regressing state. See [WEBHOOKS_AND_PR_DISCOVERY.md](WEBHOOKS_AND_PR_DISCOVERY.md).
 - Unsupported actions return an error without mutation; future HTTP routing must
   ignore unrelated event types/actions. Comments/reviews never reset a deadline.
 - Manual observations track PR state and supersede stale active intent without
@@ -107,6 +108,18 @@ rows skips runtime execution. Allowing `running` supports idempotent rescued/ret
 attempts and the approved mode-change behavior; it does not allow parallel logical
 requests to bypass the River PR key.
 
+After a successful claim, `ClearBuildLogs` removes logs for that PR's environment
+inside the same transaction, before runtime execution. This also starts a fresh log
+for an admitted runtime retry. Stale, cancelled, revoked or not-yet-due work cannot
+clear logs. A deletion failure rolls back the running claim and skips the runtime.
+Already-published/pending-candidate replays return before admission and preserve logs.
+The future log writer must fence appends by the current request; no streaming or
+Docker log adapter is enabled here.
+
+Migration 9 adds unconditional environment uniqueness by PR. The existing row and
+subdomain survive rebuild, teardown and reopen; fixture tests exercise this lifecycle.
+Initial environment provisioning still belongs to the later execution integration.
+
 ## Completion, handoff and recovery
 
 `finishJob` uses the same scope/PR lock. It completes or terminally discards the old
@@ -174,7 +187,7 @@ fails closed; existing deployed fields are preserved.
 
 ## Local checks and next phase
 
-Run `make migrate-up` after checkout updates. Current schema: Goose 7, River 007.
+Run `make migrate-up` after checkout updates. Current schema: Goose 9, River 007.
 No new `.env` fields or extra production processes are needed. With an exported
 local `TEST_DATABASE_URL`:
 
@@ -190,6 +203,6 @@ observation/request changes, same-generation stale success/failure/publication,
 generation-zero finalization, real River wake-up processing/PR uniqueness, future
 handoff deadlines, success/terminal-failure handoff and close-during-build cleanup.
 
-Next is Prompt 4: authenticated durable webhook ingress. PR discovery/screens
-and owner controls follow in Prompt 5; real source/build/runtime/router/reporting
+Prompts 4–5 are complete: authenticated transactional ingress, paginated PR discovery,
+workspace screens and owner controls. Real source/build/runtime/router/reporting
 adapters remain the later execution phase.

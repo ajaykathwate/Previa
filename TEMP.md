@@ -4,31 +4,77 @@ This is the operational handoff for the queue setup. For reusable setup
 instructions, see [DEVELOPMENT_SETUP.md](docs/DEVELOPMENT_SETUP.md); GitHub App
 configuration is detailed in [GITHUB_INSTALLATIONS.md](docs/GITHUB_INSTALLATIONS.md).
 
+## Phase 1 audit (2026-10-03)
+
+Prompts 1–5 were audited in order; the detailed evidence and local checks are in
+[PHASE1_AUDIT.md](docs/PHASE1_AUDIT.md). Prompt 3 was partial: its schema allowed
+multiple lifetime environment rows after teardown, and worker admission never
+cleared old logs. Migration 9 adds lifetime uniqueness; admission now clears logs
+atomically after guards and before runtime execution. Regression tests cover
+rebuild/reopen identity, stale/cancelled/early work and rollback on log-clear failure.
+No runtime adapter, Phase 2 layout, or Phase 3 discovery scope change was added.
+The new migration was verified in a disposable database, not the application DB.
+Wait for user confirmation before Phase 2; report/wait again before Phase 3.
+
 ## What is implemented
 
-Accepted policy (2026-10-03): Manual by default; opt-in Automatic uses a
-five-minute trailing quiet period. Prompts 2–3 implement current intent persistence,
-durable wake-ups, ownership-scoped manual coordination, eligibility/claim, handoff,
-revision-fenced publication and bounded recovery. These remain tested interfaces;
-production dispatch is disabled until real runtime/publication adapters exist.
-No HTTP webhook endpoint or browser build controls are connected yet.
+Prompts 1–5 are complete. The live server verifies/atomically deduplicates GitHub
+webhooks, tracks source-ordered PR state, renders repository/PR workspace pages and
+supports owner Manual/Automatic policy changes. Discovery uses bounded paginated
+River jobs; workers need only App ID/PEM for that queue. Builds/Environments display
+actual saved records. No real preview execution is enabled; Build is disabled and
+its backend rejects submissions without inserting intent.
 
-Recommendations needing implementation review: initial paginated GitHub PR sync
-and its ordering so newly connected repositories include existing PRs, plus
-repository/PR detail pages. Scheduling coordination is complete; real execution adapters remain later phases.
-Preserve current no-historical-builds MVP scope. These are recorded for review,
-not silently implemented or treated as approved database/API designs.
+Browser steps and Mermaid flows: [APP_USER_FLOW.md](docs/APP_USER_FLOW.md).
+Choices/alternatives, API bounds, ordering policy and webhook instructions:
+[WEBHOOKS_AND_PR_DISCOVERY.md](docs/WEBHOOKS_AND_PR_DISCOVERY.md).
 
-Earlier documentation checks passed; the latest feature verification is below.
+### Prompts 4–5 decisions and next integration work
 
-Next-phase prompt plan: [FEATURE_IMPLEMENTATION_PROMPTS.md](docs/FEATURE_IMPLEMENTATION_PROMPTS.md)
-contains five individually executable tasks: standalone config; policy/request
-persistence; durable debounce and intent-aware handoff; authenticated webhook
-ingress; PR discovery/pages and owner controls. Creating the plan does not start
-implementation. Prompts 1–3 are now complete. Same-SHA request and in-flight
-mode behavior are approved and documented; upstream event ordering and sync
-mechanics still require review in their tasks. Production build admission stays fail-closed until real adapters
-exist; no fake workers or historical builds archive are proposed.
+- Chose atomic receipt/state/intent transactions over an inbox: existing lifecycle
+  parsing and persistence safely compose, and no external API call is required in
+  ingress. Move to an inbox if later ingress cannot remain bounded/local.
+- Chose explicit first discovery/refresh per repository, avoiding installation-wide
+  API fan-out. Each River job fetches <=100 PRs; continuation/progress commit together.
+- Chose source timestamps plus conservative equal-time handling and snapshot fences,
+  instead of guessing chronology from receipt order. Removal/closed state wins ties;
+  ambiguous head changes invalidate work and need refresh. Finite timestamp precision
+  means some rapid changes require an extra refresh/verified linking flow.
+- Worker App credentials are an optional ID/PEM pair; no OAuth/session dependency.
+  An unconfigured worker processes ping and leaves discovery for a configured worker.
+  Discovery has two workers and 45s timeout, independent of future build limits.
+- Closed PR and installation cleanup remain durable requests; no absent runtime
+  adapter is reported as successful resource cleanup.
+- Before enabling Build: fetch/verify upstream state outside locks and fence admission;
+  wire exact-SHA source/config, Docker build/runtime, fork/secrets policy, route and
+  status adapters, durable cleanup and recovery. These were deliberately not built.
+- Later periodic authoritative reconciliation is needed for missed webhooks and
+  ambiguous access re-grants. Do not infer PR closure from partial list pages.
+- Delivery receipt retention is intentionally durable without automatic pruning;
+  choose an explicit replay window/archive policy in housekeeping before pruning.
+- README.md's implementation-status prose still describes older placeholders; it is
+  retained per the earlier instruction not to change that file. DESIGN.md and the
+  current setup/codebase/feature/flow docs describe this task's implementation.
+
+### Prompts 4–5 verification (2026-10-03)
+
+- `make build test lint`: passed; Go build/tests/vet and golangci-lint, zero issues.
+- Migration 8 applied locally; River remains schema 007. Full PostgreSQL-backed
+  `go test -count=1 ./...`: passed, including existing scheduling/publication tests.
+- Webhook/discovery tests under `-race`: passed. Signed fixtures, concurrent receipts,
+  rollback/retry, stale close/head, ambiguous source, revocation, ownership/CSRF,
+  failure/partial-page retry, source/access races and real River continuation covered.
+- GitHub API fixture verifies numeric-ID resolution across rename/transfer, bounded
+  authenticated pagination, merged/fork metadata, rate-limit handling and safe errors.
+- All 12 browser regressions pass: mobile tables/internal scrolling, separate
+  navigation, live search/pagination, modal confirmation and no-JS PR search.
+- Compiled server smoke check on localhost: DB startup health passed, invalid signature
+  rejected with 401, `make test-webhook` returned 204. Worker DB health/start/drain
+  passed with all GitHub/OAuth/session environment variables unset.
+- Real GitHub webhook delivery was not observed and no real preview was executed.
+  Those require the documented credentials/webhook configuration and later adapters.
+
+Historical phase records below describe those phases, not the current runtime surface.
 
 ### Prompt 2: repository policy and durable intent
 

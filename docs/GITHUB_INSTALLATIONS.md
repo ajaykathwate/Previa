@@ -2,8 +2,7 @@
 
 This implements DESIGN Section 4's installation redirect, verified user linking,
 installation authentication, dashboard records, and directly callable lifecycle
-handling. Dashboard login still uses the separate OAuth App. No webhook HTTP
-receiver or preview job enqueueing is added by installation linking. Standalone
+handling. Dashboard login still uses the separate OAuth App. The signed webhook receiver is now implemented separately; see [WEBHOOKS_AND_PR_DISCOVERY.md](WEBHOOKS_AND_PR_DISCOVERY.md). Preview execution stays disabled. Standalone
 config fetching/validation now exists separately; see [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md).
 
 ## Register and configure the App
@@ -20,9 +19,9 @@ config fetching/validation now exists separately; see [REPO_CONFIGURATION.md](RE
 6. Configure repository permissions: **Contents: read**, **Pull requests: write**
    (covers PR comments), **Checks: write**; GitHub supplies **Metadata: read**.
    The App does not request personal access tokens or broad OAuth scopes.
-7. Leave **Webhook → Active** disabled for this local phase: no receiver exists.
-   When the receiver is built, enable it and configure `pull_request`, installation
-   and repository-selection lifecycle delivery according to DESIGN Sections 4/6.
+7. To receive events locally, configure a secret and HTTPS forwarding URL for
+   `/webhooks/github`, enable **Webhook → Active**, and subscribe to Pull request.
+   See [webhook setup](WEBHOOKS_AND_PR_DISCOVERY.md#enable-github-deliveries-locally).
 8. Choose whether the App can be installed only on your account or others, according
    to where you intend to test. Register the App.
 9. Copy **App ID**, **Client ID**, and the URL slug from
@@ -52,7 +51,7 @@ code to verify the installation link. These are not the dashboard OAuth App cred
 All App settings may be omitted: dashboard sign-in remains available and connection
 is visibly disabled. A partial App configuration fails server validation. A configured
 server rejects unreadable/invalid keys and files accessible to group/other users.
-The worker does not read any App settings. Keys, client secrets, and tokens are never
+PR-discovery workers use only App ID/private-key path; OAuth and App user authorization settings remain server-only. Keys, client secrets, and tokens are never
 sent to templates, persisted as installation records, or logged.
 
 ## Test the browser flow against real GitHub
@@ -86,8 +85,8 @@ make run-server
    exposing credentials. No build/job is started. Refreshing preserves DB records.
 7. For selection updates, start again from **Manage connections** and manage the
    existing installation. A callback opened manually without the session-bound state
-   is rejected; use the dashboard flow. External GitHub changes do not automatically
-   synchronize this local database until lifecycle delivery is wired in a later phase.
+   is rejected; use the dashboard flow. Signed lifecycle deliveries now update access; re-completing the verified
+   connection flow refreshes repository selection as well.
 
 Installation ownership in Previa is a single verified local user. Reconnecting the
 same installation refreshes its list. Another local user cannot overwrite that owner.
@@ -143,8 +142,8 @@ credentials, installation approval, and GitHub network access.
   cache; in-flight GitHub requests remain subject to GitHub's own permission checks.
 - `Service.HandleEvent(ctx, parsedPayload)` accepts `*github.InstallationEvent` and
   `*github.InstallationRepositoriesEvent`. Fixtures in `testdata/` use
-  `github.ParseWebHook` and call it directly. It has no HTTP route or signature
-  verification. A future receiver must verify the signature/provenance before calling.
+  `github.ParseWebHook` and call it directly. The standalone API has no signature verification. The HTTP adapter verifies raw
+  bytes before sharing its parser and transaction-aware persistence.
 - Creation stores an unlinked installation when needed; callbacks assign ownership.
   Repository additions/removals update access without deleting PR/environment history.
   Suspend hides access; unsuspend restores retained selection. Delete is terminal for
@@ -153,14 +152,15 @@ credentials, installation approval, and GitHub network access.
 - Suspension/deletion commits revoked access, evicts credentials, and calls a small
   idempotent `CleanupRequester` boundary. No cleanup adapter is wired yet: the handler
   returns `ErrCleanupUnavailable` after recording access revocation. It does not claim
-  that real environments were removed. Before live lifecycle delivery, wire durable
-  teardown scheduling/recovery; do not acknowledge cleanup as complete based only on
-  these status updates. Repository removal cleanup is also future runtime integration.
+  that real environments were removed. The live HTTP transaction records
+  `cleanup_pending` with revocation and its receipt, so absent runtime cleanup stays
+  durably outstanding. Repository removal also sets this marker.
 - Fixtures verify state/CSRF/replay/session identity, user installation access,
   pagination, signed JWT/token caching/refresh/concurrency, lifecycle and cleanup
   boundaries, DB isolation/revision fences, rename/reinstall history, and rendered data.
-  Installation/repository event ordering beyond terminal deletion requires the later
-  receiver/reconciliation strategy; arrival order is not a provider event version.
+  Timestamp fences and per-repository removal tombstones now cover signed lifecycle
+  ordering conservatively. Arrival order is not a provider event version; authoritative
+  reconciliation is needed to resolve ambiguous re-grants.
 
 GitHub documents why a setup redirect's `installation_id` alone must not be trusted:
 [setup URL verification](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url).

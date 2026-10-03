@@ -12,7 +12,7 @@ Accepted next scheduling design: Manual per repository by default, with opt-in
 Automatic after a five-minute trailing quiet period. Policy/current intent
 persistence and durable scheduling are implemented behind tested interfaces.
 Parsed events and `finishJob` now consult authorized intent/deadlines. Production
-dispatch remains disabled until real execution/publication adapters are available. PR discovery/detail UI is a recommendation, not implemented.
+dispatch remains disabled until real execution/publication adapters are available. Signed transactional webhooks, paginated discovery and repository/PR workspace are implemented.
 See [BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md).
 
 Previa is a Go application for creating temporary preview environments for GitHub
@@ -20,10 +20,9 @@ pull requests. The repository currently has a working HTTP server with GitHub
 OAuth sessions, verified GitHub App installation linking, PostgreSQL persistence, and a separate River worker. The browser
 public home page leads to GitHub sign-in and a protected `/dashboard`, which
 shows database-derived overview counts. Separate protected pages provide
-paginated repositories (`/repositories`), placeholder builds (`/builds`) and
+paginated repositories/PRs, current build intents (`/builds`) and persisted
 environments (`/environments`), and queue diagnostics (`/developer-tools`). Generation-fenced build/teardown orchestration and the durable-publication
-database/River foundation are implemented and tested behind interfaces. The real
-webhook HTTP adapter, Docker runtime, router publication, GitHub reporting, and
+database/River foundation are implemented and tested behind interfaces. The signed webhook adapter is connected; Docker runtime, router publication, GitHub reporting, and
 production reconciliation runner are not connected. Do not infer that a preview
 build can currently be deployed end to end.
 
@@ -46,11 +45,12 @@ queries into feature `dbgen` packages.
 | `web/components/`, `web/styles/` | Stable templUI source, explicit navigation keys, Tailwind CSS with shared theme tokens and base/home/workspace/repositories/confirmation/motion sources. |
 | `web/assets.go`, `web/static/` | Embedded browser assets, including generated CSS, local HTMX, and progressive menu/queue-form JavaScript. |
 | `internal/auth/` | GitHub OAuth, user upsert, sessions, CSRF, and logout. |
-| `internal/installations/` | Verified redirect linking, App user authorization, lifecycle functions, ownership-scoped search/access filters and 10-row database pagination; SQL and persistence tests; no webhook endpoint. |
+| `internal/installations/` | Verified redirect linking, App user authorization, lifecycle functions, ownership-scoped search/access filters and 10-row database pagination; SQL and persistence tests; transactional lifecycle composition with webhook ingress. |
 | `internal/platform/githubapp/` | App JWT signing and bounded, cached installation authentication using ghinstallation v2.18.0. |
 | `internal/repoconfig/` | Standalone exact-SHA config fetch, strict YAML/semantic validation, named-tier clamping, safe errors and effective hash; fixtures/fake GitHub tests, no runtime wiring. |
-| `internal/dashboard/` | Public home, overview/session/tools and build/environment placeholder routes; CSRF-protected ping action. |
-| `internal/webhooks/` | PR state/generation persistence and transactional enqueueing; HTTP validation/signature endpoint is not connected yet. |
+| `internal/dashboard/` | Public home, overview/session/tools routes; CSRF-protected ping action. |
+| `internal/webhooks/` | Size-bounded HMAC-SHA256 ingress, atomic delivery dedup/lifecycle/PR coordination and safe retry/source ordering. |
+| `internal/pullrequests/` | Owned repository/PR workspace queries/actions, source ordering, paginated River discovery and access/snapshot fences; no execution adapters. |
 | `internal/environments/` | Generation-aware build/teardown jobs, fenced active/pending state, durable operation outbox, operation worker/recovery, and reconciler interfaces. External adapters are not wired. |
 | `docs/BUILD_SCHEDULING.md` | Prompt 3 coordination/wake-up APIs, eligibility SQL, revision fencing, recovery and production gates. |
 | `docs/BUILD_INTENTS.md` | Prompt 2 schema/APIs, approved Retry/Rebuild/mode semantics, atomic locks/CAS and Prompt 3 boundaries. |
@@ -67,8 +67,8 @@ queries into feature `dbgen` packages.
 ## Processes and configuration
 
 - PostgreSQL is shared by the server, worker, and migrations.
-- `cmd/server` loads `ServerConfig`: database plus HTTP, OAuth, session values and an optional all-or-nothing GitHub App group.
-- `cmd/worker` loads `WorkerConfig`: database plus queue concurrency and build timeout. It does not need OAuth variables.
+- `cmd/server` loads `ServerConfig`: database plus HTTP, OAuth, session values and an optional all-or-nothing GitHub App group and independent server-only webhook secret.
+- `cmd/worker` loads `WorkerConfig`: database, ping concurrency, build timeout and optional App ID/private-key pair for PR discovery. It does not need OAuth/session/App user credentials.
 - River workers run in the worker process; there is no separate queue server.
 - Air (`make dev`) watches and reloads the server only; restart the worker manually after worker changes.
 - Compose starts PostgreSQL by default. The application server and worker are
@@ -83,7 +83,7 @@ lock installation → repository → PR → intent and fence revision plus obser
 generation/SHA. Prompt 3 adds `Broker.RequestBuild`, `Dispatch`, `ObserveTx` and
 `RecoverScheduling`, plus a separate River wake-up kind. Migration 7 carries
 request revision through job/result/outbox/finalization/reporting/cleanup guards
-and permits generation zero. These APIs are not constructed by the live app; see
+and permits generation zero. The live server constructs policy and non-executable observation coordination; execution remains disabled. See
 [BUILD_SCHEDULING.md](BUILD_SCHEDULING.md).
 
 Goose migrations are in `db/migrations/`; River owns its own schema migrations.
@@ -91,8 +91,9 @@ Goose migrations are in `db/migrations/`; River owns its own schema migrations.
 environment (Goose uses `GOOSE_DBSTRING` internally); migration CLIs do not receive
 credentials through command-line flags. `.env.example` groups settings by process.
 
-The configured live queue job is `ping`, enqueued through the authenticated,
-CSRF-protected `POST /queue/ping` endpoint. River uniqueness is keyed by PR key
+The diagnostic live queue job is `ping`, enqueued through the authenticated,
+CSRF-protected `POST /queue/ping` endpoint. App-configured workers also process `pr_discovery` (100 API records/page, durable continuation, two workers and 45s timeout). Ownership-scoped CSRF POSTs request refresh.
+River uniqueness is keyed by PR key
 across relevant active states. Build and teardown jobs capture monotonic PR
 generations. Environment result writes are fenced in SQL; successful candidates
 remain pending until a durable publication operation is finalized. `Repository.Apply`
@@ -145,3 +146,11 @@ See `web/tests/browser/README.md` for coverage and troubleshooting.
 Installation setup/test commands and the callback/revision/token boundaries are in
 [GITHUB_INSTALLATIONS.md](GITHUB_INSTALLATIONS.md). `make test-github-app` is an
 opt-in real API proof; normal Go tests exercise fake GitHub APIs and skip that check.
+
+## Phase 1 audit navigation
+
+The sequential Prompts 1–5 audit is recorded in [PHASE1_AUDIT.md](PHASE1_AUDIT.md).
+`db/migrations/0009_environment_identity.sql` enforces one lifetime environment row
+per PR. `internal/environments/admission.go` and `scheduling_queries.sql` clear
+old logs atomically with an accepted worker claim; `build_logs_test.go` covers
+rebuild/reopen identity, rejected-job log preservation and rollback on clear failure.

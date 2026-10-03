@@ -82,9 +82,9 @@ templ Results(page Page) {
 					<li class="repository-row">
 						<div class="repository-name">
 							@components.BranchIcon()
-							<a href={ templ.SafeURL("https://github.com/" + row.FullName) } target="_blank" rel="noopener noreferrer">
+							<a href={ templ.SafeURL("/repositories/" + strconv.FormatInt(row.ID,10)) }>
 								{ row.FullName }
-								<span class="repository-external" aria-label="opens in a new tab">
+								<span class="repository-external" aria-label="View pull requests">
 									@components.ArrowUpRight()
 								</span>
 							</a>

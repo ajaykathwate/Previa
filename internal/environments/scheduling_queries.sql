@@ -18,6 +18,10 @@ WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
     AND b.state IN ('pending','queued','running') AND b.available_at <= sqlc.arg(now_at)
     AND (b.source = 'manual' OR sqlc.arg(build_mode)::text = 'automatic' OR b.state = 'running');
 
+-- name: ClearBuildLogs :exec
+DELETE FROM build_logs l USING environments e
+WHERE l.environment_id = e.id AND e.pull_request_id = $1;
+
 -- name: FinishBuildIntent :execrows
 UPDATE build_intents b SET state = sqlc.arg(next_state), completed_at = clock_timestamp(), updated_at = clock_timestamp()
 FROM pull_requests pr
@@ -36,4 +40,3 @@ WHERE pr.id > sqlc.arg(after_id) AND ((pr.state = 'open' AND b.generation = pr.g
         AND b.state IN ('pending','queued','running'))
    OR (pr.state IN ('closed','merged') AND pr.teardown_completed_generation < pr.generation)
 ) ORDER BY pr.id LIMIT sqlc.arg(batch_size);
-

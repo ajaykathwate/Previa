@@ -102,3 +102,38 @@
 .repository-access-tabs label:hover span {color:var(--ui-text-strong);}
 .repository-access-option:checked + span {background:var(--ui-surface-card);border-color:var(--ui-border-muted);color:var(--ui-text-strong);}
 .repository-access-option:focus-visible + span {outline:1px solid var(--ui-accent-forest);outline-offset:1px;}
+
+/* Repository and PR workspace use the existing theme and bounded table region. */
+.pr-workspace h1 {overflow-wrap:anywhere;}
+.pr-header-actions {display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+.pr-summary {font-size:12px;line-height:1.6;color:var(--ui-text-muted);margin-bottom:16px;max-height:125px;overflow:auto;flex-shrink:0;}
+.pr-summary p {margin:0 0 6px;}
+.pr-table {width:100%;border-collapse:collapse;font-size:13px;}
+.pr-table th {position:sticky;top:0;z-index:1;background:var(--ui-surface-sidebar);text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;}
+.pr-table th,.pr-table td {padding:16px 20px;border-bottom:1px solid var(--ui-border-footer);vertical-align:top;}
+.pr-table td:first-child {min-width:200px;max-width:400px;overflow-wrap:anywhere;}
+.pr-table a {font-weight:600;color:var(--ui-text-link);}
+.pr-table a:hover {text-decoration:underline;text-underline-offset:4px;}
+.pr-table small {display:block;color:var(--ui-text-muted);margin-top:6px;}
+.pr-table code {white-space:nowrap;}
+.pr-detail-grid {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;}
+.pr-detail-grid section {padding:24px;overflow-wrap:anywhere;}
+.pr-detail-grid h2 {font:normal 24px var(--font-editorial);margin-bottom:20px;}
+.pr-detail-grid p {font-size:13px;line-height:1.6;color:var(--ui-text-muted);margin-block:12px;}
+.pr-detail-grid code {font-size:12px;}
+.pr-policy-fallback {padding:20px;}
+.app-shell:has(.pr-policy-fallback) {height:auto;overflow:visible;}
+.app-column:has(.pr-policy-fallback) {height:auto;}
+.app-content:has(.pr-policy-fallback) {display:block;overflow:visible;}
+@media(max-width:900px) {.pr-detail-grid {grid-template-columns:1fr;}.pr-workspace .workspace-page-heading {flex-direction:column;align-items:start;}}
+@media(max-width:700px) {
+ .pr-table th,.pr-table td {padding:12px;}
+ .pr-workspace .workspace-page-heading h1 {font-size:22px;line-height:1.15;}
+ .pr-header-actions {gap:6px;}
+ .pr-header-actions button {font-size:12px;padding:8px 10px;height:36px;}
+ .pr-summary {max-height:70px;font-size:11px;margin-bottom:10px;}
+ .pr-workspace .repository-toolbar {padding:12px;gap:8px;}
+ .pr-workspace .repository-toolbar label,.pr-workspace .repository-access legend {margin-bottom:4px;}
+ .pr-workspace .repository-access-tabs {height:36px;}
+ .pr-workspace .repository-help {font-size:10px;}
+}

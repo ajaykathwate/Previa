@@ -23,22 +23,27 @@ type Client struct {
 }
 
 func New(cfg config.ServerConfig) (*Client, error) {
-	if cfg.GitHubAppID <= 0 {
+	return NewApp(cfg.GitHubAppID, cfg.GitHubAppPrivateKeyPath)
+}
+
+// NewApp requires only JWT credentials, including in non-HTTP workers.
+func NewApp(appID int64, privateKeyPath string) (*Client, error) {
+	if appID <= 0 {
 		return nil, errors.New("GITHUB_APP_ID must be configured before authenticating as the App")
 	}
-	info, err := os.Stat(cfg.GitHubAppPrivateKeyPath)
+	info, err := os.Stat(privateKeyPath)
 	if err != nil {
 		return nil, errors.New("GitHub App private key file is unavailable")
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
 		return nil, errors.New("GitHub App private key must be a regular file with owner-only permissions (chmod 600)")
 	}
-	key, err := os.ReadFile(cfg.GitHubAppPrivateKeyPath)
+	key, err := os.ReadFile(privateKeyPath)
 	if err != nil {
 		return nil, errors.New("read GitHub App private key failed")
 	}
 	defer clear(key)
-	app, err := ghinstallation.NewAppsTransport(http.DefaultTransport, cfg.GitHubAppID, key)
+	app, err := ghinstallation.NewAppsTransport(http.DefaultTransport, appID, key)
 	if err != nil {
 		return nil, errors.New("GitHub App private key must be a valid RSA PEM key")
 	}

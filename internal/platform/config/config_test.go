@@ -54,7 +54,7 @@ func TestLoadServer(t *testing.T) {
 
 func TestLoadWorkerWithoutServerOrFutureSettings(t *testing.T) {
 	validEnvironment(t)
-	unrelated := []string{"APP_BASE_URL", "HTTP_ADDR", "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "SESSION_SECRET", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH", "GITHUB_WEBHOOK_SECRET", "PREVIEW_BASE_DOMAIN", "SECRETS_ENCRYPTION_KEY", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN"}
+	unrelated := []string{"APP_BASE_URL", "HTTP_ADDR", "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "SESSION_SECRET", "GITHUB_WEBHOOK_SECRET", "PREVIEW_BASE_DOMAIN", "SECRETS_ENCRYPTION_KEY", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN"}
 	unsetEnvironment(t, unrelated...)
 	unsetEnvironment(t, "BUILD_TIMEOUT")
 	cfg, err := LoadWorker()
@@ -198,7 +198,7 @@ func TestCustomBuildTimeout(t *testing.T) {
 	}
 }
 
-func TestGitHubAppConfigurationIsAllOrNothingAndServerOnly(t *testing.T) {
+func TestGitHubAppConfigurationByProcess(t *testing.T) {
 	validEnvironment(t)
 	t.Setenv("GITHUB_APP_ID", "123")
 	if _, err := LoadServer(); err == nil {
@@ -214,8 +214,8 @@ func TestGitHubAppConfigurationIsAllOrNothingAndServerOnly(t *testing.T) {
 	if _, err := LoadServer(); err == nil {
 		t.Fatal("unsafe App slug accepted")
 	}
-	t.Setenv("GITHUB_APP_ID", "not-a-number")
+	t.Setenv("GITHUB_APP_CLIENT_SECRET", "")
 	if _, err := LoadWorker(); err != nil {
-		t.Fatal("worker read App configuration")
+		t.Fatal("worker required HTTP App settings")
 	}
 }

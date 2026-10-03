@@ -1,3 +1,3 @@
-// Package webhooks records validated PR events and enqueues their desired state
-// transactionally. HTTP ingress and signature verification are not implemented yet.
+// Package webhooks authenticates GitHub deliveries and atomically records receipts,
+// lifecycle/PR state and policy-controlled scheduling intent.
 package webhooks

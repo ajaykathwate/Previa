@@ -120,57 +120,12 @@ func (s *Service) HandleEvent(ctx context.Context, event any) error {
 	if s.app == nil {
 		return errors.New("GitHub App lifecycle client is not configured")
 	}
-	var id int64
-	var account, status string
-	var added, removed []RepositoryInfo
-	var replace, cleanup bool
-	switch e := event.(type) {
-	case *github.InstallationEvent:
-		if e == nil || e.Installation == nil {
-			return errors.New("installation event is missing installation")
-		}
-		id = e.Installation.GetID()
-		account = e.Installation.GetAccount().GetLogin()
-		switch e.GetAction() {
-		case "created":
-			status = "active"
-			replace = true
-			added = eventRepositories(e.Repositories)
-		case "deleted":
-			status = "inactive"
-			cleanup = true
-		case "suspend":
-			status = "suspended"
-			cleanup = true
-		case "unsuspend":
-			status = "active"
-		case "new_permissions_accepted":
-			status = ""
-		default:
-			return errors.New("unsupported installation action")
-		}
-	case *github.InstallationRepositoriesEvent:
-		if e == nil || e.Installation == nil {
-			return errors.New("repository event is missing installation")
-		}
-		if e.GetAction() != "added" && e.GetAction() != "removed" {
-			return errors.New("unsupported installation repositories action")
-		}
-		id = e.Installation.GetID()
-		account = e.Installation.GetAccount().GetLogin()
-		added = eventRepositories(e.RepositoriesAdded)
-		removed = eventRepositories(e.RepositoriesRemoved)
-	default:
-		return errors.New("unsupported installation event type")
+	change, err := ParseLifecycleEvent(event)
+	if err != nil {
+		return err
 	}
-	if id <= 0 {
-		return errors.New("installation ID must be positive")
-	}
-	for _, repo := range append(append([]RepositoryInfo{}, added...), removed...) {
-		if repo.ID <= 0 || repo.FullName == "" {
-			return errors.New("event repository is invalid")
-		}
-	}
+	id, status, account := change.ID, change.Status, change.Account
+	added, removed, replace, cleanup := change.Added, change.Removed, change.Replace, change.Cleanup
 	if err := s.store.ApplyEvent(ctx, id, status, account, added, removed, replace); err != nil {
 		return fmt.Errorf("apply installation lifecycle: %w", err)
 	}
@@ -191,4 +146,67 @@ func eventRepositories(repos []*github.Repository) []RepositoryInfo {
 		result = append(result, RepositoryInfo{ID: repo.GetID(), FullName: repo.GetFullName(), Accessible: true})
 	}
 	return result
+}
+
+// LifecycleChange is the normalized, validated lifecycle mutation.
+type LifecycleChange struct {
+	ID               int64
+	Status, Account  string
+	Added, Removed   []RepositoryInfo
+	Replace, Cleanup bool
+}
+
+func ParseLifecycleEvent(event any) (LifecycleChange, error) {
+	var id int64
+	var account, status string
+	var added, removed []RepositoryInfo
+	var replace, cleanup bool
+	switch e := event.(type) {
+	case *github.InstallationEvent:
+		if e == nil || e.Installation == nil {
+			return LifecycleChange{}, errors.New("installation event is missing installation")
+		}
+		id = e.Installation.GetID()
+		account = e.Installation.GetAccount().GetLogin()
+		switch e.GetAction() {
+		case "created":
+			status = "active"
+			replace = true
+			added = eventRepositories(e.Repositories)
+		case "deleted":
+			status = "inactive"
+			cleanup = true
+		case "suspend":
+			status = "suspended"
+			cleanup = true
+		case "unsuspend":
+			status = "active"
+		case "new_permissions_accepted":
+			status = ""
+		default:
+			return LifecycleChange{}, errors.New("unsupported installation action")
+		}
+	case *github.InstallationRepositoriesEvent:
+		if e == nil || e.Installation == nil {
+			return LifecycleChange{}, errors.New("repository event is missing installation")
+		}
+		if e.GetAction() != "added" && e.GetAction() != "removed" {
+			return LifecycleChange{}, errors.New("unsupported installation repositories action")
+		}
+		id = e.Installation.GetID()
+		account = e.Installation.GetAccount().GetLogin()
+		added = eventRepositories(e.RepositoriesAdded)
+		removed = eventRepositories(e.RepositoriesRemoved)
+	default:
+		return LifecycleChange{}, errors.New("unsupported installation event type")
+	}
+	if id <= 0 {
+		return LifecycleChange{}, errors.New("installation ID must be positive")
+	}
+	for _, repo := range append(append([]RepositoryInfo{}, added...), removed...) {
+		if repo.ID <= 0 || repo.FullName == "" {
+			return LifecycleChange{}, errors.New("event repository is invalid")
+		}
+	}
+	return LifecycleChange{id, status, account, added, removed, replace, cleanup}, nil
 }

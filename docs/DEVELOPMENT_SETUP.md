@@ -4,16 +4,20 @@ Follow these steps to configure, build, and run Previa locally.
 Run commands from the repository root
 in Bash or Zsh (on Windows, use WSL2 with Docker integration enabled).
 
-The accepted Manual/Automatic build policy is described in
-[BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md). It adds no setup
-commands or environment variables today: coordination is tested behind interfaces;
-PR browsing and real preview execution are not connected yet. Repository installation and the diagnostic ping
-flow are the available checks; build-mode settings are repository-owned data.
-After updating this checkout, run `make migrate-up` to apply migrations 6–7
-(policy/intent and scheduling revision fields). No new environment variables are required. Domain/API tests
-are documented in [BUILD_INTENTS.md](BUILD_INTENTS.md) and
-[BUILD_SCHEDULING.md](BUILD_SCHEDULING.md). Existing run-server/run-worker/dev
-commands remain unchanged.
+After updating this checkout, run `make migrate-up` (current application schema:
+**9**, River **007**). The normal server/worker commands below remain unchanged.
+GitHub App linking/discovery and signed webhooks are optional; configure their
+process-specific values in Step 2 when using those integrations.
+See [APP_USER_FLOW.md](APP_USER_FLOW.md) for browser steps and
+[WEBHOOKS_AND_PR_DISCOVERY.md](WEBHOOKS_AND_PR_DISCOVERY.md) for event/sync decisions.
+
+Migration 9 enforces one environment row per PR for its lifetime, including after
+teardown. It preserves existing rows, IDs, subdomains and logs. If legacy data has
+multiple environment rows for one PR, the unique constraint rejects the migration
+atomically; reconcile those rows/resource references before retrying rather than
+deleting data automatically. Rebuild admission clears prior logs only after its
+authorization/version checks succeed. The Phase 1 audit and checks are recorded
+in [PHASE1_AUDIT.md](PHASE1_AUDIT.md).
 
 Standalone repository config checks require no new `.env` values or running
 services: `go test -count=1 -v ./internal/repoconfig`. The required repo file,
@@ -77,7 +81,7 @@ The current configuration is:
 | `GITHUB_OAUTH_CLIENT_ID` | Copy from your GitHub OAuth App settings (steps below). | Identifies dashboard sign-in. |
 | `GITHUB_OAUTH_CLIENT_SECRET` | Generate in the same OAuth App's settings. | Exchanges the OAuth authorization code for a token. |
 | `SESSION_SECRET` | Run `openssl rand -hex 32` and copy the output into `.env`. | Signs OAuth state; must contain at least 32 characters. |
-| `MAX_CONCURRENT_BUILDS` | Keep `2` initially; must be a positive integer. | Per-worker queue concurrency. |
+| `MAX_CONCURRENT_BUILDS` | Keep `2` initially; must be a positive integer. | Ping workers per process; PR discovery has separate capacity. |
 | `BUILD_TIMEOUT` | Keep `12m` initially; a positive Go duration, at most `24h`. | Build execution budget, with a separate completion grace. |
 
 Register dashboard sign-in once:
@@ -101,20 +105,26 @@ Keep the dashboard OAuth App above; repository linking uses a separate **GitHub 
 See [App setup and installation testing](GITHUB_INSTALLATIONS.md) for registration,
 permissions, private-key handling, and the complete verification flow.
 
-| Server-only variable | Source | Purpose |
+| Variable / process | Source | Purpose |
 | --- | --- | --- |
-| `GITHUB_APP_ID` | Numeric App ID in GitHub App settings. | JWT issuer for App authentication. |
+| `GITHUB_APP_ID` — server + discovery worker | Numeric App ID in GitHub App settings. | JWT issuer for App authentication. |
 | `GITHUB_APP_SLUG` | Name in `https://github.com/apps/<slug>`. | Installation page to open. |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | Absolute path to the downloaded RSA PEM; store outside Git, `chmod 600`. | Signs short-lived App JWTs. |
+| `GITHUB_APP_PRIVATE_KEY_PATH` — server + discovery worker | Absolute path to the downloaded RSA PEM; store outside Git, `chmod 600`. | Signs short-lived App JWTs. |
 | `GITHUB_APP_CLIENT_ID` | GitHub App Client ID, separate from OAuth App. | User authorization for verified linking. |
 | `GITHUB_APP_CLIENT_SECRET` | Generate in GitHub App settings. | Exchanges the App user authorization code. |
 
 Configure all five together and restart the server; omit all five to keep linking
-visibly disabled while dashboard sign-in works. The worker needs none of these.
+visibly disabled while dashboard sign-in works. For PR discovery, the worker needs
+only `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH`; it needs no OAuth, session,
+slug or App client secret. Omit both worker App settings to run only ping jobs.
 Register **Setup URL** `http://localhost:8080/installations/callback` and **Callback
 URL** `http://localhost:8080/installations/authorize/callback`. Leave automatic OAuth
 on installation unchecked; Previa explicitly starts it after the setup redirect.
-Leave webhooks inactive until their HTTP receiver is implemented.
+For webhook delivery, generate a random value with `openssl rand -hex 32`, set
+server-only `GITHUB_WEBHOOK_SECRET`, and paste the same value in the App's Webhook
+secret field. Follow [local webhook setup](WEBHOOKS_AND_PR_DISCOVERY.md#enable-github-deliveries-locally)
+for the HTTPS URL/event selection. Omit the secret to keep the endpoint disabled
+with HTTP 503. Restart affected processes after changing `.env`.
 
 After migrations and server startup, open **Repositories** (`/repositories`) and click **Install on a repo**
 (or **Manage connections** after linking).
@@ -207,8 +217,9 @@ docker compose -f deploy/docker-compose.yml exec -T postgres psql -U previa -d p
 The table list shows application tables (including `environment_operations` after
 Goose migration 4), `installations`/`repos` extended by migration 5,
 `build_intents` and repository build mode from migration 6, `goose_db_version`,
-scheduling/publication revision fields from migration 7 and River's `river_*` tables.
-Current versions are Goose 7 and River 007.
+scheduling/publication revision fields from migration 7, PR workspace/receipt/sync
+state from migration 8, lifetime environment uniqueness from migration 9 and River's
+`river_*` tables. Current versions are Goose 9 and River 007.
 Re-running `make migrate-up` is safe; it applies only pending migrations.
 
 The migration Make targets load `.env` automatically, falling back to `.env.example`
@@ -301,9 +312,13 @@ workspace sidebar. Each navigation item opens its own page:
   connection management is in the page header. The list scrolls inside its panel;
   search updates as you type (300ms debounce). Clearing search restores all records
   within the selected access filter. There are no Search/Reset buttons; press Enter
-  in the search field if JavaScript is disabled. GitHub links open in a new tab.
-- **Builds** (`/builds`) and **Environments** (`/environments`): dedicated placeholders
-  until their actual features are connected.
+  in the search field if JavaScript is disabled. Repository names open local PR detail lists; the PR page links to GitHub.
+- **Repository/PR detail**: select a repository, click Refresh pull requests, keep
+  the configured worker running, and reload to see discovery progress. PR lists use
+  ten-row pagination/search/state tabs. Build mode is owner-controlled through a modal.
+- **Builds** (`/builds`) and **Environments** (`/environments`): actual current intent
+  and persisted deployment records; empty when there are none. Build execution is
+  disabled until real runtime/publication adapters are connected.
 - **Developer tools** (`/developer-tools`): the queue diagnostic.
 
 Open **Developer tools** to use the queue ping diagnostic; run the worker to process
@@ -324,7 +339,8 @@ make run-worker
 **Expected:** `database health check passed`, then `River worker started`.
 The server inserts jobs; the separate worker processes them. Keep both running
 against the same database. `MAX_CONCURRENT_BUILDS` sets concurrency per worker
-process. Stop the worker with `Ctrl+C`; it drains active work before exiting.
+process for ping; App-configured discovery has a separate queue with two workers
+and a 45-second per-page timeout. Stop the worker with `Ctrl+C`; it drains active work before exiting.
 
 For live reload, stop the server and run:
 
@@ -341,6 +357,16 @@ to prevent rebuild loops. Worker startup does not need the Tailwind CLI.
 Refresh the browser after a rebuild to see the change. Check the terminal for startup
 or compilation errors. Use `Ctrl+C` to stop the process.
 Air reloads the server; restart the worker separately after changes to worker code.
+
+For a signed local webhook check after configuring the secret, run:
+
+```sh
+make test-webhook
+```
+
+**Expected:** `HTTP 204: signed fixture accepted`. This sends a harmless ping event.
+The target loads `.env`; no credential is passed as a process argument. Detailed
+stateful fixtures and delivery checks are in [WEBHOOKS_AND_PR_DISCOVERY.md](WEBHOOKS_AND_PR_DISCOVERY.md).
 
 ## 7. Daily workflow and shutdown
 
@@ -435,7 +461,7 @@ make test-browser
 
 - Run the first command once to install locked Playwright v1.58.2 and Chromium.
 - The second prepares assets/templates and starts a temporary test-only server.
-  **Expected:** all nine browser scenarios pass and the server stops automatically.
+  **Expected:** all twelve browser scenarios pass and the server stops automatically.
 - No Postgres, `.env`, or GitHub credentials are needed. GitHub and queue providers
   are fakes; session rotation, CSRF and logout use the actual middleware.
 - On Linux, missing browser system libraries may require Playwright's OS dependency

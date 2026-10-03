@@ -5,9 +5,7 @@ import (
 	"net/http"
 
 	"github.com/a-h/templ"
-	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
-	environmentpages "github.com/ajaykathwatee/previa/web/pages/environments"
 	homepages "github.com/ajaykathwatee/previa/web/pages/home"
 )
 
@@ -51,14 +49,6 @@ func (h *handler) protected(w http.ResponseWriter, r *http.Request) {
 	templ.Handler(dashboardpages.Protected(username, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
 }
 
-func (h *handler) builds(w http.ResponseWriter, r *http.Request) {
-	username, _ := h.users.Username(r.Context())
-	templ.Handler(buildpages.Index(username, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
-}
-func (h *handler) environments(w http.ResponseWriter, r *http.Request) {
-	username, _ := h.users.Username(r.Context())
-	templ.Handler(environmentpages.Index(username, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
-}
 func (h *handler) tools(w http.ResponseWriter, r *http.Request) {
 	username, _ := h.users.Username(r.Context())
 	templ.Handler(dashboardpages.Tools(username, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)

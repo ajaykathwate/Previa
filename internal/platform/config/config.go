@@ -24,6 +24,7 @@ type ServerConfig struct {
 	HTTPAddr                string `envconfig:"HTTP_ADDR" default:"127.0.0.1:8080"`
 	GitHubOAuthClientID     string `envconfig:"GITHUB_OAUTH_CLIENT_ID" required:"true"`
 	GitHubOAuthClientSecret string `envconfig:"GITHUB_OAUTH_CLIENT_SECRET" required:"true"`
+	GitHubWebhookSecret     string `envconfig:"GITHUB_WEBHOOK_SECRET"`
 	SessionSecret           string `envconfig:"SESSION_SECRET" required:"true"`
 	GitHubAppID             int64  `envconfig:"GITHUB_APP_ID"`
 	GitHubAppSlug           string `envconfig:"GITHUB_APP_SLUG"`
@@ -35,8 +36,10 @@ type ServerConfig struct {
 // WorkerConfig contains only settings used to execute queued jobs.
 type WorkerConfig struct {
 	SharedConfig
-	MaxConcurrentBuilds int           `envconfig:"MAX_CONCURRENT_BUILDS" required:"true"`
-	BuildTimeout        time.Duration `envconfig:"BUILD_TIMEOUT" default:"12m"`
+	GitHubAppID             int64         `envconfig:"GITHUB_APP_ID"`
+	GitHubAppPrivateKeyPath string        `envconfig:"GITHUB_APP_PRIVATE_KEY_PATH"`
+	MaxConcurrentBuilds     int           `envconfig:"MAX_CONCURRENT_BUILDS" required:"true"`
+	BuildTimeout            time.Duration `envconfig:"BUILD_TIMEOUT" default:"12m"`
 }
 
 // LoadShared reads database/queue connection settings, including for migrations.
@@ -71,6 +74,11 @@ func LoadWorker() (WorkerConfig, error) {
 	}
 	if err := cfg.validate(); err != nil {
 		return WorkerConfig{}, fmt.Errorf("validate worker configuration: %w", err)
+	}
+	if cfg.GitHubAppID != 0 || cfg.GitHubAppPrivateKeyPath != "" {
+		if cfg.GitHubAppID <= 0 || strings.TrimSpace(cfg.GitHubAppPrivateKeyPath) == "" {
+			return WorkerConfig{}, errors.New("GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH must be configured together for PR discovery")
+		}
 	}
 	if cfg.MaxConcurrentBuilds <= 0 {
 		return WorkerConfig{}, errors.New("MAX_CONCURRENT_BUILDS must be positive")

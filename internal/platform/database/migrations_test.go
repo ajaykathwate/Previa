@@ -94,15 +94,9 @@ func TestMigrationConstraintsIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err := tx.Exec(ctx, "INSERT INTO environments (pull_request_id, subdomain, expires_at) VALUES ($1, $2, now() + interval '1 day')", prID, "replacement-"+suffix)
-			if status == "torn_down" {
-				if err != nil {
-					t.Errorf("completed teardown must release the active slot: %v", err)
-				}
-			} else {
-				var pgErr *pgconn.PgError
-				if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
-					t.Errorf("status %s must retain the active slot, got %v", status, err)
-				}
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+				t.Errorf("status %s must retain the lifetime environment identity, got %v", status, err)
 			}
 			if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT active_test"); err != nil {
 				t.Fatal(err)

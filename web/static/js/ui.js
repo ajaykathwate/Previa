@@ -174,6 +174,7 @@
     const form = document.querySelector('[data-repository-search]');
     if (!form) return;
     const feedback = form.querySelector('[data-repository-feedback]');
+    const label = form.dataset.repositorySearch || 'repositories';
     const results = document.querySelector('#repository-results');
     let activeRequest;
     const belongs = event => event.detail?.target === results;
@@ -182,7 +183,7 @@
       activeRequest = event.detail.xhr;
       results.setAttribute('aria-busy', 'true');
       delete feedback.dataset.error;
-      feedback.textContent = 'Updating repositories…';
+      feedback.textContent = `Updating ${label}…`;
     });
     document.addEventListener('htmx:afterRequest', event => {
       if (!belongs(event) || event.detail.xhr !== activeRequest) return;
@@ -191,7 +192,7 @@
         feedback.textContent = '';
       } else {
         feedback.dataset.error = 'true';
-        feedback.textContent = 'Could not update repositories. Check your connection or refresh to sign in again, then retry.';
+        feedback.textContent = `Could not update ${label}. Check your connection or refresh to sign in again, then retry.`;
       }
     });
     document.addEventListener('htmx:afterSwap', event => {

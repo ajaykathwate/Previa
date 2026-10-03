@@ -4,14 +4,14 @@
 
 Prompt 2 implements the persistence/domain foundation, tested with PostgreSQL.
 Migration `0006_build_intents.sql` adds repository build mode and a current intent
-row per PR. These services are **not constructed by the production app**. They do
+row per PR. The live server now constructs the policy/observation services. Persistence APIs alone do
 not enqueue jobs, create environments, change deployed previews or perform external
-calls. Production still runs ping only.
+calls. Production workers execute ping and App-configured PR discovery; executable previews remain disabled.
 
 Prompt 3 now integrates parsed events, wake-ups, worker admission/handoff and
 request-revision guards through results/publication/cleanup. Details are in
 [BUILD_SCHEDULING.md](BUILD_SCHEDULING.md). Production remains fail-closed until
-real execution adapters are configured; no preview UI/HTTP control was added.
+real execution adapters are configured; repository/PR policy UI and signed HTTP observation are now implemented by Prompts 4–5.
 
 ## Approved behavior
 

@@ -18,7 +18,5 @@ func MountWithSummary(r chi.Router, users UserSession, requireUser func(http.Han
 	r.Get("/", h.home)
 	r.With(requireUser).Get("/dashboard", h.dashboard)
 	r.With(requireUser).Get("/protected", h.protected)
-	r.With(requireUser).Get("/builds", h.builds)
-	r.With(requireUser).Get("/environments", h.environments)
 	r.With(requireUser).Get("/developer-tools", h.tools)
 }

@@ -50,7 +50,7 @@ func (h *Handler) repositories(w http.ResponseWriter, r *http.Request) {
 		page.End = page.Start + int64(len(result.Rows)) - 1
 	}
 	for _, row := range result.Rows {
-		page.Rows = append(page.Rows, repositorypages.Row{FullName: row.FullName, Account: row.Account, InstallationID: row.InstallationID, Status: row.Status, Accessible: row.Accessible})
+		page.Rows = append(page.Rows, repositorypages.Row{ID: row.ID, FullName: row.FullName, Account: row.Account, InstallationID: row.InstallationID, Status: row.Status, Accessible: row.Accessible})
 	}
 	if r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-Target") == "repository-results" {
 		templ.Handler(repositorypages.Results(page)).ServeHTTP(w, r)

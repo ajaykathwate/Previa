@@ -10,6 +10,11 @@ never starts a build. Result/outbox/finalization/reporting/cleanup guards carry
 request revision as well as generation; real adapters must fence that tuple.
 Production dispatch remains disabled without those adapters.
 
+Phase 1 audit fixes: migration 9 enforces one lifetime environment row per PR.
+Worker admission clears prior logs transactionally after current-request checks;
+rejected jobs and failed admission preserve logs. See [PHASE1_AUDIT.md](PHASE1_AUDIT.md)
+for the executed regression matrix and production boundaries.
+
 **Status:** generation fencing and the database/River durable-publication
 foundation are implemented. `Repository.Apply` commits environment state plus an
 outbox row and River wake-up in one short transaction; external operations run in
@@ -19,10 +24,11 @@ production reconciliation scheduling remain unimplemented. See
 and adapter requirements.
 
 The ordering core is implemented behind the runtime and publication interfaces in
-`internal/environments`. The HTTP webhook receiver, Docker build/runtime adapter,
-Traefik routing adapter, and GitHub comment adapter are not implemented yet. Per
+`internal/environments`. The signed HTTP webhook receiver and PR discovery are now implemented; see
+[WEBHOOKS_AND_PR_DISCOVERY.md](WEBHOOKS_AND_PR_DISCOVERY.md) for receipt/source ordering.
+Docker build/runtime, Traefik routing and GitHub comment adapters remain unimplemented. Per
 AGENTS.md scope discipline, these dependencies remain interfaces. The default
-server/worker still expose/process only the diagnostic ping. Integration tests
+server tracks signed events and renders the PR workspace; workers process ping and configured discovery. Integration tests
 exercise the new processing flow with real PostgreSQL/River and simulated external
 operations; they do not build Docker images or contact GitHub.
 
@@ -34,7 +40,7 @@ Migration `0003_pr_generation.sql` adds:
 - `environments.applied_generation` — last applied result's sequence.
 - `environments.head_sha` — SHA of the deployed artifact, distinct from desired SHA.
 
-`webhooks.Service.ProcessPR` accepts already validated `opened`, `reopened`,
+The legacy test/domain `webhooks.Service.ProcessPR` accepts already validated `opened`, `reopened`,
 `synchronize` or `closed` events; closed with merged=true records merged. `internal/webhooks/queries.sql` performs:
 
 ```sql
@@ -52,8 +58,8 @@ events. PostgreSQL serializes concurrent increments on the same PR. The same
 transaction persists policy-controlled intent and its delayed/immediate River
 wake-up. Manual open observations insert neither intent nor wake-up; close always
 records a wake-up. An insertion failure rolls back event, generation and intent. Generation records
-processing order, not GitHub delivery timestamps. Delivery deduplication belongs
-at the future authenticated webhook ingress, before calling this method.
+processing order, not GitHub delivery timestamps. Production ingress composes unique receipts and source-timestamp guards with the same coordinator; stale sources are ignored and ambiguous changes require refresh. The legacy parsed API remains a trusted integration-test boundary; production
+uses the authenticated DeliveryService and source-aware observations.
 
 ## Atomic completion guard — review this SQL
 

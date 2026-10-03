@@ -11,8 +11,8 @@ make test-browser
 ```
 
 The first command installs locked npm dependencies and Chromium. The second
-generates assets/templates and runs nine browser scenarios against a temporary
-Go HTTP server, which closes automatically. Expected: nine passes, no JavaScript
+generates assets/templates and runs twelve browser scenarios against a temporary
+Go HTTP server, which closes automatically. Expected: twelve passes, no JavaScript
 errors, and a successful Go test. Ordinary `make test` skips this opt-in suite.
 
 The fixture uses real routes, templates, session middleware, OAuth state handling,

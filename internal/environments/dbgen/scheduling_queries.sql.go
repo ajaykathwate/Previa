@@ -45,6 +45,16 @@ func (q *Queries) ClaimBuildIntent(ctx context.Context, arg ClaimBuildIntentPara
 	return result.RowsAffected(), nil
 }
 
+const clearBuildLogs = `-- name: ClearBuildLogs :exec
+DELETE FROM build_logs l USING environments e
+WHERE l.environment_id = e.id AND e.pull_request_id = $1
+`
+
+func (q *Queries) ClearBuildLogs(ctx context.Context, pullRequestID int64) error {
+	_, err := q.db.Exec(ctx, clearBuildLogs, pullRequestID)
+	return err
+}
+
 const completeTeardownRequest = `-- name: CompleteTeardownRequest :execrows
 UPDATE pull_requests SET teardown_completed_generation = generation
 WHERE id = $1 AND generation = $2 AND state IN ('closed','merged')

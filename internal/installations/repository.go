@@ -113,43 +113,49 @@ func upsertRepositories(ctx context.Context, q *dbgen.Queries, id int64, repos [
 	return nil
 }
 func (r *Repository) ApplyEvent(ctx context.Context, id int64, status, account string, added, removed []RepositoryInfo, replace bool) error {
-	return r.transaction(ctx, func(q *dbgen.Queries) error {
-		if err := q.EnsureInstallation(ctx, id); err != nil {
-			return fmt.Errorf("ensure lifecycle installation: %w", err)
+	return r.transaction(ctx, func(q *dbgen.Queries) error { return applyEvent(ctx, q, id, status, account, added, removed, replace) })
+}
+
+// ApplyEventTx composes lifecycle mutation with the authenticated delivery receipt.
+func (r *Repository) ApplyEventTx(ctx context.Context, tx pgx.Tx, change LifecycleChange) error {
+	return applyEvent(ctx, dbgen.New(tx), change.ID, change.Status, change.Account, change.Added, change.Removed, change.Replace)
+}
+func applyEvent(ctx context.Context, q *dbgen.Queries, id int64, status, account string, added, removed []RepositoryInfo, replace bool) error {
+	if err := q.EnsureInstallation(ctx, id); err != nil {
+		return fmt.Errorf("ensure lifecycle installation: %w", err)
+	}
+	row, err := q.LockInstallation(ctx, id)
+	if err != nil {
+		return fmt.Errorf("lock lifecycle installation: %w", err)
+	}
+	// Deletion is terminal for a GitHub installation ID. A fresh install has a new ID.
+	if row.Status == "inactive" {
+		status = "inactive"
+	} else if status == "" {
+		status = row.Status
+	}
+	if account == "" {
+		account = row.AccountLogin
+	}
+	if err := q.UpdateInstallationLifecycle(ctx, dbgen.UpdateInstallationLifecycleParams{ID: row.ID, Status: status, AccountLogin: account}); err != nil {
+		return fmt.Errorf("update installation lifecycle: %w", err)
+	}
+	if replace || status == "inactive" {
+		if err := q.MarkRepositoriesUnavailable(ctx, row.ID); err != nil {
+			return fmt.Errorf("revoke installation repositories: %w", err)
 		}
-		row, err := q.LockInstallation(ctx, id)
-		if err != nil {
-			return fmt.Errorf("lock lifecycle installation: %w", err)
+	}
+	if status == "active" {
+		if err := upsertRepositories(ctx, q, row.ID, added, !row.OwnerUserID.Valid); err != nil {
+			return err
 		}
-		// Deletion is terminal for a GitHub installation ID. A fresh install has a new ID.
-		if row.Status == "inactive" {
-			status = "inactive"
-		} else if status == "" {
-			status = row.Status
+	}
+	for _, repo := range removed {
+		if err := q.RemoveRepositoryAccess(ctx, dbgen.RemoveRepositoryAccessParams{InstallationID: row.ID, GithubRepoID: pgtype.Int8{Int64: repo.ID, Valid: true}}); err != nil {
+			return fmt.Errorf("remove repository access: %w", err)
 		}
-		if account == "" {
-			account = row.AccountLogin
-		}
-		if err := q.UpdateInstallationLifecycle(ctx, dbgen.UpdateInstallationLifecycleParams{ID: row.ID, Status: status, AccountLogin: account}); err != nil {
-			return fmt.Errorf("update installation lifecycle: %w", err)
-		}
-		if replace || status == "inactive" {
-			if err := q.MarkRepositoriesUnavailable(ctx, row.ID); err != nil {
-				return fmt.Errorf("revoke installation repositories: %w", err)
-			}
-		}
-		if status == "active" {
-			if err := upsertRepositories(ctx, q, row.ID, added, !row.OwnerUserID.Valid); err != nil {
-				return err
-			}
-		}
-		for _, repo := range removed {
-			if err := q.RemoveRepositoryAccess(ctx, dbgen.RemoveRepositoryAccessParams{InstallationID: row.ID, GithubRepoID: pgtype.Int8{Int64: repo.ID, Valid: true}}); err != nil {
-				return fmt.Errorf("remove repository access: %w", err)
-			}
-		}
-		return nil
-	})
+	}
+	return nil
 }
 func (r *Repository) List(ctx context.Context, userID int64) ([]InstallationInfo, error) {
 	rows, err := dbgen.New(r.db).ListLinkedInstallations(ctx, pgtype.Int8{Int64: userID, Valid: true})

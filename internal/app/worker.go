@@ -9,7 +9,10 @@ import (
 
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
+	"github.com/ajaykathwatee/previa/internal/platform/githubapp"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
+	"github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/riverqueue/river"
 )
 
 // RunWorker checks the database and runs River until canceled, draining on shutdown.
@@ -24,7 +27,25 @@ func RunWorker(ctx context.Context, logger *slog.Logger) error {
 	}
 	defer pool.Close()
 	logger.Info("database health check passed")
-	client, err := queue.NewWorker(pool, cfg, logger)
+	producer, err := queue.NewProducer(pool, logger)
+	if err != nil {
+		return err
+	}
+	var source pullrequests.Source
+	if cfg.GitHubAppID > 0 {
+		appClient, err := githubapp.NewApp(cfg.GitHubAppID, cfg.GitHubAppPrivateKeyPath)
+		if err != nil {
+			return fmt.Errorf("initialize worker GitHub App: %w", err)
+		}
+		source = pullrequests.NewGitHubSource(appClient)
+	}
+	syncService := pullrequests.NewSyncService(pool, producer, source)
+	client, err := queue.NewWorker(pool, cfg, logger, func(workers *river.Workers, queues map[string]river.QueueConfig) {
+		if source != nil {
+			river.AddWorker(workers, &pullrequests.SyncWorker{Service: syncService})
+			queues[pullrequests.SyncQueue] = river.QueueConfig{MaxWorkers: 2}
+		}
+	})
 	if err != nil {
 		return err
 	}
@@ -32,7 +53,7 @@ func RunWorker(ctx context.Context, logger *slog.Logger) error {
 	if err := client.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("start River worker (run make migrate-up first): %w", err)
 	}
-	logger.Info("River worker started", "queue", queue.PingQueue, "max_workers", cfg.MaxConcurrentBuilds)
+	logger.Info("River worker started", "ping_workers", cfg.MaxConcurrentBuilds, "pr_discovery_configured", source != nil)
 	select {
 	case <-ctx.Done():
 	case <-client.Stopped():

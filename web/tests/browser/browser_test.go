@@ -19,6 +19,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/dashboard"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/web"
+	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
 	"github.com/alexedwards/scs/v2/memstore"
 	"github.com/go-chi/chi/v5"
@@ -44,7 +45,45 @@ func TestBrowserRegression(t *testing.T) {
 		r.Use(sessions.LoadAndSave, handler.LoadUser, handler.CSRF)
 		handler.Mount(r)
 		dashboard.Mount(r, handler, auth.RequireUser)
+		for _, path := range []string{"/builds", "/environments"} {
+			r.With(auth.RequireUser).Get(path, func(w http.ResponseWriter, r *http.Request) {
+				templ.Handler(prpages.ActivityIndex("design-review", handler.CSRFToken(r.Context()), prpages.Activity{Environments: r.URL.Path == "/environments", Number: 1, Pages: 1})).ServeHTTP(w, r)
+			})
+		}
 		dashboard.MountPing(r, fixturePings{}, auth.RequireUser, logger)
+		// Real templates with bounded fixture PRs; ownership and SQL are tested in pullrequests.
+		r.With(auth.RequireUser).Get("/repositories/{repoID}", func(w http.ResponseWriter, r *http.Request) {
+			p := prpages.Page{RepoID: 1, Name: "fixture-owner/repository", Mode: "manual", Available: true, DiscoveryEnabled: true, SyncState: "complete", Fetched: 25, LastRefresh: "2026-10-03T10:00:00Z", Number: 1, Pages: 3, Total: 25, State: r.URL.Query().Get("state"), Search: r.URL.Query().Get("q")}
+			if p.State == "" {
+				p.State = "open"
+			}
+			if n, err := strconv.ParseInt(r.URL.Query().Get("page"), 10, 64); err == nil {
+				p.Number = min(max(n, 1), 3)
+			}
+			for n := int32(1); n <= 25; n++ {
+				title := "A careful change to preview " + strconv.Itoa(int(n))
+				if p.Search != "" && !strings.Contains(title, p.Search) {
+					continue
+				}
+				p.Rows = append(p.Rows, prpages.PR{Number: n, Title: title, Author: "design-review", Branch: "feature/preview", SHA: "1234567890abcdef", State: "open", Build: "Not requested"})
+			}
+			p.Total = int64(len(p.Rows))
+			p.Pages = max(int64(1), (p.Total+9)/10)
+			p.Number = min(p.Number, p.Pages)
+			offset := (p.Number - 1) * 10
+			p.Rows = p.Rows[offset:min(offset+10, p.Total)]
+			if r.Header.Get("HX-Request") == "true" {
+				templ.Handler(prpages.Results(p)).ServeHTTP(w, r)
+				return
+			}
+			templ.Handler(prpages.Index("design-review", handler.CSRFToken(r.Context()), p)).ServeHTTP(w, r)
+		})
+		r.With(auth.RequireUser).Get("/repositories/{repoID}/pull-requests/{number}", func(w http.ResponseWriter, r *http.Request) {
+			templ.Handler(prpages.Detail("design-review", handler.CSRFToken(r.Context()), 1, prpages.PR{Number: 1, Available: true, Title: "A careful change", SHA: "latest-commit", Build: "Not requested", State: "open", Environment: "Not deployed"})).ServeHTTP(w, r)
+		})
+		r.With(auth.RequireUser).Post("/repositories/{repoID}/policy", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/repositories/1", http.StatusSeeOther)
+		})
 		// Test-only paged repository views. Database pagination is verified separately.
 		r.With(auth.RequireUser).Get("/repositories", func(w http.ResponseWriter, r *http.Request) {
 			number, _ := strconv.ParseInt(r.URL.Query().Get("page"), 10, 64)
@@ -57,7 +96,7 @@ func TestBrowserRegression(t *testing.T) {
 			}
 			var rows []repositorypages.Row
 			for i := int64(1); i <= 150; i++ {
-				row := repositorypages.Row{FullName: "fixture-owner/a-long-repository-name-for-responsive-layout-verification-" + strconv.FormatInt(i, 10), Account: "fixture-owner", InstallationID: 99, Status: "active", Accessible: i%2 == 1}
+				row := repositorypages.Row{ID: i, FullName: "fixture-owner/a-long-repository-name-for-responsive-layout-verification-" + strconv.FormatInt(i, 10), Account: "fixture-owner", InstallationID: 99, Status: "active", Accessible: i%2 == 1}
 				if !strings.Contains(strings.ToLower(row.FullName), strings.ToLower(data.Search)) {
 					continue
 				}

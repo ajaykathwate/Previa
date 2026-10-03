@@ -12,12 +12,15 @@ import (
 
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/dashboard"
+	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/githubapp"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
+	"github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/ajaykathwatee/previa/internal/webhooks"
 	"github.com/ajaykathwatee/previa/web"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
 	"github.com/alexedwards/scs/pgxstore"
@@ -46,12 +49,14 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	}
 	pings := queue.NewService(pool, producer)
 
+	var invalidate func(int64)
 	service := installations.NewService(installations.NewRepository(pool), nil, nil, nil)
 	if cfg.GitHubAppID != 0 {
 		appClient, err := githubapp.New(cfg)
 		if err != nil {
 			return fmt.Errorf("initialize GitHub App: %w", err)
 		}
+		invalidate = appClient.Invalidate
 		service = installations.NewService(installations.NewRepository(pool), appClient, installations.NewGitHubAuthorization(cfg), nil)
 	}
 	installationHandler := installations.NewHandler(service, authHandler, sessions, cfg.GitHubAppSlug, logger)
@@ -61,11 +66,20 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	}
 	router := httpx.NewRouter(logger)
 	router.Handle("/static/*", web.StaticHandler())
+	coordinator := environments.NewBroker(pool, producer)
+	deliveries := webhooks.NewDeliveryService(pool, coordinator, invalidate)
+	router.Post("/webhooks/github", webhooks.NewHandler(cfg.GitHubWebhookSecret, deliveries, logger).ServeHTTP)
+	policy, err := installations.NewBuildPolicyService(installations.NewRepository(pool))
+	if err != nil {
+		return err
+	}
+	prs := pullrequests.NewHandler(pullrequests.NewRepository(pool), pullrequests.NewSyncService(pool, producer, nil), policy, authHandler, logger, cfg.GitHubAppID > 0)
 	router.Group(func(r chi.Router) {
 		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
 		authHandler.Mount(r)
 		dashboard.MountWithSummary(r, authHandler, auth.RequireUser, summaryReader, authHandler.UserIDs)
 		installationHandler.Mount(r, auth.RequireUser)
+		prs.Mount(r, auth.RequireUser)
 		dashboard.MountPing(r, pings, auth.RequireUser, logger)
 	})
 	server := &http.Server{

@@ -1,19 +1,8 @@
 package environments
 
-import "github.com/ajaykathwatee/previa/web/components"
-import "github.com/ajaykathwatee/previa/web/layouts"
+import pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 
-templ Index(username string, csrfToken string) {
-	@layouts.App("Environments", username, csrfToken, components.NavEnvironments) {
-		<header class="workspace-page-heading"><div><span class="eyebrow">YOUR WORKSPACE</span><h1>Environments</h1><p>A dedicated place for your pull-request previews.</p></div></header>
-		<section class="workspace-panel feature-empty">
-			<span class="feature-icon" aria-hidden="true">◎</span>
-			<h2>Environments are not connected yet</h2>
-			<p>Preview environments and their links will appear here when runtime support is connected.</p>
-			<a href="/repositories" class="text-link">
-				View repositories
-				@components.ArrowUpRight()
-			</a>
-		</section>
-	}
+// Index renders real ownership-scoped activity supplied by the workspace handler.
+templ Index(username, csrf string, page pages.Activity) {
+ @pages.ActivityIndex(username,csrf,page)
 }

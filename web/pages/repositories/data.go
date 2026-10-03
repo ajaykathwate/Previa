@@ -6,6 +6,7 @@ import (
 )
 
 type Row struct {
+	ID                        int64
 	FullName, Account, Status string
 	InstallationID            int64
 	Accessible                bool

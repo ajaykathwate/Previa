@@ -20,11 +20,15 @@ func NewProducer(pool *pgxpool.Pool, logger *slog.Logger) (*river.Client[pgx.Tx]
 	return client, nil
 }
 
-// NewWorker registers only the ping worker and its isolated queue.
-func NewWorker(pool *pgxpool.Pool, cfg config.WorkerConfig, logger *slog.Logger) (*river.Client[pgx.Tx], error) {
+// NewWorker registers ping and accepts feature registrations from the composition root.
+func NewWorker(pool *pgxpool.Pool, cfg config.WorkerConfig, logger *slog.Logger, registrations ...func(*river.Workers, map[string]river.QueueConfig)) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &PingWorker{Logger: logger})
-	client, err := river.NewClient(riverpgxv5.New(pool), workerConfig(cfg, logger, workers))
+	workerCfg := workerConfig(cfg, logger, workers)
+	for _, register := range registrations {
+		register(workers, workerCfg.Queues)
+	}
+	client, err := river.NewClient(riverpgxv5.New(pool), workerCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create River worker: %w", err)
 	}

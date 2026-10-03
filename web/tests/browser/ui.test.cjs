@@ -283,3 +283,45 @@ test('repository live search restores all records and keeps the input focused', 
   await page.waitForFunction(() => document.querySelector('[data-repository-feedback]')?.hasAttribute('data-error'));
   assert.equal(await page.locator('.repository-row').count(),10);
 });
+
+test('PR workspace live search pagination modal and disabled build', async () => {
+  await login();
+  await page.goto(`${origin}/repositories/1`);
+  assert.equal(await page.locator('.pr-table tbody tr').count(),10);
+  await page.getByRole('link',{name:'Next',exact:true}).click();
+  await page.waitForURL(/page=2/);
+  assert.match(await page.locator('.pr-table tbody tr').first().innerText(),/#11/);
+  const search=page.getByRole('searchbox');
+  await search.fill('preview 25');
+  await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
+  await search.fill('');
+  await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===10);
+  await page.getByRole('button',{name:'Build mode: manual',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
+  assert.equal(new URL(page.url()).pathname,'/repositories/1');
+  await page.keyboard.press('Escape');
+  for(const width of [320,390,768,1440]) {
+    await page.setViewportSize({width,height:844});
+    await assertNoOverflow();
+    assert.equal(await page.locator('.app-header').evaluate(e=>Math.round(e.getBoundingClientRect().top)),0);
+    assert(await page.locator('.repository-table-scroll').evaluate(e=>e.clientHeight>60),'table must remain usable');
+  }
+  await page.locator('.pr-table tbody a').first().click();
+  await page.waitForURL(/pull-requests/);
+  assert(await page.getByRole('button',{name:'Build latest commit'}).isDisabled());
+  assert.match(await page.locator('.pr-detail-grid').innerText(),/Not requested/);
+});
+
+test('PR search and pagination work without JavaScript', async () => {
+  const noJS=await browser.newContext({javaScriptEnabled:false,viewport:{width:1280,height:900}});
+  try {
+    const p=await noJS.newPage();
+    await p.goto(`${origin}/auth/github/login`);
+    await p.waitForURL(`${origin}/dashboard`);
+    await p.goto(`${origin}/repositories/1`);
+    await p.getByRole('searchbox').fill('preview 25');
+    await p.getByRole('button',{name:'Apply filters',exact:true}).click();
+    assert.equal(await p.locator('.pr-table tbody tr').count(),1);
+    assert.match(await p.locator('.pr-table').innerText(),/#25/);
+  } finally {await noJS.close();}
+});

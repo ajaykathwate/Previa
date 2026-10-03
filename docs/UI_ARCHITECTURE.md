@@ -2,9 +2,9 @@
 
 Accepted scheduling policy and the recommended repository → PR → build → preview
 screen flow are in [BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md).
-Manual-default controls, PR detail pages and Automatic debounce are future work,
-not current UI behavior. The proposed screens reuse this architecture and theme;
-they do not require moving handlers or adding a frontend framework.
+Manual-default mode controls and repository/PR detail pages are implemented.
+Automatic intent follows a five-minute quiet period; real preview execution remains
+unavailable. See [APP_USER_FLOW.md](APP_USER_FLOW.md) for current screen behavior.
 
 The server renders Templ pages and serves embedded assets. HTMX is loaded locally;
 existing forms retain their ordinary HTTP behavior. There is no React application,
@@ -35,9 +35,10 @@ The public home page is in `web/pages/home`; authenticated dashboard/session pag
 are in `web/pages/dashboard`, and auth error pages are in `web/pages/auth`.
 Successful OAuth redirects to `/dashboard`; logout returns to `/`. Overview,
 Repositories, Builds, Environments and Developer tools are separate authenticated
-HTTP pages. `internal/installations` owns `/repositories`; `internal/dashboard`
-owns the overview, session, tools and honest build/environment placeholders.
-No build/environment backend feature is added by these presentation routes.
+HTTP pages. `internal/installations` owns `/repositories`; `internal/dashboard` owns overview, session and tools. `internal/pullrequests`
+owns repository/PR detail, discovery/policy actions and ownership-scoped current
+Builds/Environments queries. Their page wrappers reuse the shared activity presentation;
+view models contain display data, never backend types. Build execution remains disabled.
 
 `layouts.Document` owns the HTML document and local asset references. `layouts.Base`
 adds public navigation for standalone pages; `layouts.App` composes the shared

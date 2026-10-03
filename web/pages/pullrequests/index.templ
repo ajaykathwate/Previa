@@ -1,0 +1,269 @@
+package pullrequests
+
+import "strconv"
+import "github.com/ajaykathwatee/previa/web/components"
+import "github.com/ajaykathwatee/previa/web/components/button"
+import "github.com/ajaykathwatee/previa/web/layouts"
+
+templ Index(username, csrf string, p Page) {
+	@layouts.App("Pull requests", username, csrf, components.NavRepositories) {
+		<div class="repository-workspace pr-workspace">
+			<header class="workspace-page-heading">
+				<div><a href="/repositories" class="eyebrow">REPOSITORIES / PULL REQUESTS</a><h1>{ p.Name }</h1><p>Review your pull requests, build requests and deployed commits.</p></div>
+				<div class="pr-header-actions">
+					<form method="post" action={ RepoURL(p.RepoID) + "/refresh" }>
+						<input type="hidden" name="csrf_token" value={ csrf }/>
+						@button.Button(button.Props{Type: button.TypeSubmit, Disabled: !p.Available || !p.DiscoveryEnabled || p.SyncState == "queued" || p.SyncState == "syncing"}) {
+							Refresh pull requests
+						}
+					</form>
+					@button.Button(button.Props{Variant: button.VariantOutline, Disabled: !p.Available, Attributes: templ.Attributes{"data-open-dialog": "build-policy", "commandfor": "build-policy", "command": "show-modal", "aria-haspopup": "dialog"}}) {
+						Build mode: { p.Mode }
+					}
+				</div>
+			</header>
+			<div class="pr-summary" role="status">
+				if !p.Available {
+					<p>Repository unavailable. Previously observed PRs remain visible; restore access in Manage connections before refreshing.</p>
+				} else if !p.DiscoveryEnabled {
+					<p>Configure the GitHub App to discover PRs. See the development setup guide.</p>
+				}
+				if p.SyncState=="" {
+					<p>No discovery requested yet. Refresh pull requests to import existing PRs without starting builds.</p>
+				} else if p.SyncState=="queued"||p.SyncState=="syncing" {
+					<p>Discovery { p.SyncState } · { strconv.Itoa(int(p.Fetched)) } records fetched so far. Reload this page to see progress. The worker must be running.</p>
+				} else if p.SyncState=="failed" {
+					<p>{ p.SyncMessage } Some pages may already have been imported.</p>
+				} else {
+					<p>Discovery completed · { strconv.Itoa(int(p.Fetched)) } records fetched. Last successful refresh: <time datetime={ p.LastRefresh }>{ p.LastRefresh }</time>.</p>
+				}
+				<p>Build execution is not available yet. Automatic records eligible work after five quiet minutes; it does not run a preview.</p>
+			</div>
+			<section class="workspace-panel repository-browser" aria-label="Pull request browser">
+				<form id="repository-filters" method="get" action={ RepoURL(p.RepoID) } class="repository-toolbar" role="search" hx-get={ RepoURL(p.RepoID) } hx-trigger="submit, input delay:300ms from:#repository-search, change from:.repository-access-option" hx-target="#repository-results" hx-swap="innerHTML" hx-sync="this:replace" hx-replace-url="true" hx-request='{"timeout":10000}' data-repository-search="pull requests">
+					<div class="repository-search"><label for="repository-search">Find a pull request</label><input id="repository-search" type="search" name="q" value={ p.Search } maxlength="100" placeholder="Title, number, author or branch"/></div>
+					<fieldset class="repository-access">
+						<legend>State</legend>
+						<div class="repository-access-tabs">
+							for _,state:=range []string{"open","closed","merged","all"} {
+								<label><input class="sr-only repository-access-option" type="radio" name="state" value={ state } checked?={ p.State==state }/><span>{ state }</span></label>
+							}
+						</div>
+					</fieldset>
+					<noscript><button type="submit" class="text-link">Apply filters</button></noscript>
+					<p class="repository-search-feedback" data-repository-feedback role="status" aria-live="polite"></p>
+				</form>
+				<div id="repository-results" class="repository-results">
+					@Results(p)
+				</div>
+			</section>
+			<p class="repository-help"><a href={ templ.SafeURL("/builds?repo_id=" + strconv.FormatInt(p.RepoID, 10)) }>Current build requests</a> · <a href={ templ.SafeURL("/environments?repo_id=" + strconv.FormatInt(p.RepoID, 10)) }>Environments</a> · <a href="/repositories">Manage connections</a></p>
+		</div>
+		@components.ConfirmationDialog("build-policy", "Change build mode?", "Manual is the default. Automatic applies to future PR events after five quiet minutes; it never bulk-builds existing PRs. Switching to Manual cancels unstarted automatic requests and preserves running work and previews.") {
+			@PolicyForm(p, csrf)
+		}
+		<noscript>
+			<section class="workspace-panel pr-policy-fallback">
+				<h2>Repository build policy</h2>
+				<p>Automatic applies only to future events. Manual cancels unstarted automatic requests.</p>
+				@PolicyForm(p, csrf)
+			</section>
+		</noscript>
+	}
+}
+
+templ PolicyForm(p Page, csrf string) {
+	<form method="post" action={ RepoURL(p.RepoID) + "/policy" } class="dialog-actions">
+		<input type="hidden" name="csrf_token" value={ csrf }/>
+		<label>Build mode <select name="mode" disabled?={ !p.Available }><option value="manual" selected?={ p.Mode=="manual" }>Manual</option><option value="automatic" selected?={ p.Mode=="automatic" }>Automatic</option></select></label>
+		@button.Button(button.Props{Type: button.TypeSubmit, Disabled: !p.Available}) {
+			Save build mode
+		}
+	</form>
+}
+
+templ Results(p Page) {
+	<div class="repository-table-scroll" tabindex="0" role="region" aria-label="Pull request list">
+		if len(p.Rows)==0 {
+			<div class="repository-empty"><h2>No pull requests match this view.</h2><p>Try another filter or refresh to discover existing PRs. Discovery never starts a build.</p></div>
+		} else {
+			<table class="pr-table">
+				<thead><tr><th>Pull request</th><th>Head commit</th><th>State</th><th>Latest request</th></tr></thead>
+				<tbody>
+					for _,pr:=range p.Rows {
+						<tr>
+							<td>
+								<a href={ PRURL(p.RepoID, pr.Number) }>#{ strconv.Itoa(int(pr.Number)) } · { pr.Title }</a>
+								<small>
+									{ pr.Author } · { pr.Branch }
+									if pr.Fork {
+										<span>· Fork</span>
+									}
+									if pr.NeedsRefresh {
+										<span>· Refresh required</span>
+									}
+								</small>
+							</td>
+							<td><code>{ Short(pr.SHA) }</code></td>
+							<td><span class="repository-status available">{ pr.State }</span></td>
+							<td>{ pr.Build }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	</div>
+	<footer class="repository-pagination">
+		<p role="status" aria-live="polite">{ strconv.FormatInt(p.Total,10) } pull requests · Page { strconv.FormatInt(p.Number,10) } of { strconv.FormatInt(p.Pages,10) } · 10 per page</p>
+		<nav aria-label="Pull request pages">
+			if p.Number>1 {
+				<a href={ templ.SafeURL(p.PageURL(p.Number - 1)) } hx-get={ p.PageURL(p.Number - 1) } hx-target="#repository-results" hx-sync="#repository-filters:replace" hx-push-url="true" rel="prev">Previous</a>
+			}
+			if p.Number<p.Pages {
+				<a href={ templ.SafeURL(p.PageURL(p.Number + 1)) } hx-get={ p.PageURL(p.Number + 1) } hx-target="#repository-results" hx-sync="#repository-filters:replace" hx-push-url="true" rel="next">Next</a>
+			}
+		</nav>
+	</footer>
+}
+
+templ Detail(username, csrf string, repoID int64, p PR) {
+	@layouts.App("Pull request", username, csrf, components.NavRepositories) {
+		<header class="workspace-page-heading">
+			<div>
+				<a href={ RepoURL(repoID) } class="eyebrow">BACK TO PULL REQUESTS</a>
+				<h1>#{ strconv.Itoa(int(p.Number)) } · { p.Title }</h1>
+				<p>
+					{ p.Author } · { p.Branch } · { p.State }
+					if p.Fork {
+						<span>· Fork</span>
+					}
+				</p>
+			</div>
+			@button.Button(button.Props{Disabled: true, Attributes: templ.Attributes{"aria-describedby": "build-unavailable"}}) {
+				Build latest commit
+			}
+		</header>
+        if !p.Available {
+         <p class="connection-notice">Repository access is unavailable. Previously observed state remains visible; restore the GitHub connection before refreshing or requesting work.</p>
+        }
+		if p.NeedsRefresh {
+			<p class="connection-notice">Conflicting upstream observations need a fresh GitHub snapshot. Refresh this repository before requesting work.</p>
+		}
+		<div class="pr-detail-grid">
+			<section class="workspace-panel"><h2>Latest observed commit</h2><code>{ p.SHA }</code><p>State: { p.State }</p></section>
+			<section class="workspace-panel">
+				<h2>Current build request</h2>
+				<p>{ p.Build }</p><code>{ Short(p.RequestedSHA) }</code>
+				if p.Deadline!=""&&p.Build=="pending" {
+					<p>Eligible after <time datetime={ p.Deadline }>{ p.Deadline }</time>. Execution remains unavailable.</p>
+				}
+			</section>
+			<section class="workspace-panel">
+				<h2>Deployed preview</h2>
+				<p>{ p.Environment }</p><code>{ Short(p.DeployedSHA) }</code>
+				if p.DeployedSHA!=""&&p.DeployedSHA!=p.SHA {
+					<p>This deployment reflects an older commit.</p>
+				}
+				<p>A public URL is not available until routing is connected.</p>
+			</section>
+		</div>
+		<p id="build-unavailable" class="repository-help">Build execution, runtime health, live logs and teardown controls require the execution phase. No build is submitted by this page.</p>
+		if p.URL!="" {
+			<a class="text-link" href={ templ.SafeURL(p.URL) } target="_blank" rel="noopener noreferrer">
+				View on GitHub
+				@components.ArrowUpRight()
+			</a>
+		}
+	}
+}
+
+templ ActivityIndex(username, csrf string, p Activity) {
+	{{ title := "Builds"
+nav := components.NavBuilds
+if p.Environments {
+	title = "Environments"
+	nav = components.NavEnvironments
+} }}
+	@layouts.App(title, username, csrf, nav) {
+		<div class="repository-workspace">
+			<header class="workspace-page-heading">
+				<div>
+					<span class="eyebrow">YOUR WORKSPACE</span>
+					<h1>{ title }</h1>
+					if p.Environments {
+						<p>Persisted deployment state. Runtime health and public routing are not connected yet.</p>
+					} else {
+						<p>Current/latest authorized requests, not a permanent attempt history. Execution is not available yet.</p>
+					}
+				</div>
+				<a class="text-link" href="/repositories">
+					Repositories
+					@components.ArrowUpRight()
+				</a>
+			</header>
+			<section class="workspace-panel repository-browser">
+				<div class="repository-results">
+					<div class="repository-table-scroll" tabindex="0" role="region" aria-label={ title + " list" }>
+						if len(p.Rows)==0 {
+							<div class="repository-empty"><h2>No { title } to show.</h2><p>Only real saved records appear here. Connecting or discovering a repository does not create a deployment.</p></div>
+						} else {
+							<table class="pr-table">
+								<thead>
+									<tr>
+										<th>Repository / PR</th>
+										<th>Status</th>
+										<th>Latest SHA</th>
+										<th>
+											if p.Environments {
+												Deployed SHA
+											} else {
+												Requested SHA 
+											}
+										</th>
+									</tr>
+								</thead>
+								<tbody>
+									for _,row:=range p.Rows {
+										<tr>
+											<td>
+												<a href={ PRURL(row.RepoID, row.Number) }>{ row.Name } · #{ strconv.Itoa(int(row.Number)) }</a>
+												if !row.Available {
+													<small>Access unavailable</small>
+												}
+											</td>
+											<td>
+												{ row.State }
+												if !p.Environments&&row.State=="pending" {
+													<small>Eligible: { row.Deadline }</small>
+												}
+											</td>
+											<td><code>{ Short(row.Latest) }</code></td>
+											<td>
+												if p.Environments {
+													<code>{ Short(row.Deployed) }</code>
+												} else {
+													<code>{ Short(row.Requested) }</code>
+												}
+											</td>
+										</tr>
+									}
+								</tbody>
+							</table>
+						}
+					</div>
+					<footer class="repository-pagination">
+						<p>{ strconv.FormatInt(p.Total,10) } records · Page { strconv.FormatInt(p.Number,10) } of { strconv.FormatInt(p.Pages,10) }</p>
+						<nav aria-label={ title + " pages" }>
+							if p.Number>1 {
+								<a href={ templ.SafeURL(p.PageURL(p.Number - 1)) } rel="prev">Previous</a>
+							}
+							if p.Number<p.Pages {
+								<a href={ templ.SafeURL(p.PageURL(p.Number + 1)) } rel="next">Next</a>
+							}
+						</nav>
+					</footer>
+				</div>
+			</section>
+		</div>
+	}
+}

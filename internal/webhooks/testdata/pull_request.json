@@ -1,0 +1,14 @@
+{
+  "action": "opened",
+  "installation": {"id": 99},
+  "repository": {"id": 100},
+  "pull_request": {
+    "number": 7,
+    "title": "Improve preview",
+    "state": "open",
+    "updated_at": "2026-10-03T10:00:00Z",
+    "user": {"login": "contributor"},
+    "html_url": "https://github.com/owner/repo/pull/7",
+    "head": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ref": "feature", "repo": {"id": 101}}
+  }
+}

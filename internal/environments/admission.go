@@ -31,6 +31,13 @@ func (r *Repository) claimBuild(ctx context.Context, request Request, now time.T
 			return fmt.Errorf("claim authorized build intent: %w", e)
 		}
 		allowed = affected == 1
+		if allowed {
+			// Clear the previous attempt only after admission, in the same
+			// transaction. Rejected/stale jobs must preserve current logs.
+			if e := q.ClearBuildLogs(ctx, request.PullRequestID); e != nil {
+				return fmt.Errorf("clear previous build logs: %w", e)
+			}
+		}
 		return nil
 	})
 	return allowed, err

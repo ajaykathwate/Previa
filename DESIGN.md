@@ -51,7 +51,7 @@ Medium. The tables are simple, but correctness under duplicate and out-of-order 
 ### Technical implementation
 1. Define core entities: users, installations, repos, pull requests, environments, build logs, and encrypted env secrets.
 2. Model an environment as a state machine with explicit statuses: `queued`, `building`, `running`, `failed`, `tearing_down`, `torn_down`. Only defined transitions are allowed; the update statement itself checks the current status so illegal transitions fail rather than silently succeed.
-3. Enforce uniqueness at the database level: one pull request row per (repo, PR number), one active environment per pull request, and globally unique subdomains.
+3. Enforce uniqueness at the database level: one pull request row per (repo, PR number), one lifetime environment row per pull request (reused after teardown/reopen), and globally unique subdomains. Migration 9 enforces lifetime identity rather than only uniqueness among active environments.
 4. Store timestamps for creation, last activity and expiry so the housekeeping job can work purely from the database.
 5. Store external identifiers: Docker container ID and image tag, GitHub comment ID, head commit SHA, so any later job can locate and act on the right resources.
 6. All multi-step state changes (for example "mark building and enqueue job") happen inside a single transaction.
@@ -206,9 +206,20 @@ Medium. Small code, high consequence: authenticity, idempotency and ordering all
 ### Design decisions and edge cases
 - **Ack fast, work later:** GitHub treats slow responses as failures and retries, which multiplies load.
 - **Idempotency by delivery ID plus natural keys:** duplicate deliveries collapse into one effect.
+- **Durable receipt composition:** bounded raw-body SHA-256 verification precedes
+  parsing. Receipt, parsed lifecycle/PR update and policy-controlled wake-up commit
+  together; no GitHub calls occur under database locks. This avoids an inbox queue
+  while work remains small and transactional.
+- **Source chronology:** PR `updated_at` is distinct from generation. Older source
+  observations cannot revert current state; timestamp conflicts require a fenced
+  API refresh, with close/revocation favored conservatively. Discovery never
+  bulk-authorizes builds. Installation deletion is terminal; per-repository access
+  tombstones preserve revocation on ambiguous timestamp ties. Cleanup remains
+  durably pending until a real adapter handles it. See
+  [WEBHOOKS_AND_PR_DISCOVERY.md](docs/WEBHOOKS_AND_PR_DISCOVERY.md).
 - **Out-of-order delivery:** jobs carry the head SHA; a job whose SHA is no longer the latest for that PR is discarded on start (see feature 13).
 - **Fork PRs:** detect them from the payload and apply the fork policy from feature 10 and 16.
-- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and real runtime integration remain unbuilt. See [BUILD_POLICY_AND_USER_FLOW.md](docs/BUILD_POLICY_AND_USER_FLOW.md); see [BUILD_SCHEDULING.md](docs/BUILD_SCHEDULING.md) for parsed-event coordination and production dispatch boundaries.
+- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. Real runtime integration remains unbuilt. See [BUILD_POLICY_AND_USER_FLOW.md](docs/BUILD_POLICY_AND_USER_FLOW.md); see [BUILD_SCHEDULING.md](docs/BUILD_SCHEDULING.md) for parsed-event coordination and production dispatch boundaries.
 
 ---
 
@@ -232,6 +243,10 @@ High. This is the coordination core of the system.
 6. Retries use backoff for transient errors (network, registry, GitHub rate limits); permanent errors (invalid config, Dockerfile failure) fail once and report to the user without retrying.
 7. Jobs are written to be idempotent: running one twice leaves the same end state (for example, "ensure container for SHA X exists" rather than "start a container").
 8. On worker startup, jobs left running by a crashed worker are reclaimed and re-run.
+9. Once worker admission has rechecked access, generation, revision and eligibility,
+   clear the environment's previous build logs in that same short transaction,
+   before invoking the runtime. Rejected jobs preserve logs; a log-clear failure
+   rolls back admission. Log writing/streaming remains a later adapter integration.
 
 ### Design decisions and edge cases
 - **Transactional outbox for free:** the database-backed queue avoids the classic lost-job window.
@@ -519,8 +534,10 @@ an explicit per-PR build action. Recommended future UI: repository detail with
 paginated PRs → PR detail with current build/logs and deployed preview. Builds is
 a cross-repository view of current/latest work; Environments is a deployment view,
 not another name for Builds. Do not add historical build storage implicitly.
-Initial discovery of existing GitHub PRs and detail screens still need implementation
-review; see [BUILD_POLICY_AND_USER_FLOW.md](docs/BUILD_POLICY_AND_USER_FLOW.md).
+Initial discovery and detail screens are implemented by a feature-owned
+`internal/pullrequests` package: explicit refresh, bounded River pagination,
+source/access snapshot fences and owned Templ pages. The build action fails closed
+until real execution adapters exist. See [APP_USER_FLOW.md](docs/APP_USER_FLOW.md).
 
 ### Design decisions and edge cases
 - **Server-rendered UI** keeps everything in one binary and one deploy.
@@ -749,6 +766,10 @@ preview/
 │   │   ├── handler.go  routes.go   # dashboard actions (teardown now)
 │   │   ├── queries.sql  dbgen/
 │   │
+│   ├── pullrequests/               # FEATURE: PR observations, discovery and workspace
+│   │   ├── handler.go  repository.go  queries.sql  dbgen/
+│   │   ├── observation.go  github.go  sync.go
+│   │
 │   ├── repoconfig/                 # FEATURE: .previewrc.yaml parse + validate
 │   │   ├── config.go               # typed struct + defaults
 │   │   ├── parser.go
@@ -819,8 +840,9 @@ preview/
 │   │   ├── home/                   # public landing page
 │   │   ├── dashboard/              # overview, session, developer tools
 │   │   ├── repositories/           # paginated, filtered repository page
-│   │   ├── builds/                 # build page (placeholder until feature wired)
-│   │   └── environments/           # environment page (placeholder until feature wired)
+│   │   ├── pullrequests/           # repository/PR detail and shared current activity
+│   │   ├── builds/                 # current build intent page
+│   │   └── environments/           # persisted deployment state page
 │   ├── components/                 # local, reusable UI; no backend imports
 │   ├── styles/                     # Tailwind entry CSS and theme tokens
 │   └── static/                     # local HTMX, generated CSS, browser assets

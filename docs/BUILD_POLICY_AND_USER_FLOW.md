@@ -11,13 +11,16 @@ Policy persistence and ownership-scoped intent APIs are implemented by Prompt 2;
 see [BUILD_INTENTS.md](BUILD_INTENTS.md). Prompt 3 implements coordination and
 River scheduling behind tested interfaces; see [BUILD_SCHEDULING.md](BUILD_SCHEDULING.md).
 Production preview dispatch is not connected.
-Installation linking and paginated repository browsing work. Builds and Environments
-are placeholder pages; PR browsing and manual build controls remain unbuilt. Production workers execute only ping.
+Installation linking, paginated repositories/PRs, repository/PR details and owner
+mode controls work. Builds/Environments show actual persisted records. Production
+workers execute ping and configured PR discovery; the per-PR Build action is disabled.
 The tested orchestration core now admits only current authorized eligible intent.
 Production must supply real runtime/publication adapters before enabling dispatch.
 
-The screen structure below is a **recommended next UI design**, not authorization
-to implement new screens, routes, database columns or a PR synchronization runner.
+Prompts 4–5 implement the tracking/workspace parts below. Real execution, logs,
+preview URLs, health and teardown controls remain later integrations. Current
+browser steps are in [APP_USER_FLOW.md](APP_USER_FLOW.md); decisions and source
+ordering are in [WEBHOOKS_AND_PR_DISCOVERY.md](WEBHOOKS_AND_PR_DISCOVERY.md).
 
 ## What each workspace page means
 
@@ -65,36 +68,36 @@ default branch. A PR with no build request has “Not requested,” not “Faile
 successful older preview should be identified as serving an older commit when the
 PR has moved forward. Do not create an environment merely to display an unbuilt PR.
 
-Suggested URLs, subject to implementation review:
+Implemented workspace URLs:
 
 - `/repositories/{repoID}` — repository detail and paginated PRs.
 - `/repositories/{repoID}/pull-requests/{number}` — PR detail.
 - `/builds?repo_id=...` — current/latest work filtered to a repository.
 - `/environments?repo_id=...` — deployments filtered to a repository.
 
-These routes do not exist today. Mutations use authenticated, ownership-scoped,
+These routes are implemented. Mutations use authenticated, ownership-scoped,
 CSRF-protected POST requests. Destructive confirmation uses a modal. Reuse the
 approved layout, palette, fonts, focus style, components and HTMX GET behavior.
 Handlers stay feature-owned; view models and templates stay under `web/`.
 
 ## PR discovery is separate from build scheduling
 
-Future authenticated webhooks record relevant PR state in both modes. Manual mode
+Authenticated webhooks record relevant PR state in both modes. Manual mode
 means no automatic build, not no PR tracking. Comments/reviews do not trigger a
 build or reset its timer. Closed/merged PRs invalidate pending work and request
 teardown immediately in either mode.
 
 Webhooks alone cannot show **all existing PRs** on a newly linked repository.
-Recommended addition: an ownership-checked, bounded, paginated GitHub API sync for
+Implemented: an ownership-checked, bounded, paginated GitHub API sync for
 initial discovery and explicit refresh, plus later reconciliation for missed events.
 This sync must obey installation permissions, rate limits and event-ordering rules;
 an older API snapshot must not overwrite a newer webhook state. Syncing PRs must
-not implicitly authorize builds. The exact sync execution model and persistence
-fields need review before implementation; do not perform an unbounded GitHub fetch
-on every page render.
+not implicitly authorize builds. River processes bounded pages, with durable continuation and source/access revision
+fences. Refresh is explicit; page rendering reads the database only.
 
-Until this exists, GitHub's repository Pull Requests page is the place to inspect
-all PRs. Local PR browsing is not currently connected.
+Use Refresh on repository detail to import existing PRs. Completion means pagination
+finished, not a transactionally consistent GitHub snapshot. No missing row is inferred
+closed from a partial page; periodic reconciliation remains later work.
 
 ## Scheduling and ordering requirements
 
@@ -148,8 +151,8 @@ capacity can add queue wait. Manual “Build latest commit” bypasses the quiet
   still needed; debounce is not a spending cap.
 - Tracking PRs and authorized work separately adds persistence and race tests,
   but is required to keep the existing successor mechanism from defeating Manual.
-- Initial-sync mechanics, exact mutation routes and production runtime integration
-  remain later tasks; River coordination is implemented behind tested interfaces. The current policy/intent schema is implemented; historical
+- Initial discovery, workspace routes and policy UI are implemented. Production runtime
+  integration remains later work. The current policy/intent schema is implemented; historical
   builds remain outside the agreed MVP scope. Current-only idempotency retention
   rejects stale commands through expected revision instead of an unbounded ledger.
 
@@ -162,9 +165,9 @@ capacity can add queue wait. Manual “Build latest commit” bypasses the quiet
 3. Complete: parsed-event processing, broker handoff, retries and recovery enforce
    intent. Tests cover Manual no-build, deadline reset, stale wake-ups, manual
    override, cancellation, recovery, same-SHA revision and close-during-build races.
-   Next: authenticated durable webhook ingress (Prompt 4).
-4. Add PR discovery/list/detail queries and pages with ownership boundaries. Test
-   existing-PR discovery, pagination and stale-sync/webhook races.
+   Complete: authenticated durable webhook ingress (Prompt 4), with atomic receipts/source ordering.
+4. Complete: explicit PR discovery/list/detail pages and mode controls (Prompt 5). Tests
+   cover existing-PR discovery, pagination, ownership, CSRF and source/access races.
 5. Add mode/build controls and connect real build/runtime/publication integrations
    in their planned phases. Cover duplicate clicks, access revocation, latest versus
    deployed SHA, failed rebuild preserving preview, logs and teardown confirmation.
