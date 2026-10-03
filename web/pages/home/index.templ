@@ -44,10 +44,20 @@ templ Index(loggedIn bool) {
 					<div class="preview-layer layer-back" aria-hidden="true"></div>
 					<div class="preview-layer layer-middle" aria-hidden="true"></div>
 					<div class="preview-window">
-						<div class="preview-window-bar"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>the bigger picture</span><span aria-hidden="true">↗</span></div>
+						<div class="preview-window-bar">
+							<span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>the bigger picture</span>
+							<span aria-hidden="true">
+								@components.ArrowUpRight()
+							</span>
+						</div>
 						<div class="preview-window-content"><div class="mini-brand" aria-hidden="true">p.</div><p>One branch.<br/><em>A shared perspective.</em></p><div class="art-line" aria-hidden="true"></div><div class="art-line short" aria-hidden="true"></div><span class="art-button">See it. Discuss it. Refine it.</span></div>
 					</div>
-					<div class="review-tag"><span class="review-tag-icon" aria-hidden="true">↗</span><div><strong>Beyond the diff</strong><span>Made for the conversation.</span></div></div>
+					<div class="review-tag">
+						<span class="review-tag-icon" aria-hidden="true">
+							@components.ArrowUpRight()
+						</span>
+						<div><strong>Beyond the diff</strong><span>Made for the conversation.</span></div>
+					</div>
 					<figcaption><span class="art-caption-line" aria-hidden="true"></span>WORKFLOW CONCEPT · NOT A LIVE PREVIEW</figcaption>
 				</figure>
 			</section>
@@ -55,16 +65,56 @@ templ Index(loggedIn bool) {
 			<section id="workflow" class="site-container section-block" aria-labelledby="workflow-title">
 				<div class="section-heading" data-scroll-reveal><div><span class="eyebrow">LESS GUESSWORK. MORE CONTEXT.</span><h2 id="workflow-title">A little closer to<br/>the <em>real thing.</em></h2></div><p>A screenshot is a moment. A preview is a place to explore. This is the pull-request workflow we're building toward.</p></div>
 				<div class="workflow-grid">
-					<article class="workflow-card" data-scroll-reveal><div class="workflow-symbol branch-diagram" aria-hidden="true"><span></span><span></span><span></span><i></i></div><span class="eyebrow">FROM YOUR BRANCH</span><h3>Make the change.</h3><p>Start where your team already works: a GitHub pull request. Keep the code, the conversation, and the context together.</p><div class="workflow-card-footer">A familiar starting point <span aria-hidden="true">↗</span></div></article>
-					<article class="workflow-card featured" data-scroll-reveal><div class="workflow-symbol stacked-diagram" aria-hidden="true"><span></span><span></span><span></span></div><span class="eyebrow">INTO A SHARED VIEW</span><h3>Explore the idea.</h3><p>The goal: an isolated preview for each pull request, so reviewers can experience a change instead of imagining it.</p><div class="workflow-card-footer">Built around real feedback <span aria-hidden="true">↗</span></div></article>
-					<article class="workflow-card" data-scroll-reveal><div class="workflow-symbol merge-diagram" aria-hidden="true"><span></span><i></i><b>↗</b></div><span class="eyebrow">BACK TO THE WORK</span><h3>Move it forward.</h3><p>Review, refine, and merge. The intended lifecycle keeps previews tied to their pull requests, from open to close.</p><div class="workflow-card-footer">A natural finish <span aria-hidden="true">↗</span></div></article>
+					<article class="workflow-card" data-scroll-reveal>
+						<div class="workflow-symbol branch-diagram" aria-hidden="true"><span></span><span></span><span></span><i></i></div><span class="eyebrow">FROM YOUR BRANCH</span>
+						<h3>Make the change.</h3>
+						<p>Start where your team already works: a GitHub pull request. Keep the code, the conversation, and the context together.</p>
+						<div class="workflow-card-footer">
+							A familiar starting point
+							<span aria-hidden="true">
+								@components.ArrowUpRight()
+							</span>
+						</div>
+					</article>
+					<article class="workflow-card featured" data-scroll-reveal>
+						<div class="workflow-symbol stacked-diagram" aria-hidden="true"><span></span><span></span><span></span></div><span class="eyebrow">INTO A SHARED VIEW</span>
+						<h3>Explore the idea.</h3>
+						<p>The goal: an isolated preview for each pull request, so reviewers can experience a change instead of imagining it.</p>
+						<div class="workflow-card-footer">
+							Built around real feedback
+							<span aria-hidden="true">
+								@components.ArrowUpRight()
+							</span>
+						</div>
+					</article>
+					<article class="workflow-card" data-scroll-reveal>
+						<div class="workflow-symbol merge-diagram" aria-hidden="true">
+							<span></span><i></i>
+							<b>
+								@components.ArrowUpRight()
+							</b>
+						</div><span class="eyebrow">BACK TO THE WORK</span>
+						<h3>Move it forward.</h3>
+						<p>Review, refine, and merge. The intended lifecycle keeps previews tied to their pull requests, from open to close.</p>
+						<div class="workflow-card-footer">
+							A natural finish
+							<span aria-hidden="true">
+								@components.ArrowUpRight()
+							</span>
+						</div>
+					</article>
 				</div>
 			</section>
 			<section id="principles" class="principles-section" aria-labelledby="principles-title">
 				<div class="site-container principles-grid" data-scroll-reveal>
 					<div><span class="eyebrow">A PLATFORM WITH A POINT OF VIEW</span><h2 id="principles-title">Your work.<br/>Your infrastructure.<br/><em>Your perspective.</em></h2><p>Previa's direction is deliberately simple: make reviewing a change feel closer to using it, while keeping control in your hands.</p></div>
 					<div class="principles-list">
-						<article><span aria-hidden="true">↗</span><div><h3>Self-hosted by design</h3><p>A preview platform designed to run on infrastructure you own, with a clear boundary between the platform and previewed applications.</p></div></article>
+						<article>
+							<span aria-hidden="true">
+								@components.ArrowUpRight()
+							</span>
+							<div><h3>Self-hosted by design</h3><p>A preview platform designed to run on infrastructure you own, with a clear boundary between the platform and previewed applications.</p></div>
+						</article>
 						<article>
 							<span aria-hidden="true">
 								@components.BranchIcon()

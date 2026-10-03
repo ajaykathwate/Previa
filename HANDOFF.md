@@ -35,14 +35,14 @@ Last updated: 2026-10-03
 - Thin cmd entrypoints; app constructs dependencies and handles graceful shutdown.
   Server and worker DB pools are health-checked on startup.
 - chi middleware; all presentation in `web/` (pages/layouts/components/styles).
-  Official Tailwind v4.1.18 + copied stable templUI v1.13.2; local HTMX 2.0.11.
+  Official Tailwind v4.1.18 + stable templUI v1.13.2; local HTMX 2.0.11; shared SVG arrows.
 - GitHub OAuth, users keyed by GitHub ID, signed state, login rotation, SCS pgxstore,
   RequireUser, session CSRF, logout. Session lifetime 24h, idle timeout 30m.
 - OAuth callback: http://localhost:8080/auth/github/callback. Configure server-only
   OAuth ID/secret and SESSION_SECRET. Browser checks: `docs/AUTH_TESTING.md`.
 - `/` is public; GitHub sign-in redirects to protected `/dashboard` (sticky navbar/sidebar).
   Overview uses actual counts; `/repositories` has ownership-scoped SQL pagination
-  (25 rows), search/access filters; `/builds` and `/environments` are separate placeholders.
+  (10 rows), search/access filters; `/builds` and `/environments` are separate placeholders.
   `/developer-tools` holds ping; `/protected` shows sessions; logout uses a shared modal.
 - Installations: verified redirect + separate App user authorization; status/repo access,
   revision fences, cached tokens, parsed lifecycle functions. Cleanup adapter is not wired.
@@ -84,8 +84,8 @@ Last updated: 2026-10-03
   Section 15. See generation documentation for exact integration requirements.
 
 ## Verification
-- Build/tests/vet/lint, full DB tests and nine browser scenarios pass.
-  Pages, 150-repository pagination, ownership/search/access filters and no-JS links verified.
+- Build/tests/vet/lint, DB tests and ten browser scenarios pass.
+  10-row pages, internal scrolling/live search; Available-default radio tabs; shared field focus.
   Optional `make browser-install`/`make test-browser`; App proof pending, see TEMP.md.
 - Goose 5 applied locally; installation ownership/lifecycle/revision/rename/reinstall
   tests pass in isolated schemas. Real App proof requires credentials and an installation.

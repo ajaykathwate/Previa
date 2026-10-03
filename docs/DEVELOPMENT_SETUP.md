@@ -278,8 +278,12 @@ in; successful authentication opens `/dashboard`, with the account navbar and
 workspace sidebar. Each navigation item opens its own page:
 
 - **Overview** (`/dashboard`): database-derived installation/repository/access counts.
-- **Repositories** (`/repositories`): 25 records per page, name search and access filters;
-  connection management is in the page header. GitHub links open in a new tab.
+- **Repositories** (`/repositories`): 10 records per page, name search and Available/Unavailable/All access tabs
+  (Available is selected by default);
+  connection management is in the page header. The list scrolls inside its panel;
+  search updates as you type (300ms debounce). Clearing search restores all records
+  within the selected access filter. There are no Search/Reset buttons; press Enter
+  in the search field if JavaScript is disabled. GitHub links open in a new tab.
 - **Builds** (`/builds`) and **Environments** (`/environments`): dedicated placeholders
   until their actual features are connected.
 - **Developer tools** (`/developer-tools`): the queue diagnostic.

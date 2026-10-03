@@ -10,9 +10,10 @@ import (
 )
 
 func (h *Handler) repositories(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Vary", "HX-Request, HX-Target")
 	filter := RepositoryFilter{Page: 1, Search: strings.TrimSpace(r.URL.Query().Get("q")), Access: r.URL.Query().Get("access")}
 	if filter.Access == "" {
-		filter.Access = "all"
+		filter.Access = "available"
 	}
 	if value := r.URL.Query().Get("page"); value != "" {
 		number, err := strconv.ParseInt(value, 10, 64)
@@ -43,7 +44,7 @@ func (h *Handler) repositories(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, repositorypages.PageURL(result.Page, filter.Search, filter.Access), http.StatusSeeOther)
 		return
 	}
-	page := repositorypages.Page{Total: result.Total, Number: result.Page, Pages: result.Pages, Search: filter.Search, Access: filter.Access, Installations: summary.Installations, Enabled: h.slug != "", Connected: h.sessions.PopString(r.Context(), "installation_notice") == "linked"}
+	page := repositorypages.Page{Total: result.Total, Number: result.Page, Pages: result.Pages, Search: filter.Search, Access: filter.Access, Installations: summary.Installations, Enabled: h.slug != ""}
 	if result.Total > 0 {
 		page.Start = (result.Page-1)*RepositoryPageSize + 1
 		page.End = page.Start + int64(len(result.Rows)) - 1
@@ -51,6 +52,11 @@ func (h *Handler) repositories(w http.ResponseWriter, r *http.Request) {
 	for _, row := range result.Rows {
 		page.Rows = append(page.Rows, repositorypages.Row{FullName: row.FullName, Account: row.Account, InstallationID: row.InstallationID, Status: row.Status, Accessible: row.Accessible})
 	}
+	if r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-Target") == "repository-results" {
+		templ.Handler(repositorypages.Results(page)).ServeHTTP(w, r)
+		return
+	}
+	page.Connected = h.sessions.PopString(r.Context(), "installation_notice") == "linked"
 	username, _ := h.users.Username(r.Context())
 	templ.Handler(repositorypages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
 }

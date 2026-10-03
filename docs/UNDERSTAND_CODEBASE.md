@@ -39,7 +39,7 @@ queries into feature `dbgen` packages.
 | `web/components/`, `web/styles/` | Stable templUI source, explicit navigation keys, Tailwind CSS with shared theme tokens and base/home/workspace/repositories/confirmation/motion sources. |
 | `web/assets.go`, `web/static/` | Embedded browser assets, including generated CSS, local HTMX, and progressive menu/queue-form JavaScript. |
 | `internal/auth/` | GitHub OAuth, user upsert, sessions, CSRF, and logout. |
-| `internal/installations/` | Verified redirect linking, App user authorization, lifecycle functions, ownership-scoped search/access filters and 25-row database pagination; SQL and persistence tests; no webhook endpoint. |
+| `internal/installations/` | Verified redirect linking, App user authorization, lifecycle functions, ownership-scoped search/access filters and 10-row database pagination; SQL and persistence tests; no webhook endpoint. |
 | `internal/platform/githubapp/` | App JWT signing and bounded, cached installation authentication using ghinstallation v2.18.0. |
 | `internal/dashboard/` | Public home, overview/session/tools and build/environment placeholder routes; CSRF-protected ping action. |
 | `internal/webhooks/` | PR state/generation persistence and transactional enqueueing; HTTP validation/signature endpoint is not connected yet. |

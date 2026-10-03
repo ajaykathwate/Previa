@@ -70,11 +70,14 @@ test('responsive dashboard sticky navigation and honest placeholders', async () 
     await page.setViewportSize({width, height: 844});
     await assertNoOverflow();
     await page.evaluate(() => scrollTo({top: 500, behavior: 'instant'}));
-    assert(await page.evaluate(() => scrollY > 0));
+    assert.equal(await page.evaluate(() => scrollY), 0);
+    const list = page.locator('.repository-table-scroll');
+    await list.evaluate(e => {e.scrollTop = 300;});
+    assert(await list.evaluate(e => e.scrollTop > 0));
     assert.equal(await page.locator('.app-header').evaluate(e => Math.round(e.getBoundingClientRect().top)), 0);
     await page.evaluate(() => scrollTo({top: 0, behavior: 'instant'}));
   }
-  assert.equal(await page.locator('.repository-row').count(), 25);
+  assert.equal(await page.locator('.repository-row').count(), 10);
   assert.equal(await page.locator('[data-queue-form]').count(), 0);
 });
 
@@ -96,7 +99,7 @@ test('mobile navigation opens separate pages and highlights the destination', as
 test('logout modal preserves page scroll and traps and restores focus', async () => {
   await login();
   await page.goto(`${origin}/repositories`);
-  await page.evaluate(() => scrollTo({top: 450, behavior: 'instant'}));
+  await page.locator('.repository-table-scroll').evaluate(e => {e.scrollTop = 300;});
   const scroll = await page.evaluate(() => scrollY);
   let logoutRequests = 0;
   page.on('request', request => { if (request.method() === 'POST' && request.url().endsWith('/auth/logout')) logoutRequests++; });
@@ -142,6 +145,10 @@ test('modal works on session page and confirmed logout invalidates session', asy
 test('queue feedback handles pending duplicate failures and expired session', async () => {
   await login();
   await page.goto(`${origin}/developer-tools`);
+  const pingInput=page.locator('#pr-key');
+  await pingInput.click();
+  assert.equal(await pingInput.evaluate(e => getComputedStyle(e).outlineStyle),'none');
+  assert.equal(await pingInput.evaluate(e => getComputedStyle(e).boxShadow),'none');
   const submit = page.getByRole('button', {name: 'Send a ping', exact: true});
   const result = page.locator('[data-queue-result]');
   await submit.click();
@@ -203,9 +210,13 @@ test('content and native confirmation remain usable without JavaScript', async (
     await nativePage.goto(`${origin}/auth/github/login`);
     await nativePage.waitForURL(`${origin}/dashboard`);
     await nativePage.goto(`${origin}/repositories?page=2`);
-    assert.equal(await nativePage.locator('.repository-row').count(),25);
+    assert.equal(await nativePage.locator('.repository-row').count(),10);
     await nativePage.getByRole('link',{name:'Previous page',exact:true}).click();
     assert.equal(new URL(nativePage.url()).searchParams.get('page'),'1');
+    await nativePage.locator('#repository-search').fill('verification-149');
+    await nativePage.locator('#repository-search').press('Enter');
+    await nativePage.waitForURL(url => url.searchParams.get('q') === 'verification-149');
+    assert.equal(await nativePage.locator('.repository-row').count(),1);
     await nativePage.locator('.account-menu summary').click();
     await nativePage.getByRole('button', {name: 'Log out', exact: true}).click();
     assert(await nativePage.locator('#logout-confirmation').evaluate(e => e.matches(':modal')));
@@ -217,7 +228,7 @@ test('content and native confirmation remain usable without JavaScript', async (
 test('repository pagination preserves filters and connection action is in the header', async () => {
   await login();
   await page.goto(`${origin}/repositories?q=fixture&access=available`);
-  assert.equal(await page.locator('.repository-row').count(), 25);
+  assert.equal(await page.locator('.repository-row').count(), 10);
   assert.equal(await page.locator('.repository-row .unavailable').count(), 0);
   const form = page.locator('form[action="/installations/start"]');
   assert.equal(await form.getAttribute('method'), 'post');
@@ -227,11 +238,48 @@ test('repository pagination preserves filters and connection action is in the he
   assert.equal(await manage.evaluate(e => getComputedStyle(e).cursor), 'pointer');
   assert.equal(await page.locator('.workspace-page-heading form').count(), 1);
   await page.getByRole('link', {name:'Next page',exact:true}).click();
+  await page.waitForURL(url => url.searchParams.get('page') === '2');
   const location = new URL(page.url());
   assert.equal(location.searchParams.get('page'), '2');
   assert.equal(location.searchParams.get('q'), 'fixture');
   assert.equal(location.searchParams.get('access'), 'available');
-  assert.match(await page.locator('.repository-pagination p').innerText(), /26–50 of 75/);
-  assert.equal(await page.locator('.repository-row').count(), 25);
+  assert.match(await page.locator('.repository-pagination p').innerText(), /11–20 of 75/);
+  assert.equal(await page.locator('.repository-row').count(), 10);
   for (const width of [320,390,768,1440]) { await page.setViewportSize({width,height:844}); await assertNoOverflow(); }
+});
+
+
+test('repository live search restores all records and keeps the input focused', async () => {
+  await login();
+  await page.goto(`${origin}/repositories?page=3`);
+  await page.evaluate(() => {window.repositoryDocument = document;});
+  const search = page.locator('#repository-search');
+  assert.equal(await page.locator('#repository-filters button').count(),0);
+  assert(await page.getByRole('radio',{name:'Available',exact:true}).isChecked());
+  assert.equal(await page.locator('#repository-filters select').count(),0);
+  assert.equal(await page.locator('#repository-filters a').count(),0);
+  await search.click();
+  assert.equal(await search.evaluate(e => getComputedStyle(e).outlineStyle),'none');
+  assert.equal(await search.evaluate(e => getComputedStyle(e).boxShadow),'none');
+  await search.fill('verification-149');
+  await page.waitForFunction(() => document.querySelectorAll('.repository-row').length === 1);
+  assert.match(await page.locator('.repository-row').innerText(), /verification-149/);
+  assert.equal(await search.evaluate(e => e === document.activeElement),true);
+  assert(await page.evaluate(() => document === window.repositoryDocument));
+  assert.equal(new URL(page.url()).searchParams.get('page'),null);
+  await search.fill('no-such-repository');
+  await page.getByRole('heading',{name:'No repositories match these filters.'}).waitFor();
+  await search.fill('');
+  await page.waitForFunction(() => document.querySelector('.repository-pagination p')?.textContent.includes('of 75'));
+  assert.equal(await page.locator('.repository-row').count(),10);
+  assert.equal(new URL(page.url()).searchParams.get('q'),'');
+  await page.locator('.repository-access-tabs').getByText('All',{exact:true}).click();
+  await page.waitForFunction(() => document.querySelector('.repository-pagination p')?.textContent.includes('of 150'));
+  await page.locator('.repository-access-tabs').getByText('Available',{exact:true}).click();
+  await page.waitForFunction(() => document.querySelector('.repository-pagination p')?.textContent.includes('of 75'));
+  assert.equal(await page.locator('.repository-row .unavailable').count(),0);
+  await page.route('**/repositories?*',route => route.fulfill({status:503,body:'fixture unavailable'}));
+  await search.fill('verification-1');
+  await page.waitForFunction(() => document.querySelector('[data-repository-feedback]')?.hasAttribute('data-error'));
+  assert.equal(await page.locator('.repository-row').count(),10);
 });

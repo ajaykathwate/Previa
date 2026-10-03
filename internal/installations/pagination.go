@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const RepositoryPageSize int64 = 25
+const RepositoryPageSize int64 = 10
 
 type WorkspaceSummary struct{ Installations, Repositories, Available int64 }
 type RepositoryFilter struct {
@@ -39,7 +39,7 @@ func (s *Service) Page(ctx context.Context, userID int64, filter RepositoryFilte
 		return RepositoryPage{}, errors.New("search must be at most 100 characters")
 	}
 	if filter.Access == "" {
-		filter.Access = "all"
+		filter.Access = "available"
 	}
 	if filter.Access != "all" && filter.Access != "available" && filter.Access != "unavailable" {
 		return RepositoryPage{}, errors.New("invalid repository access filter")

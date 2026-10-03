@@ -8,13 +8,47 @@ templ Index(username string, csrfToken string, summary Summary) {
 	@layouts.App("Overview", username, csrfToken, components.NavOverview) {
 		<div class="dashboard-heading"><div><span class="eyebrow">WORKSPACE OVERVIEW</span><h1>Your next change,<br/><em>a clearer perspective.</em></h1><p>Welcome back, { username }. Your workspace at a glance.</p></div><a href="/protected" class="identity-badge"><span class="status-dot" aria-hidden="true"></span>Signed in with GitHub</a></div>
 		<div class="overview-stats">
-			<a href="/repositories"><span>Linked installations</span><strong>{ strconv.FormatInt(summary.Installations,10) }</strong><span>Manage connections ↗</span></a>
-			<a href="/repositories"><span>Repositories</span><strong>{ strconv.FormatInt(summary.Repositories,10) }</strong><span>Browse your source ↗</span></a>
-			<a href="/repositories?access=available"><span>Access available</span><strong>{ strconv.FormatInt(summary.Available,10) }</strong><span>View accessible repositories ↗</span></a>
+			<a href="/repositories">
+				<span>Linked installations</span><strong>{ strconv.FormatInt(summary.Installations,10) }</strong>
+				<span>
+					Manage connections
+					@components.ArrowUpRight()
+				</span>
+			</a>
+			<a href="/repositories">
+				<span>Repositories</span><strong>{ strconv.FormatInt(summary.Repositories,10) }</strong>
+				<span>
+					Browse your source
+					@components.ArrowUpRight()
+				</span>
+			</a>
+			<a href="/repositories?access=available">
+				<span>Access available</span><strong>{ strconv.FormatInt(summary.Available,10) }</strong>
+				<span>
+					View accessible repositories
+					@components.ArrowUpRight()
+				</span>
+			</a>
 		</div>
 		<div class="workspace-feature-grid">
-			<a href="/environments" class="workspace-panel overview-link"><span class="eyebrow">PREVIEW WORKSPACE</span><h2>Environments</h2><p>Open the dedicated environment page.</p><span class="text-link">View environments ↗</span></a>
-			<a href="/builds" class="workspace-panel overview-link"><span class="eyebrow">FROM COMMIT TO PREVIEW</span><h2>Builds</h2><p>Open the dedicated build page.</p><span class="text-link">View builds ↗</span></a>
+			<a href="/environments" class="workspace-panel overview-link">
+				<span class="eyebrow">PREVIEW WORKSPACE</span>
+				<h2>Environments</h2>
+				<p>Open the dedicated environment page.</p>
+				<span class="text-link">
+					View environments
+					@components.ArrowUpRight()
+				</span>
+			</a>
+			<a href="/builds" class="workspace-panel overview-link">
+				<span class="eyebrow">FROM COMMIT TO PREVIEW</span>
+				<h2>Builds</h2>
+				<p>Open the dedicated build page.</p>
+				<span class="text-link">
+					View builds
+					@components.ArrowUpRight()
+				</span>
+			</a>
 		</div>
 	}
 }

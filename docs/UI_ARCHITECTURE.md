@@ -156,7 +156,7 @@ this directory so installed dependencies and screenshots do not trigger rebuilds
 The fixture uses real authentication/session/CSRF middleware with an in-memory
 session store and fake GitHub/user/queue providers. It needs no application server,
 Postgres, OAuth credentials, or `.env`; it never enters the production application.
-Checks cover responsive/sticky navigation, mobile anchors, modal focus/dismissal,
+Checks cover responsive/sticky navigation, mobile page navigation, modal focus/dismissal,
 logout/session deletion, CSRF failures, configured installation-list responsiveness,
 queue feedback, motion and no-JavaScript
 behavior. See [browser test instructions](../web/tests/browser/README.md).
@@ -164,7 +164,7 @@ behavior. See [browser test instructions](../web/tests/browser/README.md).
 ## Repository browsing
 
 `internal/installations/queries.sql` scopes every count/list to the logged-in
-user's installation ownership. The page uses a fixed 25-row limit, stable
+user's installation ownership. The page uses a fixed 10-row limit, stable
 case-insensitive name/ID ordering, a literal case-insensitive substring search
 (up to 100 characters), and all/available/unavailable access filters. Suspended
 or inactive installations cannot count as available. Count and list share a
@@ -181,3 +181,38 @@ installation is linked. It still uses the existing verified redirect flow;
 there is no new management API or automatic synchronization. Linking returns
 to Repositories with a session-backed, one-use confirmation notice.
 All pages reuse the sticky header, sidebar, logout modal, palette and fonts.
+
+Directional arrows use shared SVG components (`Arrow`, `ArrowLeft`,
+`ArrowUpRight`) with the navbar's rounded stroke style and inherited colour.
+Use these instead of Unicode/emoji arrows to avoid platform-specific coloured
+glyphs or boxed icons. Outward link arrows point diagonally up/right; previous
+and next page controls retain their respective horizontal direction.
+
+Repository browsing fills the available workspace height. The results region
+scrolls internally; the compact heading, filters, sticky column headings and
+pagination remain visible. HTMX sends a debounced GET after 300ms of search input
+or an access-filter change, replacing only `repository-results`. Search always
+starts at page 1, preserves input focus and updates the URL without creating
+a history entry for every keystroke. Pagination uses ordinary links enhanced
+with HTMX; concurrent requests share replacement synchronization to discard
+older requests. Failed searches preserve current rows and display retry feedback.
+An empty query restores all owned repositories within the selected access filter.
+Full GET forms/page links remain usable without JavaScript. Partial responses
+retain the same authentication/ownership checks and vary by HX request/target headers.
+
+The repository panel uses the same centered 1100px content boundary as other
+workspace pages, with balanced desktop/mobile padding. Live search has no
+Search/Reset buttons; clearing the field restores results and Enter remains
+the ordinary GET-form fallback. Search focus uses a subtle forest border
+rather than the detached outer ring. This is now the shared text-input, textarea
+and select focus style in `base.css`; copied input components defer to it. Invalid
+fields keep their error borders, and buttons/radios retain their keyboard cues.
+
+Repository access uses native radio choices styled as segmented tabs:
+Available (default), Unavailable and All. Tab choices send the same filtered
+GET request and reset pagination; native arrow-key selection and the Enter
+search fallback remain usable without JavaScript. Explicit `access=all` stays
+in pagination URLs so it cannot silently revert to the Available default.
+Previously linked repositories remain stored with access flags; that retention
+behaviour is unchanged. Available excludes removed access and inactive/suspended
+installations, while All intentionally includes the retained history.

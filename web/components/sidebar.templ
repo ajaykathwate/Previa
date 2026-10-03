@@ -38,7 +38,13 @@ templ WorkspaceLink(href string, label string, symbol string, item NavItem, acti
 			aria-current="page"
 		}
 	>
-		<span class="nav-symbol" aria-hidden="true">{ symbol }</span>{ label }
+		<span class="nav-symbol" aria-hidden="true">
+			if symbol == "↗" {
+				@ArrowUpRight()
+			} else {
+				{ symbol }
+			}
+		</span>{ label }
 		if active==item {
 			<span class="active-dot" aria-hidden="true"></span>
 		}

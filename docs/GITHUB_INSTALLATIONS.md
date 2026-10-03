@@ -78,8 +78,10 @@ make run-server
    App and is not suspended. An installation token then authenticates a repository
    listing and, when a repository exists, its metadata lookup.
 6. Expected: return to `/repositories` with a connection confirmation and the linked
-   repository names, account, installation ID and access state. Lists use 25 rows
-   per page; search and access filters run against the database. The server logs a successful link without
+   repository names, account, installation ID and access state. Lists use 10 rows
+   per page; search and access filters run against the database. Available is the
+   default tab; use All or Unavailable to inspect previously linked records with
+   revoked access. Those rows are retained for history, not deleted. The server logs a successful link without
    exposing credentials. No build/job is started. Refreshing preserves DB records.
 7. For selection updates, start again from **Manage connections** and manage the
    existing installation. A callback opened manually without the session-bound state

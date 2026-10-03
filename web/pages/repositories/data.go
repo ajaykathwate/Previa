@@ -22,7 +22,7 @@ func PageURL(number int64, search, access string) string {
 	if search != "" {
 		values.Set("q", search)
 	}
-	if access != "" && access != "all" {
+	if access != "" {
 		values.Set("access", access)
 	}
 	return "/repositories?" + values.Encode()

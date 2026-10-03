@@ -499,7 +499,7 @@ Medium.
 1. During builds and container startup, each output line is appended to the log table with a sequence number per environment.
 2. The logs page loads existing lines, then opens an SSE stream that pushes new lines as they arrive (the server polls or listens for new rows, or uses Postgres notifications).
 3. A reconnecting client resumes from the last sequence number it received, so nothing is duplicated or lost.
-4. The workspace has separate Overview, Repositories, Builds and Environments pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (25 rows), search and access filters. Once the environment feature is connected, Environments shows status, URL, commit SHA, age, and a manual "tear down now" action. Developer tools has its own local diagnostic page.
+4. The workspace has separate Overview, Repositories, Builds and Environments pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 rows), search and Available/Unavailable/All access tabs (Available by default). Once the environment feature is connected, Environments shows status, URL, commit SHA, age, and a manual "tear down now" action. Developer tools has its own local diagnostic page.
 5. Dashboard actions check both authentication and ownership: a user can only see and act on environments in installations they own.
 6. Log retention has a size and age cap; old logs are pruned.
 

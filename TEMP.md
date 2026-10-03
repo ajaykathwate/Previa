@@ -434,3 +434,60 @@ rerun; existing HTTP auth/session/CSRF tests passed. No database schema changed.
   responsive layouts (320–1440px), sticky header, filter-preserving pagination,
   no-JavaScript page links, queue feedback and logout modal/session regression.
   Full database regression tests pass; root README.md is unchanged.
+
+## Consistent directional icons (2026-10-03)
+
+- Replaced Unicode arrow glyphs across Manage connections, repository links,
+  Overview, workspace navigation, pagination and homepage artwork with shared
+  SVG components matching the navbar arrow's rounded strokes. Diagonal link
+  direction, horizontal pagination direction, theme colours and behaviour remain.
+- Icons inherit surrounding colours; no platform-specific blue/boxed emoji
+  rendering, new icon dependency, or navigation change is introduced.
+- Verification: build, existing tests, vet and lint pass; all nine browser
+  regression scenarios pass with the shared SVG arrows. README.md remains unchanged.
+
+## Repository browsing refinement (2026-10-03)
+
+- Page size is now 10, enforced in the database query limit. Search remains
+  ownership-scoped across the full list; an empty query removes the name filter.
+- Compact page layout uses available width/height. Only the result region scrolls;
+  header, filters, column headings and pagination remain accessible.
+- HTMX live search waits 300ms, resets to page 1, replaces only result markup and
+  preserves focus. Access changes also refresh results. Shared request replacement
+  prevents older in-flight responses from overwriting newer searches. Failures
+  preserve displayed rows and announce retry feedback. Ordinary GET forms/links
+  remain the no-JavaScript fallback. No dependencies or configuration were added.
+- Verification: build, existing tests, vet and lint pass; installation PostgreSQL
+  tests cover all fifteen ten-row pages and partial responses. All ten browser
+  scenarios pass, including table-only scrolling at 320–1440px, live search,
+  clearing search, filter changes, preserved focus, failure feedback and no-JS links.
+  Root README.md remains unchanged.
+
+## Repository search appearance (2026-10-03)
+
+- Removed Search/Reset controls; debounced search and clear-to-restore remain.
+  Without JavaScript, Enter submits the existing GET form (with a short hint).
+- Search focus uses a quiet forest border without an outer outline or shadow.
+  Other controls keep their keyboard focus indicators.
+- Restored a centered 1100px content boundary and balanced header/toolbar padding,
+  retaining internal table scrolling, visible pagination and the approved theme.
+- Verification: build, existing tests, vet and lint pass; all ten browser scenarios
+  pass, including no Search/Reset controls, search focus without outline/shadow,
+  mobile/desktop table scrolling and Enter submission without JavaScript.
+
+## Shared focus and repository access tabs (2026-10-03)
+
+- Approved search-field focus is now shared across text inputs, textareas and
+  selects: a quiet forest border without an outer outline/shadow. Copied input
+  focus-ring classes are removed; invalid borders retain their error colour.
+- User confirmed segmented tabs rather than a table: Available / Unavailable /
+  All. Native radios provide keyboard selection and no-JS form behaviour. Available
+  is the default in HTTP/service filtering; explicit All is preserved in page URLs.
+- Repository retention/lifecycle/storage were not changed. Retaining old linked
+  rows with unavailable access preserves future build/environment history. Access
+  flags must gate future operations; unavailable history does not grant access.
+  Automatic webhook synchronization remains unbuilt; reconnect refreshes the list.
+- Verification: build/tests/vet/lint pass; installation PostgreSQL tests pass; all
+  ten browser scenarios pass with native access tabs, Available default, All
+  switching, preserved search/pagination and subtle focus on copied/native inputs.
+  No repository write queries or lifecycle methods were changed. README.md unchanged.

@@ -13,6 +13,9 @@ License: [LICENSE.templui](LICENSE.templui) (MIT).
 - Input retains native input markup and styling. Its optional password-toggle
   feature, icons, and script loader are omitted because no current page uses them.
   Password inputs therefore behave as native inputs without a visibility toggle.
+  Upstream input focus-ring classes are omitted; all text fields use the shared
+  quiet forest-border focus style in `web/styles/base.css`. Invalid borders retain
+  their error colour. Button/radio keyboard indicators remain separate.
 - `navbar.templ`, `app_navbar.templ`, and `sidebar.templ` are application-specific
   composition, not copied library code. `confirmation.templ` is an application-owned
   native dialog shell and logout form; it reuses the local button primitive. Native details/summary menus are enhanced

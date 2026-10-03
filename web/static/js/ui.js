@@ -170,9 +170,40 @@
     });
   }
 
+  function initRepositorySearch() {
+    const form = document.querySelector('[data-repository-search]');
+    if (!form) return;
+    const feedback = form.querySelector('[data-repository-feedback]');
+    const results = document.querySelector('#repository-results');
+    let activeRequest;
+    const belongs = event => event.detail?.target === results;
+    document.addEventListener('htmx:beforeRequest', event => {
+      if (!belongs(event)) return;
+      activeRequest = event.detail.xhr;
+      results.setAttribute('aria-busy', 'true');
+      delete feedback.dataset.error;
+      feedback.textContent = 'Updating repositories…';
+    });
+    document.addEventListener('htmx:afterRequest', event => {
+      if (!belongs(event) || event.detail.xhr !== activeRequest) return;
+      results.removeAttribute('aria-busy');
+      if (event.detail.successful) {
+        feedback.textContent = '';
+      } else {
+        feedback.dataset.error = 'true';
+        feedback.textContent = 'Could not update repositories. Check your connection or refresh to sign in again, then retry.';
+      }
+    });
+    document.addEventListener('htmx:afterSwap', event => {
+      if (!belongs(event)) return;
+      results.querySelector('.repository-table-scroll')?.scrollTo({top: 0, behavior: 'instant'});
+    });
+  }
+
   initMotion();
   initNavigation();
   initConfirmationDialogs();
   initAccountMenus();
   initQueueForms();
+  initRepositorySearch();
 })();

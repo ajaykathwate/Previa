@@ -53,7 +53,7 @@ func TestBrowserRegression(t *testing.T) {
 			}
 			data := repositorypages.Page{Installations: 2, Enabled: true, Search: r.URL.Query().Get("q"), Access: r.URL.Query().Get("access")}
 			if data.Access == "" {
-				data.Access = "all"
+				data.Access = "available"
 			}
 			var rows []repositorypages.Row
 			for i := int64(1); i <= 150; i++ {
@@ -67,15 +67,19 @@ func TestBrowserRegression(t *testing.T) {
 				rows = append(rows, row)
 			}
 			data.Total = int64(len(rows))
-			data.Pages = max(int64(1), (data.Total+24)/25)
+			data.Pages = max(int64(1), (data.Total+9)/10)
 			data.Number = min(number, data.Pages)
-			offset := (data.Number - 1) * 25
+			offset := (data.Number - 1) * 10
 			if data.Total > 0 {
 				data.Start = offset + 1
-				data.End = min(offset+25, data.Total)
+				data.End = min(offset+10, data.Total)
 				data.Rows = rows[offset:data.End]
 			}
 
+			if r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-Target") == "repository-results" {
+				templ.Handler(repositorypages.Results(data)).ServeHTTP(w, r)
+				return
+			}
 			templ.Handler(repositorypages.Index("design-review", handler.CSRFToken(r.Context()), data)).ServeHTTP(w, r)
 		})
 	})

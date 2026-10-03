@@ -6,6 +6,16 @@ import "github.com/ajaykathwatee/previa/web/layouts"
 templ Index(username string, csrfToken string) {
 	@layouts.App("Builds", username, csrfToken, components.NavBuilds) {
 		<header class="workspace-page-heading"><div><span class="eyebrow">YOUR WORKSPACE</span><h1>Builds</h1><p>Follow each commit on its way to a preview.</p></div></header>
-		<section class="workspace-panel feature-empty"><span class="feature-icon" aria-hidden="true">↗</span><h2>Builds are not connected yet</h2><p>Build execution and history will appear here when the build feature is connected. Linking a repository does not start a build.</p><a href="/repositories" class="text-link">View repositories ↗</a></section>
+		<section class="workspace-panel feature-empty">
+			<span class="feature-icon" aria-hidden="true">
+				@components.ArrowUpRight()
+			</span>
+			<h2>Builds are not connected yet</h2>
+			<p>Build execution and history will appear here when the build feature is connected. Linking a repository does not start a build.</p>
+			<a href="/repositories" class="text-link">
+				View repositories
+				@components.ArrowUpRight()
+			</a>
+		</section>
 	}
 }

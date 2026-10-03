@@ -210,15 +210,15 @@ func TestPostgresRepositoryPaginationFiltersAndOwnership(t *testing.T) {
 	if err := repo.Link(ctx, 100, other, 0, "other", []RepositoryInfo{{ID: 200, FullName: "other/private", Accessible: true}}); err != nil {
 		t.Fatal(err)
 	}
-	for number := int64(1); number <= 6; number++ {
+	for number := int64(1); number <= 15; number++ {
 		page, err := repo.Page(ctx, user, RepositoryFilter{Page: number, Access: "all"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if page.Total != 150 || page.Pages != 6 || len(page.Rows) != 25 || page.Page != number {
+		if page.Total != 150 || page.Pages != 15 || len(page.Rows) != 10 || page.Page != number {
 			t.Fatalf("incorrect page: %+v", page)
 		}
-		if page.Rows[0].FullName != fmt.Sprintf("owner/repo-%03d", (number-1)*25+1) {
+		if page.Rows[0].FullName != fmt.Sprintf("owner/repo-%03d", (number-1)*10+1) {
 			t.Fatal("unstable ordering or wrong offset")
 		}
 	}
@@ -227,7 +227,7 @@ func TestPostgresRepositoryPaginationFiltersAndOwnership(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if page.Total != 75 || len(page.Rows) != 25 {
+		if page.Total != 75 || len(page.Rows) != 10 {
 			t.Fatal("access filter did not limit count and rows")
 		}
 		for _, row := range page.Rows {
@@ -237,7 +237,7 @@ func TestPostgresRepositoryPaginationFiltersAndOwnership(t *testing.T) {
 		}
 	}
 	page, err := repo.Page(ctx, user, RepositoryFilter{Page: 9223372036854775807, Access: "all"})
-	if err != nil || page.Page != 6 {
+	if err != nil || page.Page != 15 {
 		t.Fatalf("page was not safely clamped: %v", err)
 	}
 	for _, search := range []string{"REPO-150", "%", "other/private"} {

@@ -1069,3 +1069,5 @@ summary::-webkit-details-marker {
   }
 
 }
+
+.merge-diagram b svg { width: 30px; height: 30px; }
