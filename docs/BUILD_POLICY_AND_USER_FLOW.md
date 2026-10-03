@@ -151,7 +151,8 @@ capacity can add queue wait. Manual “Build latest commit” bypasses the quiet
 
 ## Implementation sequence and checks
 
-1. Complete standalone `repoconfig`; build mode stays outside repo YAML.
+1. Standalone `repoconfig` is complete; build mode stays outside repo YAML.
+   Approved defaults, tiers and checks are in [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md).
 2. Review and implement repository policy + durable request/deadline persistence.
 3. Adapt parsed-event processing, broker handoff, retries and recovery before wiring
    live webhook ingress. Test Manual no-build, deadline reset, stale wake-up, manual

@@ -1,0 +1,7 @@
+dockerfile: ./docker/Dockerfile
+port: 8080
+env:
+  - NODE_ENV=preview
+  - FEATURE_FLAGS=a=b
+health_check_path: /health
+resource_tier: small

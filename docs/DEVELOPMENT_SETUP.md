@@ -10,6 +10,10 @@ commands or environment variables today: scheduling, PR browsing and real previe
 execution are not connected yet. Repository installation and the diagnostic ping
 flow are the available checks; build-mode settings will be repository-owned data.
 
+Standalone repository config checks require no new `.env` values or running
+services: `go test -count=1 -v ./internal/repoconfig`. The required repo file,
+approved defaults and resource tiers are in [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md).
+
 ## 1. Prerequisites
 
 - Go **1.26.5 or newer**, as required by `go.mod` and `tools/go.mod`.

@@ -162,13 +162,13 @@ Let each repo declare how its app is built and run: Dockerfile path, exposed por
 Low to Medium. Parsing is easy; useful validation and safe defaults take care.
 
 ### Tech stack (feature-specific)
-- `goccy/go-yaml` for parsing, `go-playground/validator` for validation.
+- `goccy/go-yaml` v1.19.2 for parsing, `go-playground/validator/v10` v10.30.5 for validation.
 
 ### Technical implementation
 1. When a build job starts, fetch the config file from the repo at the exact PR head SHA (not the default branch), so config changes in a PR apply to that PR's preview.
-2. Parse into a typed structure and reject unknown keys, so typos surface as errors instead of being ignored.
-3. Validate: Dockerfile path stays inside the repo (no path traversal), port in a valid range, environment variable names are well formed, requested resources do not exceed server-defined maximums.
-4. Apply defaults for anything omitted (for example a default port and a standard health check).
+2. Parse one typed YAML mapping; reject unknown/duplicate keys, incorrect scalar types, explicit nulls, tags, anchors, aliases and merges so ambiguity does not silently change effective values.
+3. Validate: Dockerfile is a relative file path without traversal/absolute paths, port is an integer 1–65535, env is a list of unique `NAME=value` entries with well-formed names. Optional health path is a local absolute HTTP path without host/query/fragment/traversal. Resolve the named resource tier and clamp CPU/memory to platform ceilings with notices.
+4. Defaults apply to omitted fields: `Dockerfile`, port `3000`, empty env, no HTTP health path, and `resource_tier: standard`. Small = 0.5 vCPU/512 MiB, standard = 1 vCPU/1 GiB, large = 2 vCPU/2 GiB. Default platform ceilings are 2 vCPU/2 GiB per preview. No numeric resource YAML or build-policy field is supported.
 5. On validation failure, do not build; post a comment listing the specific problems.
 6. Store a hash of the effective config on the environment record to detect config changes between builds.
 
@@ -176,6 +176,10 @@ Low to Medium. Parsing is easy; useful validation and safe defaults take care.
 - **Config from the PR's own commit** matches developer expectations and lets them iterate on the config inside the PR.
 - **Server-side ceilings:** a repo cannot ask for unlimited CPU or memory; the config can request less than or equal to the platform limit, never more.
 - **Missing config** produces a helpful comment explaining what to add, not silence.
+- **Approved contract:** the config file is required, but `{}` is valid when defaults match the app. Explicit invalid/null values do not become defaults. Omitting a health path does not require `/health`; runtime readiness still needs implementation.
+- **Safety:** 64 KiB config / 128 KiB API response envelope; 15-second overall fetch context plus existing HTTP timeouts. GitHub 404 is called missing-file only after the installation can verify the exact commit. Errors expose safe fields/codes/locations rather than YAML/env values or raw API bodies.
+- **Filesystem boundary:** validation is lexical; later source extraction/build adapters must reject unsafe symlinks and enforce actual repository containment.
+- **Current implementation:** standalone `internal/repoconfig` fetch/parse/effective-limit/hash APIs and fixtures are implemented. Config hash excludes requested tier metadata and uses resolved resources plus sorted unique env entries. No database persistence, webhook/job/UI wiring, health execution or GitHub comments are implemented here. See [REPO_CONFIGURATION.md](docs/REPO_CONFIGURATION.md).
 
 ---
 

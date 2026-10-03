@@ -1,2 +1,3 @@
-// Package repoconfig will let each repository declare how its app is built and run.
+// Package repoconfig fetches and validates commit-specific preview configuration.
+// It does not authorize builds, resolve filesystem symlinks, or deploy containers.
 package repoconfig

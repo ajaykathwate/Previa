@@ -23,19 +23,43 @@ exact scheduling/request schema and mode-change treatment for already running wo
 Preserve current no-historical-builds MVP scope. These are recorded for review,
 not silently implemented or treated as approved database/API designs.
 
-Documentation verification: `make build test lint` passes (Go build, existing tests,
-vet and golangci-lint: zero issues). Local Markdown targets resolve; HANDOFF has
-99 lines. No TEST_DATABASE_URL was supplied for this documentation task, so DB
-integration checks were not rerun. Application/config/schema/UI files are unchanged.
+Earlier documentation checks passed; the latest feature verification is below.
 
 Next-phase prompt plan: [FEATURE_IMPLEMENTATION_PROMPTS.md](docs/FEATURE_IMPLEMENTATION_PROMPTS.md)
 contains five individually executable tasks: standalone config; policy/request
 persistence; durable debounce and intent-aware handoff; authenticated webhook
 ingress; PR discovery/pages and owner controls. Creating the plan does not start
-implementation. YAML defaults/resource schema, same-SHA request fencing, in-flight
+implementation. Prompt 1 is now complete; same-SHA request fencing, in-flight
 mode changes, upstream event ordering and sync mechanics require review in the
 relevant task. Production build admission stays fail-closed until real adapters
 exist; no fake workers or historical builds archive are proposed.
+
+### Prompt 1: approved repository configuration and standalone implementation
+
+- Approved: missing fields default to Dockerfile, port 3000, empty env, no HTTP
+  health path and standard tier. The file is still required; `{}` is valid.
+- Approved tiers: small 0.5 vCPU/512 MiB; standard 1 vCPU/1 GiB; large 2 vCPU/2 GiB.
+  Default platform ceilings: 2 vCPU/2 GiB. Named tiers only; lower ceilings clamp
+  with notices. Runtime readiness without a health path remains adapter work.
+- `internal/repoconfig` implements strict YAML/semantic validation, effective limits,
+  normalized SHA-256 hashing and exact-SHA GitHub fetching using existing cached
+  installation transports. No HTTP routes, jobs, schema, UI or .env changes.
+- Bounds: 64 KiB config, 128 KiB API envelope, 15s overall fetch context. Safe
+  structured errors preserve fields/codes/locations without values/source snippets.
+  A content 404 is confirmed against the exact commit before reporting missing file.
+- Fixtures and fake API tests cover defaults, unknown/duplicate keys, traversal,
+  bad port/env/health path, malformed/unknown tier, clamping, response limits,
+  cancellation, masked access, rate limits, network failures and effective hashes.
+- Pinned DESIGN dependencies: goccy/go-yaml v1.19.2 and validator/v10 v10.30.5;
+  their required transitive versions are resolved in go.mod/go.sum.
+- Verification: `make build test lint` passes; repoconfig race tests pass with 95.7%
+  statement coverage. No real GitHub API call, DB integration or browser rerun is
+  claimed for this standalone feature. No deployment/config-hash persistence yet.
+- Remaining boundaries: caller checks installation ownership; lexical Dockerfile
+  validation does not resolve symlinks. Source/runtime phases must enforce actual
+  containment, health and returned container resource limits. No new approval
+  decision is introduced here; later request/scheduling decisions remain in Prompt 2.
+- Contract and local fixture command: [REPO_CONFIGURATION.md](docs/REPO_CONFIGURATION.md).
 
 - PostgreSQL configuration, connection pooling, startup health checks, application
   migrations, and generated queries.

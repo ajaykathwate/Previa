@@ -7,6 +7,8 @@ Prepared on 2026-10-03 against the current repository. Verify this summary again
 
 - Implemented: PostgreSQL/migrations, split process config, HTTP server, sessions,
   GitHub OAuth, verified App installation linking and cached installation tokens.
+- Prompt 1 completed: standalone commit-specific repo config fetch/parse/validation,
+  effective resource limits and hashing; see [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md).
 - Implemented UI: home, Overview, ownership-scoped repository search/access tabs
   and ten-row pagination, shared layout/theme, logout modal and diagnostic tools.
 - Implemented behind tested interfaces: generation-fenced build/teardown,
@@ -28,7 +30,7 @@ execute all five at once. Each numbered prompt is one task with its own stop poi
 
 | Order | Deliverable | Depends on |
 | --- | --- | --- |
-| 1 | Standalone repo config fetch/parse/validation | Existing App authentication |
+| 1 — complete | Standalone repo config fetch/parse/validation | Existing App authentication |
 | 2 | Repository policy and durable authorized request model | Accepted build policy |
 | 3 | Debounce, manual request coordination and intent-aware handoff | Prompt 2 |
 | 4 | Authenticated, durable GitHub webhook ingress | Prompt 3 |
@@ -76,19 +78,21 @@ End with actual verification, local testing steps and the exact scope still unbu
 
 ## Prompt 1 — Standalone repository configuration
 
+Completed as a standalone feature. Retained below as its implementation contract;
+the next implementation task is Prompt 2. Confirmed defaults/schema are documented
+in [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md); do not ask to approve them again.
+
 > Read DESIGN.md Section 5 in full, README.md Section 2.3's `.previewrc.yaml`
 > example, and the existing `internal/platform/githubapp` authentication boundary.
 > Implement `internal/repoconfig` as a standalone feature. No webhook, job, UI or
 > environment wiring in this task.
 >
-> Before implementing the public YAML contract, resolve the current mismatch:
-> README requires Dockerfile/port, while DESIGN permits defaults and the earlier
-> feature request asks for defaults. Propose the exact schema/defaults and confirm
-> them. Proposed starting values—not already approved—are `Dockerfile`, port 3000
-> and a platform ceiling of 2 vCPU / 2 GiB per preview. Resource tier names/mappings
-> and whether numeric resource requests exist must be explicit; do not invent a
-> second competing resource schema. Missing optional health path must not silently
-> require an endpoint the app may not serve.
+> Use the approved contract: omitted Dockerfile → `Dockerfile`, port → 3000,
+> env → empty, `health_check_path` → no HTTP endpoint, and `resource_tier` → standard.
+> The config file itself remains required. Named tiers only: small = 0.5 vCPU /
+> 512 MiB, standard = 1 vCPU / 1 GiB, large = 2 vCPU / 2 GiB. Default platform
+> ceilings are 2 vCPU / 2 GiB; lower ceilings clamp with notices. Do not introduce
+> numeric resource fields or an assumed `/health` endpoint.
 >
 > Implement a typed config matching the agreed YAML: Dockerfile path, application
 > port, non-secret env entries, optional health path and resource declaration.

@@ -3,7 +3,8 @@
 This implements DESIGN Section 4's installation redirect, verified user linking,
 installation authentication, dashboard records, and directly callable lifecycle
 handling. Dashboard login still uses the separate OAuth App. No webhook HTTP
-receiver, preview configuration parser, or job enqueueing is added.
+receiver or preview job enqueueing is added by installation linking. Standalone
+config fetching/validation now exists separately; see [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md).
 
 ## Register and configure the App
 

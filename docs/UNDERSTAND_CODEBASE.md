@@ -48,6 +48,7 @@ queries into feature `dbgen` packages.
 | `internal/auth/` | GitHub OAuth, user upsert, sessions, CSRF, and logout. |
 | `internal/installations/` | Verified redirect linking, App user authorization, lifecycle functions, ownership-scoped search/access filters and 10-row database pagination; SQL and persistence tests; no webhook endpoint. |
 | `internal/platform/githubapp/` | App JWT signing and bounded, cached installation authentication using ghinstallation v2.18.0. |
+| `internal/repoconfig/` | Standalone exact-SHA config fetch, strict YAML/semantic validation, named-tier clamping, safe errors and effective hash; fixtures/fake GitHub tests, no runtime wiring. |
 | `internal/dashboard/` | Public home, overview/session/tools and build/environment placeholder routes; CSRF-protected ping action. |
 | `internal/webhooks/` | PR state/generation persistence and transactional enqueueing; HTTP validation/signature endpoint is not connected yet. |
 | `internal/environments/` | Generation-aware build/teardown jobs, fenced active/pending state, durable operation outbox, operation worker/recovery, and reconciler interfaces. External adapters are not wired. |
@@ -57,6 +58,7 @@ queries into feature `dbgen` packages.
 | `docs/DEVELOPMENT_SETUP.md` | Full local prerequisites, configuration, migrations, run commands, and checks. |
 | `docs/BUILD_POLICY_AND_USER_FLOW.md` | Accepted scheduling decision, proposed PR UI flow, current gaps and implementation checks. |
 | `docs/FEATURE_IMPLEMENTATION_PROMPTS.md` | Five sequential next-phase tasks: repoconfig, durable intent, scheduling, webhooks and PR workspace; unresolved decisions and execution boundaries. |
+| `docs/REPO_CONFIGURATION.md` | Approved repo YAML defaults/tier contract, feature API, safe failure categories and fixture checks. |
 | `TEMP.md` | Operational notes, process configuration, queue checks, and verification record. |
 | `docs/DESIGN_DURABLE_PUBLICATION.md` | Durable, generation-fenced publication decision, implemented foundation, and remaining adapter boundary. |
 

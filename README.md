@@ -97,18 +97,35 @@ even if the person who installed it changes their password or leaves the team.
 **Step 0 — Setup (once per repo)**
 1. Repo Owner logs in (2.2-A).
 2. Repo Owner installs the GitHub App on their repo (2.2-B).
-3. Repo Owner adds a config file to their repo root, e.g. `.previewrc.yaml`,
-   telling your system how to run their app. MVP: it must declare a Dockerfile
-   path and the port the app listens on. Example:
+3. Repo Owner adds `.previewrc.yaml` to the repository root. The file is required,
+   but individual settings have defaults: root `Dockerfile`, port `3000`, no env
+   entries, no HTTP health path, and the `standard` resource tier. Example:
    ```yaml
    dockerfile: ./Dockerfile
    port: 3000
    env:
      - NODE_ENV=preview
+   health_check_path: /health # optional; include only if the app provides it
+   resource_tier: standard
    ```
 4. The repository defaults to **Manual**. Its owner may enable **Automatic** in
    the dashboard; this policy is stored by the platform, not in PR-controlled YAML.
    Connecting a repository or enabling Automatic does not bulk-build existing PRs.
+
+`{}` is a valid minimal file if these defaults match the app. The port describes
+where the app already listens inside its container; it does not change the app's
+listening port. Named tiers are `small` (0.5 vCPU / 512 MiB), `standard` (1 vCPU /
+1 GiB, default), and `large` (2 vCPU / 2 GiB). Default platform ceilings are 2 vCPU
+and 2 GiB per preview; lower platform ceilings clamp the resolved limits with a
+notice. Numeric resource fields are not supported. These are runtime container
+limits, separate from build concurrency/timeouts. Omitted health path does not
+authorize publishing an unchecked container; runtime readiness remains a later
+integration requirement.
+
+Standalone fetching/validation is implemented; real builds are not connected.
+See [repository configuration](docs/REPO_CONFIGURATION.md) for strict validation,
+safe error categories, fixtures and effective config hashing. Build mode remains
+platform-owned and cannot be set through this YAML.
 
 **Step 1 — PR opened**
 1. Contributor opens a PR on GitHub.

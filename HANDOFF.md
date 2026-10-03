@@ -46,6 +46,8 @@ Last updated: 2026-10-03
   `/developer-tools` holds ping; `/protected` shows sessions; logout uses a shared modal.
 - Installations: verified redirect + separate App user authorization; status/repo access,
   revision fences, cached tokens, parsed lifecycle functions. Cleanup adapter is not wired.
+- Prompt 1 complete: internal/repoconfig exact-SHA fetch/strict validation/hash;
+  docs/REPO_CONFIGURATION.md records approved defaults/tiers. Next: Prompt 2 (intent).
 - Default production queue still runs only ping. Webhook HTTP,
   Docker runtime, Traefik, GitHub publication, and environment provisioning remain
   unimplemented. A bounded reconciliation contract exists but is not wired to a
@@ -83,7 +85,7 @@ Last updated: 2026-10-03
   Section 15. See generation documentation for exact integration requirements.
 
 ## Verification
-- Latest docs task: build/tests/vet/lint pass; links checked. DB/browser checks passed earlier.
+- Prompt 1: build/tests/vet/lint pass; repoconfig race tests pass (95.7% coverage).
   10-row pages, internal scrolling/live search; Available-default radio tabs; shared field focus.
   Optional `make browser-install`/`make test-browser`; App proof pending, see TEMP.md.
 - Goose 5 applied locally; installation ownership/lifecycle/revision/rename/reinstall
@@ -93,7 +95,5 @@ Last updated: 2026-10-03
   exact concurrent increments, enqueue rollback, captured generation/handoff,
   durable operation retry/finalization/recovery, pending artifact protection, and
   nonblocking external publication.
-- Worker/OAuth-unset and credential-free migrations verified earlier. README/DESIGN
-  document accepted policy; five next-feature prompts drafted, no implementation started.
-- Local `.env` line 38 is not a shell assignment; sourcing fails. Configuration left
-  unchanged. Comment/remove that non-assignment before using make run-server/dev.
+- Worker/OAuth-unset/migration checks passed earlier; Prompt 1 needs no env/DB changes.
+- Earlier `.env` sourcing failed on non-assignment prose; check this if startup fails.
