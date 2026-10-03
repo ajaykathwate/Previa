@@ -6,6 +6,28 @@ configuration is detailed in [GITHUB_INSTALLATIONS.md](docs/GITHUB_INSTALLATIONS
 
 ## What is implemented
 
+Documentation decision (2026-10-03): repositories default to Manual; opt-in
+Automatic waits for a five-minute trailing quiet period. This is not implemented.
+README/DESIGN and [BUILD_POLICY_AND_USER_FLOW.md](docs/BUILD_POLICY_AND_USER_FLOW.md)
+now distinguish policy, current code and recommended future PR screens. No config,
+schema, application or UI changes were made for this decision.
+
+Required before live builds: persist authorized intent separately from observed
+PR state, adapt `ProcessPR` and `finishJob` (including terminal failure/recovery),
+and enforce current mode/access/deadline/generation before execution. Retain the
+existing durable publication and cleanup guarantees.
+
+Recommendations needing implementation review: initial paginated GitHub PR sync
+so newly connected repositories include existing PRs; repository/PR detail pages;
+exact scheduling/request schema and mode-change treatment for already running work.
+Preserve current no-historical-builds MVP scope. These are recorded for review,
+not silently implemented or treated as approved database/API designs.
+
+Documentation verification: `make build test lint` passes (Go build, existing tests,
+vet and golangci-lint: zero issues). Local Markdown targets resolve; HANDOFF has
+99 lines. No TEST_DATABASE_URL was supplied for this documentation task, so DB
+integration checks were not rerun. Application/config/schema/UI files are unchanged.
+
 - PostgreSQL configuration, connection pooling, startup health checks, application
   migrations, and generated queries.
 - HTTP server, request logging/IDs, panic recovery, templ layout, local HTMX assets,

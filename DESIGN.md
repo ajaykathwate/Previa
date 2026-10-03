@@ -194,9 +194,9 @@ Medium. Small code, high consequence: authenticity, idempotency and ordering all
 1. Read the raw request body before any parsing, since signature verification needs the exact bytes.
 2. Verify the HMAC signature header against the shared webhook secret using a constant-time comparison; reject with an error status on mismatch.
 3. Read the event type and delivery ID headers. Record the delivery ID; if it has been seen before, return success without doing anything (GitHub retries deliveries).
-4. Route by event type and action: PR `opened`, `reopened`, `synchronize` lead to build or rebuild; `closed` leads to teardown; `installation` events go to feature 4 handling; everything else is acknowledged and ignored.
-5. Look up the repo: is it linked, active, and does it have a usable configuration? If not, stop (optionally enqueue a "explain what is missing" comment).
-6. In one database transaction, update the pull request row (latest head SHA, state) and enqueue the appropriate job.
+4. Route by event type and action: PR `opened`, `reopened`, `synchronize` record current PR state; Manual creates no automatic build intent, while Automatic schedules/resets a five-minute quiet period. `closed` invalidates builds and requests immediate teardown in both modes; `installation` events go to feature 4 handling. Other events, including comments/reviews, do not trigger builds or reset deadlines.
+5. Look up the repo: is it linked and active? Enforce owner-controlled build policy. Fetch and validate `.previewrc.yaml` at the requested SHA in the eligible build path, not through an unbounded inline webhook call.
+6. In one database transaction, update the PR row (latest head SHA, state, generation) and persist policy-controlled scheduling/teardown intent plus the required River wake-up. A state update alone does not imply a build job.
 7. Return success immediately.
 
 ### Design decisions and edge cases
@@ -204,6 +204,7 @@ Medium. Small code, high consequence: authenticity, idempotency and ordering all
 - **Idempotency by delivery ID plus natural keys:** duplicate deliveries collapse into one effect.
 - **Out-of-order delivery:** jobs carry the head SHA; a job whose SHA is no longer the latest for that PR is discarded on start (see feature 13).
 - **Fork PRs:** detect them from the payload and apply the fork policy from feature 10 and 16.
+- **Decision status:** Manual-default policy and five-minute Automatic debounce are accepted but not implemented. See [BUILD_POLICY_AND_USER_FLOW.md](docs/BUILD_POLICY_AND_USER_FLOW.md); the parsed-event service and worker successor handoff still require adaptation.
 
 ---
 
@@ -223,7 +224,7 @@ High. This is the coordination core of the system.
 2. Use separate queues so long builds never block quick teardowns.
 3. Set queue concurrency to a configured maximum simultaneous builds; excess jobs wait.
 4. Enforce **one active job per pull request** using job uniqueness on the PR key, so a build and teardown for the same PR never run simultaneously.
-5. Because enqueueing happens in the same transaction as the state change, a job exists if and only if the state change committed.
+5. Persist authorized scheduling intent and the required River wake-up in the same transaction as its state change. Manual PR observations create no build intent; Automatic deadlines survive restarts. Delayed wake-ups recheck current policy, request, generation, access, PR state and deadline before execution.
 6. Retries use backoff for transient errors (network, registry, GitHub rate limits); permanent errors (invalid config, Dockerfile failure) fail once and report to the user without retrying.
 7. Jobs are written to be idempotent: running one twice leaves the same end state (for example, "ensure container for SHA X exists" rather than "start a container").
 8. On worker startup, jobs left running by a crashed worker are reclaimed and re-run.
@@ -231,6 +232,8 @@ High. This is the coordination core of the system.
 ### Design decisions and edge cases
 - **Transactional outbox for free:** the database-backed queue avoids the classic lost-job window.
 - **Latest-SHA-wins:** if commits arrive faster than builds finish, superseded builds are cancelled or skipped.
+- **Intent-aware handoff:** a newer observed PR generation does not itself authorize a successor build. Completion, terminal failure, retries and recovery must consult durable authorized intent and its deadline; teardown remains immediate in either mode.
+- **Manual override:** an ownership-checked, CSRF-protected request builds the current PR SHA without the Automatic delay; coalesce matching pending Automatic work and repeated submissions. Mode is platform-owned, not a repo YAML field.
 - **Backpressure:** a queued job's status is visible in the PR comment ("queued, position N") so waiting is not mistaken for failure.
 
 ---
@@ -374,7 +377,7 @@ Medium. Simple API calls, but rate limits, race conditions and idempotency matte
 ## 13. Rebuild on new commits
 
 ### Requirement
-When new commits are pushed to a PR, update the same environment to the new code, keep the URL the same, and avoid downtime and leaked old containers.
+Track new PR commits in both modes. Rebuild the same environment only on an explicit Manual request or after Automatic's five-minute quiet period; keep its URL stable and avoid downtime and leaked old containers.
 
 ### Complexity
 High. Concurrency and zero-gap swapping.
@@ -383,7 +386,7 @@ High. Concurrency and zero-gap swapping.
 - River uniqueness and cancellation, Docker API, Traefik health-gated routing.
 
 ### Technical implementation
-1. A `synchronize` webhook records the new head SHA and enqueues a rebuild.
+1. A `synchronize` webhook records the new head SHA and increments PR generation. Manual waits for an explicit request; Automatic persists/resets the PR's five-minute deadline. It does not enqueue an immediate rebuild merely because state changed.
 2. If a build for an older SHA is still in progress for this PR, cancel it or mark it superseded so its result is discarded.
 3. Build the new image while the **old container keeps serving**.
 4. Start the new container alongside the old one (same hostname, different container identity) and wait for it to become healthy.
@@ -395,6 +398,8 @@ High. Concurrency and zero-gap swapping.
 - **Blue/green at container level:** guarantees a working URL exists whenever possible.
 - **Latest wins:** intermediate commits may never deploy; only the newest matters.
 - **Orphan protection:** any container labeled for this PR but not referenced by the current record is removed by the reconciler.
+- **Manual freshness:** a new commit fences an older in-flight result but does not authorize its successor in Manual mode. An already deployed healthy preview stays available and the UI distinguishes its deployed SHA from the latest PR SHA.
+- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Exact request revision/schema and already-running mode-change handling require implementation review.
 
 Implementation status and the proposed durable publication boundary are kept
 separate: see [the current generation-ordering implementation](docs/GENERATION_ORDERING.md)
@@ -421,7 +426,8 @@ Medium.
 3. Remove per-environment resources: container, image tag (shared layers stay cached), any volumes.
 4. Delete stored non-audit data: env secrets scoped to this environment, temporary directories.
 5. Mark the environment `torn_down` and edit the comment ("Preview removed").
-6. Reopening the PR later simply enqueues a fresh build.
+6. Reopening records a new generation and follows repository policy: Manual waits
+   for an owner request; Automatic schedules after the five-minute quiet period.
 
 ### Design decisions and edge cases
 - **Idempotent teardown:** every step tolerates the resource already being gone.
@@ -503,6 +509,14 @@ Medium.
 5. Dashboard actions check both authentication and ownership: a user can only see and act on environments in installations they own.
 6. Log retention has a size and age cap; old logs are pruned.
 
+The accepted manual build policy requires owner-controlled per-repository mode and
+an explicit per-PR build action. Recommended future UI: repository detail with
+paginated PRs → PR detail with current build/logs and deployed preview. Builds is
+a cross-repository view of current/latest work; Environments is a deployment view,
+not another name for Builds. Do not add historical build storage implicitly.
+Initial discovery of existing GitHub PRs and detail screens still need implementation
+review; see [BUILD_POLICY_AND_USER_FLOW.md](docs/BUILD_POLICY_AND_USER_FLOW.md).
+
 ### Design decisions and edge cases
 - **Server-rendered UI** keeps everything in one binary and one deploy.
 - **Authorization at the query level:** every query is scoped by the user's installations, not just by an ID from the URL.
@@ -536,7 +550,7 @@ Medium.
 
 ## 19. End-to-end sequence diagram
 
-The diagram below connects the features: login and installation (features 2 to 4), PR open (6 to 12), push (13), close (14), and background housekeeping (15). Paste the code into any Mermaid renderer (GitHub renders it natively in Markdown).
+The diagram below connects the target features: login and installation (features 2 to 4), policy-controlled PR builds (6 to 12), push (13), close (14), and background housekeeping (15). It is not a claim that these adapters are connected today. Paste the code into any Mermaid renderer (GitHub renders it natively in Markdown).
 
 ```mermaid
 sequenceDiagram
@@ -579,9 +593,23 @@ sequenceDiagram
     Dev->>GH: Open pull request
     GH->>Web: Webhook pull_request opened
     Web->>Web: Verify signature and check delivery ID
-    Web->>DB: Upsert PR and environment as queued
-    Web->>Q: Enqueue build job in same transaction
+    Web->>DB: Upsert PR state and increment generation
+    alt Repository is Manual (default)
+        Note over Web,DB: Observe PR; no automatic build intent
+    else Repository is Automatic
+        Web->>DB: Persist five-minute deadline and authorized intent
+        Web->>Q: Schedule durable wake-up in same transaction
+    end
     Web-->>GH: 200 OK
+    alt Manual build requested
+        Owner->>Web: Select PR and click Build latest commit
+        Web->>DB: Check ownership and persist immediate intent
+        Web->>Q: Enqueue wake-up in same transaction
+    else Automatic quiet period elapsed
+        Q->>W: Deliver due wake-up
+        W->>DB: Recheck deadline, intent, access and PR generation
+        W->>Q: Make latest eligible build available
+    end
     Q->>W: Deliver build job
     W->>GH: Request installation token
     GH-->>W: Installation token
@@ -623,8 +651,9 @@ sequenceDiagram
     Note over Dev,TR: Phase 4 - New commit pushed
     Dev->>GH: Push new commit
     GH->>Web: Webhook pull_request synchronize
-    Web->>DB: Update head SHA
-    Web->>Q: Enqueue rebuild job
+    Web->>DB: Update head SHA and increment generation
+    Note over Web,Q: Manual waits for owner request; Automatic resets five-minute deadline
+    Note over Web,Q: Only current authorized eligible work may proceed below
     Q->>W: Deliver rebuild job
     W->>W: Cancel or skip superseded build if any
     W->>BK: Build new image while old container keeps serving

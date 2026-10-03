@@ -4,6 +4,12 @@ Follow these steps to configure, build, and run Previa locally.
 Run commands from the repository root
 in Bash or Zsh (on Windows, use WSL2 with Docker integration enabled).
 
+The accepted Manual/Automatic build policy is described in
+[BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md). It adds no setup
+commands or environment variables today: scheduling, PR browsing and real preview
+execution are not connected yet. Repository installation and the diagnostic ping
+flow are the available checks; build-mode settings will be repository-owned data.
+
 ## 1. Prerequisites
 
 - Go **1.26.5 or newer**, as required by `go.mod` and `tools/go.mod`.

@@ -1,5 +1,13 @@
 # PR generation ordering
 
+**Scheduling decision:** [BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md)
+changes the target to Manual by default and five-minute Automatic debounce.
+That policy is not implemented. The unconditional event enqueue and newer-generation
+handoff described below are current code behavior, not the intended Manual behavior.
+Before real adapters are wired, separate observed PR state from authorized intent
+and gate initial enqueue, successor handoff, retries and recovery on that intent.
+Atomic generation fencing and durable publication remain required in both modes.
+
 **Status:** generation fencing and the database/River durable-publication
 foundation are implemented. `Repository.Apply` commits environment state plus an
 outbox row and River wake-up in one short transaction; external operations run in

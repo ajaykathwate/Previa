@@ -1,5 +1,11 @@
 # Presentation architecture
 
+Accepted scheduling policy and the recommended repository → PR → build → preview
+screen flow are in [BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md).
+Manual-default controls, PR detail pages and Automatic debounce are future work,
+not current UI behavior. The proposed screens reuse this architecture and theme;
+they do not require moving handlers or adding a frontend framework.
+
 The server renders Templ pages and serves embedded assets. HTMX is loaded locally;
 existing forms retain their ordinary HTTP behavior. There is no React application,
 Node.js runtime dependency, or frontend service. Optional browser tests use Node.js

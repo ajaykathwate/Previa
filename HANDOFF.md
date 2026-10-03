@@ -2,7 +2,6 @@
 Last updated: 2026-10-03
 
 ## Start here
-
 - `README.md` and `DESIGN.md` are source of truth; read only task-relevant sections.
 - `docs/DEVELOPMENT_SETUP.md`, `.env.example`, `Makefile`, and `deploy/docker-compose.yml`
   describe setup. `TEMP.md` records verification; `docs/GITHUB_INSTALLATIONS.md` covers App setup.
@@ -12,9 +11,11 @@ Last updated: 2026-10-03
   implemented database/River foundation, and integrations still required.
 - Feature packages stay flat; shared infrastructure is under `internal/platform`.
   Presentation lives under `web/`; see `docs/UI_ARCHITECTURE.md`.
+- `docs/BUILD_POLICY_AND_USER_FLOW.md`: accepted Manual default + opt-in Automatic
+  five-minute debounce, not implemented; PR browsing/sync UI remains a recommendation.
+  Adapt ProcessPR/finishJob to authorized intent before live builds; no build history.
 
 ## Run and verify
-
 - Go/toolchain dependencies are pinned. `make generate`, `make build`, `make test`,
   and `make lint` wrap generation/build/tests/vet/golangci-lint.
 - PostgreSQL 17 runs through Compose. `make migrate-up` applies Goose then River.
@@ -31,7 +32,6 @@ Last updated: 2026-10-03
   Restart processes after config edits.
 
 ## Completed foundation and authentication
-
 - Thin cmd entrypoints; app constructs dependencies and handles graceful shutdown.
   Server and worker DB pools are health-checked on startup.
 - chi middleware; all presentation in `web/` (pages/layouts/components/styles).
@@ -52,7 +52,6 @@ Last updated: 2026-10-03
   production runner. Adapter dependencies remain behind small interfaces.
 
 ## Generation ordering core (DESIGN Sections 7 and 13)
-
 - `0003_pr_generation.sql`: PR generation BIGINT, environment applied_generation,
   and deployed head_sha. Existing PRs start at zero; first recorded event becomes 1.
 - `webhooks.Service.ProcessPR` accepts validated opened/synchronize/closed events.
@@ -84,7 +83,7 @@ Last updated: 2026-10-03
   Section 15. See generation documentation for exact integration requirements.
 
 ## Verification
-- Build/tests/vet/lint, DB tests and ten browser scenarios pass.
+- Latest docs task: build/tests/vet/lint pass; links checked. DB/browser checks passed earlier.
   10-row pages, internal scrolling/live search; Available-default radio tabs; shared field focus.
   Optional `make browser-install`/`make test-browser`; App proof pending, see TEMP.md.
 - Goose 5 applied locally; installation ownership/lifecycle/revision/rename/reinstall
@@ -94,6 +93,7 @@ Last updated: 2026-10-03
   exact concurrent increments, enqueue rollback, captured generation/handoff,
   durable operation retry/finalization/recovery, pending artifact protection, and
   nonblocking external publication.
-- Worker/OAuth-unset and credential-free migrations verified earlier; README unchanged.
+- Worker/OAuth-unset and credential-free migrations verified earlier. README/DESIGN
+  now document the accepted build policy; latest task changed documentation only.
 - Local `.env` line 38 is not a shell assignment; sourcing fails. Configuration left
   unchanged. Comment/remove that non-assignment before using make run-server/dev.

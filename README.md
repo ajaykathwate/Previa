@@ -2,9 +2,15 @@
 
 ## 1. Overview
 
-A self-hosted service that automatically builds and deploys an isolated, publicly
-reachable preview environment for every pull request on a connected GitHub repo,
-and tears it down when the PR closes.
+A self-hosted service that builds and deploys isolated, publicly reachable preview
+environments for pull requests on connected GitHub repositories. Each repository
+defaults to **Manual**: its owner requests a build for a specific PR. Owners can
+enable **Automatic**, which builds the latest commit after a five-minute quiet
+period. Previews are torn down when the PR closes or merges.
+
+Manual/Automatic scheduling is the accepted target design, not yet implemented.
+See [build policy and recommended UI flow](docs/BUILD_POLICY_AND_USER_FLOW.md)
+for the implementation boundaries and remaining decisions.
 
 This document is written for the builder (me), not an end user — every step
 explains what happens internally at that stage, not just what the user sees.
@@ -100,7 +106,9 @@ even if the person who installed it changes their password or leaves the team.
    env:
      - NODE_ENV=preview
    ```
-4. Nothing else happens yet — the system is now "armed" for this repo.
+4. The repository defaults to **Manual**. Its owner may enable **Automatic** in
+   the dashboard; this policy is stored by the platform, not in PR-controlled YAML.
+   Connecting a repository or enabling Automatic does not bulk-build existing PRs.
 
 **Step 1 — PR opened**
 1. Contributor opens a PR on GitHub.
@@ -109,14 +117,17 @@ even if the person who installed it changes their password or leaves the team.
    head branch name, and head commit SHA.
 3. Your webhook handler verifies the payload signature (using the shared
    webhook secret) to confirm it really came from GitHub, not a spoofed request.
-4. Your handler looks up whether this repo has an active installation and a
-   valid `.previewrc.yaml`. If not, it stops here (and optionally comments
-   explaining what's missing).
-5. Your handler enqueues a **build job** — do not build synchronously inside
-   the webhook handler; GitHub expects a fast response (a few seconds) or it
-   considers the delivery failed. The webhook handler's only job is: verify,
-   validate, enqueue, return `200 OK`.
-6. A separate **worker process** picks up the build job from the queue.
+4. Your handler checks the linked installation and records the latest PR state
+   and generation. In **Manual**, it creates no automatic build request. The owner
+   selects that PR in the dashboard and chooses **Build latest commit**.
+5. In **Automatic**, record durable scheduling intent for five minutes after the
+   latest relevant change. Further head commits reset that PR's deadline; comments
+   and reviews do not. Return promptly; config fetching/building happens later.
+   Manual requests bypass this delay. All requests enforce ownership, repository
+   access, PR state, capacity and generation checks before execution.
+6. Once eligible, a separate **worker process** picks up the build job. PR state,
+   authorized request and River wake-up are recorded transactionally; an observed
+   PR update alone must not authorize a build in Manual mode.
 7. The worker generates an installation access token (2.2-B step 7) and uses it
    to clone/download the repo at the PR's head commit SHA.
 8. The worker reads `.previewrc.yaml`, runs `docker build` using the specified
@@ -135,9 +146,11 @@ even if the person who installed it changes their password or leaves the team.
 1. GitHub sends `pull_request` webhook, type `synchronize`, with the new head
    SHA.
 2. Same verification/validation as Step 1.
-3. Your handler checks: is there already a running preview for this PR? If yes,
-   enqueue a **rebuild job** referencing the existing PR's environment, not a
-   new one.
+3. Record the latest SHA and increment the PR generation in either mode. Manual
+   waits for an explicit build request; Automatic resets the five-minute deadline.
+   Superseded results cannot publish, and the worker's successor handoff must obey
+   authorized intent and the deadline rather than build every newer observed SHA.
+   An existing preview keeps its environment identity and URL.
 4. Worker repeats steps 7-9 from above, using the new commit SHA, and replaces
    the running container for that PR (build new one, swap the router's mapping
    to it, then stop the old one — avoid a gap where the URL points to nothing).
@@ -146,7 +159,8 @@ even if the person who installed it changes their password or leaves the team.
 
 **Step 3 — PR closed or merged**
 1. GitHub sends `pull_request` webhook, type `closed`.
-2. Handler enqueues a **teardown job**.
+2. Handler invalidates pending builds and records a **teardown job** immediately in
+   either mode, without a quiet period. Generation fencing defeats in-flight builds.
 3. Worker stops and removes the container, removes the router's mapping for
    that PR's subdomain, and deletes the built image (or marks it for cleanup)
    to reclaim disk space.
@@ -157,25 +171,30 @@ even if the person who installed it changes their password or leaves the team.
    activity time (or simply their age).
 3. Any environment older than a configured threshold (e.g. 24-48 hours) with
    an open PR gets torn down anyway, and a comment is posted noting it expired
-   and can be redeployed by pushing a new commit.
+   and can be redeployed with **Build latest commit**. In Automatic mode, a later
+   relevant commit can also schedule a replacement after the quiet period.
 4. This exists specifically to prevent silently leaking compute if a PR is
    opened and forgotten.
 
 ### 2.4 Is a web dashboard needed?
 
-For the MVP, keep it minimal but not zero — you need *somewhere* for the
-GitHub OAuth login (2.2-A) and GitHub App installation (2.2-B) flows to
-redirect to and from, since both require your app to have at least one web
-page. So yes, a small web interface is required, but its MVP scope is just:
+The dashboard supports login, installation linking and the accepted manual build
+workflow. Owners need repository mode controls and a way to select a PR and request
+its latest commit. GitHub comments/checks remain the review-facing feedback channel.
 
-- A login page ("Login with GitHub").
-- A page listing the repos the logged-in user has installed the app on, with
-  an "Install on another repo" button (linking to GitHub's install flow).
-- Optionally, a simple list of currently active preview environments per repo,
-  with their URLs and a manual "tear down now" button.
+Current pages are Overview, paginated Repositories, Builds, Environments and
+Developer Tools. Repository browsing works; Builds and Environments are placeholders.
+The recommended next screen flow is repository detail → paginated PRs → PR detail
+with build action, current logs and preview link. PR discovery, those detail pages
+and build controls are not implemented yet; their detailed UI design remains a
+recommendation in [BUILD_POLICY_AND_USER_FLOW.md](docs/BUILD_POLICY_AND_USER_FLOW.md).
 
-Everything else (build status, links) is surfaced via PR comments — the
-dashboard is not the primary interface, GitHub is.
+- **Builds** describes current/latest execution work and its commit/logs, not a
+  permanent historical build archive (see 4.5).
+- **Environments** describes the preview deployment: URL, deployed SHA, health,
+  expiry and teardown. A preview can serve an older commit while a newer build runs.
+- All lists/actions are scoped to the logged-in installation owner. Mutations
+  require CSRF protection; destructive confirmation uses a modal.
 
 ### 2.5 Explicit MVP boundaries (what's out of scope for v1)
 
@@ -193,7 +212,8 @@ dashboard is not the primary interface, GitHub is.
 ### 3.1 Components
 
 - **Webhook receiver** — a small HTTP endpoint. Verifies GitHub signatures,
-  validates payloads, enqueues jobs. Stateless, must respond fast.
+  deduplicates deliveries and records PR state plus policy-controlled intent.
+  Must respond fast; Manual events do not automatically enqueue builds.
 - **Job queue** — decouples webhook receipt from build execution (e.g. Redis-
   backed queue). Needed so GitHub's webhook delivery never times out waiting
   on a slow build.
@@ -207,16 +227,19 @@ dashboard is not the primary interface, GitHub is.
 - **State store** — a database tracking: installations, repos, PRs, their
   associated container/image names, comment IDs (for editing), and
   created/last-active timestamps (for the housekeeping job).
-- **Web dashboard** — thin layer for login, install flow, and environment
-  visibility (2.4).
+- **Web dashboard** — login, install flow, repository policy/manual build controls
+  and visibility into PRs, current builds and environments (2.4).
 - **Housekeeping scheduler** — periodic job for expiring stale environments.
 
 ### 3.2 Data flow summary
 
 ```
-GitHub PR event
-   → Webhook receiver (verify + validate)
-   → Job queue
+GitHub PR event → Webhook receiver → durable PR state
+   → Manual: wait for an owner request
+   → Automatic: persist/reset five-minute deadline
+Owner selects a PR → Build latest commit (immediate intent)
+Eligible authorized intent
+   → Job queue (River/PostgreSQL)
    → Build worker (clone → docker build → docker run → register with router)
    → GitHub API (post/edit comment)
 
@@ -231,6 +254,10 @@ Reviewer clicks preview link
   GitHub expects webhook responses within seconds; builds take much longer.
   Decoupling also lets you control concurrency (limit simultaneous builds) and
   survive worker crashes without losing the event.
+- **Why Manual by default and a quiet period for Automatic:** avoids unnecessary
+  builds and coalesces rapid commits. Durable deadlines survive restarts. Tracking
+  a new PR state and authorizing compute are separate; successor jobs and retries
+  must respect that distinction. Manual bypasses delay, not capacity/safety limits.
 - **Why Docker's API rather than hand-rolled namespaces/cgroups:** the hard
   problem in this project is orchestration and lifecycle correctness, not
   container internals — using Docker keeps scope focused on that.
@@ -375,15 +402,26 @@ Keeping `Runtime` as an interface in `/internal/runtime` is what lets you swap D
 
 - `users` — id, github_id, username, created_at
 - `installations` — id, github_installation_id, owner_user_id
-- `repos` — id, installation_id, full_name, default_config_hash
+- `repos` — id, installation_id, full_name, default_config_hash; planned owner-controlled build mode (Manual by default)
 - `pull_requests` — id, repo_id, number, head_sha, state, github_comment_id
 - `environments` — id, pull_request_id, container_id, image_tag, subdomain, status (building / running / failed / torn_down), created_at, last_active_at, expires_at
 - `build_logs` — id, environment_id, sequence, line, created_at
 - `env_secrets` — id, repo_id, key, encrypted_value
 
+The accepted scheduling design also needs durable authorized request identity,
+captured PR generation/SHA, source and deadline, distinct from the latest observed
+PR state. Exact schema is deferred to implementation review; these policy/request
+fields do not exist yet. They do not introduce a historical builds archive.
+
 A unique constraint on (repo_id, number) for `pull_requests` and on `subdomain` for `environments` prevents duplicate environments when webhooks arrive twice.
 
-**Explicit scope decision:** one PR has exactly one `environment` row for its whole lifetime, updated in place on every rebuild (new commit → new image tag and container, same row, same URL). There is no persisted history of past builds for a PR — no separate `builds` table, no way to browse build #1 after build #3 has replaced it. A repo with N open PRs has at most N environments, by design, to keep resource usage bounded and predictable. `build_logs` are scoped to the environment's *current* build only: on each rebuild, the previous build's log lines are cleared (or the environment's logs are simply overwritten/truncated) rather than retained — logs are a live-tailing aid for the build in progress, not an audit trail.
+**Explicit scope decision:** once preview work is requested, a PR has one
+`environment` row reused for its lifetime. An observed PR with no build request
+does not need an environment row. Rebuilds update the same row and URL. There is
+no persisted history of past builds—no separate `builds` table or browsing build
+#1 after build #3 replaces it. A repo with N open PRs has at most N environments.
+`build_logs` hold the environment's current build only; earlier logs are cleared
+or truncated on rebuild rather than retained as an audit trail.
 
 ### 4.6 Container isolation (most important security section)
 
@@ -422,6 +460,8 @@ This system runs other people's code on your machine, so isolation is a core req
 ### 4.10 Operational limits to set on day one
 
 - Worker pool size in River caps simultaneous builds so ten PRs opening at once cannot take down the host
+- Automatic builds become eligible after a five-minute trailing quiet period;
+  manual requests bypass this delay but still wait for worker capacity.
 - Disk pruning job for old images and build cache (disk exhaustion is the most likely real-world failure)
 - Per-repo cap on concurrent active previews
 - Build timeout and image size limit

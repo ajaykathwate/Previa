@@ -8,6 +8,13 @@ not a product feature list.
 
 ## Current shape
 
+Accepted next scheduling design: Manual per repository by default, with opt-in
+Automatic after a five-minute trailing quiet period. Neither policy persistence
+nor scheduling is implemented. The current parsed-event service and `finishJob`
+still enqueue newer observed generations unconditionally; adapt both before live
+build integration. PR discovery/detail UI is a recommendation, not implemented.
+See [BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md).
+
 Previa is a Go application for creating temporary preview environments for GitHub
 pull requests. The repository currently has a working HTTP server with GitHub
 OAuth sessions, verified GitHub App installation linking, PostgreSQL persistence, and a separate River worker. The browser
@@ -47,7 +54,8 @@ queries into feature `dbgen` packages.
 | `db/migrations/` | Goose-managed application schema migrations. |
 | `internal/*/dbgen/` | sqlc-generated database code for feature queries. |
 | `deploy/docker-compose.yml` | Local PostgreSQL service and persistent data volume. |
-| `DEVELOPMENT_SETUP.md` | Full local prerequisites, configuration, migrations, run commands, and checks. |
+| `docs/DEVELOPMENT_SETUP.md` | Full local prerequisites, configuration, migrations, run commands, and checks. |
+| `docs/BUILD_POLICY_AND_USER_FLOW.md` | Accepted scheduling decision, proposed PR UI flow, current gaps and implementation checks. |
 | `TEMP.md` | Operational notes, process configuration, queue checks, and verification record. |
 | `docs/DESIGN_DURABLE_PUBLICATION.md` | Durable, generation-fenced publication decision, implemented foundation, and remaining adapter boundary. |
 

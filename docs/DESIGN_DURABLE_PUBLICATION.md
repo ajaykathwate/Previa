@@ -9,6 +9,13 @@ tests remain in [GENERATION_ORDERING.md](GENERATION_ORDERING.md).
 
 ## Decision
 
+Build authorization follows the accepted
+[Manual/Automatic policy](BUILD_POLICY_AND_USER_FLOW.md), which is not implemented
+yet. PR observation is distinct from authorized work: Manual waits for an owner
+request; Automatic persists a five-minute trailing deadline. The publication
+protocol below applies only to authorized builds. Generation fencing remains
+independent of scheduling mode; close/merge still requests immediate teardown.
+
 Use PostgreSQL as the durable source of desired PR state and environment state.
 Use River for at-least-once delivery of durable work. Keep generation checks and
 database mutations inside short transactions. Perform builds and external
@@ -21,7 +28,8 @@ committed database state after partial failure or a crash.
 
 The generation number is the fencing token. No result from generation `g` may
 replace state accepted for a later generation. The PR row remains the authority
-for the latest requested state. A completed database transaction is the durable
+for the latest observed lifecycle state; authorized build intent is a separate
+scheduling concern. A completed database transaction is the durable
 boundary; River jobs and external systems are mechanisms for converging toward it.
 
 This is a transactional-outbox/saga design, not a distributed transaction.
@@ -120,8 +128,8 @@ process pointer. The database transaction that creates a durable operation also
 inserts its River wake-up job with `InsertTx`. River delivery is at least once; job
 completion alone is not the audit record for an external action.
 
-Keep the existing per-PR uniqueness/handoff behavior for desired build and teardown
-work. Build, teardown, publication, reporting, and cleanup use separate queues and
+Keep per-PR uniqueness, but adapt successor handoff to authorized, eligible intent
+rather than every newer observed PR generation. Build, teardown, publication, reporting, and cleanup use separate queues and
 per-kind execution/rescue budgets as their work is implemented. A publication
 operation must not be silently lost when a River job reaches its retry limit; the
 durable operation row stays pending/failed for retry or reconciliation.
@@ -243,8 +251,10 @@ an external action and before recording its completion.
 ### New commit / rebuild
 
 1. The webhook handler authenticates and deduplicates the delivery.
-2. One transaction increments PR generation to `g`, stores the new SHA/state, and
-   inserts the River build job. It commits and returns quickly.
+2. One transaction increments PR generation to `g` and stores the new SHA/state.
+   Manual creates no automatic build intent; Automatic persists/resets its deadline
+   and River wake-up transactionally. An explicit owner request creates immediate
+   intent. Only eligible authorized work proceeds below; receipt returns quickly.
 3. The build worker checks desired generation, fetches the exact SHA, builds an
    unregistered candidate, starts it, and verifies health. No long DB transaction
    or PR lock is held during this work.
