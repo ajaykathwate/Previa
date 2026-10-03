@@ -1,11 +1,5 @@
 # PR Preview Environments — Requirements & Design
 
-For local prerequisites, setup commands, and verification steps, see
-[Development setup](docs/DEVELOPMENT_SETUP.md). The implemented generation fence
-and database/River durable-publication foundation, plus the adapter work still
-needed for real previews, are documented in [the ordering guide](docs/GENERATION_ORDERING.md)
-and [the publication design](docs/DESIGN_DURABLE_PUBLICATION.md).
-
 ## 1. Overview
 
 A self-hosted service that automatically builds and deploys an isolated, publicly
@@ -388,6 +382,8 @@ Keeping `Runtime` as an interface in `/internal/runtime` is what lets you swap D
 - `env_secrets` — id, repo_id, key, encrypted_value
 
 A unique constraint on (repo_id, number) for `pull_requests` and on `subdomain` for `environments` prevents duplicate environments when webhooks arrive twice.
+
+**Explicit scope decision:** one PR has exactly one `environment` row for its whole lifetime, updated in place on every rebuild (new commit → new image tag and container, same row, same URL). There is no persisted history of past builds for a PR — no separate `builds` table, no way to browse build #1 after build #3 has replaced it. A repo with N open PRs has at most N environments, by design, to keep resource usage bounded and predictable. `build_logs` are scoped to the environment's *current* build only: on each rebuild, the previous build's log lines are cleared (or the environment's logs are simply overwritten/truncated) rather than retained — logs are a live-tailing aid for the build in progress, not an audit trail.
 
 ### 4.6 Container isolation (most important security section)
 
