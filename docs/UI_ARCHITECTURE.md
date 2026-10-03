@@ -107,8 +107,9 @@ shared theme tokens and existing components rather than adding unrelated themes.
 
 The dashboard is an operational workspace: a sticky navbar, fixed desktop sidebar,
 and collapsible mobile navigation. Repositories, Environments, and Builds link to
-clearly labeled upcoming sections on the existing dashboard; no future routes or
-backend features are created. Repository connection is visibly unavailable. The
+dashboard sections. Repository linking is available when the GitHub App is configured;
+its installation list uses handler-provided display models. Without App configuration
+the connection button explains its disabled state. Environments/builds remain upcoming. The
 existing queue diagnostic lives in a collapsed Developer tools section; navigation
 to its anchor opens it. No counters, repositories, build history, or environment
 status are fabricated.
@@ -152,5 +153,6 @@ The fixture uses real authentication/session/CSRF middleware with an in-memory
 session store and fake GitHub/user/queue providers. It needs no application server,
 Postgres, OAuth credentials, or `.env`; it never enters the production application.
 Checks cover responsive/sticky navigation, mobile anchors, modal focus/dismissal,
-logout/session deletion, CSRF failures, queue feedback, motion and no-JavaScript
+logout/session deletion, CSRF failures, configured installation-list responsiveness,
+queue feedback, motion and no-JavaScript
 behavior. See [browser test instructions](../web/tests/browser/README.md).

@@ -1,7 +1,8 @@
 # Local configuration, processes, and queue verification
 
-This is the operational handoff for the queue setup. For reusable installation
-instructions, see [DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md).
+This is the operational handoff for the queue setup. For reusable setup
+instructions, see [DEVELOPMENT_SETUP.md](docs/DEVELOPMENT_SETUP.md); GitHub App
+configuration is detailed in [GITHUB_INSTALLATIONS.md](docs/GITHUB_INSTALLATIONS.md).
 
 ## What is implemented
 
@@ -11,6 +12,9 @@ instructions, see [DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md).
   and Air development reload.
 - GitHub OAuth login, persisted users, server-side sessions, login rotation,
   protected routes, CSRF protection, and logout.
+- Verified GitHub App installation linking, user-only dashboard records, cached
+  installation-token authentication and directly tested lifecycle functions; no
+  installation webhook receiver or preview job enqueueing.
 - River v0.47.0 producer in the server and a separate worker process. The only
   configured production job kind is `ping`. Generation-fenced build/teardown and
   durable environment-operation workers are implemented behind interfaces and
@@ -28,7 +32,7 @@ instructions, see [DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md).
 
 Copy `.env.example` once if `.env` does not exist. Never commit `.env` or private keys.
 Each process loads only its own settings: `SharedConfig` supplies `DATABASE_URL`,
-`ServerConfig` adds HTTP/OAuth/session settings, and `WorkerConfig` adds queue
+`ServerConfig` adds HTTP/OAuth/session and optional GitHub App settings, and `WorkerConfig` adds queue
 concurrency and an optional build timeout. River uses the same database connection.
 The worker needs no OAuth variables. Real OAuth credentials are required for browser
 sign-in.
@@ -62,7 +66,7 @@ The detailed login checks are in [docs/AUTH_TESTING.md](docs/AUTH_TESTING.md).
 
 ### Settings for future integrations
 
-GitHub App, webhook, preview domain, encryption, TTL, and DNS settings listed in
+Webhook, preview domain, encryption, TTL, and DNS settings listed in
 README Section 4.8 will be added to the relevant process when their features are
 implemented. They are absent from the config structs and `.env.example`; existing
 values in a local `.env` are ignored. HTTP/OAuth/session settings are server-only;
@@ -349,3 +353,44 @@ rerun; existing HTTP auth/session/CSRF tests passed. No database schema changed.
   `make build test lint` passed (build/tests/vet/golangci-lint, zero issues), and
   `git diff --check` passed. Root README.md is unchanged; setup/UI/design/code-map docs
   and HANDOFF are updated. No additional architectural changes need approval here.
+
+## GitHub App installation linking
+
+- Implemented the approved Section 4 scope: installation redirect linking,
+  separate App user authorization, numeric identity and installation-access checks,
+  dashboard display, status/access persistence, cached JWT/installation authentication,
+  and directly parsed lifecycle functions. No webhook HTTP receiver, preview config
+  parser or job enqueueing was added. Root README.md remains unchanged.
+- Setup URLs, exact GitHub registration/credential steps, local test commands, and
+  implementation boundaries are in `docs/GITHUB_INSTALLATIONS.md`; setup, code-map,
+  UI architecture, DESIGN.md and `.env.example` are synchronized. All five App fields
+  are optional as a group; partial configuration fails. Worker configuration is unchanged.
+- Migration 5 applied to local Postgres. Repository history survives removals,
+  renames, and verified same-owner reinstalls. Unlinked events cannot transfer an
+  existing repository. Cross-user installation/repository ownership changes are rejected.
+- Callback/API calls happen outside transactions. Revision is read before all API
+  verification, then rechecked under `SELECT ... FOR UPDATE` in the final transaction;
+  ownership, status, repository updates and revision increment share that transaction.
+- ghinstallation v2.18.0 caches/refreshes tokens per installation. Its mutable App
+  transport is copied per installation to prevent refresh races; HTTP timeouts are
+  bounded. The private key must have owner-only permissions and is never logged.
+- Fixture/API and Postgres tests cover state, replay/expiry, CSRF, changed browser
+  user, pending approval, incorrect identity/access, pagination, JWT signing, token
+  reuse/early refresh/isolation/concurrency, lifecycle, ownership and stale callbacks.
+  Native session test fixtures disable unused cleanup timers to avoid an upstream
+  memstore startup/StopCleanup race. Production session behavior is unchanged.
+- Real GitHub verification remains pending: none of the five App settings are
+  currently configured locally. No real installation token/API call is claimed.
+  `make test-github-app` loads `.env` and performs a real token-authenticated metadata
+  request when TEST_GITHUB_INSTALLATION_ID and TEST_GITHUB_REPO_ID are supplied.
+- Remaining planned integration work: verified webhook delivery, delivery replay/
+  ordering reconciliation, and durable teardown scheduling. Suspension/deletion
+  currently records revocation and returns ErrCleanupUnavailable if its adapter is
+  absent, rather than claiming running environments were cleaned up. No speculative
+  runtime adapter or deployment feature was built in this phase.
+
+- Final verification passed: `make build test lint` (zero lint issues), the full Go
+  suite with TEST_DATABASE_URL enabled, installation/token race tests, all nine
+  browser scenarios (including configured-list rendering at 320–1440px), and
+  `git diff --check`. Local server startup health-checked the DB and served HTTP 200
+  with App settings unset. The smoke server was stopped; PostgreSQL remains running.

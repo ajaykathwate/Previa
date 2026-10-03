@@ -1,2 +1,2 @@
-// Package githubapp will construct GitHub App clients and cache installation tokens for selected repositories.
+// Package githubapp signs App JWTs and constructs bounded GitHub clients with cached installation tokens.
 package githubapp

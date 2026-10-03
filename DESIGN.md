@@ -146,6 +146,10 @@ High. Two credential types, a private key to protect, short-lived tokens to mana
 - **The private key is the crown jewel:** stored outside the repo, file permissions locked down, never logged.
 - **Uninstall handling:** if the App is removed, running previews for that installation must be cleaned up, not orphaned.
 - **Linking installer to user** relies on the browser redirect; the webhook alone does not say which dashboard user did it, so the two events are matched by installation ID.
+- **Verified linking (approved refinement):** do not trust the redirect's installation ID alone. Use expiring, one-use, session-bound state, then a separate GitHub App user authorization flow. Verify its numeric user identity against dashboard sign-in and verify installation access through GitHub before linking. Keep dashboard OAuth credentials separate from App client credentials; discard the App user token after verification.
+- **Persistence:** owner may be NULL until a verified redirect; unlinked records are hidden. Store status, numeric repository IDs and access flags without deleting history. A callback captures installation revision before GitHub calls and verifies it under a row lock in its final short transaction; lifecycle calls bump revision. Existing ownership cannot be reassigned. Same-owner reinstall can retain repository history only after the old installation is inactive.
+- **Current phase boundary:** redirect linking, token caching and parsed lifecycle functions are implemented; webhook HTTP/signature validation and durable cleanup enqueueing remain later phases. Suspension/deletion revoke access and expose an idempotent cleanup boundary; absent a cleanup adapter they explicitly report incomplete cleanup. No runtime teardown is claimed. See `docs/GITHUB_INSTALLATIONS.md` for configuration, real testing and remaining delivery/reconciliation work.
+
 
 ---
 

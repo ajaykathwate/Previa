@@ -63,8 +63,11 @@ type EnvironmentOperation struct {
 type Installation struct {
 	ID                   int64
 	GithubInstallationID int64
-	OwnerUserID          int64
+	OwnerUserID          pgtype.Int8
 	CreatedAt            pgtype.Timestamptz
+	Status               string
+	AccountLogin         string
+	Revision             int64
 }
 
 type PullRequest struct {
@@ -84,6 +87,8 @@ type Repo struct {
 	FullName          string
 	DefaultConfigHash pgtype.Text
 	CreatedAt         pgtype.Timestamptz
+	GithubRepoID      pgtype.Int8
+	Accessible        bool
 }
 
 type Session struct {

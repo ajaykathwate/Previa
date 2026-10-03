@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser browser-install lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -61,6 +61,13 @@ browser-install:
 
 test-browser: assets generate
 	RUN_BROWSER_TESTS=1 $(GO) test -count=1 -v ./web/tests/browser
+
+# Opt-in real GitHub proof; reads credentials from .env, never CLI flags.
+test-github-app:
+	@$(load_run_env) if [ -z "$${TEST_GITHUB_INSTALLATION_ID:-}" ] || [ -z "$${TEST_GITHUB_REPO_ID:-}" ]; then \
+		echo 'Set TEST_GITHUB_INSTALLATION_ID and TEST_GITHUB_REPO_ID to real numeric GitHub IDs' >&2; exit 1; \
+	fi; \
+	$(GO) test -count=1 -v -run '^TestRealInstallationRepositoryAccess$$' ./internal/platform/githubapp
 
 lint: assets generate
 	$(GO) vet ./...

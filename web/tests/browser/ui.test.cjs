@@ -207,3 +207,20 @@ test('content and native confirmation remain usable without JavaScript', async (
     assert.equal(await nativePage.locator('#logout-confirmation').evaluate(e => e.open), false);
   } finally { await noJS.close(); }
 });
+
+test('configured installation dashboard renders records and remains responsive', async () => {
+  await login();
+  await page.goto(`${origin}/fixture-installations`);
+  await page.emulateMedia({reducedMotion: 'reduce'});
+  assert.match(await page.locator('.installation-summary').innerText(), /fixture-owner/);
+  assert.equal(await page.getByText('Access granted', {exact: true}).count(), 1);
+  assert.equal(await page.getByText('Access unavailable', {exact: true}).count(), 1);
+  const form = page.locator('form[action="/installations/start"]');
+  assert.equal(await form.getAttribute('method'), 'post');
+  assert(await form.locator('[name="csrf_token"]').inputValue());
+  assert(await page.getByRole('button', {name: 'Install on a repo'}).isEnabled());
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+});

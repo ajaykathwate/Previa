@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -13,10 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/dashboard"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/web"
+	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
 	"github.com/alexedwards/scs/v2/memstore"
 	"github.com/go-chi/chi/v5"
 )
@@ -41,6 +44,15 @@ func TestBrowserRegression(t *testing.T) {
 		handler.Mount(r)
 		dashboard.Mount(r, handler, auth.RequireUser)
 		dashboard.MountPing(r, fixturePings{}, auth.RequireUser, logger)
+		// Test-only view of the configured branch; never mounted by internal/app.
+		r.With(auth.RequireUser).Get("/fixture-installations", func(w http.ResponseWriter, r *http.Request) {
+			templ.Handler(dashboardpages.Index("design-review", handler.CSRFToken(r.Context()), true, []dashboardpages.Installation{
+				{ID: 99, Account: "fixture-owner", Status: "active", Repositories: []dashboardpages.Repository{
+					{FullName: "fixture-owner/a-long-repository-name-for-responsive-layout-verification", Accessible: true},
+					{FullName: "fixture-owner/removed"},
+				}},
+			})).ServeHTTP(w, r)
+		})
 	})
 	server.Start()
 	t.Cleanup(server.Close)

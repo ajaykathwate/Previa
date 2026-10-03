@@ -10,9 +10,9 @@ not a product feature list.
 
 Previa is a Go application for creating temporary preview environments for GitHub
 pull requests. The repository currently has a working HTTP server with GitHub
-OAuth sessions, PostgreSQL persistence, and a separate River worker. The browser
+OAuth sessions, verified GitHub App installation linking, PostgreSQL persistence, and a separate River worker. The browser
 public home page leads to GitHub sign-in and a protected `/dashboard`, which
-contains the actual signed-in identity, upcoming workspace sections, and a
+contains signed-in identity, linked installation/repository records when configured, upcoming runtime sections, and a
 collapsible Developer tools queue check. Generation-fenced build/teardown orchestration and the durable-publication
 database/River foundation are implemented and tested behind interfaces. The real
 webhook HTTP adapter, Docker runtime, router publication, GitHub reporting, and
@@ -38,6 +38,8 @@ queries into feature `dbgen` packages.
 | `web/components/`, `web/styles/` | Stable templUI source, explicit navigation keys, Tailwind CSS with shared theme tokens and base/home/workspace/confirmation/motion sources. |
 | `web/assets.go`, `web/static/` | Embedded browser assets, including generated CSS, local HTMX, and progressive menu/queue-form JavaScript. |
 | `internal/auth/` | GitHub OAuth, user upsert, sessions, CSRF, and logout. |
+| `internal/installations/` | Verified redirect linking, App user authorization, lifecycle functions, SQL and persistence tests; no webhook endpoint. |
+| `internal/platform/githubapp/` | App JWT signing and bounded, cached installation authentication using ghinstallation v2.18.0. |
 | `internal/dashboard/` | Public home, protected dashboard/session routes, and CSRF-protected ping action. |
 | `internal/webhooks/` | PR state/generation persistence and transactional enqueueing; HTTP validation/signature endpoint is not connected yet. |
 | `internal/environments/` | Generation-aware build/teardown jobs, fenced active/pending state, durable operation outbox, operation worker/recovery, and reconciler interfaces. External adapters are not wired. |
@@ -51,7 +53,7 @@ queries into feature `dbgen` packages.
 ## Processes and configuration
 
 - PostgreSQL is shared by the server, worker, and migrations.
-- `cmd/server` loads `ServerConfig`: database plus HTTP, OAuth, and session values.
+- `cmd/server` loads `ServerConfig`: database plus HTTP, OAuth, session values and an optional all-or-nothing GitHub App group.
 - `cmd/worker` loads `WorkerConfig`: database plus queue concurrency and build timeout. It does not need OAuth variables.
 - River workers run in the worker process; there is no separate queue server.
 - Air (`make dev`) watches and reloads the server only; restart the worker manually after worker changes.
@@ -115,3 +117,7 @@ Optional browser regression checks live in `web/tests/browser`: run
 Go fixture uses actual auth/session/CSRF middleware with fake external providers;
 no database or credentials are required. Ordinary Go tests skip these checks.
 See `web/tests/browser/README.md` for coverage and troubleshooting.
+
+Installation setup/test commands and the callback/revision/token boundaries are in
+[GITHUB_INSTALLATIONS.md](GITHUB_INSTALLATIONS.md). `make test-github-app` is an
+opt-in real API proof; normal Go tests exercise fake GitHub APIs and skip that check.

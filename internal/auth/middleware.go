@@ -105,3 +105,9 @@ func (h *Handler) CSRF(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// UserIDs supplies scalar identity values to feature-owned authorization boundaries.
+func (h *Handler) UserIDs(ctx context.Context) (int64, int64, bool) {
+	u, ok := CurrentUser(ctx)
+	return u.ID, u.GitHubID, ok
+}

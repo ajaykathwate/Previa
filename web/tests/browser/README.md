@@ -11,8 +11,8 @@ make test-browser
 ```
 
 The first command installs locked npm dependencies and Chromium. The second
-generates assets/templates and runs eight browser scenarios against a temporary
-Go HTTP server, which closes automatically. Expected: eight passes, no JavaScript
+generates assets/templates and runs nine browser scenarios against a temporary
+Go HTTP server, which closes automatically. Expected: nine passes, no JavaScript
 errors, and a successful Go test. Ordinary `make test` skips this opt-in suite.
 
 The fixture uses real routes, templates, session middleware, OAuth state handling,
@@ -24,7 +24,9 @@ Coverage includes public/protected access; responsive and sticky navigation;
 mobile section links; modal scroll preservation, focus trapping/restoration and
 dismissals; logout and session invalidation; CSRF rejection; queue pending,
 duplicate and error feedback; reveal/offscreen behavior; reduced motion; and
-native confirmation/content without JavaScript in Chromium.
+native confirmation/content without JavaScript in Chromium; and the configured
+installation list with long repository names at mobile/desktop sizes. The latter
+uses a test-only authenticated presentation path, never a production route.
 
 To capture ignored screenshots:
 

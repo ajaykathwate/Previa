@@ -24,3 +24,11 @@ sql:
         package: dbgen
         out: internal/environments/dbgen
         sql_package: pgx/v5
+  - engine: postgresql
+    schema: db/migrations
+    queries: internal/installations/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: internal/installations/dbgen
+        sql_package: pgx/v5

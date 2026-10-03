@@ -8,27 +8,10 @@ import (
 	"github.com/ajaykathwatee/previa/web/layouts"
 )
 
-templ Index(username string, csrfToken string) {
+templ Index(username string, csrfToken string, installationsEnabled bool, installations []Installation) {
 	@layouts.App("Dashboard", username, csrfToken, components.NavOverview) {
 		<div class="dashboard-heading"><div><span class="eyebrow">WORKSPACE OVERVIEW</span><h1>Your next change,<br/><em>a clearer perspective.</em></h1><p>Welcome back, { username }. This is your home for pull-request previews.</p></div><a href="/protected" class="identity-badge"><span class="status-dot" aria-hidden="true"></span>Signed in with GitHub</a></div>
-		<section id="repositories" tabindex="-1" class="workspace-panel repository-panel" aria-labelledby="repositories-title">
-			<div class="workspace-panel-top"><div><span class="eyebrow">START WITH YOUR SOURCE</span><h2 id="repositories-title">Repositories</h2></div><span class="upcoming-badge">Coming next</span></div>
-			<div class="repository-empty">
-				<div class="empty-source-icon" aria-hidden="true">
-					@components.BranchIcon()
-				</div><span class="eyebrow">THE STARTING POINT FOR EVERY PREVIEW</span>
-				<h3>Give your code a place to come to life.</h3>
-				<p>Repository connections are coming next. You'll explicitly choose which repositories Previa can access through a GitHub App installation.</p><button type="button" class="upcoming-action" disabled aria-describedby="repository-availability">Connect a repository <span aria-hidden="true">↗</span></button>
-				<p id="repository-availability" class="availability-note">Not available yet. Signing in only verifies your identity.</p>
-			</div>
-			<div class="repository-footer">
-				<span>GitHub identity connected</span>
-				<a href="/#workflow" class="text-link">
-					How the workflow fits together
-					@components.Arrow()
-				</a>
-			</div>
-		</section>
+		@RepositoryConnections(csrfToken, installationsEnabled, installations)
 		<div class="workspace-feature-grid">
 			<section id="environments" tabindex="-1" aria-labelledby="environments-title">
 				@card.Card(card.Props{Class: "feature-placeholder"}) {

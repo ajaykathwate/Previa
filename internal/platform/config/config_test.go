@@ -16,8 +16,9 @@ func validEnvironment(t *testing.T) {
 		"GITHUB_OAUTH_CLIENT_ID":     "client-id",
 		"GITHUB_OAUTH_CLIENT_SECRET": "client-secret",
 		"SESSION_SECRET":             strings.Repeat("s", 32),
-		"MAX_CONCURRENT_BUILDS":      "2",
-		"BUILD_TIMEOUT":              "12m",
+		"GITHUB_APP_ID":              "0", "GITHUB_APP_SLUG": "", "GITHUB_APP_PRIVATE_KEY_PATH": "", "GITHUB_APP_CLIENT_ID": "", "GITHUB_APP_CLIENT_SECRET": "",
+		"MAX_CONCURRENT_BUILDS": "2",
+		"BUILD_TIMEOUT":         "12m",
 	} {
 		t.Setenv(key, value)
 	}
@@ -73,7 +74,7 @@ func TestLoadWorkerWithoutServerOrFutureSettings(t *testing.T) {
 
 func TestLoadServerIgnoresFutureSettings(t *testing.T) {
 	validEnvironment(t)
-	for _, key := range []string{"GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH", "GITHUB_WEBHOOK_SECRET", "PREVIEW_BASE_DOMAIN", "SECRETS_ENCRYPTION_KEY", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN"} {
+	for _, key := range []string{"GITHUB_WEBHOOK_SECRET", "PREVIEW_BASE_DOMAIN", "SECRETS_ENCRYPTION_KEY", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN"} {
 		t.Setenv(key, "invalid")
 	}
 	if _, err := LoadServer(); err != nil {
@@ -194,5 +195,27 @@ func TestCustomBuildTimeout(t *testing.T) {
 	cfg, err := LoadWorker()
 	if err != nil || cfg.BuildTimeout != 15*time.Minute {
 		t.Fatalf("custom build timeout not loaded: %v", err)
+	}
+}
+
+func TestGitHubAppConfigurationIsAllOrNothingAndServerOnly(t *testing.T) {
+	validEnvironment(t)
+	t.Setenv("GITHUB_APP_ID", "123")
+	if _, err := LoadServer(); err == nil {
+		t.Fatal("partial App settings accepted")
+	}
+	for key, value := range map[string]string{"GITHUB_APP_SLUG": "test-app", "GITHUB_APP_PRIVATE_KEY_PATH": "/private/app.pem", "GITHUB_APP_CLIENT_ID": "app-client", "GITHUB_APP_CLIENT_SECRET": "app-secret"} {
+		t.Setenv(key, value)
+	}
+	if _, err := LoadServer(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GITHUB_APP_SLUG", "../other-app")
+	if _, err := LoadServer(); err == nil {
+		t.Fatal("unsafe App slug accepted")
+	}
+	t.Setenv("GITHUB_APP_ID", "not-a-number")
+	if _, err := LoadWorker(); err != nil {
+		t.Fatal("worker read App configuration")
 	}
 }

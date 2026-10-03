@@ -1,2 +1,2 @@
-// Package installations will grant access to receive events, read code, and write comments and checks for explicitly selected repositories.
+// Package installations links verified GitHub App installations and handles parsed lifecycle events without an HTTP webhook receiver.
 package installations

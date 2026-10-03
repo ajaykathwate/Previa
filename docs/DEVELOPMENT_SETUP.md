@@ -80,6 +80,39 @@ can pass startup validation but cannot complete GitHub sign-in. These credential
 come from an **OAuth App**, separate from a repository-integration GitHub App.
 See [GitHub's registration instructions](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app).
 
+### Configure GitHub App repository linking (optional)
+
+Keep the dashboard OAuth App above; repository linking uses a separate **GitHub App**.
+See [App setup and installation testing](GITHUB_INSTALLATIONS.md) for registration,
+permissions, private-key handling, and the complete verification flow.
+
+| Server-only variable | Source | Purpose |
+| --- | --- | --- |
+| `GITHUB_APP_ID` | Numeric App ID in GitHub App settings. | JWT issuer for App authentication. |
+| `GITHUB_APP_SLUG` | Name in `https://github.com/apps/<slug>`. | Installation page to open. |
+| `GITHUB_APP_PRIVATE_KEY_PATH` | Absolute path to the downloaded RSA PEM; store outside Git, `chmod 600`. | Signs short-lived App JWTs. |
+| `GITHUB_APP_CLIENT_ID` | GitHub App Client ID, separate from OAuth App. | User authorization for verified linking. |
+| `GITHUB_APP_CLIENT_SECRET` | Generate in GitHub App settings. | Exchanges the App user authorization code. |
+
+Configure all five together and restart the server; omit all five to keep linking
+visibly disabled while dashboard sign-in works. The worker needs none of these.
+Register **Setup URL** `http://localhost:8080/installations/callback` and **Callback
+URL** `http://localhost:8080/installations/authorize/callback`. Leave automatic OAuth
+on installation unchecked; Previa explicitly starts it after the setup redirect.
+Leave webhooks inactive until their HTTP receiver is implemented.
+
+After migrations and server startup, visit `/dashboard` and click **Install on a repo**.
+Expected: select repositories on GitHub, authorize the same account, then return to
+linked installation/repository records. To independently prove token minting/API access:
+
+```sh
+TEST_GITHUB_INSTALLATION_ID=<your-installation-id> TEST_GITHUB_REPO_ID=<your-repo-id> make test-github-app
+```
+
+Replace both placeholders with numeric IDs. The target loads `.env`; no manual export
+is needed. Expected: a passing real repository-metadata API check, with no token printed.
+See the App guide for an ID lookup command and pending-approval/reconnect behavior.
+
 ### Loading configuration
 
 Run `make run-server` or `make run-worker` directly: each target loads `.env` and
@@ -156,7 +189,7 @@ docker compose -f deploy/docker-compose.yml exec -T postgres psql -U previa -d p
 
 **Expected:** Goose and River apply pending migrations (or report none pending).
 The table list shows application tables (including `environment_operations` after
-Goose migration 4), `goose_db_version`, and River's `river_*` tables.
+Goose migration 4), `installations`/`repos` extended by migration 5, `goose_db_version`, and River's `river_*` tables.
 Re-running `make migrate-up` is safe; it applies only pending migrations.
 
 The migration Make targets load `.env` automatically, falling back to `.env.example`
@@ -371,7 +404,7 @@ make test-browser
 
 - Run the first command once to install locked Playwright v1.58.2 and Chromium.
 - The second prepares assets/templates and starts a temporary test-only server.
-  **Expected:** all eight browser scenarios pass and the server stops automatically.
+  **Expected:** all nine browser scenarios pass and the server stops automatically.
 - No Postgres, `.env`, or GitHub credentials are needed. GitHub and queue providers
   are fakes; session rotation, CSRF and logout use the actual middleware.
 - On Linux, missing browser system libraries may require Playwright's OS dependency

@@ -25,6 +25,11 @@ type ServerConfig struct {
 	GitHubOAuthClientID     string `envconfig:"GITHUB_OAUTH_CLIENT_ID" required:"true"`
 	GitHubOAuthClientSecret string `envconfig:"GITHUB_OAUTH_CLIENT_SECRET" required:"true"`
 	SessionSecret           string `envconfig:"SESSION_SECRET" required:"true"`
+	GitHubAppID             int64  `envconfig:"GITHUB_APP_ID"`
+	GitHubAppSlug           string `envconfig:"GITHUB_APP_SLUG"`
+	GitHubAppPrivateKeyPath string `envconfig:"GITHUB_APP_PRIVATE_KEY_PATH"`
+	GitHubAppClientID       string `envconfig:"GITHUB_APP_CLIENT_ID"`
+	GitHubAppClientSecret   string `envconfig:"GITHUB_APP_CLIENT_SECRET"`
 }
 
 // WorkerConfig contains only settings used to execute queued jobs.
@@ -118,6 +123,25 @@ func (c ServerConfig) validate() error {
 	}
 	if len(strings.TrimSpace(c.SessionSecret)) < 32 {
 		return errors.New("SESSION_SECRET must contain at least 32 characters")
+	}
+	if c.GitHubAppID != 0 || c.GitHubAppSlug != "" || c.GitHubAppPrivateKeyPath != "" || c.GitHubAppClientID != "" || c.GitHubAppClientSecret != "" {
+		if c.GitHubAppID <= 0 {
+			return errors.New("GITHUB_APP_ID must be positive when installation linking is configured")
+		}
+		for _, field := range []struct{ name, value string }{
+			{"GITHUB_APP_SLUG", c.GitHubAppSlug}, {"GITHUB_APP_PRIVATE_KEY_PATH", c.GitHubAppPrivateKeyPath},
+			{"GITHUB_APP_CLIENT_ID", c.GitHubAppClientID}, {"GITHUB_APP_CLIENT_SECRET", c.GitHubAppClientSecret},
+		} {
+			if strings.TrimSpace(field.value) == "" {
+				return fmt.Errorf("%s is required when installation linking is configured", field.name)
+			}
+		}
+		for _, char := range c.GitHubAppSlug {
+			valid := char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || char == '-'
+			if !valid {
+				return errors.New("GITHUB_APP_SLUG must contain lowercase letters, digits or hyphens")
+			}
+		}
 	}
 	return nil
 }

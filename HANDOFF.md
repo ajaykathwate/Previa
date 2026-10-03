@@ -7,7 +7,7 @@ Last updated: 2026-10-02
 - `README.md` and `DESIGN.md` are source of truth; read only task-relevant sections.
 - Check `git status` before acting; verify this handoff against current code.
 - `docs/DEVELOPMENT_SETUP.md`, `.env.example`, `Makefile`, and `deploy/docker-compose.yml`
-  describe setup. `TEMP.md` explains process/configuration and records verification.
+  describe setup. `TEMP.md` records verification; `docs/GITHUB_INSTALLATIONS.md` covers App setup.
 - `docs/GENERATION_ORDERING.md` explains the generation SQL, job handoff, outbox,
   retries, cleanup, timeout/rescue policy, tests, and adapter boundaries.
 - `docs/DESIGN_DURABLE_PUBLICATION.md` records the durable-publication decision,
@@ -20,18 +20,17 @@ Last updated: 2026-10-02
 - Go/toolchain dependencies are pinned. `make generate`, `make build`, `make test`,
   and `make lint` wrap generation/build/tests/vet/golangci-lint.
 - PostgreSQL 17 runs through Compose. `make migrate-up` applies Goose then River.
-  Current application schema: Goose 4; River 007 (River v0.47.0).
+  Current application schema: Goose 5; River 007 (River v0.47.0).
 - River migrations use `cmd/river-migrate` / `internal/app/river_migrate.go` and
   DATABASE_URL from environment; Goose uses GOOSE_DBSTRING. No credential flags.
 - Set TEST_DATABASE_URL for DB tests. New ordering tests create/drop isolated schemas.
 - `make run-server` and `make run-worker` load `.env` with exported overrides.
   `make dev` reloads server; `make watch-templates` polls templates only (no env needed).
 - Config: SharedConfig has DATABASE_URL (also River's connection); ServerConfig adds
-  HTTP/OAuth/session settings; WorkerConfig adds MAX_CONCURRENT_BUILDS and optional
+  HTTP/OAuth/session plus optional all-or-nothing App settings; WorkerConfig adds concurrency and
   BUILD_TIMEOUT (default 12m). Unbuilt integrations have no config fields.
-- Code map: `docs/UNDERSTAND_CODEBASE.md`; setup: `docs/DEVELOPMENT_SETUP.md`.
 - Setup guide covers config sources/OAuth/Make env loading; direct Go needs exports.
-  AGENTS.md requires keeping it in sync. Restart processes after config edits.
+  Restart processes after config edits.
 
 ## Completed foundation and authentication
 
@@ -45,7 +44,9 @@ Last updated: 2026-10-02
   OAuth ID/secret and SESSION_SECRET. Browser checks: `docs/AUTH_TESTING.md`.
 - `/` is public; GitHub sign-in redirects to protected `/dashboard` (sticky navbar/sidebar).
   `/protected` shows session details; logout is a shared modal with a CSRF-protected POST.
-- Default production server/worker still expose/process only ping. Webhook HTTP,
+- Installations: verified redirect + separate App user authorization; status/repo access,
+  revision fences, cached tokens, parsed lifecycle functions. Cleanup adapter is not wired.
+- Default production queue still runs only ping. Webhook HTTP,
   Docker runtime, Traefik, GitHub publication, and environment provisioning remain
   unimplemented. A bounded reconciliation contract exists but is not wired to a
   production runner. Adapter dependencies remain behind small interfaces.
@@ -84,16 +85,15 @@ Last updated: 2026-10-02
 
 ## Verification
 
-- UI cleanup passed build/tests/vet/lint and eight durable browser scenarios; baseline
-  screenshots match. Optional `make browser-install`/`make test-browser`; see TEMP.md.
-- Goose schema is locally at migration 4; migrations 3 and 4 also apply in
-  isolated-schema integration tests. No real containers/images/routes were created.
+- Build/tests/vet/lint, full DB tests and nine browser scenarios pass; startup HTTP 200.
+  Optional `make browser-install`/`make test-browser`; App proof pending, see TEMP.md.
+- Goose 5 applied locally; installation ownership/lifecycle/revision/rename/reinstall
+  tests pass in isolated schemas. Real App proof requires credentials (currently absent).
 - PostgreSQL/River tests cover late success/failure, close during build, stale queued
   work, cleanup retry/order, old-preview preservation, both lock-race directions,
   exact concurrent increments, enqueue rollback, captured generation/handoff,
   durable operation retry/finalization/recovery, pending artifact protection, and
   nonblocking external publication.
-- Real River rescuer test verifies expired ping/build/teardown handling while a
-  legitimately slow build remains running. Build/tests/vet/lint passed.
+- River rescue tests and installation/token race checks pass; build/tests/vet/lint pass.
 - Earlier worker/OAuth-unset and credential-free migration checks passed.
   UI uses shared theme tokens, named JS initializers and explicit NavItem; README unchanged.
