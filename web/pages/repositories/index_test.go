@@ -8,7 +8,7 @@ import (
 
 func TestRepositoryPageEscapesDataAndPreservesFilters(t *testing.T) {
 	var output strings.Builder
-	data := Page{Rows: []Row{{FullName: "owner/<script>", Account: "owner<script>", Status: "suspended", InstallationID: 99}}, Number: 2, Pages: 6, Total: 150, Start: 26, End: 50, Installations: 1, Enabled: true, Search: "owner & code", Access: "unavailable"}
+	data := Page{Rows: []Row{{FullName: "owner<script>/<script>", Account: "owner<script>", Status: "suspended", InstallationID: 99}}, Number: 2, Pages: 6, Total: 150, Start: 26, End: 50, Installations: 1, Enabled: true, Search: "owner & code", Access: "unavailable"}
 	if err := Index("owner", "csrf", data).Render(context.Background(), &output); err != nil {
 		t.Fatal(err)
 	}
@@ -17,7 +17,7 @@ func TestRepositoryPageEscapesDataAndPreservesFilters(t *testing.T) {
 			t.Fatalf("missing %q", expected)
 		}
 	}
-	if strings.Contains(output.String(), "<script>owner") {
+	if strings.Contains(output.String(), "<script>") {
 		t.Fatal("unescaped repository name")
 	}
 	output.Reset()

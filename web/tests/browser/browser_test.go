@@ -149,7 +149,11 @@ func TestBrowserRegression(t *testing.T) {
 				data.Access = "available"
 			}
 			var rows []repositorypages.Row
-			for i := int64(1); i <= 150; i++ {
+			limit := int64(150)
+			if value, err := strconv.ParseInt(r.URL.Query().Get("fixture_count"), 10, 64); err == nil && value > 0 && value <= 5 {
+				limit = value
+			}
+			for i := int64(1); i <= limit; i++ {
 				row := repositorypages.Row{ID: i, FullName: "fixture-owner/a-long-repository-name-for-responsive-layout-verification-" + strconv.FormatInt(i, 10), Account: "fixture-owner", InstallationID: 99, Status: "active", Accessible: i%2 == 1}
 				if !strings.Contains(strings.ToLower(row.FullName), strings.ToLower(data.Search)) {
 					continue

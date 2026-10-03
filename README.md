@@ -200,14 +200,19 @@ workflow. Owners need repository mode controls and a way to select a PR and requ
 its latest commit. GitHub comments/checks remain the review-facing feedback channel.
 
 Current pages are Overview, Repositories, Builds, Environments and Developer Tools.
-Repositories shows only a full-width searchable, paginated repository list.
+Repositories shows a compact repository card grid: two columns on desktop and
+one on mobile, sized to the collection rather than the viewport. Cards show the
+repository name, owner and access state; search and access filters stay compact.
+Pagination appears only when more than one page is needed.
 Selecting a source opens its dedicated repository page; selecting a PR opens its
 dedicated detail page. Clickable owner/repository/PR breadcrumbs and Back links
 preserve list filters. Search and filters share a row on desktop and stack on
-narrow screens. Repository pages show the last sync time and **Sync Pull Requests**.
-The **Automatic** switch is off in Manual mode; enabling requires an owner-controlled,
-CSRF-protected confirmation modal. Search, sync progress and policy saves update
-in place through HTMX. Page URLs are shareable and navigation works without JavaScript.
+narrow screens. The PR list page shows **Sync Pull Requests** and an **Enable
+Automatic Builds** switch with a subtle background. These controls are absent
+from individual PR detail pages. The switch is off in Manual mode; enabling
+requires an owner-controlled, CSRF-protected confirmation modal. Search, sync
+progress and policy saves update in place through HTMX. Page URLs are shareable
+and navigation works without JavaScript.
 
 PR discovery and latest/requested/deployed commit views are implemented. Builds
 and Environments show actual saved state. Build execution, live logs, preview

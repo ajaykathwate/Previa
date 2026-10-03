@@ -525,7 +525,7 @@ Medium.
 1. During builds and container startup, each output line is appended to the log table with a sequence number per environment.
 2. The logs page loads existing lines, then opens an SSE stream that pushes new lines as they arrive (the server polls or listens for new rows, or uses Postgres notifications).
 3. A reconnecting client resumes from the last sequence number it received, so nothing is duplicated or lost.
-4. The workspace has separate Overview, Repositories, Builds and Environments pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 rows), search and Available/Unavailable/All access tabs (Available by default). Once the environment feature is connected, Environments shows status, URL, commit SHA, age, and a manual "tear down now" action. Developer tools has its own local diagnostic page.
+4. The workspace has separate Overview, Repositories, Builds and Environments pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 records), search and Available/Unavailable/All access tabs (Available by default). Once the environment feature is connected, Environments shows status, URL, commit SHA, age, and a manual "tear down now" action. Developer tools has its own local diagnostic page.
 5. Dashboard actions check both authentication and ownership: a user can only see and act on environments in installations they own.
 6. Log retention has a size and age cap; old logs are pruned.
 
@@ -535,10 +535,16 @@ an explicit per-PR build action. Repositories lists sources at `/repositories`;
 `/repositories/{id}/pull-requests/{number}` is a dedicated PR detail page. Selection
 uses ordinary navigation, with clickable breadcrumbs and Back links preserving
 filters. Earlier query-based workspace bookmarks redirect after ownership checks.
-Directory and PR filters use independent query keys. Search and filters share a
+Repositories uses a content-sized, capped card grid (two desktop columns, one on
+mobile), with name/owner/access metadata, compact search/access filters, a result
+count and pagination only across multiple pages. Breadcrumb labels and separators
+share a compact 17px size. Directory and PR filters use independent query keys.
+Search and filters share a
 desktop row; narrow screens stack them. Short screens scroll within the current
 page's results. HTMX updates search results, Sync Pull Requests and policy saves
-without reloading the page. Automatic is off for Manual; enabling requires an
+without reloading the page. Sync and the Enable Automatic Builds switch appear
+only on the repository's PR list page. Individual PR details retain read-only
+sync information. Automatic is off for Manual; enabling requires an
 accessible confirmation modal, while turning it off directly saves Manual.
 Active syncs poll every three seconds without interrupting user requests, focused
 search or an open policy modal. Current build/logs and deployed

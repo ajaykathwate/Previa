@@ -40,8 +40,10 @@ HTMX uses `repository-results` for directory search/pagination,
 polling and policy saves. Only the requested fragment is rendered. Every query
 rechecks installation ownership; `Vary` separates full/partial representations.
 Navigation values are whitelisted and mutations never accept arbitrary return
-URLs. Last synced, Sync Pull Requests and the Manual-default Automatic switch
-remain at the top of the repository/PR page; enabling requires modal confirmation.
+URLs. Last synced remains at the top of repository/PR pages. Sync Pull Requests
+and the Manual-default Enable Automatic Builds switch appear only on the PR list.
+The switch uses a theme background with distinct checked state; enabling requires
+modal confirmation. Breadcrumb links, current label and separators share 17px type.
 Desktop search/filter controls share a row; tablet/mobile controls stack. Pages
 have bounded scrolling regions and motion respects reduced-motion preferences.
 
@@ -204,7 +206,7 @@ No application-side full repository list is used to render pages.
 
 Overview reads actual aggregate counts only. The repositories page has its
 connection action at the top, differentiated empty and no-match states, explicit
-access badges, a displayed record range, and bounded page-number navigation.
+access badges, a result count and bounded navigation only for multiple pages.
 The action changes from Install on a repo to Manage connections once an
 installation is linked. It still uses the existing verified redirect flow;
 there is no new management API or automatic synchronization. Linking returns
@@ -217,9 +219,11 @@ Use these instead of Unicode/emoji arrows to avoid platform-specific coloured
 glyphs or boxed icons. Outward link arrows point diagonally up/right; previous
 and next page controls retain their respective horizontal direction.
 
-Repository browsing fills the available workspace height. The results region
-scrolls internally; the compact heading, filters, sticky column headings and
-pagination remain visible. HTMX sends a debounced GET after 300ms of search input
+Repository browsing uses a content-sized card grid, two columns on desktop and
+one on mobile. The directory has no enclosing table surface or minimum viewport
+height; large collections scroll in the main content area. Cards are whole links
+with name/owner/access metadata, shared icons and keyboard focus treatment.
+Single-page pagination is hidden. HTMX sends a debounced GET after 300ms of search input
 or an access-filter change, replacing only `repository-results`. Search always
 starts at page 1, preserves input focus and updates the URL without creating
 a history entry for every keystroke. Pagination uses ordinary links enhanced
@@ -229,8 +233,9 @@ An empty query restores all owned repositories within the selected access filter
 Full GET forms/page links remain usable without JavaScript. Partial responses
 retain the same authentication/ownership checks and vary by HX request/target headers.
 
-The repository workspace uses a centered, capped 1440px content boundary with
-balanced desktop/mobile padding and independent scroll regions. Live search has no
+The repository directory uses a centered, capped 1000px content boundary with
+balanced desktop/mobile padding. Dedicated PR pages retain the 1440px content
+boundary and bounded results scrolling. Live search has no
 Search/Reset buttons; clearing the field restores results and Enter remains
 the ordinary GET-form fallback. Search focus uses a subtle forest border
 rather than the detached outer ring. This is now the shared text-input, textarea

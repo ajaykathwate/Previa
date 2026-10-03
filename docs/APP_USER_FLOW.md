@@ -40,8 +40,11 @@ For installation/configuration commands, use [DEVELOPMENT_SETUP.md](DEVELOPMENT_
 4. The repository list defaults to **Available**. **Unavailable** retains previously
    linked repositories whose access was removed/suspended; **All** includes both.
 5. Use name search; results update after a short typing pause. Clearing search shows
-   all matching records in the selected tab. Pages contain ten repositories and
-   scroll inside the list panel; there is no infinite scroll.
+   all matching records in the selected tab. Repositories appear as compact cards,
+   two columns on desktop and one on mobile. Each card shows its name, owner and
+   access badge; clicking anywhere on it opens the PR list. Pages contain up to ten
+   records; pagination appears only for multiple pages. Small collections size to
+   their content, and larger collections scroll in the main content area.
 6. **Manage connections** opens the Previa GitHub App installation flow for your
    account. Use it to connect another installation or update selected repositories,
    then complete verification again. Keeping this action after linking is intentional.
@@ -86,8 +89,9 @@ URLs redirect to dedicated pages after ownership checks.
 
 ## Choose a repository build policy
 
-1. **Automatic** is off by default in Manual mode. Click its switch in an available
-   repository's page to enable it.
+1. **Enable Automatic Builds** is off by default in Manual mode. Its switch and
+   **Sync Pull Requests** appear only on the repository's PR list page. Use
+   **Back to pull requests** from an individual PR to reach them.
 2. A confirmation modal opens over the current page. Click **Enable automatic**
    to save in place; Cancel, Close or Escape leaves it off. Turning the switch off
    directly saves Manual. Failed saves keep the existing mode and allow retry.

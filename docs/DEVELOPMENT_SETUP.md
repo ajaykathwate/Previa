@@ -307,19 +307,23 @@ in; successful authentication opens `/dashboard`, with the account navbar and
 workspace sidebar. Each navigation item opens its own page:
 
 - **Overview** (`/dashboard`): database-derived installation/repository/access counts.
-- **Repositories** (`/repositories`): only the repository list, with ten rows per
-  page, debounced search and Available/Unavailable/All access tabs. Available is
-  the default; Manage connections stays in the header.
+- **Repositories** (`/repositories`): compact repository cards in two columns on
+  desktop and one on mobile, with natural content height and ten records per page.
+  Cards show name, owner and access. Debounced search and access tabs stay compact;
+  Available is the default. Pagination is hidden for a single page; Manage connections
+  stays in the header.
 - **Repository page** (`/repositories/<local-repo-id>`): its PR list, defaulting to
-  Open, search/state filters, Last synced, Sync Pull Requests and Automatic mode.
+  Open, search/state filters, Last synced, Sync Pull Requests and Enable Automatic Builds.
   Search and filters share a desktop row and stack on tablet/mobile. Search, sync
   and policy updates use HTMX; selecting a repository or PR uses ordinary page navigation.
 - **PR detail** (`/repositories/<id>/pull-requests/<number>`): latest observed,
   requested and deployed commits, real saved state and the actual GitHub link.
   Breadcrumbs and Back to pull requests preserve PR filters; Repositories returns
-  to the directory with its previous search/access/page.
+  to the directory with its previous search/access/page. Breadcrumb labels and slashes
+  share the same compact size. Sync and policy controls do not appear on PR details.
 - **Sync and policy**: Sync Pull Requests queues discovery; a configured worker
-  updates its compact progress every three seconds. Automatic is off for Manual.
+  updates its compact progress every three seconds. Enable Automatic Builds is off
+  for Manual and has a background with clear on/off states.
   Enabling requires an accessible confirmation modal; Cancel/Escape leaves it off.
   Turning it off saves Manual directly. Failed partial requests preserve current
   records and allow retry. Pages and filters are bookmarkable; old query-based
@@ -489,7 +493,11 @@ preserved. Repositories returns with directory filters/page preserved. Browser
 Back/Forward, reload and bookmarked URLs work across these pages. Older
 `/repositories?repo_id=<id>&pr=<number>` links redirect to the dedicated pages.
 
-Search/filter controls share a row on desktop and stack on tablet/mobile. Enable
+Check a collection of 1–5 repositories: cards should form two desktop columns,
+stack on mobile and stop at their content height. Single-page results show a count
+and no pagination. Search/filter controls share a desktop row and stack on mobile.
+Breadcrumb labels/slashes have equal sizes. Sync Pull Requests and Enable Automatic
+Builds appear only on the PR list page, not on individual PR details. Enable
 Automatic only after its confirmation; Cancel/Escape must leave it off. Sync Pull
 Requests updates Last synced and compact progress in place. Run `make run-worker`
 separately to process sync requests. `make run-server` and `make run-worker` load
@@ -500,7 +508,8 @@ Run `make build`, `make test`, `make lint`, then `make test-browser` after
 `TEST_DATABASE_URL` pointing to an isolated test database; `make test` does not
 load `.env`. The browser fixture needs no GitHub credentials or database. Expected:
 build/tests pass, vet/lint report no issues, and browser checks verify full-page
-navigation, aligned controls, breadcrumbs/filter preservation, history, failed
+navigation, small card collections and hidden single-page pagination, compact
+breadcrumbs, PR-list-only controls, filter preservation, history, failed
 searches, Automatic confirmation/retry, polling, responsive layout, accessibility
 and no-JavaScript navigation/forms. Set `UI_BROWSER_SCREENSHOTS=1` for screenshots
 in `web/tests/browser/artifacts/` (ignored by Git).

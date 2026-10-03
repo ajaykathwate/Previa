@@ -7,7 +7,7 @@ import "github.com/ajaykathwatee/previa/web/layouts"
 
 templ Index(username string, csrfToken string, page Page) {
 	@layouts.App("Repositories", username, csrfToken, components.NavRepositories) {
-		<div class="repository-workspace">
+		<div class="repository-workspace repository-catalog">
 			<header class="workspace-page-heading">
 				<div><span class="eyebrow">YOUR SOURCE, CONNECTED</span><h1>Repositories</h1></div>
 				<div class="repository-action">
@@ -37,7 +37,7 @@ templ Index(username string, csrfToken string, page Page) {
 				<p class="connection-notice" role="status">GitHub connection verified. Your selected repositories are linked.</p>
 			}
 			<div class="repository-directory-view">
-				<section class="workspace-panel repository-browser repository-directory" aria-label="Repository browser">
+				<section class="repository-directory" aria-label="Repository browser">
 					<form
 						id="repository-filters"
 						method="get"
@@ -76,8 +76,16 @@ templ Index(username string, csrfToken string, page Page) {
 
 templ Results(page Page) {
 	<div data-directory-page={ strconv.FormatInt(page.Number, 10) } class="repository-results-content">
+		<p class="repository-count" role="status" aria-live="polite">
+			{ strconv.FormatInt(page.Total, 10) }
+			if page.Total==1 {
+				repository
+			} else {
+				repositories
+			}
+		</p>
 		if len(page.Rows)>0 {
-			<div class="repository-table-scroll" tabindex="0" role="region" aria-label="Repository list">
+			<div class="repository-card-results" role="region" aria-label="Repository list">
 				<ul class="repository-list">
 					for _, row := range page.Rows {
 						<li class="repository-row">
@@ -86,77 +94,82 @@ templ Results(page Page) {
 								href={ templ.SafeURL(page.SelectURL(row.ID)) }
 								data-repo-link={ strconv.FormatInt(row.ID, 10) }
 							>
-								<div class="repository-name">
-									@components.BranchIcon()
-									<strong>{ row.FullName }</strong>
-								</div>
-								<div class="repository-row-meta">
-									<span>{ row.Account }</span>
+								<div class="repository-card-top">
+									<span class="repository-card-icon" aria-hidden="true">
+										@components.BranchIcon()
+									</span>
 									if row.Accessible {
 										<span class="repository-status available">Available</span>
 									} else {
 										<span class="repository-status unavailable">Unavailable</span>
 									}
 								</div>
+								<div class="repository-card-name"><h2>{ row.Name() }</h2><p>{ row.Owner() }</p></div>
 								if row.Status!="active" {
 									<span class="repository-status-detail">Installation { row.Status }</span>
 								}
+								<span class="repository-card-link">
+									View pull requests
+									@components.Arrow()
+								</span>
 							</a>
 						</li>
 					}
 				</ul>
 			</div>
-			<footer class="repository-pagination">
-				<p role="status" aria-live="polite">Showing { strconv.FormatInt(page.Start,10) }–{ strconv.FormatInt(page.End,10) } of { strconv.FormatInt(page.Total,10) } repositories</p>
-				<nav aria-label="Repository pages">
-					{{ numbers := PageNumbers(page.Number, page.Pages) }}
-					if page.Number>1 {
-						<a hx-get={ templ.SafeURL(page.URL(page.Number - 1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Number - 1)) } rel="prev" aria-label="Previous page">
-							@components.ArrowLeft()
-						</a>
-					} else {
-						<span aria-disabled="true" aria-label="Previous page">
-							@components.ArrowLeft()
-						</span>
-					}
-					if numbers[0]>1 {
-						<a hx-get={ templ.SafeURL(page.URL(1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(1)) }>1</a>
-						if numbers[0]>2 {
-							<span aria-hidden="true">…</span>
+			if page.Pages>1 {
+				<footer class="repository-pagination">
+					<p role="status" aria-live="polite">Showing { strconv.FormatInt(page.Start,10) }–{ strconv.FormatInt(page.End,10) } of { strconv.FormatInt(page.Total,10) } repositories</p>
+					<nav aria-label="Repository pages">
+						{{ numbers := PageNumbers(page.Number, page.Pages) }}
+						if page.Number>1 {
+							<a hx-get={ templ.SafeURL(page.URL(page.Number - 1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Number - 1)) } rel="prev" aria-label="Previous page">
+								@components.ArrowLeft()
+							</a>
+						} else {
+							<span aria-disabled="true" aria-label="Previous page">
+								@components.ArrowLeft()
+							</span>
 						}
-					}
-					for _, number := range numbers {
-						<a
-							hx-get={ templ.SafeURL(page.URL(number)) }
-							hx-target="#repository-results"
-							hx-swap="innerHTML"
-							hx-sync="#repository-filters:replace"
-							hx-push-url="true"
-							href={ templ.SafeURL(page.URL(number)) }
-							if number==page.Number {
-								aria-current="page"
+						if numbers[0]>1 {
+							<a hx-get={ templ.SafeURL(page.URL(1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(1)) }>1</a>
+							if numbers[0]>2 {
+								<span aria-hidden="true">…</span>
 							}
-						>{ strconv.FormatInt(number,10) }</a>
-					}
-					if numbers[len(numbers)-1]<page.Pages {
-						if numbers[len(numbers)-1]<page.Pages-1 {
-							<span aria-hidden="true">…</span>
 						}
-						<a hx-get={ templ.SafeURL(page.URL(page.Pages)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Pages)) }>{ strconv.FormatInt(page.Pages,10) }</a>
-					}
-					if page.Number<page.Pages {
-						<a hx-get={ templ.SafeURL(page.URL(page.Number + 1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Number + 1)) } rel="next" aria-label="Next page">
-							@components.Arrow()
-						</a>
-					} else {
-						<span aria-disabled="true" aria-label="Next page">
-							@components.Arrow()
-						</span>
-					}
-				</nav>
-			</footer>
+						for _, number := range numbers {
+							<a
+								hx-get={ templ.SafeURL(page.URL(number)) }
+								hx-target="#repository-results"
+								hx-swap="innerHTML"
+								hx-sync="#repository-filters:replace"
+								hx-push-url="true"
+								href={ templ.SafeURL(page.URL(number)) }
+								if number==page.Number {
+									aria-current="page"
+								}
+							>{ strconv.FormatInt(number,10) }</a>
+						}
+						if numbers[len(numbers)-1]<page.Pages {
+							if numbers[len(numbers)-1]<page.Pages-1 {
+								<span aria-hidden="true">…</span>
+							}
+							<a hx-get={ templ.SafeURL(page.URL(page.Pages)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Pages)) }>{ strconv.FormatInt(page.Pages,10) }</a>
+						}
+						if page.Number<page.Pages {
+							<a hx-get={ templ.SafeURL(page.URL(page.Number + 1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Number + 1)) } rel="next" aria-label="Next page">
+								@components.Arrow()
+							</a>
+						} else {
+							<span aria-disabled="true" aria-label="Next page">
+								@components.Arrow()
+							</span>
+						}
+					</nav>
+				</footer>
+			}
 		} else {
-			<div class="repository-table-scroll" tabindex="0" role="region" aria-label="Repository list">
+			<div class="repository-card-results" role="region" aria-label="Repository list">
 				<div class="repository-empty">
 					<div class="empty-source-icon" aria-hidden="true">
 						@components.BranchIcon()

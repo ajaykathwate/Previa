@@ -3,6 +3,7 @@ package repositories
 import (
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 type Row struct {
@@ -69,4 +70,19 @@ func PageNumbers(current, pages int64) []int64 {
 		result = append(result, number)
 	}
 	return result
+}
+
+func (r Row) Name() string {
+	_, name, found := strings.Cut(r.FullName, "/")
+	if !found {
+		return r.FullName
+	}
+	return name
+}
+func (r Row) Owner() string {
+	owner, _, found := strings.Cut(r.FullName, "/")
+	if !found {
+		return r.Account
+	}
+	return owner
 }

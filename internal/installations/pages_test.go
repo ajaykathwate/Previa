@@ -74,7 +74,7 @@ func TestRepositoryHTTPValidationScopeAndOptionalConfiguration(t *testing.T) {
 		t.Fatal("anonymous repository access allowed")
 	}
 	request("/fixture-login")
-	if code, _, body := request("/repositories?q=owner&access=available"); code != 200 || !strings.Contains(body, "owner/repo") || !strings.Contains(body, "Not configured") {
+	if code, _, body := request("/repositories?q=owner&access=available"); code != 200 || !strings.Contains(body, ">repo<") || !strings.Contains(body, ">owner<") || !strings.Contains(body, "Not configured") {
 		t.Fatal("stored repositories unavailable without App configuration")
 	}
 	if store.lastUser != 1 || store.lastFilter.Search != "owner" || store.lastFilter.Access != "available" {
@@ -95,7 +95,7 @@ func TestRepositoryHTTPValidationScopeAndOptionalConfiguration(t *testing.T) {
 	if readErr != nil || closeErr != nil {
 		t.Fatal(errors.Join(readErr, closeErr))
 	}
-	if response.StatusCode != 200 || !strings.Contains(string(fragment), "owner/repo") || strings.Contains(string(fragment), "<!doctype") || strings.Contains(string(fragment), `id="repository-filters"`) {
+	if response.StatusCode != 200 || !strings.Contains(string(fragment), ">repo<") || !strings.Contains(string(fragment), ">owner<") || strings.Contains(string(fragment), "<!doctype") || strings.Contains(string(fragment), `id="repository-filters"`) {
 		t.Fatal("HTMX request did not return only repository results")
 	}
 	if response.Header.Get("Vary") == "" {

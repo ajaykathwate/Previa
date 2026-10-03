@@ -159,8 +159,14 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 		}
 	}
 	w = request("POST", base+"/policy", "csrf_token="+token+"&mode=automatic&workspace_query="+url.QueryEscape("q=owner&access=all&page=1&pr=7&pr_q=Improve"), "repository-detail")
-	if w.Code != 200 || strings.Contains(w.Body.String(), "<!doctype") || !strings.Contains(w.Body.String(), `role="switch" aria-checked="true"`) || !strings.Contains(w.Header().Get("HX-Push-Url"), "/pull-requests/7") {
+	if w.Code != 200 || strings.Contains(w.Body.String(), "<!doctype") || strings.Contains(w.Body.String(), `role="switch"`) || !strings.Contains(w.Header().Get("HX-Push-Url"), "/pull-requests/7") {
 		t.Fatal("inline policy response", w.Code, w.Body.String())
+	}
+	if list := request("GET", workspace, ""); list.Code != 200 || !strings.Contains(list.Body.String(), `role="switch" aria-checked="true"`) || !strings.Contains(list.Body.String(), "Enable Automatic Builds") {
+		t.Fatal("PR list policy controls", list.Code)
+	}
+	if detail := request("GET", base+"/pull-requests/7", ""); detail.Code != 200 || strings.Contains(detail.Body.String(), `id="build-policy"`) || strings.Contains(detail.Body.String(), "Sync Pull Requests") {
+		t.Fatal("PR detail included list-only controls", detail.Code)
 	}
 	w = request("POST", base+"/refresh", "csrf_token="+token, "repository-detail")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "every 3s") || strings.Contains(w.Body.String(), "<!doctype") {

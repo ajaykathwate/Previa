@@ -1,5 +1,5 @@
 # Project handoff
-Last updated: 2026-10-03
+Last updated: 2026-10-04
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
@@ -40,14 +40,15 @@ Last updated: 2026-10-03
 - OAuth/users, signed state, SCS sessions (24h/30m idle), rotation, CSRF/logout modal.
 - Home, protected Overview, Repositories, PR detail, current Builds/Environments,
   Developer Tools ping and /protected. Installation-owner scoping on queries/actions.
-- Repositories lists only sources at /repositories; rows open /repositories/<id>.
-  PRs open /repositories/<id>/pull-requests/<number>; full pages with shared shell.
-- Breadcrumbs/Back preserve filters; old query bookmarks redirect after ownership
+- Repositories uses compact cards at /repositories: two desktop columns, one mobile;
+  1000px content width, natural height, count and pagination only for multiple pages.
+  Cards open /repositories/<id>; PRs open /repositories/<id>/pull-requests/<number>.
+- Breadcrumb labels/slashes use 17px sans; Back preserves filters. Bookmarks redirect after ownership
   validation via installations' navigator. Safe local URLs only.
 - HTMX targets: repository-results, pull-request-results and repository-detail.
   Live search/pagination, sync/policy saves, history/no-JS and inline retries covered.
-- Last synced + Sync Pull Requests; Automatic switch off for Manual. Enabling needs
-  modal confirmation; off saves Manual directly. Sync polls every 3s, pausing for
+- PR list alone has Sync Pull Requests + soft-background Enable Automatic Builds.
+  Manual is off; enabling needs confirmation, disabling saves directly. Sync polls every 3s, pausing for
   focused PR search/open modal. Desktop filters one row; short/mobile pages scroll.
 - PR detail: latest/requested/deployed SHA, actual GitHub link, fork/refresh/access
   notices. Build button disabled; direct POST rejects without authorizing work.
@@ -90,10 +91,9 @@ Last updated: 2026-10-03
 - Build/tests/vet/lint pass; PostgreSQL-backed full suite and webhook/discovery race
   tests pass. Real River pagination, concurrent dedup, rollback/retry, source/access
   races, Manual no-build, policy, ownership and CSRF covered.
-- All 19 revised browser checks pass: dedicated navigation, bookmarks, breadcrumbs,
-  filter/history preservation, failed searches, confirmed Automatic/retry, polling
-  on list/detail, session expiry, 320–1917px responsive layout and native no-JS flow.
-- Compiled localhost server DB health/startup, invalid signature 401 and signed
-  make test-webhook 204 verified; worker starts with all GitHub/session env unset.
+- All 20 browser checks pass: 1–5 compact cards, PR-list-only controls, navigation,
+  uniform breadcrumbs, filters/history, search errors, confirmed Automatic/retry,
+  polling, session expiry, 320–1917px responsive layout and native no-JS flow.
+- Server/worker DB startup and signed local webhook ping previously verified.
 - Phase 1/2 and refinement test DBs/env files cleaned; application DB not migrated.
-- No real GitHub delivery or preview build tested; execution controls stay disabled.
+  Real GitHub delivery/preview builds remain untested; execution controls stay disabled.

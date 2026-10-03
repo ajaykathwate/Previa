@@ -75,7 +75,7 @@ test('responsive dashboard sticky navigation and honest placeholders', async () 
     await assertNoOverflow();
     await page.evaluate(() => scrollTo({top: 500, behavior: 'instant'}));
     assert.equal(await page.evaluate(() => scrollY), 0);
-    const list = page.locator('#repository-results .repository-table-scroll');
+    const list = page.locator('.app-content');
     await list.evaluate(e => {e.scrollTop = 300;});
     assert(await list.evaluate(e => e.scrollTop > 0));
     assert.equal(await page.locator('.app-header').evaluate(e => Math.round(e.getBoundingClientRect().top)), 0);
@@ -103,7 +103,7 @@ test('mobile navigation opens separate pages and highlights the destination', as
 test('logout modal preserves page scroll and traps and restores focus', async () => {
   await login();
   await page.goto(`${origin}/repositories`);
-  await page.locator('#repository-results .repository-table-scroll').evaluate(e => {e.scrollTop = 300;});
+  await page.locator('.app-content').evaluate(e => {e.scrollTop = 300;});
   const scroll = await page.evaluate(() => scrollY);
   let logoutRequests = 0;
   page.on('request', request => { if (request.method() === 'POST' && request.url().endsWith('/auth/logout')) logoutRequests++; });
@@ -300,7 +300,7 @@ test('PR workspace live search pagination modal and disabled build', async () =>
   await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
   await search.fill('');
   await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===10);
-  await page.getByRole('switch',{name:'Automatic',exact:true}).click();
+  await page.getByRole('switch',{name:'Enable Automatic Builds',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
   assert.equal(new URL(page.url()).pathname,'/repositories/1');
   await page.keyboard.press('Escape');
@@ -329,7 +329,7 @@ test('PR search and pagination work without JavaScript', async () => {
     assert.match(await p.locator('.pr-table').innerText(),/#25/);
     await p.locator('.pr-table tbody a').click();assert.equal(new URL(p.url()).pathname,'/repositories/1/pull-requests/25');
     await p.getByRole('link',{name:'Back to pull requests'}).click();assert.equal(await p.locator('#pull-request-search').inputValue(),'preview 25');
-    await p.getByRole('switch',{name:'Automatic',exact:true}).click();
+    await p.getByRole('switch',{name:'Enable Automatic Builds',exact:true}).click();
     assert(await p.locator('#build-policy').evaluate(e=>e.matches(':modal')));
     await p.locator('#build-policy').getByRole('button',{name:'Enable automatic',exact:true}).click();
     assert.equal(await p.locator('#pull-request-search').inputValue(),'preview 25');assert.match(await p.locator('.pr-panel-heading').innerText(),/Automatic/);
@@ -345,7 +345,7 @@ test('Automatic confirms before enabling saves in place and sync polling respect
  await page.locator('#pull-request-search').fill('preview 25');await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
  let policyRequests=0;
  page.on('request',request=>{if(request.method()==='POST' && request.url().endsWith('/repositories/1/policy')) policyRequests++;});
- const mode=page.getByRole('switch',{name:'Automatic',exact:true});
+ const mode=page.getByRole('switch',{name:'Enable Automatic Builds',exact:true});
  assert.equal(await mode.getAttribute('aria-checked'),'false');
  await mode.click();await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
  assert.equal(await mode.getAttribute('aria-checked'),'false');assert.equal(policyRequests,0);
@@ -384,7 +384,7 @@ test('unavailable repositories and empty PR states remain clear and cannot reque
  await login();await page.goto(`${origin}/repositories/2?access=all&pr_state=closed`);
  assert.match(await page.locator('.pr-summary').innerText(),/Repository unavailable/);
  assert(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).isDisabled());
- assert(await page.getByRole('switch',{name:'Automatic',exact:true}).isDisabled());
+ assert(await page.getByRole('switch',{name:'Enable Automatic Builds',exact:true}).isDisabled());
  assert.equal(await page.locator('.pr-table').count(),0);assert.match(await page.locator('#pull-request-results').innerText(),/No pull requests/);
  assert.equal(await page.locator('#repository-filters').count(),0);
 });
@@ -461,14 +461,49 @@ test('failed PR searches preserve records and query bookmarks redirect to dedica
  assert.equal(new URL(page.url()).searchParams.get('pr_q'),'preview 25');
 });
 
-test('policy and sync on PR detail keep the dedicated URL and selected PR',async()=>{
- await login();await page.goto(`${origin}/repositories/1/pull-requests/7?pr_q=preview&q=fixture&page=2`);
- await page.getByRole('switch',{name:'Automatic'}).click();await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
+test('sync and automatic controls appear only on the PR list and breadcrumbs use consistent sizing',async()=>{
+ await login();await page.goto(`${origin}/repositories/1?pr_q=preview&q=fixture&page=2`);
+ await page.getByRole('switch',{name:'Enable Automatic Builds'}).click();await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
  await page.getByRole('button',{name:'Enable automatic',exact:true}).click();await readyPanel('1');
- assert.equal(new URL(page.url()).pathname,'/repositories/1/pull-requests/7');assert.equal(await page.locator('.automatic-switch').getAttribute('aria-checked'),'true');
- assert.match(await page.locator('.pr-current-crumb').innerText(),/#7/);
+ assert.equal(await page.locator('.automatic-switch').getAttribute('aria-checked'),'true');
+ assert.notEqual(await page.locator('.automatic-switch').evaluate(e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)');
  await page.getByRole('button',{name:'Sync Pull Requests'}).click();await page.locator('.sync-state').filter({hasText:'Syncing'}).waitFor();
  await page.waitForFunction(()=>!document.querySelector('.pr-summary').textContent.includes('Syncing'));await readyPanel('1');
- assert.equal(new URL(page.url()).pathname,'/repositories/1/pull-requests/7');assert.equal(new URL(page.url()).searchParams.get('page'),'2');
- assert.match(await page.locator('.pr-current-crumb').innerText(),/#7/);
+ await page.locator('.pr-table tbody a').first().click();await page.waitForURL(url=>url.pathname.includes('/pull-requests/'));
+ assert.equal(await page.getByRole('switch',{name:'Enable Automatic Builds'}).count(),0);
+ assert.equal(await page.getByRole('button',{name:'Sync Pull Requests'}).count(),0);assert.equal(await page.locator('#build-policy').count(),0);
+ const sizes=await page.locator('.pr-breadcrumb').evaluate(e=>Array.from(e.children).map(child=>getComputedStyle(child).fontSize));
+ assert(sizes.every(size=>size==='17px'), 'breadcrumb text and separators share a compact size');
+ await page.getByRole('link',{name:'Back to pull requests'}).click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+ assert.equal(await page.locator('.automatic-switch').getAttribute('aria-checked'),'true');
+ assert.equal(new URL(page.url()).searchParams.get('page'),'2');
+ await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories');
+ assert.equal(await page.getByRole('switch',{name:'Enable Automatic Builds'}).count(),0);assert.equal(await page.getByRole('button',{name:'Sync Pull Requests'}).count(),0);
+});
+
+test('small repository collections use compact cards with natural height and no pagination',async()=>{
+ await login();
+ for(const count of [1,2,3,5]) {
+  await page.goto(`${origin}/repositories?access=all&fixture_count=${count}`);
+  assert.equal(await page.locator('.repository-row').count(),count);
+  assert.equal(await page.getByRole('navigation',{name:'Repository pages'}).count(),0);
+  assert.match(await page.locator('.repository-count').innerText(),new RegExp(`${count} repositor`));
+  assert.equal(await page.locator('.repository-select').first().locator('svg').count(),2);
+  assert.equal(await page.locator('.repository-card-name p').first().innerText(),'fixture-owner');
+  assert.equal(await page.locator('.repository-card-name h2').first().innerText().then(v=>v.includes('fixture-owner/')),false);
+  for(const width of [320,390,768,1440,1917]) {
+   await page.setViewportSize({width,height:960});await assertNoOverflow();
+   const cards=await page.locator('.repository-select').evaluateAll(items=>items.map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};}));
+   if(count>1 && width>700) assert.equal(cards[0].y,cards[1].y,'desktop cards share a row');
+   if(count>1 && width<=700) assert(cards[1].y>cards[0].y,'mobile cards stack');
+   assert(cards.every(c=>c.height<280), 'long repository names fit compact cards');
+   if(count<=2 && width>700) {
+    const catalog=await page.locator('.repository-catalog').boundingBox();
+    assert(catalog.height<500, 'small collections do not stretch toward the footer');
+    assert(catalog.width<=1001,'catalog has a compact width');
+   }
+  }
+  if(process.env.UI_BROWSER_SCREENSHOTS==='1') await page.screenshot({path:path.join(__dirname,'artifacts',`repository-cards-${count}.png`)});
+ }
+ await page.locator('[data-repo-link="1"]').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
 });

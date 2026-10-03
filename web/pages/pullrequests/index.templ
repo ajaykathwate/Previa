@@ -21,8 +21,10 @@ templ Panel(p Page, csrf string) {
 		<header class="pr-panel-heading">
 			<div class="pr-heading-text">
 				<nav aria-label="Repository location">
-					<a href={ templ.SafeURL(p.CloseURL()) } class="text-link pr-directory-link">@components.ArrowLeft()
-Repositories</a>
+					<a href={ templ.SafeURL(p.CloseURL()) } class="text-link pr-directory-link">
+						@components.ArrowLeft()
+						Repositories
+					</a>
 					<h1 tabindex="-1" data-detail-heading class="pr-breadcrumb">
 						<a href={ templ.SafeURL(p.CloseURL()) } title={ p.Owner() }>{ p.Owner() }</a>
 						<span aria-hidden="true">/</span>
@@ -57,15 +59,17 @@ Repositories</a>
 					}
 				</p>
 			</div>
-			<div class="pr-header-actions">
-				<form method="post" action={ RepoURL(p.RepoID) + "/refresh" } hx-post={ RepoURL(p.RepoID) + "/refresh" } hx-target="#repository-detail" hx-sync="#repository-detail:replace">
-					<input type="hidden" name="csrf_token" value={ csrf }/><input type="hidden" name="workspace_query" value={ p.Query() }/>
-					@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline, Disabled: !p.Available || !p.DiscoveryEnabled || p.SyncState == "queued" || p.SyncState == "syncing"}) {
-						Sync Pull Requests
-					}
-				</form>
-				@AutomaticSwitch(p, csrf)
-			</div>
+			if p.SelectedPR==nil {
+				<div class="pr-header-actions">
+					<form method="post" action={ RepoURL(p.RepoID) + "/refresh" } hx-post={ RepoURL(p.RepoID) + "/refresh" } hx-target="#repository-detail" hx-sync="#repository-detail:replace">
+						<input type="hidden" name="csrf_token" value={ csrf }/><input type="hidden" name="workspace_query" value={ p.Query() }/>
+						@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline, Disabled: !p.Available || !p.DiscoveryEnabled || p.SyncState == "queued" || p.SyncState == "syncing"}) {
+							Sync Pull Requests
+						}
+					</form>
+					@AutomaticSwitch(p, csrf)
+				</div>
+			}
 		</header>
 		if p.SelectedPR!=nil {
 			@PRDetail(p, p.Selected())
@@ -90,16 +94,18 @@ Repositories</a>
 				</div>
 			</section>
 		}
-		@components.ConfirmationDialog("build-policy", "Enable automatic builds?", "Future PR updates will schedule work after five quiet minutes. Existing PRs are not bulk-built. Build execution is not available yet.") {
-			@PolicyForm(p, csrf, true)
+		if p.SelectedPR==nil {
+			@components.ConfirmationDialog("build-policy", "Enable automatic builds?", "Future PR updates will schedule work after five quiet minutes. Existing PRs are not bulk-built. Build execution is not available yet.") {
+				@PolicyForm(p, csrf, true)
+			}
+			<noscript>
+				<section class="workspace-panel pr-policy-fallback">
+					<h3>Automatic builds</h3>
+					<p>Automatic applies only to future events. Manual cancels unstarted automatic requests.</p>
+					@PolicyForm(p, csrf, false)
+				</section>
+			</noscript>
 		}
-		<noscript>
-			<section class="workspace-panel pr-policy-fallback">
-				<h3>Automatic builds</h3>
-				<p>Automatic applies only to future events. Manual cancels unstarted automatic requests.</p>
-				@PolicyForm(p, csrf, false)
-			</section>
-		</noscript>
 	</div>
 }
 
@@ -107,10 +113,10 @@ templ AutomaticSwitch(p Page, csrf string) {
 	if p.Mode=="automatic" {
 		<form method="post" action={ RepoURL(p.RepoID) + "/policy" } hx-post={ RepoURL(p.RepoID) + "/policy" } hx-target="#repository-detail" hx-sync="#repository-detail:replace" hx-disabled-elt="find button">
 			<input type="hidden" name="csrf_token" value={ csrf }/><input type="hidden" name="workspace_query" value={ p.Query() }/><input type="hidden" name="mode" value="manual"/>
-			<button type="submit" role="switch" aria-checked="true" class="automatic-switch" disabled?={ !p.Available }><span class="switch-track" aria-hidden="true"><span></span></span>Automatic</button>
+			<button type="submit" role="switch" aria-checked="true" class="automatic-switch" disabled?={ !p.Available }><span>Enable Automatic Builds</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
 		</form>
 	} else {
-		<button type="button" role="switch" aria-checked="false" class="automatic-switch" disabled?={ !p.Available } data-open-dialog="build-policy" commandfor="build-policy" command="show-modal" aria-haspopup="dialog"><span class="switch-track" aria-hidden="true"><span></span></span>Automatic</button>
+		<button type="button" role="switch" aria-checked="false" class="automatic-switch" disabled?={ !p.Available } data-open-dialog="build-policy" commandfor="build-policy" command="show-modal" aria-haspopup="dialog"><span>Enable Automatic Builds</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
 	}
 }
 
