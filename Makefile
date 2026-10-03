@@ -26,7 +26,7 @@ $(TAILWIND): deploy/install-tailwind.sh
 
 assets: $(TAILWIND)
 	@set -eu; mkdir -p web/static/css; \
-	previa_css=$$(mktemp web/static/css/app.css.XXXXXX); \
+	previa_css=$$(mktemp web/static/css/.app.css.XXXXXX); \
 	trap 'rm -f "$$previa_css"' EXIT HUP INT TERM; \
 	$(TAILWIND) -i web/styles/app.css -o "$$previa_css" --minify; \
 	if ! cmp -s "$$previa_css" web/static/css/app.css; then \

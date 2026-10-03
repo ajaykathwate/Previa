@@ -45,14 +45,7 @@
     document.querySelectorAll('[data-mobile-nav] a').forEach(link => {
       link.addEventListener('click', () => { link.closest('details').open = false; });
     });
-    const openToolsFromHash = () => {
-      if (window.location.hash === '#queue-check') {
-        const tools = document.querySelector('#queue-check details');
-        if (tools) tools.open = true;
-      }
-    };
-    window.addEventListener('hashchange', openToolsFromHash);
-    openToolsFromHash();
+
   }
 
   function initConfirmationDialogs() {

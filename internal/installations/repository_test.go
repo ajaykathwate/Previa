@@ -179,3 +179,89 @@ func TestPostgresInstallationOwnershipLifecycleAndRevisionFence(t *testing.T) {
 	}
 
 }
+
+func TestPostgresRepositoryPaginationFiltersAndOwnership(t *testing.T) {
+	pool := installationDatabase(t)
+	repo := NewRepository(pool)
+	ctx := t.Context()
+	var user, other int64
+	if err := pool.QueryRow(ctx, "INSERT INTO users(github_id,username) VALUES(42,'owner') RETURNING id").Scan(&user); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, "INSERT INTO users(github_id,username) VALUES(43,'other') RETURNING id").Scan(&other); err != nil {
+		t.Fatal(err)
+	}
+	var records []RepositoryInfo
+	for i := 1; i <= 150; i++ {
+		records = append(records, RepositoryInfo{ID: int64(i), FullName: fmt.Sprintf("owner/repo-%03d", i), Accessible: i%2 == 1})
+	}
+	if err := repo.Link(ctx, 99, user, 0, "owner", records); err != nil {
+		t.Fatal(err)
+	}
+	var removed []RepositoryInfo
+	for _, record := range records {
+		if !record.Accessible {
+			removed = append(removed, record)
+		}
+	}
+	if err := repo.ApplyEvent(ctx, 99, "active", "owner", nil, removed, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Link(ctx, 100, other, 0, "other", []RepositoryInfo{{ID: 200, FullName: "other/private", Accessible: true}}); err != nil {
+		t.Fatal(err)
+	}
+	for number := int64(1); number <= 6; number++ {
+		page, err := repo.Page(ctx, user, RepositoryFilter{Page: number, Access: "all"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page.Total != 150 || page.Pages != 6 || len(page.Rows) != 25 || page.Page != number {
+			t.Fatalf("incorrect page: %+v", page)
+		}
+		if page.Rows[0].FullName != fmt.Sprintf("owner/repo-%03d", (number-1)*25+1) {
+			t.Fatal("unstable ordering or wrong offset")
+		}
+	}
+	for _, filter := range []RepositoryFilter{{Page: 1, Access: "available"}, {Page: 1, Access: "unavailable"}} {
+		page, err := repo.Page(ctx, user, filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page.Total != 75 || len(page.Rows) != 25 {
+			t.Fatal("access filter did not limit count and rows")
+		}
+		for _, row := range page.Rows {
+			if row.Accessible != (filter.Access == "available") {
+				t.Fatal("incorrect access result")
+			}
+		}
+	}
+	page, err := repo.Page(ctx, user, RepositoryFilter{Page: 9223372036854775807, Access: "all"})
+	if err != nil || page.Page != 6 {
+		t.Fatalf("page was not safely clamped: %v", err)
+	}
+	for _, search := range []string{"REPO-150", "%", "other/private"} {
+		page, err := repo.Page(ctx, user, RepositoryFilter{Page: 1, Access: "all", Search: search})
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := int64(0)
+		if search == "REPO-150" {
+			expected = 1
+		}
+		if page.Total != expected {
+			t.Fatalf("search %q returned %d", search, page.Total)
+		}
+	}
+	summary, err := repo.Summary(ctx, user)
+	if err != nil || summary.Installations != 1 || summary.Repositories != 150 || summary.Available != 75 {
+		t.Fatalf("wrong scoped summary: %+v %v", summary, err)
+	}
+	if err := repo.ApplyEvent(ctx, 99, "suspended", "owner", nil, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	page, err = repo.Page(ctx, user, RepositoryFilter{Page: 1, Access: "available"})
+	if err != nil || page.Total != 0 {
+		t.Fatalf("suspended installation still available: %v", err)
+	}
+}

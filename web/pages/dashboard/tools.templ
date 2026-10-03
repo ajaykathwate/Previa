@@ -1,0 +1,40 @@
+package dashboard
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/button"
+	"github.com/ajaykathwatee/previa/web/components/input"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+templ Tools(username string, csrfToken string) {
+	@layouts.App("Developer tools", username, csrfToken, components.NavTools) {
+		<section id="queue-check" tabindex="-1" class="developer-tools" aria-labelledby="tools-title">
+			<details class="tools-disclosure" open>
+				<summary><span><span class="eyebrow">FOR LOCAL DEVELOPMENT</span><strong id="tools-title">Developer tools</strong><span class="tools-subtitle">Check the existing queue without creating a preview.</span></span><span class="tools-chevron" aria-hidden="true">⌄</span></summary>
+				<div class="tools-content">
+					<div>
+						<h2>Send a queue ping</h2>
+						<p>This diagnostic inserts a job into River. Run the worker alongside the server to process it. The result below confirms enqueueing, not completion.</p>
+						<a href="/protected" class="text-link">
+							View your session
+							@components.Arrow()
+						</a>
+					</div>
+					<form method="post" action="/queue/ping" class="queue-form" data-queue-form>
+						<input type="hidden" name="csrf_token" value={ csrfToken }/>
+						<div class="space-y-2">
+							<label for="pr-key">Ping PR key</label>
+							@input.Input(input.Props{ID: "pr-key", Name: "pr_key", Value: "demo:pr:1", Required: true, Attributes: templ.Attributes{"maxlength": "128", "aria-describedby": "ping-help"}})
+							<p id="ping-help" class="field-help">A diagnostic key, not a repository connection.</p>
+						</div>
+						@button.Button(button.Props{Type: button.TypeSubmit, Class: "queue-submit"}) {
+							Send a ping
+						}
+						<p class="queue-result" data-queue-result role="status" aria-live="polite" aria-atomic="true"></p>
+					</form>
+				</div>
+			</details>
+		</section>
+	}
+}

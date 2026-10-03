@@ -29,6 +29,8 @@ type InstallationInfo struct {
 
 type store interface {
 	Prepare(context.Context, int64) (int64, error)
+	Summary(context.Context, int64) (WorkspaceSummary, error)
+	Page(context.Context, int64, RepositoryFilter) (RepositoryPage, error)
 	Link(context.Context, int64, int64, int64, string, []RepositoryInfo) error
 	List(context.Context, int64) ([]InstallationInfo, error)
 	ApplyEvent(context.Context, int64, string, string, []RepositoryInfo, []RepositoryInfo, bool) error
@@ -68,6 +70,9 @@ func (s *Service) List(ctx context.Context, userID int64) ([]InstallationInfo, e
 // Link performs external verification before a short atomic persistence step.
 // A revision fence prevents lifecycle events from being overwritten by this API snapshot.
 func (s *Service) Link(ctx context.Context, code string, userID, githubUserID, installationID int64) error {
+	if s.app == nil || s.authorization == nil {
+		return errors.New("GitHub App linking is not configured")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 	revision, err := s.store.Prepare(ctx, installationID)
@@ -112,6 +117,9 @@ func (s *Service) Link(ctx context.Context, code string, userID, githubUserID, i
 // HandleEvent accepts already authenticated/parsed GitHub payloads; it is not an
 // HTTP receiver. A future receiver must verify signature and delivery provenance.
 func (s *Service) HandleEvent(ctx context.Context, event any) error {
+	if s.app == nil {
+		return errors.New("GitHub App lifecycle client is not configured")
+	}
 	var id int64
 	var account, status string
 	var added, removed []RepositoryInfo

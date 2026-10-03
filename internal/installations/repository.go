@@ -14,6 +14,7 @@ import (
 type database interface {
 	dbgen.DBTX
 	Begin(context.Context) (pgx.Tx, error)
+	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
 }
 type Repository struct{ db database }
 

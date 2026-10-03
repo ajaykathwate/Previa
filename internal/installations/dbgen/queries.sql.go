@@ -11,6 +11,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countRepositoryPage = `-- name: CountRepositoryPage :one
+SELECT count(*) FROM repos r JOIN installations i ON i.id = r.installation_id
+WHERE i.owner_user_id = $1
+ AND strpos(lower(r.full_name), lower($2::text)) > 0
+ AND ($3::text = 'all'
+   OR ($3::text = 'available' AND r.accessible AND i.status = 'active')
+   OR ($3::text = 'unavailable' AND NOT (r.accessible AND i.status = 'active')))
+`
+
+type CountRepositoryPageParams struct {
+	UserID pgtype.Int8
+	Search string
+	Access string
+}
+
+func (q *Queries) CountRepositoryPage(ctx context.Context, arg CountRepositoryPageParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countRepositoryPage, arg.UserID, arg.Search, arg.Access)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const ensureInstallation = `-- name: EnsureInstallation :exec
 INSERT INTO installations (github_installation_id, status)
 VALUES ($1, 'active') ON CONFLICT (github_installation_id) DO NOTHING
@@ -41,6 +63,28 @@ func (q *Queries) GetRepositoryInstallation(ctx context.Context, githubRepoID pg
 	var installation_id int64
 	err := row.Scan(&installation_id)
 	return installation_id, err
+}
+
+const getWorkspaceSummary = `-- name: GetWorkspaceSummary :one
+SELECT
+ (SELECT count(*) FROM installations own_i WHERE own_i.owner_user_id = $1) AS installations,
+ count(*) AS repositories,
+ count(*) FILTER (WHERE r.accessible AND i.status = 'active') AS available
+FROM repos r JOIN installations i ON i.id = r.installation_id
+WHERE i.owner_user_id = $1
+`
+
+type GetWorkspaceSummaryRow struct {
+	Installations int64
+	Repositories  int64
+	Available     int64
+}
+
+func (q *Queries) GetWorkspaceSummary(ctx context.Context, ownerUserID pgtype.Int8) (GetWorkspaceSummaryRow, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceSummary, ownerUserID)
+	var i GetWorkspaceSummaryRow
+	err := row.Scan(&i.Installations, &i.Repositories, &i.Available)
+	return i, err
 }
 
 const linkInstallation = `-- name: LinkInstallation :exec
@@ -98,6 +142,68 @@ func (q *Queries) ListLinkedInstallations(ctx context.Context, ownerUserID pgtyp
 			&i.FullName,
 			&i.GithubRepoID,
 			&i.Accessible,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRepositoryPage = `-- name: ListRepositoryPage :many
+SELECT r.id, r.full_name, r.accessible, i.status, i.account_login, i.github_installation_id
+FROM repos r JOIN installations i ON i.id = r.installation_id
+WHERE i.owner_user_id = $1
+ AND strpos(lower(r.full_name), lower($2::text)) > 0
+ AND ($3::text = 'all'
+   OR ($3::text = 'available' AND r.accessible AND i.status = 'active')
+   OR ($3::text = 'unavailable' AND NOT (r.accessible AND i.status = 'active')))
+ORDER BY lower(r.full_name), r.id
+LIMIT $5::bigint OFFSET $4::bigint
+`
+
+type ListRepositoryPageParams struct {
+	UserID     pgtype.Int8
+	Search     string
+	Access     string
+	PageOffset int64
+	PageSize   int64
+}
+
+type ListRepositoryPageRow struct {
+	ID                   int64
+	FullName             string
+	Accessible           bool
+	Status               string
+	AccountLogin         string
+	GithubInstallationID int64
+}
+
+func (q *Queries) ListRepositoryPage(ctx context.Context, arg ListRepositoryPageParams) ([]ListRepositoryPageRow, error) {
+	rows, err := q.db.Query(ctx, listRepositoryPage,
+		arg.UserID,
+		arg.Search,
+		arg.Access,
+		arg.PageOffset,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRepositoryPageRow
+	for rows.Next() {
+		var i ListRepositoryPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.FullName,
+			&i.Accessible,
+			&i.Status,
+			&i.AccountLogin,
+			&i.GithubInstallationID,
 		); err != nil {
 			return nil, err
 		}

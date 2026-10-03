@@ -20,6 +20,8 @@ import (
 
 type UserSession interface {
 	UserIDs(context.Context) (int64, int64, bool)
+	Username(context.Context) (string, bool)
+	CSRFToken(context.Context) string
 }
 type Handler struct {
 	service  *Service
@@ -33,6 +35,10 @@ func NewHandler(service *Service, users UserSession, sessions *scs.SessionManage
 	return &Handler{service: service, users: users, sessions: sessions, slug: slug, logger: logger}
 }
 func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handler) {
+	r.With(requireUser).Get("/repositories", h.repositories)
+	if h.slug == "" {
+		return
+	}
 	r.With(requireUser).Post("/installations/start", h.start)
 	r.With(requireUser).Get("/installations/callback", h.setup)
 	r.With(requireUser).Get("/installations/authorize/callback", h.authorize)
@@ -113,7 +119,8 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.logger.InfoContext(r.Context(), "installation linked; authenticated repository verification completed", "installation_id", id)
-	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+	h.sessions.Put(r.Context(), "installation_notice", "linked")
+	http.Redirect(w, r, "/repositories", http.StatusSeeOther)
 }
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, status int, message string) {
 	templ.Handler(authpages.Error(message), templ.WithStatus(status)).ServeHTTP(w, r)

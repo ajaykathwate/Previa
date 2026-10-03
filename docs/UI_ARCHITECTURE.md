@@ -27,8 +27,11 @@ packages until actual reuse calls for one. Use aliases such as `authpages` and
 The root `web` package stays focused on assets; it does not aggregate page packages.
 The public home page is in `web/pages/home`; authenticated dashboard/session pages
 are in `web/pages/dashboard`, and auth error pages are in `web/pages/auth`.
-Successful OAuth redirects to `/dashboard`; logout returns to `/`. No future
-repository, build, or environment screens are scaffolded.
+Successful OAuth redirects to `/dashboard`; logout returns to `/`. Overview,
+Repositories, Builds, Environments and Developer tools are separate authenticated
+HTTP pages. `internal/installations` owns `/repositories`; `internal/dashboard`
+owns the overview, session, tools and honest build/environment placeholders.
+No build/environment backend feature is added by these presentation routes.
 
 `layouts.Document` owns the HTML document and local asset references. `layouts.Base`
 adds public navigation for standalone pages; `layouts.App` composes the shared
@@ -36,7 +39,7 @@ navbar, sidebar, mobile workspace navigation, and authenticated content slot.
 Authentication remains in handlers/middleware, never in templates.
 
 `web/styles/site.css` imports `base.css`, `home.css`, `workspace.css`,
-`confirmation.css`, and `motion.css`. Each owns its base and responsive rules;
+`repositories.css`, `confirmation.css`, and `motion.css`. Each owns its base and responsive rules;
 `theme.css` centralizes the approved palette and fonts without changing their values.
 The existing pipeline still produces one embedded stylesheet. Duplicate selector
 declarations are consolidated rather than overridden by later blocks. Reduced
@@ -45,7 +48,8 @@ explicitly labeled as concepts; dashboard identity and queue results use actual
 server values. No invented metrics or activity are displayed.
 
 `layouts.App` receives an explicit `components.NavItem`; page titles do not decide
-which navigation item is active. Only Overview and no-selection exist today.
+which navigation item is active. Overview, Repositories, Environments, Builds, Developer tools and no-selection
+are explicit values. Sidebar/mobile links use real URLs, not dashboard anchors.
 
 `web/static/js/ui.js` has private initializers for motion, navigation, confirmation
 dialogs, account menus, and queue forms. It remains one plain browser script.
@@ -156,3 +160,24 @@ Checks cover responsive/sticky navigation, mobile anchors, modal focus/dismissal
 logout/session deletion, CSRF failures, configured installation-list responsiveness,
 queue feedback, motion and no-JavaScript
 behavior. See [browser test instructions](../web/tests/browser/README.md).
+
+## Repository browsing
+
+`internal/installations/queries.sql` scopes every count/list to the logged-in
+user's installation ownership. The page uses a fixed 25-row limit, stable
+case-insensitive name/ID ordering, a literal case-insensitive substring search
+(up to 100 characters), and all/available/unavailable access filters. Suspended
+or inactive installations cannot count as available. Count and list share a
+read-only repeatable-read transaction; empty results have one empty page and
+requests beyond the last page redirect to the last valid page before rendering.
+Search submissions reset to page 1; pagination preserves query/filter values.
+No application-side full repository list is used to render pages.
+
+Overview reads actual aggregate counts only. The repositories page has its
+connection action at the top, differentiated empty and no-match states, explicit
+access badges, a displayed record range, and bounded page-number navigation.
+The action changes from Install on a repo to Manage connections once an
+installation is linked. It still uses the existing verified redirect flow;
+there is no new management API or automatic synchronization. Linking returns
+to Repositories with a session-backed, one-use confirmation notice.
+All pages reuse the sticky header, sidebar, logout modal, palette and fonts.

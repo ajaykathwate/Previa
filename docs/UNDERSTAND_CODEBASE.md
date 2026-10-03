@@ -12,8 +12,9 @@ Previa is a Go application for creating temporary preview environments for GitHu
 pull requests. The repository currently has a working HTTP server with GitHub
 OAuth sessions, verified GitHub App installation linking, PostgreSQL persistence, and a separate River worker. The browser
 public home page leads to GitHub sign-in and a protected `/dashboard`, which
-contains signed-in identity, linked installation/repository records when configured, upcoming runtime sections, and a
-collapsible Developer tools queue check. Generation-fenced build/teardown orchestration and the durable-publication
+shows database-derived overview counts. Separate protected pages provide
+paginated repositories (`/repositories`), placeholder builds (`/builds`) and
+environments (`/environments`), and queue diagnostics (`/developer-tools`). Generation-fenced build/teardown orchestration and the durable-publication
 database/River foundation are implemented and tested behind interfaces. The real
 webhook HTTP adapter, Docker runtime, router publication, GitHub reporting, and
 production reconciliation runner are not connected. Do not infer that a preview
@@ -34,13 +35,13 @@ queries into feature `dbgen` packages.
 | `internal/platform/database/` | pgx pool construction and health checks. |
 | `internal/platform/queue/` | River client, ping job, queue registration, and per-kind timeout policy. |
 | `internal/platform/httpx/` | chi router and shared HTTP middleware. |
-| `web/layouts/`, `web/pages/` | Public HTML shell, authenticated app shell, and home/auth/dashboard pages; no backend imports. |
-| `web/components/`, `web/styles/` | Stable templUI source, explicit navigation keys, Tailwind CSS with shared theme tokens and base/home/workspace/confirmation/motion sources. |
+| `web/layouts/`, `web/pages/` | Public HTML shell, authenticated app shell, and home/auth/dashboard/repository/build/environment pages; no backend imports. |
+| `web/components/`, `web/styles/` | Stable templUI source, explicit navigation keys, Tailwind CSS with shared theme tokens and base/home/workspace/repositories/confirmation/motion sources. |
 | `web/assets.go`, `web/static/` | Embedded browser assets, including generated CSS, local HTMX, and progressive menu/queue-form JavaScript. |
 | `internal/auth/` | GitHub OAuth, user upsert, sessions, CSRF, and logout. |
-| `internal/installations/` | Verified redirect linking, App user authorization, lifecycle functions, SQL and persistence tests; no webhook endpoint. |
+| `internal/installations/` | Verified redirect linking, App user authorization, lifecycle functions, ownership-scoped search/access filters and 25-row database pagination; SQL and persistence tests; no webhook endpoint. |
 | `internal/platform/githubapp/` | App JWT signing and bounded, cached installation authentication using ghinstallation v2.18.0. |
-| `internal/dashboard/` | Public home, protected dashboard/session routes, and CSRF-protected ping action. |
+| `internal/dashboard/` | Public home, overview/session/tools and build/environment placeholder routes; CSRF-protected ping action. |
 | `internal/webhooks/` | PR state/generation persistence and transactional enqueueing; HTTP validation/signature endpoint is not connected yet. |
 | `internal/environments/` | Generation-aware build/teardown jobs, fenced active/pending state, durable operation outbox, operation worker/recovery, and reconciler interfaces. External adapters are not wired. |
 | `db/migrations/` | Goose-managed application schema migrations. |

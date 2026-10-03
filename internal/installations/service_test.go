@@ -162,3 +162,10 @@ func TestLifecycleFixturePayloads(t *testing.T) {
 		}
 	}
 }
+
+func (f *fakeStore) Summary(context.Context, int64) (WorkspaceSummary, error) {
+	return WorkspaceSummary{}, nil
+}
+func (f *fakeStore) Page(_ context.Context, _ int64, filter RepositoryFilter) (RepositoryPage, error) {
+	return RepositoryPage{Page: 1, Pages: 1, Filter: filter}, nil
+}

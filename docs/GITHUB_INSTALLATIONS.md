@@ -62,7 +62,8 @@ make run-server
 ```
 
 1. Visit **http://localhost:8080**, sign in, and arrive at **/dashboard**.
-2. In **Repositories**, click **Install on a repo**. This submits the CSRF-protected
+2. Open **Repositories** (`/repositories`), then click **Install on a repo**
+   in the page header (or **Manage connections** after linking). This submits the CSRF-protected
    `POST /installations/start`; GitHub opens
    `https://github.com/apps/<slug>/installations/new?state=<random-state>`.
 3. Select a test repository and approve installation. If organization-owner approval
@@ -76,10 +77,11 @@ make run-server
    App-authenticated installation metadata confirms this is an installation of our
    App and is not suspended. An installation token then authenticates a repository
    listing and, when a repository exists, its metadata lookup.
-6. Expected: return to `/dashboard` with the linked account, installation ID, status,
-   and repository names/access state. The server logs a successful link without
+6. Expected: return to `/repositories` with a connection confirmation and the linked
+   repository names, account, installation ID and access state. Lists use 25 rows
+   per page; search and access filters run against the database. The server logs a successful link without
    exposing credentials. No build/job is started. Refreshing preserves DB records.
-7. For selection updates, start again from **Install on a repo** and manage the
+7. For selection updates, start again from **Manage connections** and manage the
    existing installation. A callback opened manually without the session-bound state
    is rejected; use the dashboard flow. External GitHub changes do not automatically
    synchronize this local database until lifecycle delivery is wired in a later phase.
@@ -116,9 +118,9 @@ credentials, installation approval, and GitHub network access.
 - Feature: `internal/installations` contains handler, service, authorization,
   repository, SQL and tests. GitHub JWT/token transport is in
   `internal/platform/githubapp`; `ghinstallation/v2` is pinned to **v2.18.0**.
-- `internal/app` constructs dependencies and adapts installation records to simple
-  dashboard display models. Presentation remains under `web/pages/dashboard` and
-  imports no backend packages. A consumer-owned reader keeps dashboard independent
+- `internal/app` constructs dependencies and adapts installation counts to simple
+  overview display models. Repository handlers pass view data to `web/pages/repositories` and
+  presentation imports no backend packages. A consumer-owned summary reader keeps dashboard independent
   of the installations implementation. Approved styles/modal behavior stay intact.
 - `0005_installation_linking.sql` extends the existing tables: nullable owner,
   `active`/`suspended`/`inactive` status, account login, installation revision,

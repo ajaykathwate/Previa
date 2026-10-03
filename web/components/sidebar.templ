@@ -3,21 +3,11 @@ package components
 templ SidebarContent(active NavItem) {
 	<div class="sidebar-label">WORKSPACE</div>
 	<nav aria-label="Workspace navigation" class="sidebar-nav">
-		<a
-			href="/dashboard"
-			if active == NavOverview {
-				aria-current="page"
-			}
-		>
-			<span class="nav-symbol" aria-hidden="true">◈</span>Overview
-			if active == NavOverview {
-				<span class="active-dot" aria-hidden="true"></span>
-			}
-		</a>
-		<a href="/dashboard#repositories"><span class="nav-symbol" aria-hidden="true">⌘</span>Repositories<span class="nav-upcoming">Soon</span></a>
-		<a href="/dashboard#environments"><span class="nav-symbol" aria-hidden="true">◎</span>Environments<span class="nav-upcoming">Soon</span></a>
-		<a href="/dashboard#builds"><span class="nav-symbol" aria-hidden="true">↗</span>Builds<span class="nav-upcoming">Soon</span></a>
-		<a href="/dashboard#queue-check"><span class="nav-symbol" aria-hidden="true">↗</span>Developer tools</a>
+		@WorkspaceLink("/dashboard", "Overview", "◈", NavOverview, active)
+		@WorkspaceLink("/repositories", "Repositories", "⌘", NavRepositories, active)
+		@WorkspaceLink("/environments", "Environments", "◎", NavEnvironments, active)
+		@WorkspaceLink("/builds", "Builds", "↗", NavBuilds, active)
+		@WorkspaceLink("/developer-tools", "Developer tools", "↗", NavTools, active)
 	</nav>
 	<div class="sidebar-note">
 		<span class="eyebrow">A little room to grow</span>
@@ -38,4 +28,19 @@ templ Sidebar(active NavItem) {
 		@SidebarContent(active)
 		<div class="sidebar-bottom"><span class="status-dot" aria-hidden="true"></span>Built to be yours.<span>Self-hosted by design</span></div>
 	</aside>
+}
+
+// WorkspaceLink renders identical desktop/mobile navigation with explicit selection.
+templ WorkspaceLink(href string, label string, symbol string, item NavItem, active NavItem) {
+	<a
+		href={ href }
+		if active==item {
+			aria-current="page"
+		}
+	>
+		<span class="nav-symbol" aria-hidden="true">{ symbol }</span>{ label }
+		if active==item {
+			<span class="active-dot" aria-hidden="true"></span>
+		}
+	</a>
 }

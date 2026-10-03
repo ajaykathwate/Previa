@@ -53,7 +53,9 @@ async function assertNoOverflow() {
 }
 
 test('public home and protected dashboard access', async () => {
-  assert.equal((await context.request.get(`${origin}/dashboard`, {maxRedirects: 0})).status(), 303);
+  for (const route of ['/dashboard','/repositories','/builds','/environments','/developer-tools']) {
+    assert.equal((await context.request.get(`${origin}${route}`, {maxRedirects:0})).status(),303);
+  }
   await page.goto(origin);
   assert.match(await page.locator('h1').innerText(), /Review the branch/);
   assert.equal(await page.locator('[data-queue-form]').count(), 0);
@@ -63,7 +65,7 @@ test('public home and protected dashboard access', async () => {
 
 test('responsive dashboard sticky navigation and honest placeholders', async () => {
   await login();
-  assert(await page.getByRole('button', {name: 'Connect a repository'}).isDisabled());
+  await page.goto(`${origin}/repositories`);
   for (const width of [320, 390, 768, 1024, 1440]) {
     await page.setViewportSize({width, height: 844});
     await assertNoOverflow();
@@ -72,34 +74,34 @@ test('responsive dashboard sticky navigation and honest placeholders', async () 
     assert.equal(await page.locator('.app-header').evaluate(e => Math.round(e.getBoundingClientRect().top)), 0);
     await page.evaluate(() => scrollTo({top: 0, behavior: 'instant'}));
   }
-  for (const id of ['repositories', 'environments', 'builds']) {
-    assert.equal(await page.locator(`#${id}`).count(), 1);
-  }
-  assert.equal(await page.locator('.tools-disclosure').getAttribute('open'), null);
+  assert.equal(await page.locator('.repository-row').count(), 25);
+  assert.equal(await page.locator('[data-queue-form]').count(), 0);
 });
 
-test('mobile navigation closes and reveals the selected section', async () => {
+test('mobile navigation opens separate pages and highlights the destination', async () => {
   await login();
   await page.setViewportSize({width: 390, height: 844});
   await page.emulateMedia({reducedMotion: 'reduce'});
   await page.locator('.mobile-workspace-nav summary').click();
-  await page.locator('.mobile-workspace-nav a[href="/dashboard#builds"]').click();
+  await page.locator('.mobile-workspace-nav a[href="/builds"]').click();
   assert.equal(await page.locator('.mobile-workspace-nav').getAttribute('open'), null);
-  assert(await page.locator('#builds').evaluate(e => e.getBoundingClientRect().top >= 118));
+  await page.waitForURL(`${origin}/builds`);
+  assert.equal(await page.locator('h1').innerText(), 'Builds');
   await page.locator('.mobile-workspace-nav summary').click();
-  await page.locator('.mobile-workspace-nav a[href="/dashboard#queue-check"]').click();
+  await page.locator('.mobile-workspace-nav a[href="/developer-tools"]').click();
   await page.waitForFunction(() => document.querySelector('.tools-disclosure').open);
   assert.notEqual(await page.locator('.tools-disclosure').getAttribute('open'), null);
 });
 
 test('logout modal preserves page scroll and traps and restores focus', async () => {
   await login();
+  await page.goto(`${origin}/repositories`);
   await page.evaluate(() => scrollTo({top: 450, behavior: 'instant'}));
   const scroll = await page.evaluate(() => scrollY);
   let logoutRequests = 0;
   page.on('request', request => { if (request.method() === 'POST' && request.url().endsWith('/auth/logout')) logoutRequests++; });
   await openLogout();
-  assert.equal(page.url(), `${origin}/dashboard`);
+  assert.equal(page.url(), `${origin}/repositories`);
   assert.equal(await page.evaluate(() => scrollY), scroll);
   assert.equal(await page.evaluate(() => document.activeElement.textContent.trim()), 'Cancel');
   for (const key of ['Tab', 'Tab', 'Tab', 'Shift+Tab', 'Shift+Tab', 'Shift+Tab']) {
@@ -139,7 +141,7 @@ test('modal works on session page and confirmed logout invalidates session', asy
 
 test('queue feedback handles pending duplicate failures and expired session', async () => {
   await login();
-  await page.locator('.tools-disclosure summary').click();
+  await page.goto(`${origin}/developer-tools`);
   const submit = page.getByRole('button', {name: 'Send a ping', exact: true});
   const result = page.locator('[data-queue-result]');
   await submit.click();
@@ -200,6 +202,10 @@ test('content and native confirmation remain usable without JavaScript', async (
     assert.equal(await nativePage.locator('#principles .principles-grid').evaluate(e => getComputedStyle(e).opacity), '1');
     await nativePage.goto(`${origin}/auth/github/login`);
     await nativePage.waitForURL(`${origin}/dashboard`);
+    await nativePage.goto(`${origin}/repositories?page=2`);
+    assert.equal(await nativePage.locator('.repository-row').count(),25);
+    await nativePage.getByRole('link',{name:'Previous page',exact:true}).click();
+    assert.equal(new URL(nativePage.url()).searchParams.get('page'),'1');
     await nativePage.locator('.account-menu summary').click();
     await nativePage.getByRole('button', {name: 'Log out', exact: true}).click();
     assert(await nativePage.locator('#logout-confirmation').evaluate(e => e.matches(':modal')));
@@ -208,19 +214,24 @@ test('content and native confirmation remain usable without JavaScript', async (
   } finally { await noJS.close(); }
 });
 
-test('configured installation dashboard renders records and remains responsive', async () => {
+test('repository pagination preserves filters and connection action is in the header', async () => {
   await login();
-  await page.goto(`${origin}/fixture-installations`);
-  await page.emulateMedia({reducedMotion: 'reduce'});
-  assert.match(await page.locator('.installation-summary').innerText(), /fixture-owner/);
-  assert.equal(await page.getByText('Access granted', {exact: true}).count(), 1);
-  assert.equal(await page.getByText('Access unavailable', {exact: true}).count(), 1);
+  await page.goto(`${origin}/repositories?q=fixture&access=available`);
+  assert.equal(await page.locator('.repository-row').count(), 25);
+  assert.equal(await page.locator('.repository-row .unavailable').count(), 0);
   const form = page.locator('form[action="/installations/start"]');
   assert.equal(await form.getAttribute('method'), 'post');
   assert(await form.locator('[name="csrf_token"]').inputValue());
-  assert(await page.getByRole('button', {name: 'Install on a repo'}).isEnabled());
-  for (const width of [320, 390, 768, 1440]) {
-    await page.setViewportSize({width, height: 844});
-    await assertNoOverflow();
-  }
+  const manage = page.getByRole('button', {name: 'Manage connections'});
+  assert(await manage.isEnabled());
+  assert.equal(await manage.evaluate(e => getComputedStyle(e).cursor), 'pointer');
+  assert.equal(await page.locator('.workspace-page-heading form').count(), 1);
+  await page.getByRole('link', {name:'Next page',exact:true}).click();
+  const location = new URL(page.url());
+  assert.equal(location.searchParams.get('page'), '2');
+  assert.equal(location.searchParams.get('q'), 'fixture');
+  assert.equal(location.searchParams.get('access'), 'available');
+  assert.match(await page.locator('.repository-pagination p').innerText(), /26–50 of 75/);
+  assert.equal(await page.locator('.repository-row').count(), 25);
+  for (const width of [320,390,768,1440]) { await page.setViewportSize({width,height:844}); await assertNoOverflow(); }
 });

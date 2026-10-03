@@ -12,7 +12,7 @@ configuration is detailed in [GITHUB_INSTALLATIONS.md](docs/GITHUB_INSTALLATIONS
   and Air development reload.
 - GitHub OAuth login, persisted users, server-side sessions, login rotation,
   protected routes, CSRF protection, and logout.
-- Verified GitHub App installation linking, user-only dashboard records, cached
+- Verified GitHub App installation linking, ownership-scoped repository records, cached
   installation-token authentication and directly tested lifecycle functions; no
   installation webhook receiver or preview job enqueueing.
 - River v0.47.0 producer in the server and a separate worker process. The only
@@ -25,7 +25,7 @@ configuration is detailed in [GITHUB_INSTALLATIONS.md](docs/GITHUB_INSTALLATIONS
   generation-guarded state transition, operation row, and River wake-up. Operation
   calls run outside database transactions; final database writes are generation
   checked. The bounded reconciler contract exists but is not scheduled in app.
-- Authenticated, CSRF-protected `POST /queue/ping`, exposed through the protected dashboard's
+- Authenticated, CSRF-protected `POST /queue/ping`, exposed through the protected `/developer-tools`
   queue-check form. It returns HTTP 202 with `job_id` and `duplicate`.
 
 ## Configuration: what to put in `.env`
@@ -394,3 +394,43 @@ rerun; existing HTTP auth/session/CSRF tests passed. No database schema changed.
   browser scenarios (including configured-list rendering at 320–1440px), and
   `git diff --check`. Local server startup health-checked the DB and served HTTP 200
   with App settings unset. The smoke server was stopped; PostgreSQL remains running.
+
+## Separate workspace pages and repository UX (2026-10-03)
+
+- Overview, Repositories, Builds, Environments and Developer tools use distinct
+  authenticated routes; desktop/mobile navigation explicitly marks the current page.
+- Overview uses real aggregate counts. Repositories queries only 25 records per
+  page, with stable ordering, ownership scope, literal name search and access filter.
+  Count/list share a read-only repeatable-read snapshot; invalid inputs are rejected
+  and out-of-range pages redirect safely. No migration or new configuration is needed.
+- The connection action lives in the page header and changes to Manage connections
+  after linking. It starts the existing verified GitHub flow, which now returns to
+  Repositories with a one-use confirmation. Existing accounts can be refreshed and
+  additional accounts linked; lifecycle synchronization remains a later feature.
+- Differentiated empty/filter states, bounded page links, responsive rows, explicit
+  available/unavailable badges, record ranges, pointer cursors and keyboard focus
+  indicators improve browsing. Approved palette/fonts and shared logout modal remain.
+- Builds and Environments are presentation-only placeholders, without invented
+  metrics or backend functionality. Queue diagnostics moved to Developer tools.
+- Root README.md remains unchanged. No new dependencies, River UI, or frontend service.
+- No further architecture decision needs approval for this task.
+
+- Verification: full PostgreSQL tests pass, including a 150-repository fixture,
+  six pages without cross-user leakage, case-insensitive literal search, access
+  filtering, suspended-installation filtering and maximum-integer page clamping.
+  HTTP tests cover anonymous access, optional App configuration, invalid query
+  parameters, safe database errors and redirect filter preservation.
+- A concrete development build race appeared when asset generation overlapped Go
+  compilation: temporary CSS files were accidentally included by `go:embed static`.
+  Make now uses hidden temporary CSS names, which Go embed ignores, while keeping
+  the existing atomic rename. This is a small build fix, not a pipeline redesign.
+- Local configuration issue discovered independently: `.env` line 38 is not a shell
+  assignment and fails when sourced. It was left untouched; comment out or remove
+  that non-configuration line before running commands that load `.env`. DB tests
+  used the documented local Compose connection directly instead.
+
+- Final verification: build and unit tests pass; vet and golangci-lint report zero
+  issues; all nine browser scenarios pass, including five protected routes,
+  responsive layouts (320–1440px), sticky header, filter-preserving pagination,
+  no-JavaScript page links, queue feedback and logout modal/session regression.
+  Full database regression tests pass; root README.md is unchanged.

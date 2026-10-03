@@ -55,3 +55,30 @@ WHERE github_repo_id = sqlc.arg(github_repo_id)
       AND new_i.owner_user_id IS NOT NULL
       AND old_i.owner_user_id = new_i.owner_user_id
   );
+
+-- name: GetWorkspaceSummary :one
+SELECT
+ (SELECT count(*) FROM installations own_i WHERE own_i.owner_user_id = $1) AS installations,
+ count(*) AS repositories,
+ count(*) FILTER (WHERE r.accessible AND i.status = 'active') AS available
+FROM repos r JOIN installations i ON i.id = r.installation_id
+WHERE i.owner_user_id = $1;
+
+-- name: CountRepositoryPage :one
+SELECT count(*) FROM repos r JOIN installations i ON i.id = r.installation_id
+WHERE i.owner_user_id = sqlc.arg(user_id)
+ AND strpos(lower(r.full_name), lower(sqlc.arg(search)::text)) > 0
+ AND (sqlc.arg(access)::text = 'all'
+   OR (sqlc.arg(access)::text = 'available' AND r.accessible AND i.status = 'active')
+   OR (sqlc.arg(access)::text = 'unavailable' AND NOT (r.accessible AND i.status = 'active')));
+
+-- name: ListRepositoryPage :many
+SELECT r.id, r.full_name, r.accessible, i.status, i.account_login, i.github_installation_id
+FROM repos r JOIN installations i ON i.id = r.installation_id
+WHERE i.owner_user_id = sqlc.arg(user_id)
+ AND strpos(lower(r.full_name), lower(sqlc.arg(search)::text)) > 0
+ AND (sqlc.arg(access)::text = 'all'
+   OR (sqlc.arg(access)::text = 'available' AND r.accessible AND i.status = 'active')
+   OR (sqlc.arg(access)::text = 'unavailable' AND NOT (r.accessible AND i.status = 'active')))
+ORDER BY lower(r.full_name), r.id
+LIMIT sqlc.arg(page_size)::bigint OFFSET sqlc.arg(page_offset)::bigint;

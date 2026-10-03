@@ -847,11 +847,3 @@
   }
 
 }
-
-/* Real installation records reuse the approved workspace palette. */
-.installation-summary { padding: 24px 28px; border-top: 1px solid var(--ui-border-panel); }
-.installation-summary h3 { color: var(--ui-text-heading); margin-bottom: 6px; }
-.installation-summary p { color: var(--ui-text-muted); font-size: 14px; }
-.installation-repositories { list-style: none; padding: 0; margin-top: 16px; }
-.installation-repositories li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 12px 0; overflow-wrap: anywhere; border-top: 1px solid var(--ui-border-footer); }
-.installation-access { color: var(--ui-text-link); font-size: 13px; }

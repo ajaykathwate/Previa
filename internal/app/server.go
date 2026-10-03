@@ -46,40 +46,26 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	}
 	pings := queue.NewService(pool, producer)
 
-	var installationHandler *installations.Handler
-	var installationList dashboard.InstallationList
+	service := installations.NewService(installations.NewRepository(pool), nil, nil, nil)
 	if cfg.GitHubAppID != 0 {
 		appClient, err := githubapp.New(cfg)
 		if err != nil {
 			return fmt.Errorf("initialize GitHub App: %w", err)
 		}
-		service := installations.NewService(installations.NewRepository(pool), appClient, installations.NewGitHubAuthorization(cfg), nil)
-		installationHandler = installations.NewHandler(service, authHandler, sessions, cfg.GitHubAppSlug, logger)
-		installationList = func(ctx context.Context, userID int64) ([]dashboardpages.Installation, error) {
-			linked, err := service.List(ctx, userID)
-			if err != nil {
-				return nil, err
-			}
-			pages := make([]dashboardpages.Installation, 0, len(linked))
-			for _, installation := range linked {
-				page := dashboardpages.Installation{ID: installation.ID, Account: installation.Account, Status: installation.Status}
-				for _, repo := range installation.Repositories {
-					page.Repositories = append(page.Repositories, dashboardpages.Repository{FullName: repo.FullName, Accessible: repo.Accessible})
-				}
-				pages = append(pages, page)
-			}
-			return pages, nil
-		}
+		service = installations.NewService(installations.NewRepository(pool), appClient, installations.NewGitHubAuthorization(cfg), nil)
+	}
+	installationHandler := installations.NewHandler(service, authHandler, sessions, cfg.GitHubAppSlug, logger)
+	summaryReader := func(ctx context.Context, userID int64) (dashboardpages.Summary, error) {
+		summary, err := service.Summary(ctx, userID)
+		return dashboardpages.Summary{Installations: summary.Installations, Repositories: summary.Repositories, Available: summary.Available}, err
 	}
 	router := httpx.NewRouter(logger)
 	router.Handle("/static/*", web.StaticHandler())
 	router.Group(func(r chi.Router) {
 		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
 		authHandler.Mount(r)
-		dashboard.MountWithInstallations(r, authHandler, auth.RequireUser, installationList, authHandler.UserIDs)
-		if installationHandler != nil {
-			installationHandler.Mount(r, auth.RequireUser)
-		}
+		dashboard.MountWithSummary(r, authHandler, auth.RequireUser, summaryReader, authHandler.UserIDs)
+		installationHandler.Mount(r, auth.RequireUser)
 		dashboard.MountPing(r, pings, auth.RequireUser, logger)
 	})
 	server := &http.Server{

@@ -19,9 +19,10 @@ import (
 	"github.com/ajaykathwatee/previa/internal/dashboard"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/web"
-	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
+	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
 	"github.com/alexedwards/scs/v2/memstore"
 	"github.com/go-chi/chi/v5"
+	"strconv"
 )
 
 // This opt-in suite exercises the real UI, session, and CSRF middleware without
@@ -44,14 +45,38 @@ func TestBrowserRegression(t *testing.T) {
 		handler.Mount(r)
 		dashboard.Mount(r, handler, auth.RequireUser)
 		dashboard.MountPing(r, fixturePings{}, auth.RequireUser, logger)
-		// Test-only view of the configured branch; never mounted by internal/app.
-		r.With(auth.RequireUser).Get("/fixture-installations", func(w http.ResponseWriter, r *http.Request) {
-			templ.Handler(dashboardpages.Index("design-review", handler.CSRFToken(r.Context()), true, []dashboardpages.Installation{
-				{ID: 99, Account: "fixture-owner", Status: "active", Repositories: []dashboardpages.Repository{
-					{FullName: "fixture-owner/a-long-repository-name-for-responsive-layout-verification", Accessible: true},
-					{FullName: "fixture-owner/removed"},
-				}},
-			})).ServeHTTP(w, r)
+		// Test-only paged repository views. Database pagination is verified separately.
+		r.With(auth.RequireUser).Get("/repositories", func(w http.ResponseWriter, r *http.Request) {
+			number, _ := strconv.ParseInt(r.URL.Query().Get("page"), 10, 64)
+			if number < 1 {
+				number = 1
+			}
+			data := repositorypages.Page{Installations: 2, Enabled: true, Search: r.URL.Query().Get("q"), Access: r.URL.Query().Get("access")}
+			if data.Access == "" {
+				data.Access = "all"
+			}
+			var rows []repositorypages.Row
+			for i := int64(1); i <= 150; i++ {
+				row := repositorypages.Row{FullName: "fixture-owner/a-long-repository-name-for-responsive-layout-verification-" + strconv.FormatInt(i, 10), Account: "fixture-owner", InstallationID: 99, Status: "active", Accessible: i%2 == 1}
+				if !strings.Contains(strings.ToLower(row.FullName), strings.ToLower(data.Search)) {
+					continue
+				}
+				if data.Access == "available" && !row.Accessible || data.Access == "unavailable" && row.Accessible {
+					continue
+				}
+				rows = append(rows, row)
+			}
+			data.Total = int64(len(rows))
+			data.Pages = max(int64(1), (data.Total+24)/25)
+			data.Number = min(number, data.Pages)
+			offset := (data.Number - 1) * 25
+			if data.Total > 0 {
+				data.Start = offset + 1
+				data.End = min(offset+25, data.Total)
+				data.Rows = rows[offset:data.End]
+			}
+
+			templ.Handler(repositorypages.Index("design-review", handler.CSRFToken(r.Context()), data)).ServeHTTP(w, r)
 		})
 	})
 	server.Start()

@@ -142,3 +142,8 @@ button:focus-visible {
   }
 
 }
+
+/* Tailwind's reset uses the default cursor; actionable controls need feedback. */
+a[href], button:not(:disabled), summary, select, input[type="submit"] { cursor: pointer; }
+button:disabled, [aria-disabled="true"] { cursor: not-allowed; }
+a:focus-visible, summary:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; }

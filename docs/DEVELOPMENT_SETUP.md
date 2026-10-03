@@ -101,7 +101,8 @@ URL** `http://localhost:8080/installations/authorize/callback`. Leave automatic 
 on installation unchecked; Previa explicitly starts it after the setup redirect.
 Leave webhooks inactive until their HTTP receiver is implemented.
 
-After migrations and server startup, visit `/dashboard` and click **Install on a repo**.
+After migrations and server startup, open **Repositories** (`/repositories`) and click **Install on a repo**
+(or **Manage connections** after linking).
 Expected: select repositories on GitHub, authorize the same account, then return to
 linked installation/repository records. To independently prove token minting/API access:
 
@@ -274,7 +275,15 @@ address (default `127.0.0.1:8080`).
 
 The root URL serves the public home page. Click **Get started with GitHub** to sign
 in; successful authentication opens `/dashboard`, with the account navbar and
-workspace sidebar. Upcoming navigation links lead to labeled placeholder sections.
+workspace sidebar. Each navigation item opens its own page:
+
+- **Overview** (`/dashboard`): database-derived installation/repository/access counts.
+- **Repositories** (`/repositories`): 25 records per page, name search and access filters;
+  connection management is in the page header. GitHub links open in a new tab.
+- **Builds** (`/builds`) and **Environments** (`/environments`): dedicated placeholders
+  until their actual features are connected.
+- **Developer tools** (`/developer-tools`): the queue diagnostic.
+
 Open **Developer tools** to use the queue ping diagnostic; run the worker to process
 queued pings. The navbar remains visible while scrolling. The account menu leads
 to session details and a logout confirmation modal. Cancel or Escape keeps the

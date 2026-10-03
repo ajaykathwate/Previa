@@ -158,7 +158,7 @@ func TestInstallRedirectCallbackStateAndSession(t *testing.T) {
 				}
 				return
 			}
-			if code != 303 || location != "/dashboard" || !store.linked {
+			if code != 303 || location != "/repositories" || !store.linked {
 				t.Fatalf("link did not finish: %d %s", code, location)
 			}
 			if scenario == "replayed callback" {

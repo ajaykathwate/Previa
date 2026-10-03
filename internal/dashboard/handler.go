@@ -5,7 +5,9 @@ import (
 	"net/http"
 
 	"github.com/a-h/templ"
+	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
+	environmentpages "github.com/ajaykathwatee/previa/web/pages/environments"
 	homepages "github.com/ajaykathwatee/previa/web/pages/home"
 )
 
@@ -15,13 +17,13 @@ type UserSession interface {
 	CSRFToken(context.Context) string
 }
 
-// InstallationList supplies display data without coupling dashboard to another feature.
-type InstallationList func(context.Context, int64) ([]dashboardpages.Installation, error)
+// SummaryReader supplies counts without coupling dashboard to another feature.
+type SummaryReader func(context.Context, int64) (dashboardpages.Summary, error)
 
 type handler struct {
-	users         UserSession
-	installations InstallationList
-	userID        func(context.Context) (int64, int64, bool)
+	users   UserSession
+	summary SummaryReader
+	userID  func(context.Context) (int64, int64, bool)
 }
 
 func (h *handler) home(w http.ResponseWriter, r *http.Request) {
@@ -31,20 +33,33 @@ func (h *handler) home(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) dashboard(w http.ResponseWriter, r *http.Request) {
 	username, _ := h.users.Username(r.Context())
-	var linked []dashboardpages.Installation
-	if h.installations != nil {
+	var summary dashboardpages.Summary
+	if h.summary != nil {
 		id, _, _ := h.userID(r.Context())
 		var err error
-		linked, err = h.installations(r.Context(), id)
+		summary, err = h.summary(r.Context(), id)
 		if err != nil {
 			http.Error(w, "Repository connections are temporarily unavailable.", http.StatusServiceUnavailable)
 			return
 		}
 	}
-	templ.Handler(dashboardpages.Index(username, h.users.CSRFToken(r.Context()), h.installations != nil, linked)).ServeHTTP(w, r)
+	templ.Handler(dashboardpages.Index(username, h.users.CSRFToken(r.Context()), summary)).ServeHTTP(w, r)
 }
 
 func (h *handler) protected(w http.ResponseWriter, r *http.Request) {
 	username, _ := h.users.Username(r.Context())
 	templ.Handler(dashboardpages.Protected(username, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
+}
+
+func (h *handler) builds(w http.ResponseWriter, r *http.Request) {
+	username, _ := h.users.Username(r.Context())
+	templ.Handler(buildpages.Index(username, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
+}
+func (h *handler) environments(w http.ResponseWriter, r *http.Request) {
+	username, _ := h.users.Username(r.Context())
+	templ.Handler(environmentpages.Index(username, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
+}
+func (h *handler) tools(w http.ResponseWriter, r *http.Request) {
+	username, _ := h.users.Username(r.Context())
+	templ.Handler(dashboardpages.Tools(username, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
 }

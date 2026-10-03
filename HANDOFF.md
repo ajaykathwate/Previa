@@ -1,11 +1,9 @@
 # Project handoff
-
-Last updated: 2026-10-02
+Last updated: 2026-10-03
 
 ## Start here
 
 - `README.md` and `DESIGN.md` are source of truth; read only task-relevant sections.
-- Check `git status` before acting; verify this handoff against current code.
 - `docs/DEVELOPMENT_SETUP.md`, `.env.example`, `Makefile`, and `deploy/docker-compose.yml`
   describe setup. `TEMP.md` records verification; `docs/GITHUB_INSTALLATIONS.md` covers App setup.
 - `docs/GENERATION_ORDERING.md` explains the generation SQL, job handoff, outbox,
@@ -43,7 +41,9 @@ Last updated: 2026-10-02
 - OAuth callback: http://localhost:8080/auth/github/callback. Configure server-only
   OAuth ID/secret and SESSION_SECRET. Browser checks: `docs/AUTH_TESTING.md`.
 - `/` is public; GitHub sign-in redirects to protected `/dashboard` (sticky navbar/sidebar).
-  `/protected` shows session details; logout is a shared modal with a CSRF-protected POST.
+  Overview uses actual counts; `/repositories` has ownership-scoped SQL pagination
+  (25 rows), search/access filters; `/builds` and `/environments` are separate placeholders.
+  `/developer-tools` holds ping; `/protected` shows sessions; logout uses a shared modal.
 - Installations: verified redirect + separate App user authorization; status/repo access,
   revision fences, cached tokens, parsed lifecycle functions. Cleanup adapter is not wired.
 - Default production queue still runs only ping. Webhook HTTP,
@@ -84,16 +84,16 @@ Last updated: 2026-10-02
   Section 15. See generation documentation for exact integration requirements.
 
 ## Verification
-
-- Build/tests/vet/lint, full DB tests and nine browser scenarios pass; startup HTTP 200.
+- Build/tests/vet/lint, full DB tests and nine browser scenarios pass.
+  Pages, 150-repository pagination, ownership/search/access filters and no-JS links verified.
   Optional `make browser-install`/`make test-browser`; App proof pending, see TEMP.md.
 - Goose 5 applied locally; installation ownership/lifecycle/revision/rename/reinstall
-  tests pass in isolated schemas. Real App proof requires credentials (currently absent).
+  tests pass in isolated schemas. Real App proof requires credentials and an installation.
 - PostgreSQL/River tests cover late success/failure, close during build, stale queued
   work, cleanup retry/order, old-preview preservation, both lock-race directions,
   exact concurrent increments, enqueue rollback, captured generation/handoff,
   durable operation retry/finalization/recovery, pending artifact protection, and
   nonblocking external publication.
-- River rescue tests and installation/token race checks pass; build/tests/vet/lint pass.
-- Earlier worker/OAuth-unset and credential-free migration checks passed.
-  UI uses shared theme tokens, named JS initializers and explicit NavItem; README unchanged.
+- Worker/OAuth-unset and credential-free migrations verified earlier; README unchanged.
+- Local `.env` line 38 is not a shell assignment; sourcing fails. Configuration left
+  unchanged. Comment/remove that non-assignment before using make run-server/dev.
