@@ -39,6 +39,10 @@ async function login() {
   await page.waitForURL(`${origin}/dashboard`);
   assert.match(await page.locator('.dashboard-heading').innerText(), /design-review/);
 }
+async function readyPanel(id) {
+  await page.locator(`[data-selected-repo="${id}"]`).waitFor();
+  await page.waitForFunction(()=>!document.getElementById('repository-detail').hasAttribute('aria-busy'));
+}
 async function openLogout() {
   // Real pointer clicks avoid automation scrolling sticky-header elements into view.
   for (const locator of [page.locator('.account-menu summary'), page.getByRole('button', {name: 'Log out', exact: true})]) {
@@ -71,7 +75,7 @@ test('responsive dashboard sticky navigation and honest placeholders', async () 
     await assertNoOverflow();
     await page.evaluate(() => scrollTo({top: 500, behavior: 'instant'}));
     assert.equal(await page.evaluate(() => scrollY), 0);
-    const list = page.locator('.repository-table-scroll');
+    const list = page.locator('#repository-results .repository-table-scroll');
     await list.evaluate(e => {e.scrollTop = 300;});
     assert(await list.evaluate(e => e.scrollTop > 0));
     assert.equal(await page.locator('.app-header').evaluate(e => Math.round(e.getBoundingClientRect().top)), 0);
@@ -99,7 +103,7 @@ test('mobile navigation opens separate pages and highlights the destination', as
 test('logout modal preserves page scroll and traps and restores focus', async () => {
   await login();
   await page.goto(`${origin}/repositories`);
-  await page.locator('.repository-table-scroll').evaluate(e => {e.scrollTop = 300;});
+  await page.locator('#repository-results .repository-table-scroll').evaluate(e => {e.scrollTop = 300;});
   const scroll = await page.evaluate(() => scrollY);
   let logoutRequests = 0;
   page.on('request', request => { if (request.method() === 'POST' && request.url().endsWith('/auth/logout')) logoutRequests++; });
@@ -286,28 +290,28 @@ test('repository live search restores all records and keeps the input focused', 
 
 test('PR workspace live search pagination modal and disabled build', async () => {
   await login();
-  await page.goto(`${origin}/repositories/1`);
+  await page.goto(`${origin}/repositories?repo_id=1`);
   assert.equal(await page.locator('.pr-table tbody tr').count(),10);
   await page.getByRole('link',{name:'Next',exact:true}).click();
   await page.waitForURL(/page=2/);
   assert.match(await page.locator('.pr-table tbody tr').first().innerText(),/#11/);
-  const search=page.getByRole('searchbox');
+  const search=page.locator('#pull-request-search');
   await search.fill('preview 25');
   await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
   await search.fill('');
   await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===10);
-  await page.getByRole('button',{name:'Build mode: manual',exact:true}).click();
+  await page.getByRole('button',{name:'Build mode: Manual',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
-  assert.equal(new URL(page.url()).pathname,'/repositories/1');
+  assert.equal(new URL(page.url()).pathname,'/repositories');
   await page.keyboard.press('Escape');
   for(const width of [320,390,768,1440]) {
     await page.setViewportSize({width,height:844});
     await assertNoOverflow();
     assert.equal(await page.locator('.app-header').evaluate(e=>Math.round(e.getBoundingClientRect().top)),0);
-    assert(await page.locator('.repository-table-scroll').evaluate(e=>e.clientHeight>60),'table must remain usable');
+    assert(await page.locator('#pull-request-results .repository-table-scroll').evaluate(e=>e.clientHeight>60),'table must remain usable');
   }
   await page.locator('.pr-table tbody a').first().click();
-  await page.waitForURL(/pull-requests/);
+  await page.waitForURL(url=>url.searchParams.has('pr'));
   assert(await page.getByRole('button',{name:'Build latest commit'}).isDisabled());
   assert.match(await page.locator('.pr-detail-grid').innerText(),/Not requested/);
 });
@@ -318,10 +322,138 @@ test('PR search and pagination work without JavaScript', async () => {
     const p=await noJS.newPage();
     await p.goto(`${origin}/auth/github/login`);
     await p.waitForURL(`${origin}/dashboard`);
-    await p.goto(`${origin}/repositories/1`);
-    await p.getByRole('searchbox').fill('preview 25');
+    await p.goto(`${origin}/repositories?repo_id=1`);
+    await p.locator('#pull-request-search').fill('preview 25');
     await p.getByRole('button',{name:'Apply filters',exact:true}).click();
     assert.equal(await p.locator('.pr-table tbody tr').count(),1);
     assert.match(await p.locator('.pr-table').innerText(),/#25/);
+    await p.locator('.pr-table tbody a').click();assert.equal(new URL(p.url()).searchParams.get('pr'),'25');
+    await p.getByRole('link',{name:'Back to pull requests'}).click();assert.equal(await p.locator('#pull-request-search').inputValue(),'preview 25');
+    await p.locator('.pr-policy-fallback select').selectOption('automatic');await p.locator('.pr-policy-fallback').getByRole('button',{name:'Save build mode'}).click();
+    assert.equal(await p.locator('#pull-request-search').inputValue(),'preview 25');assert.match(await p.locator('.pr-panel-heading').innerText(),/Automatic/);
   } finally {await noJS.close();}
+});
+
+
+test('repository selection switches only the detail panel and preserves directory and filters',async()=>{
+ await login();await page.goto(`${origin}/repositories?q=fixture&page=2`);
+ await page.evaluate(()=>{window.originalDocument=document;window.originalDirectory=document.getElementById('repository-results');});
+ const list=page.locator('#repository-results .repository-table-scroll');await list.evaluate(e=>e.scrollTop=160);
+ const before=await list.evaluate(e=>e.scrollTop);
+ await page.locator('[data-repo-link="25"]').click();await readyPanel('25');
+ assert(await page.evaluate(()=>document===window.originalDocument&&document.getElementById('repository-results')===window.originalDirectory));
+ assert.equal(await list.evaluate(e=>e.scrollTop),before);
+ assert.equal(await page.locator('#repository-search').inputValue(),'fixture');
+ assert.equal(new URL(page.url()).searchParams.get('page'),'2');
+ await page.locator('[data-repo-link="27"]').click();await readyPanel('27');
+ assert.equal(await page.locator('[data-repo-link="27"]').getAttribute('aria-current'),'true');
+ assert.equal(await page.locator('[data-repo-link="25"]').getAttribute('aria-current'),null);
+ await page.locator('#pull-request-search').fill('preview 25');await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
+ await page.locator('.pr-table tbody a').click();await page.locator('.pr-detail-grid').waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('pr_q'),'preview 25');
+ await page.getByRole('link',{name:'Back to pull requests'}).click();await page.locator('#pull-request-search').waitFor();
+ assert.equal(await page.locator('#pull-request-search').inputValue(),'preview 25');
+ assert.equal(await page.locator('.pr-table tbody tr').count(),1);
+ await page.getByRole('link',{name:'Next page',exact:true}).click();await page.waitForURL(url=>url.searchParams.get('page')==='3');
+ assert.equal(new URL(page.url()).searchParams.get('repo_id'),'27');assert.equal(new URL(page.url()).searchParams.get('pr_q'),'preview 25');
+ await page.locator('#repository-search').fill('verification-149');await page.waitForFunction(()=>document.querySelectorAll('.repository-row').length===1);
+ await page.locator('.pr-table tbody a').click();await page.locator('.pr-detail-grid').waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('q'),'verification-149');assert.equal(new URL(page.url()).searchParams.get('page'),'1');
+ await page.getByRole('link',{name:'Back to pull requests'}).click();await page.locator('#pull-request-search').waitFor();
+ await page.reload();assert.equal(await page.locator('[data-selected-repo]').getAttribute('data-selected-repo'),'27');
+ assert.equal(await page.locator('#pull-request-search').inputValue(),'preview 25');
+});
+
+test('dynamic build mode modal saves in place and refresh progress completes automatically',async()=>{
+ await login();await page.goto(`${origin}/repositories`);
+ await page.locator('[data-repo-link="1"]').click();await readyPanel('1');
+ await page.evaluate(()=>window.originalDocument=document);
+ await page.locator('#pull-request-search').fill('preview 25');await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
+ const mode=page.getByRole('button',{name:'Build mode: Manual',exact:true});await mode.click();
+ await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
+ for(const key of ['Shift+Tab','Tab','Tab','Tab','Tab']) {await page.keyboard.press(key);assert(await page.locator('#build-policy').evaluate(e=>e.contains(document.activeElement)));}
+ await page.locator('#build-policy select').selectOption('automatic');
+ await page.route('**/repositories/1/policy',route=>route.fulfill({status:503,body:'fixture unavailable'}));
+ await page.getByRole('button',{name:'Save build mode',exact:true}).click();await page.locator('#build-policy [data-policy-feedback][data-error]').waitFor();
+ assert(await page.locator('#build-policy').evaluate(e=>e.matches(':modal')));assert(await page.getByRole('button',{name:'Save build mode',exact:true}).isEnabled());
+ await page.unroute('**/repositories/1/policy');await page.getByRole('button',{name:'Save build mode',exact:true}).click();
+ await page.getByRole('button',{name:'Build mode: Automatic',exact:true}).waitFor();
+ assert.equal(await page.locator('#build-policy').evaluate(e=>e.open),false);
+ assert.equal(await page.locator('#pull-request-search').inputValue(),'preview 25');
+ assert(await page.evaluate(()=>document===window.originalDocument));
+ await page.getByRole('button',{name:'Refresh pull requests',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('.pr-summary').textContent.includes('queued'));
+ assert(await page.getByRole('button',{name:'Refresh pull requests',exact:true}).isDisabled());
+ await page.getByRole('button',{name:'Build mode: Automatic',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
+ await page.waitForTimeout(3500);assert(await page.locator('#build-policy').evaluate(e=>e.matches(':modal')));assert.match(await page.locator('.pr-summary').innerText(),/queued/);
+ await page.keyboard.press('Escape');
+ await page.waitForFunction(()=>document.querySelector('.pr-summary').textContent.includes('Refresh complete'));
+ assert(await page.getByRole('button',{name:'Refresh pull requests',exact:true}).isEnabled());
+ assert.equal(await page.locator('#pull-request-search').inputValue(),'preview 25');assert.equal(await page.locator('.pr-table tbody tr').count(),1);
+ assert(await page.evaluate(()=>document===window.originalDocument));
+});
+
+test('failed detail selection preserves current content and rapid selections show the last repository',async()=>{
+ await login();await page.goto(`${origin}/repositories?repo_id=1`);
+ await page.route('**/repositories?*',async route=>{
+  const q=new URL(route.request().url()).searchParams;
+  if(q.get('repo_id')==='3') return route.fulfill({status:503,body:'fixture unavailable'});
+  return route.continue();
+ });
+ await page.locator('[data-repo-link="3"]').click();await page.locator('[data-detail-feedback][data-error]').waitFor();
+ assert.equal(await page.locator('[data-selected-repo]').getAttribute('data-selected-repo'),'1');
+ assert.equal(new URL(page.url()).searchParams.get('repo_id'),'1');
+ await page.unroute('**/repositories?*');
+ await page.route('**/repositories?*',async route=>{
+  if(new URL(route.request().url()).searchParams.get('repo_id')==='3') {await new Promise(resolve=>setTimeout(resolve,800));}
+  try {await route.continue();} catch(e) { /* The superseded request may be aborted. */ }
+ });
+ await page.locator('[data-repo-link="3"]').click();await page.locator('[data-repo-link="5"]').click();
+ await readyPanel('5');await page.waitForTimeout(1100);
+ assert.equal(await page.locator('[data-selected-repo]').getAttribute('data-selected-repo'),'5');
+ assert.equal(new URL(page.url()).searchParams.get('repo_id'),'5');
+ await page.unroute('**/repositories?*');
+ await page.goBack();await readyPanel('1');
+ assert.equal(await page.locator('#repository-detail').getAttribute('aria-busy'),null);
+ await page.getByRole('button',{name:'Build mode: Manual',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
+ for(const key of ['Shift+Tab','Tab','Tab','Tab','Tab']) {await page.keyboard.press(key);assert(await page.locator('#build-policy').evaluate(e=>e.contains(document.activeElement)));}
+ await page.keyboard.press('Escape');
+});
+
+test('mobile repository selection keeps the directory reachable and PR details usable',async()=>{
+ await login();await page.setViewportSize({width:320,height:844});await page.goto(`${origin}/repositories`);
+ await page.locator('[data-repo-link="1"]').click();await readyPanel('1');
+ await assertNoOverflow();
+ assert(await page.locator('#repository-detail').evaluate(e=>e.getBoundingClientRect().top>=0 && e.getBoundingClientRect().top<innerHeight));
+ await page.locator('.pr-table tbody a').first().click();await page.locator('.pr-detail-grid').waitFor();
+ await assertNoOverflow();assert(await page.getByRole('button',{name:'Build latest commit'}).isDisabled());
+ await page.locator('.repository-master-detail').evaluate(e=>e.scrollTop=0);
+ assert(await page.locator('#repository-search').isVisible());
+});
+
+
+test('clearing repository filters updates controls while preserving the selected PR panel',async()=>{
+ await login();await page.goto(`${origin}/repositories?repo_id=1&q=no-such-repository`);
+ await page.evaluate(()=>window.originalDocument=document);
+ await page.getByRole('link',{name:'Clear filters'}).click();await page.waitForFunction(()=>document.querySelectorAll('.repository-row').length===10);
+ assert.equal(await page.locator('#repository-search').inputValue(),'');assert(await page.getByRole('radio',{name:'All',exact:true}).first().isChecked());
+ assert.equal(new URL(page.url()).searchParams.get('repo_id'),'1');assert.equal(await page.locator('[data-selected-repo]').getAttribute('data-selected-repo'),'1');
+ assert(await page.evaluate(()=>document===window.originalDocument));
+});
+
+test('unavailable repositories and empty PR states remain clear and cannot request mutations',async()=>{
+ await login();await page.goto(`${origin}/repositories?repo_id=2&access=all&pr_state=closed`);
+ assert.match(await page.locator('.pr-summary').innerText(),/Repository unavailable/);
+ assert(await page.getByRole('button',{name:'Refresh pull requests',exact:true}).isDisabled());
+ assert(await page.getByRole('button',{name:'Build mode: Manual',exact:true}).isDisabled());
+ assert.equal(await page.locator('.pr-table').count(),0);assert.match(await page.locator('#pull-request-results').innerText(),/No pull requests/);
+ assert.equal(await page.locator('[data-repo-link="2"]').getAttribute('aria-current'),'true');
+});
+
+test('expired sessions during panel selection navigate the whole document to sign-in',async()=>{
+ await login();await page.goto(`${origin}/repositories?repo_id=1`);
+ const token=await page.locator('#logout-confirmation input[name=csrf_token]').inputValue();
+ assert.equal((await context.request.post(`${origin}/auth/logout`,{form:{csrf_token:token},maxRedirects:0})).status(),303);
+ await page.locator('[data-repo-link="3"]').click();await page.waitForURL(`${origin}/dashboard`);
+ assert.equal(await page.locator('#repository-detail').count(),0);assert.match(await page.locator('.dashboard-heading').innerText(),/design-review/);
 });

@@ -2,7 +2,7 @@
 
 Accepted scheduling policy and the recommended repository → PR → build → preview
 screen flow are in [BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md).
-Manual-default mode controls and repository/PR detail pages are implemented.
+Manual-default mode controls and repository/PR panels are implemented.
 Automatic intent follows a five-minute quiet period; real preview execution remains
 unavailable. See [APP_USER_FLOW.md](APP_USER_FLOW.md) for current screen behavior.
 
@@ -30,13 +30,23 @@ larger screens can define view models in their page package. Avoid shared DTO
 packages until actual reuse calls for one. Use aliases such as `authpages` and
 `dashboardpages` to distinguish backend and presentation imports.
 
+`/repositories?repo_id=<id>&pr=<number>` renders the whole repository workspace.
+HTMX requests use `HX-Target: repository-results` for the directory,
+`repository-detail` for source/PR selection and mutations, or `pull-request-results`
+for PR filtering/pagination. Only the requested fragment is rendered; selected
+repository and PR queries always recheck the installation owner. `Vary` separates
+full and partial representations. Legacy repository/detail paths redirect after
+ownership checks. Navigation values are whitelisted, and mutations never accept
+arbitrary return URLs. Directory and PR filters use independent query namespaces.
+
 The root `web` package stays focused on assets; it does not aggregate page packages.
 The public home page is in `web/pages/home`; authenticated dashboard/session pages
 are in `web/pages/dashboard`, and auth error pages are in `web/pages/auth`.
 Successful OAuth redirects to `/dashboard`; logout returns to `/`. Overview,
 Repositories, Builds, Environments and Developer tools are separate authenticated
 HTTP pages. `internal/installations` owns `/repositories`; `internal/dashboard` owns overview, session and tools. `internal/pullrequests`
-owns repository/PR detail, discovery/policy actions and ownership-scoped current
+provides the selected repository/PR component through a small interface consumed
+by the installations handler, and owns discovery/policy actions and ownership-scoped current
 Builds/Environments queries. Their page wrappers reuse the shared activity presentation;
 view models contain display data, never backend types. Build execution remains disabled.
 
@@ -62,7 +72,14 @@ are explicit values. Sidebar/mobile links use real URLs, not dashboard anchors.
 dialogs, account menus, and queue forms. It remains one plain browser script.
 It progressively enhances native account menus with outside-click
 and Escape dismissal and the existing queue form with inline pending/success/error
-feedback. Logout remains a normal CSRF-protected POST. The script adds no application
+feedback. Workspace request events preserve filters across independent swaps,
+share a replacement request slot for selections/PR filters/policy/refresh, and
+retain content on errors. Polls use the same slot with drop behavior; they pause
+while PR search is focused or policy is open. Dialog bindings are initialized after
+HTMX loads as well as on first load. A `js-enabled` root class scopes fallback CSS
+so fragment parsing cannot expand the workspace with hidden noscript content.
+An expired HTMX session returns `HX-Redirect` to sign-in for full-document navigation.
+Logout remains a normal CSRF-protected POST. The script adds no application
 dependency or frontend service; without it, menus and HTTP forms remain usable.
 
 ## Styling and reused components

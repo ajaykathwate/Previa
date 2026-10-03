@@ -1,5 +1,6 @@
 // Progressive enhancement: native menus, dialogs, and forms are the baseline.
 (() => {
+  document.documentElement.classList.add('js-enabled');
   function initMotion() {
     const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const reveals = document.querySelectorAll('[data-scroll-reveal]');
@@ -49,7 +50,7 @@
   }
 
   function initConfirmationDialogs() {
-    const dialogs = document.querySelectorAll('[data-confirmation-dialog]');
+    const boundDialogs = new WeakSet();
     const dialogReturnTargets = new WeakMap();
     const openDialog = (dialog, trigger) => {
       if (!(dialog instanceof HTMLDialogElement) || dialog.open) return;
@@ -70,7 +71,9 @@
         dismiss.closest('dialog').close();
       }
     });
-    dialogs.forEach(dialog => {
+    const bindDialogs = () => document.querySelectorAll('[data-confirmation-dialog]').forEach(dialog => {
+      if (boundDialogs.has(dialog)) return;
+      boundDialogs.add(dialog);
       // Keep Tab inside the dialog even where the browser includes its own chrome
       // in the native dialog's focus cycle. Native inert behavior remains the base.
       dialog.addEventListener('keydown', (event) => {
@@ -98,6 +101,9 @@
             event.clientY < rect.top || event.clientY > rect.bottom) dialog.close();
       });
     });
+    bindDialogs();
+    document.addEventListener('htmx:load', bindDialogs);
+    document.addEventListener('htmx:historyRestore', bindDialogs);
     if (new URLSearchParams(window.location.search).get('confirm') === 'logout') {
       openDialog(document.getElementById('logout-confirmation'), document.querySelector('.account-menu summary'));
     }
@@ -171,34 +177,122 @@
   }
 
   function initRepositorySearch() {
-    const form = document.querySelector('[data-repository-search]');
-    if (!form) return;
-    const feedback = form.querySelector('[data-repository-feedback]');
-    const label = form.dataset.repositorySearch || 'repositories';
-    const results = document.querySelector('#repository-results');
-    let activeRequest;
-    const belongs = event => event.detail?.target === results;
-    document.addEventListener('htmx:beforeRequest', event => {
-      if (!belongs(event)) return;
-      activeRequest = event.detail.xhr;
-      results.setAttribute('aria-busy', 'true');
-      delete feedback.dataset.error;
-      feedback.textContent = `Updating ${label}…`;
-    });
-    document.addEventListener('htmx:afterRequest', event => {
-      if (!belongs(event) || event.detail.xhr !== activeRequest) return;
-      results.removeAttribute('aria-busy');
-      if (event.detail.successful) {
-        feedback.textContent = '';
+    if (!document.querySelector('#repository-filters')) return;
+    const requests = new Map();
+    const targets = new Set(['repository-results', 'repository-detail', 'pull-request-results']);
+    const feedbackFor = target => target.id === 'repository-detail'
+      ? document.querySelector('dialog[open] [data-policy-feedback]') || target.querySelector('[data-detail-feedback]')
+      : target.parentElement.querySelector('[data-repository-feedback]');
+    const directoryContext = () => {
+      const form = document.getElementById('repository-filters');
+      return {q: form.elements.q.value, access: form.elements.access.value,
+        page: document.querySelector('[data-directory-page]')?.dataset.directoryPage || '1'};
+    };
+    document.addEventListener('htmx:configRequest', event => {
+      const target = event.detail.target;
+      if (!targets.has(target?.id)) return;
+      const parameters = event.detail.parameters;
+      const requestURL = new URL(event.detail.path, window.location.href);
+      const currentPRContext = query => {
+        const current = new URLSearchParams(window.location.search);
+        for (const key of ['pr', 'pr_q', 'pr_state', 'pr_page']) {
+          if (current.has(key)) query.set(key, current.get(key));
+          else query.delete(key);
+        }
+      };
+      if (target.id === 'repository-results') {
+        if (event.detail.elt.hasAttribute('data-clear-directory')) {
+          const form = document.getElementById('repository-filters');
+          form.elements.q.value = '';
+          form.querySelector('input[value="all"]').checked = true;
+          parameters.q = ''; parameters.access = 'all'; parameters.page = '1';
+        }
+        const current = new URLSearchParams(window.location.search);
+        for (const key of ['repo_id', 'pr', 'pr_q', 'pr_state', 'pr_page']) {
+          requestURL.searchParams.delete(key);
+          if (current.has(key)) parameters[key] = current.get(key);
+          else delete parameters[key];
+        }
       } else {
-        feedback.dataset.error = 'true';
-        feedback.textContent = `Could not update ${label}. Check your connection or refresh to sign in again, then retry.`;
+        const context = directoryContext();
+        if (event.detail.verb === 'get') {
+          Object.assign(parameters, context);
+          Object.keys(context).forEach(key => requestURL.searchParams.delete(key));
+          if (event.detail.elt.getAttribute('hx-trigger')?.includes('every ')) {
+            const query = new URLSearchParams(); currentPRContext(query);
+            for (const key of ['pr', 'pr_q', 'pr_state', 'pr_page']) {
+              requestURL.searchParams.delete(key);
+              if (query.has(key)) parameters[key] = query.get(key); else delete parameters[key];
+            }
+          }
+        }
+        else {
+          const query = new URLSearchParams(parameters.workspace_query || '');
+          currentPRContext(query);
+          Object.entries(context).forEach(([key, value]) => query.set(key, value));
+          parameters.workspace_query = query.toString();
+        }
+      }
+      if (event.detail.verb === 'get') event.detail.path = requestURL.pathname + requestURL.search;
+    });
+    document.addEventListener('htmx:beforeRequest', event => {
+      const {target, xhr, elt} = event.detail;
+      if (!targets.has(target?.id)) return;
+      if (elt.getAttribute('hx-trigger')?.includes('every ') &&
+          (document.querySelector('#build-policy[open]') || document.activeElement?.closest('#pull-request-filters'))) {
+        event.preventDefault(); return;
+      }
+      requests.set(target.id, {xhr, userAction: !elt.hasAttribute('hx-trigger') || !elt.getAttribute('hx-trigger').includes('every ')});
+      target.setAttribute('aria-busy', 'true');
+      const feedback = feedbackFor(target);
+      if (feedback) {
+        delete feedback.dataset.error;
+        feedback.textContent = 'Updating…';
       }
     });
-    document.addEventListener('htmx:afterSwap', event => {
-      if (!belongs(event)) return;
-      results.querySelector('.repository-table-scroll')?.scrollTo({top: 0, behavior: 'instant'});
+    document.addEventListener('htmx:afterRequest', event => {
+      const {target, xhr, successful} = event.detail;
+      if (!targets.has(target?.id) || requests.get(target.id)?.xhr !== xhr) return;
+      if (!successful) target.removeAttribute('aria-busy');
+      const feedback = feedbackFor(target);
+      if (!feedback) return;
+      if (successful) feedback.textContent = '';
+      else {
+        feedback.dataset.error = 'true';
+        feedback.textContent = 'Could not update this view. Check your connection or refresh to sign in again, then retry.';
+      }
     });
+    const updateSelection = () => {
+      const selected = document.querySelector('[data-selected-repo]')?.dataset.selectedRepo;
+      document.querySelectorAll('[data-repo-link]').forEach(link => {
+        if (link.dataset.repoLink === selected) link.setAttribute('aria-current', 'true');
+        else link.removeAttribute('aria-current');
+      });
+      const input = document.querySelector('#repository-filters input[name="repo_id"]');
+      if (input && selected) input.value = selected;
+    };
+    document.addEventListener('htmx:afterSettle', event => {
+      const {target} = event.detail;
+      if (!targets.has(target?.id)) return;
+      target.removeAttribute('aria-busy');
+      updateSelection();
+      if (target.id === 'repository-detail' && requests.get(target.id)?.userAction) {
+        target.querySelector('[data-detail-heading]')?.focus({preventScroll:true});
+        if (window.matchMedia('(max-width:700px)').matches) target.scrollIntoView({block:'start',behavior:'instant'});
+      } else target.querySelector('.repository-table-scroll')?.scrollTo({top:0,behavior:'instant'});
+    });
+    document.addEventListener('htmx:historyRestore', () => {
+      targets.forEach(id => {
+        const target = document.getElementById(id);
+        if (!target) return;
+        requests.get(target.id)?.xhr.abort();
+        target.removeAttribute('aria-busy');
+        const feedback = feedbackFor(target);
+        if (feedback) {feedback.textContent = ''; delete feedback.dataset.error;}
+      });
+      updateSelection();
+    });
+    updateSelection();
   }
 
   initMotion();

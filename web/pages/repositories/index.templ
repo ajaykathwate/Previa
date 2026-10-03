@@ -5,11 +5,11 @@ import "github.com/ajaykathwatee/previa/web/components"
 import "github.com/ajaykathwatee/previa/web/components/button"
 import "github.com/ajaykathwatee/previa/web/layouts"
 
-templ Index(username string, csrfToken string, page Page) {
+templ Index(username string, csrfToken string, page Page, panels ...templ.Component) {
 	@layouts.App("Repositories", username, csrfToken, components.NavRepositories) {
 		<div class="repository-workspace">
 			<header class="workspace-page-heading">
-				<div><span class="eyebrow">YOUR SOURCE, CONNECTED</span><h1>Repositories</h1><p>Find your code and review the access granted through GitHub.</p></div>
+				<div><span class="eyebrow">YOUR SOURCE, CONNECTED</span><h1>Repositories</h1><p>Select a repository to review pull requests, commits and previews.</p></div>
 				<div class="repository-action">
 					if page.Enabled {
 						<form method="post" action="/installations/start">
@@ -36,144 +36,183 @@ templ Index(username string, csrfToken string, page Page) {
 			if page.Connected {
 				<p class="connection-notice" role="status">GitHub connection verified. Your selected repositories are linked.</p>
 			}
-			<section class="workspace-panel repository-browser" aria-label="Repository browser">
-				<form
-					id="repository-filters"
-					method="get"
-					action="/repositories"
-					class="repository-toolbar"
-					role="search"
-					hx-get="/repositories"
-					hx-trigger="submit, input delay:300ms from:#repository-search, change from:.repository-access-option"
-					hx-target="#repository-results"
-					hx-swap="innerHTML"
-					hx-sync="this:replace"
-					hx-replace-url="true"
-					hx-request='{"timeout":10000}'
-					data-repository-search
-				>
-					<div class="repository-search"><label for="repository-search">Find a repository</label><input id="repository-search" name="q" type="search" value={ page.Search } maxlength="100" placeholder="Search by owner or repository name"/></div>
-					<fieldset class="repository-access">
-						<legend>Access</legend>
-						<div class="repository-access-tabs">
-							for _, option := range []struct{Value,Label string}{{"available","Available"},{"unavailable","Unavailable"},{"all","All"}} {
-								<label><input class="sr-only repository-access-option" type="radio" name="access" value={ option.Value } checked?={ page.Access==option.Value }/><span>{ option.Label }</span></label>
-							}
-						</div>
-					</fieldset>
-					<noscript><p class="repository-search-hint">Press Enter in the search field to apply your search and access filter.</p></noscript>
-					<p class="repository-search-feedback" data-repository-feedback role="status" aria-live="polite"></p>
-				</form>
-				<div id="repository-results" class="repository-results">
-					@Results(page)
-				</div>
-			</section>
+			<div class="repository-master-detail">
+				<section class="workspace-panel repository-browser repository-directory" aria-label="Repository browser">
+					<form
+						id="repository-filters"
+						method="get"
+						action="/repositories"
+						class="repository-toolbar"
+						role="search"
+						hx-get="/repositories"
+						hx-trigger="submit, input delay:300ms from:#repository-search, change from:.repository-access-option"
+						hx-target="#repository-results"
+						hx-swap="innerHTML"
+						hx-sync="this:replace"
+						hx-replace-url="true"
+						hx-request='{"timeout":10000}'
+						data-repository-search
+					>
+						if page.SelectedRepoID > 0 {
+							<input type="hidden" name="repo_id" value={ strconv.FormatInt(page.SelectedRepoID, 10) }/>
+						}
+						for key,value:=range page.PRFilters() {
+							<input type="hidden" name={ key } value={ value }/>
+						}
+						<div class="repository-search"><label for="repository-search">Find a repository</label><input id="repository-search" name="q" type="search" value={ page.Search } maxlength="100" placeholder="Owner or repository name"/></div>
+						<fieldset class="repository-access">
+							<legend>Access</legend>
+							<div class="repository-access-tabs">
+								for _, option := range []struct{Value,Label string}{{"available","Available"},{"unavailable","Unavailable"},{"all","All"}} {
+									<label><input class="sr-only repository-access-option" type="radio" name="access" value={ option.Value } checked?={ page.Access==option.Value }/><span>{ option.Label }</span></label>
+								}
+							</div>
+						</fieldset>
+						<noscript><p class="repository-search-hint">Press Enter in the search field to apply your search and access filter.</p></noscript>
+						<p class="repository-search-feedback" data-repository-feedback role="status" aria-live="polite"></p>
+					</form>
+					<div id="repository-results" class="repository-results">
+						@Results(page)
+					</div>
+				</section>
+				<section id="repository-detail" class="repository-detail" aria-label="Selected repository" hx-sync="this:replace" hx-request='{"timeout":10000}'>
+					if len(panels)>0 {
+						@panels[0]
+					} else {
+						@Unselected()
+					}
+				</section>
+			</div>
 			<p class="repository-help">GitHub controls repository access. Manage connections to add another account or update your selection; then complete the verification flow to refresh the list.</p>
 		</div>
 	}
 }
 
 templ Results(page Page) {
-	if len(page.Rows)>0 {
-		<div class="repository-table-scroll" tabindex="0" role="region" aria-label="Repository list">
-			<div class="repository-list-heading" aria-hidden="true"><span>Repository</span><span>Connection</span><span>Access</span></div>
-			<ul class="repository-list">
-				for _, row := range page.Rows {
-					<li class="repository-row">
-						<div class="repository-name">
-							@components.BranchIcon()
-							<a href={ templ.SafeURL("/repositories/" + strconv.FormatInt(row.ID,10)) }>
-								{ row.FullName }
-								<span class="repository-external" aria-label="View pull requests">
-									@components.ArrowUpRight()
-								</span>
+	<div data-directory-page={ strconv.FormatInt(page.Number, 10) } class="repository-results-content">
+		if len(page.Rows)>0 {
+			<div class="repository-table-scroll" tabindex="0" role="region" aria-label="Repository list">
+				<ul class="repository-list">
+					for _, row := range page.Rows {
+						<li class="repository-row">
+							<a
+								class="repository-select"
+								href={ templ.SafeURL(page.SelectURL(row.ID)) }
+								hx-get={ page.SelectURL(row.ID) }
+								hx-target="#repository-detail"
+								hx-swap="innerHTML"
+								hx-sync="#repository-detail:replace"
+								hx-push-url="true"
+								data-repo-link={ strconv.FormatInt(row.ID, 10) }
+								if page.SelectedRepoID==row.ID {
+									aria-current="true"
+								}
+							>
+								<div class="repository-name">
+									@components.BranchIcon()
+									<strong>{ row.FullName }</strong>
+								</div>
+								<div class="repository-row-meta">
+									<span>{ row.Account }</span>
+									if row.Accessible {
+										<span class="repository-status available">Available</span>
+									} else {
+										<span class="repository-status unavailable">Unavailable</span>
+									}
+								</div>
+								if row.Status!="active" {
+									<span class="repository-status-detail">Installation { row.Status }</span>
+								}
 							</a>
-						</div>
-						<div class="repository-account"><strong>{ row.Account }</strong><span>Installation { strconv.FormatInt(row.InstallationID,10) }</span></div>
-						<div>
-							if row.Accessible {
-								<span class="repository-status available">Available</span>
-							} else {
-								<span class="repository-status unavailable">Unavailable</span>
-							}
-							if row.Status!="active" {
-								<span class="repository-status-detail">Installation { row.Status }</span>
-							}
-						</div>
-					</li>
-				}
-			</ul>
-		</div>
-		<footer class="repository-pagination">
-			<p role="status" aria-live="polite">Showing { strconv.FormatInt(page.Start,10) }–{ strconv.FormatInt(page.End,10) } of { strconv.FormatInt(page.Total,10) } repositories</p>
-			<nav aria-label="Repository pages">
-				{{ numbers := PageNumbers(page.Number, page.Pages) }}
-				if page.Number>1 {
-					<a hx-get={ templ.SafeURL(PageURL(page.Number-1, page.Search, page.Access)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(PageURL(page.Number-1, page.Search, page.Access)) } rel="prev" aria-label="Previous page">
-						@components.ArrowLeft()
-					</a>
-				} else {
-					<span aria-disabled="true" aria-label="Previous page">
-						@components.ArrowLeft()
-					</span>
-				}
-				if numbers[0]>1 {
-					<a hx-get={ templ.SafeURL(PageURL(1, page.Search, page.Access)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(PageURL(1, page.Search, page.Access)) }>1</a>
-					if numbers[0]>2 {
-						<span aria-hidden="true">…</span>
+						</li>
 					}
-				}
-				for _, number := range numbers {
-					<a
-						hx-get={ templ.SafeURL(PageURL(number, page.Search, page.Access)) }
-						hx-target="#repository-results"
-						hx-swap="innerHTML"
-						hx-sync="#repository-filters:replace"
-						hx-push-url="true"
-						href={ templ.SafeURL(PageURL(number, page.Search, page.Access)) }
-						if number==page.Number {
-							aria-current="page"
-						}
-					>{ strconv.FormatInt(number,10) }</a>
-				}
-				if numbers[len(numbers)-1]<page.Pages {
-					if numbers[len(numbers)-1]<page.Pages-1 {
-						<span aria-hidden="true">…</span>
-					}
-					<a hx-get={ templ.SafeURL(PageURL(page.Pages, page.Search, page.Access)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(PageURL(page.Pages, page.Search, page.Access)) }>{ strconv.FormatInt(page.Pages,10) }</a>
-				}
-				if page.Number<page.Pages {
-					<a hx-get={ templ.SafeURL(PageURL(page.Number+1, page.Search, page.Access)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(PageURL(page.Number+1, page.Search, page.Access)) } rel="next" aria-label="Next page">
-						@components.Arrow()
-					</a>
-				} else {
-					<span aria-disabled="true" aria-label="Next page">
-						@components.Arrow()
-					</span>
-				}
-			</nav>
-		</footer>
-	} else {
-		<div class="repository-table-scroll" tabindex="0" role="region" aria-label="Repository list">
-			<div class="repository-empty">
-				<div class="empty-source-icon" aria-hidden="true">
-					@components.BranchIcon()
-				</div>
-				if page.Search!="" || page.Access!="all" {
-					<h2>No repositories match these filters.</h2>
-					<p>Try a different name or include all access states.</p>
-					<a href="/repositories" class="text-link">
-						Clear filters
-						@components.ArrowUpRight()
-					</a>
-				} else if page.Installations==0 {
-					<h2>Connect your code, on your terms.</h2>
-					<p>Use the connection button above to select repositories on GitHub and verify your account. Connecting does not start a build.</p>
-				} else {
-					<h2>No repositories are linked yet.</h2>
-					<p>Manage connections above to select repositories and refresh their access.</p>
-				}
+				</ul>
 			</div>
+			<footer class="repository-pagination">
+				<p role="status" aria-live="polite">Showing { strconv.FormatInt(page.Start,10) }–{ strconv.FormatInt(page.End,10) } of { strconv.FormatInt(page.Total,10) } repositories</p>
+				<nav aria-label="Repository pages">
+					{{ numbers := PageNumbers(page.Number, page.Pages) }}
+					if page.Number>1 {
+						<a hx-get={ templ.SafeURL(page.URL(page.Number - 1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Number - 1)) } rel="prev" aria-label="Previous page">
+							@components.ArrowLeft()
+						</a>
+					} else {
+						<span aria-disabled="true" aria-label="Previous page">
+							@components.ArrowLeft()
+						</span>
+					}
+					if numbers[0]>1 {
+						<a hx-get={ templ.SafeURL(page.URL(1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(1)) }>1</a>
+						if numbers[0]>2 {
+							<span aria-hidden="true">…</span>
+						}
+					}
+					for _, number := range numbers {
+						<a
+							hx-get={ templ.SafeURL(page.URL(number)) }
+							hx-target="#repository-results"
+							hx-swap="innerHTML"
+							hx-sync="#repository-filters:replace"
+							hx-push-url="true"
+							href={ templ.SafeURL(page.URL(number)) }
+							if number==page.Number {
+								aria-current="page"
+							}
+						>{ strconv.FormatInt(number,10) }</a>
+					}
+					if numbers[len(numbers)-1]<page.Pages {
+						if numbers[len(numbers)-1]<page.Pages-1 {
+							<span aria-hidden="true">…</span>
+						}
+						<a hx-get={ templ.SafeURL(page.URL(page.Pages)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Pages)) }>{ strconv.FormatInt(page.Pages,10) }</a>
+					}
+					if page.Number<page.Pages {
+						<a hx-get={ templ.SafeURL(page.URL(page.Number + 1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Number + 1)) } rel="next" aria-label="Next page">
+							@components.Arrow()
+						</a>
+					} else {
+						<span aria-disabled="true" aria-label="Next page">
+							@components.Arrow()
+						</span>
+					}
+				</nav>
+			</footer>
+		} else {
+			<div class="repository-table-scroll" tabindex="0" role="region" aria-label="Repository list">
+				<div class="repository-empty">
+					<div class="empty-source-icon" aria-hidden="true">
+						@components.BranchIcon()
+					</div>
+					if page.Installations==0 && page.Search=="" {
+						<h2>Connect your code.</h2>
+						<p>Use the connection button above to select repositories on GitHub. Connecting does not start a build.</p>
+					} else if page.Search!="" || page.Access!="all" {
+						<h2>No repositories match these filters.</h2>
+						<p>Try a different name or include all access states.</p>
+						<a href={ templ.SafeURL(WorkspaceURL(page.SelectedRepoID, nil)) } data-clear-directory hx-get={ WorkspaceURL(page.SelectedRepoID, nil) } hx-target="#repository-results" hx-sync="#repository-filters:replace" hx-push-url="true" class="text-link">
+							Clear filters
+							@components.ArrowUpRight()
+						</a>
+					} else if page.Installations==0 {
+						<h2>Connect your code, on your terms.</h2>
+						<p>Use the connection button above to select repositories on GitHub and verify your account. Connecting does not start a build.</p>
+					} else {
+						<h2>No repositories are linked yet.</h2>
+						<p>Manage connections above to select repositories and refresh their access.</p>
+					}
+				</div>
+			</div>
+		}
+	</div>
+}
+
+templ Unselected() {
+	<div class="workspace-panel repository-unselected">
+		<div class="empty-source-icon" aria-hidden="true">
+			@components.BranchIcon()
 		</div>
-	}
+		<h2>Select a repository</h2>
+		<p>Choose your code on the left to see pull requests and preview status here.</p>
+		<p class="repository-search-feedback" data-detail-feedback role="status" aria-live="polite"></p>
+	</div>
 }

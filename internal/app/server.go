@@ -74,6 +74,7 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	prs := pullrequests.NewHandler(pullrequests.NewRepository(pool), pullrequests.NewSyncService(pool, producer, nil), policy, authHandler, logger, cfg.GitHubAppID > 0)
+	installationHandler.WithWorkspace(prs)
 	router.Group(func(r chi.Router) {
 		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
 		authHandler.Mount(r)

@@ -3,17 +3,15 @@ Last updated: 2026-10-03
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
-- Phase 1: Prompts 1–5 audited sequentially; see docs/PHASE1_AUDIT.md.
-  Prompt 3 fixes: lifetime environment uniqueness and atomic admitted-build log clearing.
-- STOP: await confirmation before Phase 2 (repository/PR master–detail UI), then
-  report/wait again before Phase 3 (open-only PR discovery/tracking). Neither started.
+- Phase 1 complete: docs/PHASE1_AUDIT.md covers Prompts 1–5 and environment/log fixes.
+- Phase 2 complete: persistent repository directory + HTMX PR/detail panels.
+- STOP: await confirmation before Phase 3 (open-only PR discovery/tracking); not started.
 - docs/APP_USER_FLOW.md: working browser features, steps and Mermaid flows.
-- docs/WEBHOOKS_AND_PR_DISCOVERY.md: implemented decisions/alternatives, source
-  chronology, durable transaction/sync contracts, webhook setup and fixtures.
+- docs/WEBHOOKS_AND_PR_DISCOVERY.md: ingress/discovery contracts, setup and fixtures.
 - docs/DEVELOPMENT_SETUP.md, .env.example, Makefile, deploy/docker-compose.yml:
-  setup/config. TEMP.md records verification and remaining integration work.
-- docs/BUILD_INTENTS.md, BUILD_SCHEDULING.md, GENERATION_ORDERING.md and
-  DESIGN_DURABLE_PUBLICATION.md: intent/generation/revision/publication contracts.
+  setup/config; TEMP.md records remaining integration work.
+- Intent/publication contracts: docs/BUILD_INTENTS.md, BUILD_SCHEDULING.md,
+  GENERATION_ORDERING.md and DESIGN_DURABLE_PUBLICATION.md.
 - Backend features stay flat under internal/<feature>; construction in internal/app.
   Presentation stays in web/, with view models and no backend imports.
 - Preserve the approved palette, fonts, quiet input focus, modal confirmations,
@@ -44,15 +42,16 @@ Last updated: 2026-10-03
 - OAuth/users, signed state, SCS sessions (24h/30m idle), rotation, CSRF/logout modal.
 - Home, protected Overview, Repositories, PR detail, current Builds/Environments,
   Developer Tools ping and /protected. Installation-owner scoping on queries/actions.
-- Repositories: 10 rows, name search, Available(default)/Unavailable/All tabs,
-  internal scroll. Names now open /repositories/{repoID}; connection flow unchanged.
-- Repository detail: explicit initial Refresh, sync progress/last success, 10-row
-  searchable Open(default)/Closed/Merged/All PRs, owner build-mode modal.
+- Repositories: persistent narrow directory; 10 rows, search and access tabs.
+  /repositories?repo_id=<id>&pr=<number> selects PRs/details; legacy paths redirect.
+- HTMX targets: repository-results, repository-detail, pull-request-results.
+  Independent filters/history/no-JS fallback; stacked mobile panels and inline errors.
+- Refresh/policy stay in place; 3s polling pauses for focused PR search/open modal.
+  PR state tabs, actual sync progress/last success, accessible build-mode modal.
 - PR detail: latest/requested/deployed SHA, actual GitHub link, fork/refresh/access
   notices. Build button disabled; direct POST rejects without authorizing work.
 - Builds shows actual current/latest intents, no archive. Environments shows actual
   deployment state; no fabricated URL/health/logs. Empty records stay empty.
-- repoconfig: standalone exact-SHA fetch, strict YAML/defaults/tier limits/hash.
 
 ## Ingress/discovery consistency
 - POST /webhooks/github is outside browser session/CSRF; max 2 MiB, raw HMAC-SHA256
@@ -85,14 +84,15 @@ Last updated: 2026-10-03
   implement exact-SHA source/config, Docker build/runtime, fork/secrets, routing,
   GitHub reporting, durable cleanup and recovery/expiry scheduling.
 - Discovery still uses state=all and explicit initial Refresh; Phase 3 changes this.
-- README implementation-status prose is stale; its PR-scoping update awaits Phase 3.
+- README/DESIGN/UI/setup docs reflect the workspace; PR-scoping update awaits Phase 3.
 
 ## Verification
 - Build/tests/vet/lint pass; PostgreSQL-backed full suite and webhook/discovery race
   tests pass. Real River pagination, concurrent dedup, rollback/retry, source/access
   races, Manual no-build, policy, ownership and CSRF covered.
-- All 12 browser regressions pass, including mobile, modal and no-JS PR flow.
+- All 19 browser checks pass: panel-only selection, stale/failed requests, filters,
+  history, policy retries, polling/modal focus, session expiry, mobile and no-JS flow.
 - Compiled localhost server DB health/startup, invalid signature 401 and signed
   make test-webhook 204 verified; worker starts with all GitHub/session env unset.
-- Phase 1 test DB/env file cleaned up; application DB was not migrated.
-- No real GitHub delivery or real preview build was claimed/tested in this task.
+- Phase 1/2 isolated test DBs/env files cleaned up; application DB not migrated.
+- No real GitHub delivery or preview build tested; execution controls stay disabled.

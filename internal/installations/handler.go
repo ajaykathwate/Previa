@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -23,12 +24,26 @@ type UserSession interface {
 	Username(context.Context) (string, bool)
 	CSRFToken(context.Context) string
 }
+
+// The PR feature supplies the selected panel; installations owns the directory.
+type repositoryWorkspace interface {
+	RepositoryPanel(context.Context, int64, int64, url.Values, string, string) (templ.Component, error)
+}
+
+var ErrWorkspaceInput = errors.New("invalid repository workspace filters")
+
 type Handler struct {
-	service  *Service
-	users    UserSession
-	sessions *scs.SessionManager
-	slug     string
-	logger   *slog.Logger
+	service   *Service
+	users     UserSession
+	sessions  *scs.SessionManager
+	slug      string
+	logger    *slog.Logger
+	workspace repositoryWorkspace
+}
+
+func (h *Handler) WithWorkspace(workspace repositoryWorkspace) *Handler {
+	h.workspace = workspace
+	return h
 }
 
 func NewHandler(service *Service, users UserSession, sessions *scs.SessionManager, slug string, logger *slog.Logger) *Handler {

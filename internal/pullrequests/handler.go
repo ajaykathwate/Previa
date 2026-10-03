@@ -14,6 +14,7 @@ import (
 	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
 	environmentpages "github.com/ajaykathwatee/previa/web/pages/environments"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
+	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -95,6 +96,8 @@ func timestamp(t pgtype.Timestamptz) string {
 	}
 	return t.Time.UTC().Format(time.RFC3339)
 }
+
+// Existing bookmarks resolve to the same workspace used by ordinary GET fallbacks.
 func (h *Handler) repository(w http.ResponseWriter, r *http.Request) {
 	user, id, err := h.identity(r)
 	if err != nil {
@@ -103,32 +106,21 @@ func (h *Handler) repository(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := parseFilter(r)
 	if err != nil {
-		http.Error(w, "Use a valid state, positive page and search up to 100 characters.", http.StatusBadRequest)
+		http.Error(w, "Invalid pull request filters.", http.StatusBadRequest)
 		return
 	}
-	data, err := h.repo.Page(r.Context(), user, id, f)
-	if err != nil {
+	if _, err = h.repo.Page(r.Context(), user, id, f); err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	page := pages.Page{RepoID: id, Name: data.Repo.FullName, Mode: data.Repo.BuildMode, Available: data.Repo.Accessible && data.Repo.Status == "active", DiscoveryEnabled: h.enabled, SyncState: data.Sync.State, SyncMessage: data.Sync.Message, LastRefresh: timestamp(data.Sync.LastSuccessAt), Fetched: data.Sync.Fetched, Number: data.Page, Pages: data.Pages, Total: data.Total, Search: f.Search, State: f.State}
-	for _, row := range data.Rows {
-		page.Rows = append(page.Rows, pages.PR{Number: row.Number, Title: row.Title, Author: row.Author, Branch: row.HeadBranch, SHA: row.HeadSha, State: row.State, Build: row.BuildState, Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh})
-	}
-	if page.Number != f.Page && r.Header.Get("HX-Request") != "true" {
-		http.Redirect(w, r, page.PageURL(page.Number), http.StatusSeeOther)
-		return
-	}
-	w.Header().Add("Vary", "HX-Request, HX-Target")
-	if r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-Target") == "repository-results" {
-		if page.Number != f.Page {
-			w.Header().Set("HX-Replace-Url", page.PageURL(page.Number))
-		}
-		templ.Handler(pages.Results(page)).ServeHTTP(w, r)
-		return
-	}
-	username, _ := h.users.Username(r.Context())
-	templ.Handler(pages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
+	query := r.URL.Query()
+	query.Set("pr_q", f.Search)
+	query.Set("pr_state", f.State)
+	query.Set("pr_page", strconv.FormatInt(f.Page, 10))
+	query.Del("q")
+	query.Del("state")
+	query.Del("page")
+	http.Redirect(w, r, repositorypages.WorkspaceURL(id, query), http.StatusSeeOther)
 }
 func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
 	user, id, err := h.identity(r)
@@ -141,14 +133,13 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	row, err := h.repo.Detail(r.Context(), user, id, int32(n))
-	if err != nil {
+	if _, err = h.repo.Detail(r.Context(), user, id, int32(n)); err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	p := pages.PR{Number: row.Number, Title: row.Title, Author: row.Author, Branch: row.HeadBranch, SHA: row.HeadSha, State: row.State, Build: row.BuildState, URL: row.HtmlUrl, RequestedSHA: row.RequestedSha, DeployedSHA: row.DeployedSha, Environment: row.EnvironmentStatus, Available: row.Available.Bool, Deadline: timestamp(row.AvailableAt), Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh}
-	username, _ := h.users.Username(r.Context())
-	templ.Handler(pages.Detail(username, h.users.CSRFToken(r.Context()), id, p)).ServeHTTP(w, r)
+	query := r.URL.Query()
+	query.Set("pr", strconv.FormatInt(n, 10))
+	http.Redirect(w, r, repositorypages.WorkspaceURL(id, query), http.StatusSeeOther)
 }
 func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	user, id, err := h.identity(r)
@@ -169,7 +160,7 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	http.Redirect(w, r, pages.RepoURL(id), http.StatusSeeOther)
+	h.finishMutation(w, r, user, id)
 }
 func (h *Handler) setPolicy(w http.ResponseWriter, r *http.Request) {
 	user, id, err := h.identity(r)
@@ -190,7 +181,7 @@ func (h *Handler) setPolicy(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	http.Redirect(w, r, pages.RepoURL(id), http.StatusSeeOther)
+	h.finishMutation(w, r, user, id)
 }
 func (h *Handler) build(w http.ResponseWriter, r *http.Request) {
 	user, id, err := h.identity(r)

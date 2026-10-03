@@ -307,15 +307,20 @@ in; successful authentication opens `/dashboard`, with the account navbar and
 workspace sidebar. Each navigation item opens its own page:
 
 - **Overview** (`/dashboard`): database-derived installation/repository/access counts.
-- **Repositories** (`/repositories`): 10 records per page, name search and Available/Unavailable/All access tabs
-  (Available is selected by default);
-  connection management is in the page header. The list scrolls inside its panel;
-  search updates as you type (300ms debounce). Clearing search restores all records
-  within the selected access filter. There are no Search/Reset buttons; press Enter
-  in the search field if JavaScript is disabled. Repository names open local PR detail lists; the PR page links to GitHub.
-- **Repository/PR detail**: select a repository, click Refresh pull requests, keep
-  the configured worker running, and reload to see discovery progress. PR lists use
-  ten-row pagination/search/state tabs. Build mode is owner-controlled through a modal.
+- **Repositories** (`/repositories`): a persistent narrow repository directory and
+  right-hand PR panel. Each list has ten records per page and independent search
+  (300ms debounce) and filters. Available repositories and Open PRs are the defaults.
+  Click a repository, then a PR: both swap only the detail panel through HTMX.
+  Back to pull requests preserves the PR search/state/page. On narrow screens,
+  panels stack and selection brings the detail panel into view. Manage connections
+  stays in the header.
+- **Repository/PR panel**: Refresh pull requests queues discovery. With the configured
+  worker running, progress updates every three seconds in place; no reload is needed.
+  Build mode uses an accessible confirmation modal and saves in place. Failed requests
+  preserve visible content and show inline feedback. Current selection/filter URLs
+  can be bookmarked and reopened; old repository/PR URLs redirect into this workspace.
+  Without JavaScript, Enter applies repository search, Apply filters submits PR search,
+  links reload the complete workspace and an inline policy form remains available.
 - **Builds** (`/builds`) and **Environments** (`/environments`): actual current intent
   and persisted deployment records; empty when there are none. Build execution is
   disabled until real runtime/publication adapters are connected.
@@ -468,3 +473,24 @@ make test-browser
   installation. See [browser checks](../web/tests/browser/README.md) for commands,
   screenshots and troubleshooting. These checks do not validate real GitHub consent
   or PostgreSQL integrations.
+
+## Verify the repository master–detail workspace
+
+After `make run-server` (or `make dev`) and sign-in, open
+<http://localhost:8080/repositories>. Select a connected repository: the directory
+stays visible, and PRs appear beside it. Switch sources, filter PRs, open a PR and
+use Back to pull requests; the browser stays on `/repositories` and preserves filters.
+For a direct selection use `/repositories?repo_id=<local-repo-id>`; add `&pr=<number>`
+for PR details. Run `make run-worker` separately to process refresh requests.
+`make run-server`/`make run-worker` load `.env` automatically; the UI changes require
+no new configuration or migrations.
+
+Run `make build`, `make test`, `make lint`, then `make test-browser` after
+`make browser-install`. Database integration checks require an explicitly exported
+`TEST_DATABASE_URL` pointing to an isolated test database; the test target does not
+load `.env`. The browser fixture needs no GitHub credentials or database. Expected:
+Go tests/build pass, vet/lint report no issues, and browser tests verify partial swaps,
+filter preservation, history, stale/failed requests, policy/refresh, responsive panels,
+accessibility and no-JavaScript forms. For local inspection, set
+`UI_BROWSER_SCREENSHOTS=1` when running the browser suite; screenshots are saved in
+`web/tests/browser/artifacts/` (ignored by Git).

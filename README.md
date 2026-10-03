@@ -199,12 +199,17 @@ The dashboard supports login, installation linking and the accepted manual build
 workflow. Owners need repository mode controls and a way to select a PR and request
 its latest commit. GitHub comments/checks remain the review-facing feedback channel.
 
-Current pages are Overview, paginated Repositories, Builds, Environments and
-Developer Tools. Repository browsing works; Builds and Environments are placeholders.
-The recommended next screen flow is repository detail → paginated PRs → PR detail
-with build action, current logs and preview link. PR discovery, those detail pages
-and build controls are not implemented yet; their detailed UI design remains a
-recommendation in [BUILD_POLICY_AND_USER_FLOW.md](docs/BUILD_POLICY_AND_USER_FLOW.md).
+Current pages are Overview, Repositories, Builds, Environments and Developer Tools.
+Repositories is a single master–detail workspace: the searchable, paginated source
+list stays visible while HTMX loads a repository's PRs and PR details into the
+adjacent panel. Selection and filters have shareable URLs; ordinary GET navigation
+works without JavaScript. Refresh progress updates in place, and build mode is
+changed through an owner-controlled, CSRF-protected modal.
+
+PR discovery and latest/requested/deployed commit views are implemented. Builds
+and Environments show actual saved state. Build execution, live logs, preview
+routing and teardown controls remain unavailable until their adapters are connected.
+See [APP_USER_FLOW.md](docs/APP_USER_FLOW.md) for the current browser workflow.
 
 - **Builds** describes current/latest execution work and its commit/logs, not a
   permanent historical build archive (see 4.5).

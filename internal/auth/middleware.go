@@ -64,6 +64,11 @@ func (h *Handler) LoadUser(next http.Handler) http.Handler {
 func RequireUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := CurrentUser(r.Context()); !ok {
+			if r.Header.Get("HX-Request") == "true" {
+				w.Header().Set("HX-Redirect", "/auth/github/login")
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
 			http.Redirect(w, r, "/auth/github/login", http.StatusSeeOther)
 			return
 		}

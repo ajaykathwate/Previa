@@ -4,6 +4,10 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
+	"time"
+
+	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
 )
 
 type PR struct {
@@ -19,15 +23,79 @@ type Page struct {
 	Rows                                            []PR
 	Number, Pages, Total                            int64
 	Search, State                                   string
+	WorkspaceQuery                                  string
+	SelectedPR                                      *PR
 }
 
 func RepoURL(id int64) string { return fmt.Sprintf("/repositories/%d", id) }
 func PRURL(id int64, number int32) string {
-	return fmt.Sprintf("%s/pull-requests/%d", RepoURL(id), number)
+	return repositorypages.WorkspaceURL(id, url.Values{"pr": {strconv.Itoa(int(number))}})
 }
 func (p Page) PageURL(n int64) string {
-	v := url.Values{"page": {strconv.FormatInt(n, 10)}, "state": {p.State}, "q": {p.Search}}
-	return RepoURL(p.RepoID) + "?" + v.Encode()
+	v, _ := url.ParseQuery(p.WorkspaceQuery)
+	v.Set("pr_page", strconv.FormatInt(n, 10))
+	v.Set("pr_state", p.State)
+	v.Set("pr_q", p.Search)
+	v.Del("pr")
+	return repositorypages.WorkspaceURL(p.RepoID, v)
+}
+
+func (p Page) DetailURL(n int32) string {
+	location, _ := url.Parse(p.PageURL(p.Number))
+	v := location.Query()
+	v.Set("pr", strconv.Itoa(int(n)))
+	return repositorypages.WorkspaceURL(p.RepoID, v)
+}
+
+func (p Page) CurrentURL() string {
+	if p.SelectedPR != nil {
+		return p.DetailURL(p.SelectedPR.Number)
+	}
+	return p.PageURL(p.Number)
+}
+
+func (p Page) Query() string {
+	_, query, _ := strings.Cut(p.CurrentURL(), "?")
+	return query
+}
+
+func Label(value string) string {
+	switch value {
+	case "open":
+		return "Open"
+	case "closed":
+		return "Closed"
+	case "merged":
+		return "Merged"
+	case "all":
+		return "All"
+	case "manual":
+		return "Manual"
+	case "automatic":
+		return "Automatic"
+	case "pending":
+		return "Waiting"
+	case "queued":
+		return "Queued"
+	case "running":
+		return "Running"
+	case "succeeded":
+		return "Succeeded"
+	case "failed":
+		return "Failed"
+	case "cancelled":
+		return "Cancelled"
+	case "superseded":
+		return "Superseded"
+	case "torn_down":
+		return "Removed"
+	case "tearing_down":
+		return "Removing"
+	case "publishing":
+		return "Publishing"
+	default:
+		return value
+	}
 }
 func Short(s string) string {
 	if s == "" {
@@ -62,3 +130,29 @@ func (a Activity) PageURL(n int64) string {
 	}
 	return path + "?" + v.Encode()
 }
+
+func (p Page) DirectoryFilters() map[string]string {
+	v, _ := url.ParseQuery(p.WorkspaceQuery)
+	values := make(map[string]string)
+	for _, key := range []string{"q", "access", "page"} {
+		if v.Has(key) {
+			values[key] = v.Get(key)
+		}
+	}
+	return values
+}
+func StateClass(state string) string {
+	if state == "open" {
+		return "available"
+	}
+	return "unavailable"
+}
+func TimeLabel(value string) string {
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return value
+	}
+	return parsed.UTC().Format("2 Jan 2006, 15:04 UTC")
+}
+
+func (p Page) Selected() PR { return *p.SelectedPR }

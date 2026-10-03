@@ -360,3 +360,11 @@ func TestSessionStorageFailureDoesNotAuthenticate(t *testing.T) {
 		})
 	}
 }
+
+func TestExpiredSessionHTMXRedirectsWholeDocument(t *testing.T) {
+	browser, _, _ := newTestBrowser(t, memstore.NewWithCleanupInterval(0), &fakeUsers{}, &fakeProvider{})
+	response := browser.request(http.MethodGet, "/dashboard", "", map[string]string{"HX-Request": "true"})
+	if response.Code != http.StatusUnauthorized || response.Header().Get("HX-Redirect") != "/auth/github/login" || response.Header().Get("Location") != "" {
+		t.Fatal("expired HTMX session must navigate the full document", response.Code, response.Header())
+	}
+}

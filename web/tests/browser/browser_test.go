@@ -51,46 +51,72 @@ func TestBrowserRegression(t *testing.T) {
 			})
 		}
 		dashboard.MountPing(r, fixturePings{}, auth.RequireUser, logger)
-		// Real templates with bounded fixture PRs; ownership and SQL are tested in pullrequests.
-		r.With(auth.RequireUser).Get("/repositories/{repoID}", func(w http.ResponseWriter, r *http.Request) {
-			p := prpages.Page{RepoID: 1, Name: "fixture-owner/repository", Mode: "manual", Available: true, DiscoveryEnabled: true, SyncState: "complete", Fetched: 25, LastRefresh: "2026-10-03T10:00:00Z", Number: 1, Pages: 3, Total: 25, State: r.URL.Query().Get("state"), Search: r.URL.Query().Get("q")}
+		// Real workspace templates; database ownership is verified in pullrequests.
+		panel := func(r *http.Request, repoID int64) prpages.Page {
+			p := prpages.Page{RepoID: repoID, Name: "fixture-owner/repository-" + strconv.FormatInt(repoID, 10), Mode: sessions.GetString(r.Context(), "fixture-mode"), Available: repoID%2 == 1, DiscoveryEnabled: true, SyncState: "complete", Fetched: 25, LastRefresh: "2026-10-04T10:00:00Z", Number: 1, Pages: 3, Total: 25, State: r.URL.Query().Get("pr_state"), Search: r.URL.Query().Get("pr_q"), WorkspaceQuery: r.URL.RawQuery}
+			if p.Mode == "" {
+				p.Mode = "manual"
+			}
 			if p.State == "" {
 				p.State = "open"
 			}
-			if n, err := strconv.ParseInt(r.URL.Query().Get("page"), 10, 64); err == nil {
+			if ticks := sessions.GetInt(r.Context(), "fixture-sync"); ticks > 0 {
+				p.SyncState = "queued"
+				sessions.Put(r.Context(), "fixture-sync", ticks-1)
+			}
+			if n, err := strconv.ParseInt(r.URL.Query().Get("pr_page"), 10, 64); err == nil {
 				p.Number = min(max(n, 1), 3)
 			}
-			for n := int32(1); n <= 25; n++ {
-				title := "A careful change to preview " + strconv.Itoa(int(n))
-				if p.Search != "" && !strings.Contains(title, p.Search) {
-					continue
+			if p.State == "open" || p.State == "all" {
+				for n := int32(1); n <= 25; n++ {
+					title := "A careful change to preview " + strconv.Itoa(int(n))
+					if p.Search != "" && !strings.Contains(title, p.Search) {
+						continue
+					}
+					p.Rows = append(p.Rows, prpages.PR{Number: n, Title: title, Author: "design-review", Branch: "feature/preview", SHA: "1234567890abcdef", State: "open", Build: "Not requested"})
 				}
-				p.Rows = append(p.Rows, prpages.PR{Number: n, Title: title, Author: "design-review", Branch: "feature/preview", SHA: "1234567890abcdef", State: "open", Build: "Not requested"})
 			}
 			p.Total = int64(len(p.Rows))
 			p.Pages = max(int64(1), (p.Total+9)/10)
 			p.Number = min(p.Number, p.Pages)
 			offset := (p.Number - 1) * 10
 			p.Rows = p.Rows[offset:min(offset+10, p.Total)]
-			if r.Header.Get("HX-Request") == "true" {
-				templ.Handler(prpages.Results(p)).ServeHTTP(w, r)
-				return
+			if n, err := strconv.ParseInt(r.URL.Query().Get("pr"), 10, 32); err == nil && n > 0 {
+				p.SelectedPR = &prpages.PR{Number: int32(n), Available: p.Available, Title: "A careful change to preview " + strconv.Itoa(int(n)), SHA: "latest-commit", Build: "Not requested", State: "open", Environment: "Not deployed", URL: "https://github.com/fixture-owner/repository/pull/1"}
 			}
-			templ.Handler(prpages.Index("design-review", handler.CSRFToken(r.Context()), p)).ServeHTTP(w, r)
-		})
-		r.With(auth.RequireUser).Get("/repositories/{repoID}/pull-requests/{number}", func(w http.ResponseWriter, r *http.Request) {
-			templ.Handler(prpages.Detail("design-review", handler.CSRFToken(r.Context()), 1, prpages.PR{Number: 1, Available: true, Title: "A careful change", SHA: "latest-commit", Build: "Not requested", State: "open", Environment: "Not deployed"})).ServeHTTP(w, r)
-		})
-		r.With(auth.RequireUser).Post("/repositories/{repoID}/policy", func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "/repositories/1", http.StatusSeeOther)
-		})
+			return p
+		}
+		for _, action := range []string{"policy", "refresh"} {
+			r.With(auth.RequireUser).Post("/repositories/{repoID}/"+action, func(w http.ResponseWriter, r *http.Request) {
+				if err := r.ParseForm(); err != nil {
+					http.Error(w, "Invalid form", 400)
+					return
+				}
+				id, _ := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+				if strings.HasSuffix(r.URL.Path, "/policy") {
+					sessions.Put(r.Context(), "fixture-mode", r.Form.Get("mode"))
+				} else {
+					sessions.Put(r.Context(), "fixture-sync", 2)
+				}
+				query, _ := url.ParseQuery(r.Form.Get("workspace_query"))
+				location := repositorypages.WorkspaceURL(id, query)
+				if r.Header.Get("HX-Request") != "true" {
+					http.Redirect(w, r, location, http.StatusSeeOther)
+					return
+				}
+				r.URL.RawQuery = query.Encode()
+				w.Header().Set("HX-Push-Url", location)
+				templ.Handler(prpages.Panel(panel(r, id), handler.CSRFToken(r.Context()))).ServeHTTP(w, r)
+			})
+		}
 		// Test-only paged repository views. Database pagination is verified separately.
 		r.With(auth.RequireUser).Get("/repositories", func(w http.ResponseWriter, r *http.Request) {
 			number, _ := strconv.ParseInt(r.URL.Query().Get("page"), 10, 64)
 			if number < 1 {
 				number = 1
 			}
-			data := repositorypages.Page{Installations: 2, Enabled: true, Search: r.URL.Query().Get("q"), Access: r.URL.Query().Get("access")}
+			selected, _ := strconv.ParseInt(r.URL.Query().Get("repo_id"), 10, 64)
+			data := repositorypages.Page{SelectedRepoID: selected, Query: r.URL.RawQuery, Installations: 2, Enabled: true, Search: r.URL.Query().Get("q"), Access: r.URL.Query().Get("access")}
 			if data.Access == "" {
 				data.Access = "available"
 			}
@@ -119,7 +145,18 @@ func TestBrowserRegression(t *testing.T) {
 				templ.Handler(repositorypages.Results(data)).ServeHTTP(w, r)
 				return
 			}
-			templ.Handler(repositorypages.Index("design-review", handler.CSRFToken(r.Context()), data)).ServeHTTP(w, r)
+			detail := repositorypages.Unselected()
+			if selected > 0 {
+				detail = prpages.Panel(panel(r, selected), handler.CSRFToken(r.Context()))
+			}
+			if r.Header.Get("HX-Request") == "true" {
+				if r.Header.Get("HX-Target") == "pull-request-results" {
+					detail = prpages.Results(panel(r, selected))
+				}
+				templ.Handler(detail).ServeHTTP(w, r)
+				return
+			}
+			templ.Handler(repositorypages.Index("design-review", handler.CSRFToken(r.Context()), data, detail)).ServeHTTP(w, r)
 		})
 	})
 	server.Start()
