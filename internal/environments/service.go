@@ -12,7 +12,7 @@ import (
 
 // Runtime is the boundary for the unbuilt Docker integration. Build must return
 // an unregistered healthy container, honor cancellation, and label containers AND
-// uniquely tagged images with PR ID/generation. Resources must also discover
+// uniquely tagged images with PR ID/generation/revision. Resources must also discover
 // partial builds after process crashes. Removal is idempotent (not-found succeeds).
 type Runtime interface {
 	Build(context.Context, Request) (Artifact, error)
@@ -24,6 +24,7 @@ type Runtime interface {
 type Resource struct {
 	PullRequestID int64    `json:"pull_request_id"`
 	Generation    int64    `json:"generation"`
+	Revision      int64    `json:"revision"`
 	Artifact      Artifact `json:"artifact"`
 }
 
@@ -32,9 +33,10 @@ type Service struct {
 	runtime      Runtime
 	logger       *slog.Logger
 	buildTimeout time.Duration
+	now          func() time.Time
 }
 
-func NewService(repo *Repository, runtime Runtime, logger *slog.Logger, buildTimeout time.Duration) (*Service, error) {
+func NewService(repo *Repository, runtime Runtime, logger *slog.Logger, buildTimeout time.Duration, clocks ...func() time.Time) (*Service, error) {
 	if repo == nil || runtime == nil || logger == nil {
 		return nil, errors.New("environment service requires repository, runtime, and logger")
 	}
@@ -44,7 +46,11 @@ func NewService(repo *Repository, runtime Runtime, logger *slog.Logger, buildTim
 	if buildTimeout < 0 || buildTimeout > 24*time.Hour {
 		return nil, errors.New("invalid build timeout")
 	}
-	return &Service{repo: repo, runtime: runtime, logger: logger, buildTimeout: buildTimeout}, nil
+	now := time.Now
+	if len(clocks) > 0 && clocks[0] != nil {
+		now = clocks[0]
+	}
+	return &Service{repo: repo, runtime: runtime, logger: logger, buildTimeout: buildTimeout, now: now}, nil
 }
 
 func (s *Service) cleanup(ctx context.Context, request Request) error {
@@ -52,7 +58,7 @@ func (s *Service) cleanup(ctx context.Context, request Request) error {
 	defer cancel()
 	resources, err := s.runtime.Resources(cleanupCtx, request.PullRequestID)
 	if err != nil {
-		return fmt.Errorf("discover generation resources: %w", err)
+		return fmt.Errorf("discover request resources: %w", err)
 	}
 	if err := s.repo.ScheduleResourceCleanup(cleanupCtx, request, resources); err != nil {
 		return fmt.Errorf("clean generation resources: %w", err)
@@ -61,7 +67,7 @@ func (s *Service) cleanup(ctx context.Context, request Request) error {
 }
 
 func (s *Service) superseded(ctx context.Context, request Request) error {
-	s.logger.InfoContext(ctx, "environment job superseded", "pr_id", request.PullRequestID, "generation", request.Generation)
+	s.logger.InfoContext(ctx, "environment job superseded", "pr_id", request.PullRequestID, "generation", request.Generation, "revision", request.Revision)
 	// A cleanup error is retryable: never silently forget an orphaned container.
 	return s.cleanup(ctx, request)
 }
@@ -81,11 +87,21 @@ func (s *Service) build(ctx context.Context, request Request, finalAttempt bool)
 	if err != nil {
 		return err
 	}
-	if before.Generation != request.Generation {
+	if before.Generation != request.Generation || before.State != request.State || before.HeadSHA != request.HeadSHA || (request.State == "open" && before.Revision != request.Revision) {
 		return s.superseded(ctx, request)
 	}
-	if before.AppliedGeneration == request.Generation && before.Status == "running" {
+	if before.AppliedGeneration == request.Generation && before.AppliedRevision == request.Revision && before.Status == "running" {
 		return s.cleanup(ctx, request)
+	}
+	if before.PendingGeneration == request.Generation && before.PendingRevision == request.Revision && before.PendingArtifact.ContainerID != "" && before.PendingArtifact.ImageTag != "" {
+		return s.cleanup(ctx, request)
+	}
+	allowed, err := s.repo.claimBuild(ctx, request, s.now())
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return s.superseded(ctx, request)
 	}
 	buildCtx, cancel := context.WithTimeout(ctx, s.buildTimeout)
 	artifact, buildErr := s.runtime.Build(buildCtx, request)
@@ -117,7 +133,7 @@ func (s *Service) build(ctx context.Context, request Request, finalAttempt bool)
 		// The candidate and publication operation are already durable. Retrying the
 		// build could create a different artifact for the same idempotency key;
 		// reconciliation can rediscover cleanup work without rebuilding it.
-		s.logger.WarnContext(ctx, "post-build cleanup scheduling failed", "pr_id", request.PullRequestID, "generation", request.Generation, "error", cleanupErr)
+		s.logger.WarnContext(ctx, "post-build cleanup scheduling failed", "pr_id", request.PullRequestID, "generation", request.Generation, "revision", request.Revision, "error", cleanupErr)
 	}
 	return nil
 }
@@ -133,10 +149,13 @@ func (s *Service) Teardown(ctx context.Context, request Request) error {
 	if err != nil {
 		return err
 	}
-	if before.Generation != request.Generation {
+	if before.Generation != request.Generation || before.State != request.State || before.HeadSHA != request.HeadSHA || (request.State == "open" && before.Revision != request.Revision) {
 		return s.superseded(ctx, request)
 	}
 	if before.AppliedGeneration == request.Generation && before.Status == "torn_down" {
+		return s.cleanup(ctx, request)
+	}
+	if before.Status == "" || before.Status == "torn_down" {
 		return s.cleanup(ctx, request)
 	}
 	result := Result{Status: "torn_down"}

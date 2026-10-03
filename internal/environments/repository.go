@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ajaykathwatee/previa/internal/environments/dbgen"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
@@ -26,10 +27,11 @@ type Result struct {
 }
 
 type Snapshot struct {
-	Generation, AppliedGeneration int64
-	Status, State, HeadSHA        string
-	Artifact, PendingArtifact     Artifact
-	PendingGeneration             int64
+	Generation, AppliedGeneration              int64
+	Revision, AppliedRevision, PendingRevision int64
+	Status, State, HeadSHA                     string
+	Artifact, PendingArtifact                  Artifact
+	PendingGeneration                          int64
 }
 
 type Repository struct {
@@ -52,13 +54,20 @@ func (r *Repository) Snapshot(ctx context.Context, id int64) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("read PR generation: %w", err)
 	}
+	s := Snapshot{Generation: pr.Generation, State: pr.State, HeadSHA: pr.HeadSha}
+	i, err := q.ReadBuildIntent(ctx, id)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Snapshot{}, fmt.Errorf("read current intent: %w", err)
+	}
+	s.Revision = i.Revision
 	e, err := q.ReadEnvironment(ctx, id)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Snapshot{}, fmt.Errorf("read environment: %w", err)
 	}
-	s := Snapshot{Generation: pr.Generation, State: pr.State, HeadSHA: pr.HeadSha}
 	if err == nil {
 		s.AppliedGeneration = e.AppliedGeneration
+		s.AppliedRevision = e.AppliedRevision
+		s.PendingRevision = e.PendingRevision.Int64
 		s.Status = e.Status
 		s.Artifact = Artifact{ContainerID: e.ContainerID.String, ImageTag: e.ImageTag.String}
 		s.PendingArtifact = Artifact{ContainerID: e.PendingContainerID.String, ImageTag: e.PendingImageTag.String}
@@ -84,8 +93,26 @@ func (r *Repository) Apply(ctx context.Context, request Request, result Result) 
 	}
 	err = database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
+		owner, err := q.FindPROwner(ctx, request.PullRequestID)
+		if err != nil {
+			return fmt.Errorf("find result owner: %w", err)
+		}
+		scope, err := lockIntentScope(ctx, q, owner.Int64, request.PullRequestID)
+		if err != nil {
+			if errors.Is(err, ErrIntentUnavailable) {
+				return nil
+			}
+			return err
+		}
+		if request.State == "open" {
+			if _, err := q.ClaimBuildIntent(ctx, dbgen.ClaimBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, HeadSha: request.HeadSHA, BuildMode: scope.mode, NowAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}}); err != nil {
+				return fmt.Errorf("admit completion intent: %w", err)
+			}
+		}
+		// Take the PR lock before executing the SQL: a same-generation Retry
+		// may have changed the intent while this transaction was waiting.
 		previous, err := q.ApplyResult(ctx, dbgen.ApplyResultParams{
-			PrID: request.PullRequestID, ExpectedGeneration: request.Generation,
+			PrID: request.PullRequestID, ExpectedGeneration: request.Generation, ExpectedRevision: request.Revision,
 			ResultStatus: result.Status,
 			ContainerID:  pgtype.Text{String: result.Artifact.ContainerID, Valid: result.Artifact.ContainerID != ""},
 			ImageTag:     pgtype.Text{String: result.Artifact.ImageTag, Valid: result.Artifact.ImageTag != ""},
@@ -96,7 +123,11 @@ func (r *Repository) Apply(ctx context.Context, request Request, result Result) 
 			if readErr != nil {
 				return fmt.Errorf("read rejected result generation: %w", readErr)
 			}
-			if latest.Generation == request.Generation {
+			current, err := q.ReadBuildIntent(ctx, request.PullRequestID)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("read rejected result revision: %w", err)
+			}
+			if latest.Generation == request.Generation && latest.State == request.State && latest.HeadSha == request.HeadSHA && (request.State != "open" || (current.Revision == request.Revision && (current.State == "running" || current.State == "succeeded"))) {
 				return errors.New("no active environment provisioned for current request")
 			}
 			return nil
@@ -154,6 +185,11 @@ func (r *Repository) ScheduleResourceCleanup(ctx context.Context, request Reques
 			return fmt.Errorf("read active resources before cleanup: %w", err)
 		}
 		current := NewRequest(latest.ID, latest.Generation, latest.HeadSha, latest.State)
+		i, err := q.ReadBuildIntent(ctx, current.PullRequestID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read cleanup request revision: %w", err)
+		}
+		current.Revision = i.Revision
 		keep := []Artifact{{ContainerID: env.ContainerID.String, ImageTag: env.ImageTag.String}}
 		if env.PendingGeneration.Valid {
 			keep = append(keep, Artifact{ContainerID: env.PendingContainerID.String, ImageTag: env.PendingImageTag.String})
@@ -164,7 +200,7 @@ func (r *Repository) ScheduleResourceCleanup(ctx context.Context, request Reques
 		}
 		keep = append(keep, protected...)
 		for _, resource := range resources {
-			if resource.PullRequestID != request.PullRequestID || resource.Generation <= 0 || resource.Generation > current.Generation {
+			if resource.PullRequestID != request.PullRequestID || resource.Generation < 0 || resource.Revision < 0 || resource.Generation > current.Generation || (resource.Generation == current.Generation && resource.Revision > current.Revision) {
 				continue
 			}
 			if artifactReferenced(resource.Artifact, keep) {
@@ -198,7 +234,7 @@ func (r *Repository) enqueueCleanupTx(ctx context.Context, tx pgx.Tx, request Re
 	if resource.Artifact.ContainerID == "" && resource.Artifact.ImageTag == "" {
 		return nil
 	}
-	discriminator := fmt.Sprintf("generation:%d:container:%s:image:%s", resource.Generation, resource.Artifact.ContainerID, resource.Artifact.ImageTag)
+	discriminator := fmt.Sprintf("generation:%d:revision:%d:container:%s:image:%s", resource.Generation, resource.Revision, resource.Artifact.ContainerID, resource.Artifact.ImageTag)
 	payload := OperationPayload{Request: request, Resource: resource}
 	key := operationIdempotencyKey(request, CleanupArtifact, discriminator)
 	if _, err := r.operations.EnqueueTx(ctx, tx, OperationSpec{

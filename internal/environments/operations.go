@@ -55,6 +55,7 @@ type Operation struct {
 	ID             int64
 	PullRequestID  int64
 	Generation     int64
+	Revision       int64
 	Kind           OperationKind
 	IdempotencyKey string
 	Payload        OperationPayload
@@ -144,6 +145,7 @@ func (b *OperationBroker) EnqueueTx(ctx context.Context, tx pgx.Tx, spec Operati
 	op, err := q.CreateOperation(ctx, dbgen.CreateOperationParams{
 		PullRequestID:  spec.Request.PullRequestID,
 		Generation:     spec.Request.Generation,
+		Revision:       spec.Request.Revision,
 		Kind:           string(spec.Kind),
 		IdempotencyKey: spec.IdempotencyKey,
 		Payload:        payload,
@@ -157,7 +159,7 @@ func (b *OperationBroker) EnqueueTx(ctx context.Context, tx pgx.Tx, spec Operati
 		if err != nil {
 			return 0, fmt.Errorf("read existing environment operation: %w", err)
 		}
-		if op.PullRequestID != spec.Request.PullRequestID || op.Generation != spec.Request.Generation || op.Kind != string(spec.Kind) || string(op.Payload) != string(payload) {
+		if op.PullRequestID != spec.Request.PullRequestID || op.Generation != spec.Request.Generation || op.Revision != spec.Request.Revision || op.Kind != string(spec.Kind) || string(op.Payload) != string(payload) {
 			return 0, errors.New("environment operation idempotency key conflicts with different work")
 		}
 	}
@@ -185,7 +187,7 @@ func (b *OperationBroker) enqueueJobTx(ctx context.Context, tx pgx.Tx, id int64,
 
 func operationIdempotencyKey(request Request, kind OperationKind, discriminator string) string {
 	sum := sha256.Sum256([]byte(discriminator))
-	return fmt.Sprintf("pr:%d:g:%d:%s:%s", request.PullRequestID, request.Generation, kind, hex.EncodeToString(sum[:12]))
+	return fmt.Sprintf("pr:%d:g:%d:r:%d:%s:%s", request.PullRequestID, request.Generation, request.Revision, kind, hex.EncodeToString(sum[:12]))
 }
 
 func operationFromRow(row dbgen.EnvironmentOperation) (Operation, error) {
@@ -193,11 +195,11 @@ func operationFromRow(row dbgen.EnvironmentOperation) (Operation, error) {
 	if err := json.Unmarshal(row.Payload, &payload); err != nil {
 		return Operation{}, fmt.Errorf("decode operation %d payload: %w", row.ID, err)
 	}
-	if !OperationKind(row.Kind).valid() || payload.Request.PullRequestID != row.PullRequestID || payload.Request.Generation != row.Generation {
+	if !OperationKind(row.Kind).valid() || payload.Request.PullRequestID != row.PullRequestID || payload.Request.Generation != row.Generation || payload.Request.Revision != row.Revision {
 		return Operation{}, fmt.Errorf("operation %d has inconsistent ownership data", row.ID)
 	}
 	op := Operation{
-		ID: row.ID, PullRequestID: row.PullRequestID, Generation: row.Generation,
+		ID: row.ID, PullRequestID: row.PullRequestID, Generation: row.Generation, Revision: row.Revision,
 		Kind: OperationKind(row.Kind), IdempotencyKey: row.IdempotencyKey,
 		Payload: payload, State: OperationState(row.State), Attempts: row.Attempts,
 	}

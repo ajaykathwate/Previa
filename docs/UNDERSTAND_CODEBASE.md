@@ -9,10 +9,10 @@ not a product feature list.
 ## Current shape
 
 Accepted next scheduling design: Manual per repository by default, with opt-in
-Automatic after a five-minute trailing quiet period. Neither policy persistence
-nor scheduling is implemented. The current parsed-event service and `finishJob`
-still enqueue newer observed generations unconditionally; adapt both before live
-build integration. PR discovery/detail UI is a recommendation, not implemented.
+Automatic after a five-minute trailing quiet period. Policy/current intent
+persistence and durable scheduling are implemented behind tested interfaces.
+Parsed events and `finishJob` now consult authorized intent/deadlines. Production
+dispatch remains disabled until real execution/publication adapters are available. PR discovery/detail UI is a recommendation, not implemented.
 See [BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md).
 
 Previa is a Go application for creating temporary preview environments for GitHub
@@ -52,6 +52,8 @@ queries into feature `dbgen` packages.
 | `internal/dashboard/` | Public home, overview/session/tools and build/environment placeholder routes; CSRF-protected ping action. |
 | `internal/webhooks/` | PR state/generation persistence and transactional enqueueing; HTTP validation/signature endpoint is not connected yet. |
 | `internal/environments/` | Generation-aware build/teardown jobs, fenced active/pending state, durable operation outbox, operation worker/recovery, and reconciler interfaces. External adapters are not wired. |
+| `docs/BUILD_SCHEDULING.md` | Prompt 3 coordination/wake-up APIs, eligibility SQL, revision fencing, recovery and production gates. |
+| `docs/BUILD_INTENTS.md` | Prompt 2 schema/APIs, approved Retry/Rebuild/mode semantics, atomic locks/CAS and Prompt 3 boundaries. |
 | `db/migrations/` | Goose-managed application schema migrations. |
 | `internal/*/dbgen/` | sqlc-generated database code for feature queries. |
 | `deploy/docker-compose.yml` | Local PostgreSQL service and persistent data volume. |
@@ -73,6 +75,16 @@ queries into feature `dbgen` packages.
   started separately with their Make targets; neither is a Compose service.
 
 ## Database and queue behavior
+
+Migration 6 adds `repos.build_mode` and one current `build_intents` row per PR.
+`installations.BuildPolicyService` controls owner-scoped mode;
+`environments.IntentService` provides Get/Request/Advance/ObserveTx. Mutations
+lock installation → repository → PR → intent and fence revision plus observed
+generation/SHA. Prompt 3 adds `Broker.RequestBuild`, `Dispatch`, `ObserveTx` and
+`RecoverScheduling`, plus a separate River wake-up kind. Migration 7 carries
+request revision through job/result/outbox/finalization/reporting/cleanup guards
+and permits generation zero. These APIs are not constructed by the live app; see
+[BUILD_SCHEDULING.md](BUILD_SCHEDULING.md).
 
 Goose migrations are in `db/migrations/`; River owns its own schema migrations.
 `make migrate-up` applies both. Database connection values are read from the

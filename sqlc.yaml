@@ -18,7 +18,10 @@ sql:
         sql_package: pgx/v5
   - engine: postgresql
     schema: db/migrations
-    queries: internal/environments/queries.sql
+    queries:
+      - internal/environments/queries.sql
+      - internal/environments/intent_queries.sql
+      - internal/environments/scheduling_queries.sql
     gen:
       go:
         package: dbgen

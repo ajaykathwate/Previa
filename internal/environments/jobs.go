@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/environments/dbgen"
@@ -21,13 +22,14 @@ import (
 const BuildQueue = "build"
 const TeardownQueue = "teardown"
 
-// Request is an immutable snapshot of the PR's desired state when work was requested.
-// Only PRKey participates in River uniqueness; a newer generation is retained on
-// the PR row until the active worker can transactionally hand off to its successor.
+// Request captures observed state plus the authorized intent revision. Only PRKey
+// participates in executable River uniqueness. Newer eligible intent is handed
+// off atomically; future deadlines live in separate coordination wake-ups.
 type Request struct {
 	PRKey         string `json:"pr_key" river:"unique"`
 	PullRequestID int64  `json:"pull_request_id"`
 	Generation    int64  `json:"generation"`
+	Revision      int64  `json:"revision"`
 	HeadSHA       string `json:"head_sha"`
 	State         string `json:"state"`
 }
@@ -37,7 +39,7 @@ func NewRequest(id, generation int64, sha, state string) Request {
 }
 
 func (r Request) validate() error {
-	if r.PullRequestID <= 0 || r.Generation <= 0 || r.HeadSHA == "" || r.PRKey != fmt.Sprintf("environment:pr:%d", r.PullRequestID) || (r.State != "open" && r.State != "closed" && r.State != "merged") {
+	if r.PullRequestID <= 0 || r.Generation < 0 || r.Revision < 0 || r.HeadSHA == "" || r.PRKey != fmt.Sprintf("environment:pr:%d", r.PullRequestID) || (r.State != "open" && r.State != "closed" && r.State != "merged") {
 		return errors.New("invalid environment job request")
 	}
 	return nil
@@ -63,43 +65,68 @@ type jobInserter interface {
 
 // Broker retains one active job per PR without losing later webhook requests.
 type Broker struct {
-	pool   *pgxpool.Pool
-	client jobInserter
+	pool            *pgxpool.Pool
+	client          jobInserter
+	enabled         bool
+	now             func() time.Time
+	recoveryMu      sync.Mutex
+	recoveryAfterID int64
 }
 
 func NewBroker(pool *pgxpool.Pool, client jobInserter) *Broker {
-	return &Broker{pool: pool, client: client}
+	return &Broker{pool: pool, client: client, now: time.Now}
 }
 
-// EnqueueTx must run in the same transaction as the generation increment.
+// EnqueueTx admits only current authorized due work; observations use ObserveTx.
 func (b *Broker) EnqueueTx(ctx context.Context, tx pgx.Tx, request Request) (int64, error) {
 	if err := request.validate(); err != nil {
 		return 0, err
 	}
-	var args river.JobArgs = BuildArgs(request)
-	if request.State != "open" {
-		args = TeardownArgs(request)
+	if !b.enabled {
+		return 0, ErrExecutionUnavailable
 	}
-	result, err := b.client.InsertTx(ctx, tx, args, nil)
+	q := dbgen.New(tx)
+	owner, err := q.FindPROwner(ctx, request.PullRequestID)
 	if err != nil {
-		return 0, fmt.Errorf("enqueue PR generation: %w", err)
+		return 0, fmt.Errorf("find enqueue owner: %w", err)
 	}
-	if result.Job.Kind != "build" && result.Job.Kind != "teardown" {
-		return 0, errors.New("PR job key conflicts with an unrelated job kind")
+	scope, err := lockIntentScope(ctx, q, owner.Int64, request.PullRequestID)
+	if err != nil {
+		return 0, err
 	}
-	return result.Job.ID, nil
+	i, err := readLockedIntent(ctx, q, request.PullRequestID)
+	if err != nil {
+		return 0, err
+	}
+	if scope.pr.Generation != request.Generation || scope.pr.HeadSha != request.HeadSHA || scope.pr.State != request.State {
+		return 0, nil
+	}
+	if request.State == "open" && (i == nil || i.Revision != request.Revision) {
+		return 0, nil
+	}
+	return b.dispatchLockedTx(ctx, tx, scope, i)
 }
 
-// finishJob holds the same PR lock as event recording. Completing the old River
-// row releases its unique key; inserting the latest request happens in this same
-// transaction. An event racing with completion either precedes this handoff or
-// sees the completed job and inserts its own successor. No request can be lost.
+// finishJob releases the executable PR key and admits only current eligible
+// authorized intent in one transaction. A future deadline keeps its separate
+// durable wake-up; a new Manual observation alone never creates a successor.
 func finishJob[T river.JobArgs](ctx context.Context, broker *Broker, request Request, job *river.Job[T], workErr error) error {
 	if workErr != nil && job.Attempt < job.MaxAttempts {
 		return workErr
 	}
 	err := database.InTransaction(ctx, broker.pool, func(tx pgx.Tx) error {
-		latest, err := dbgen.New(tx).LockRequest(ctx, request.PullRequestID)
+		q := dbgen.New(tx)
+		owner, err := q.FindPROwner(ctx, request.PullRequestID)
+		if err != nil {
+			return fmt.Errorf("find handoff owner: %w", err)
+		}
+		// Locks do not require current access here: revocation must not strand a
+		// running River row. The successor admission below rechecks authorization.
+		scope, accessErr := lockIntentScope(ctx, q, owner.Int64, request.PullRequestID)
+		if accessErr != nil && !errors.Is(accessErr, ErrIntentUnavailable) {
+			return accessErr
+		}
+		_, err = q.LockRequest(ctx, request.PullRequestID)
 		if err != nil {
 			return fmt.Errorf("lock PR for job handoff: %w", err)
 		}
@@ -112,9 +139,31 @@ func finishJob[T river.JobArgs](ctx context.Context, broker *Broker, request Req
 				return fmt.Errorf("complete PR job: %w", err)
 			}
 		}
-		if latest.Generation > request.Generation {
-			_, err := broker.EnqueueTx(ctx, tx, NewRequest(latest.ID, latest.Generation, latest.HeadSha, latest.State))
+		if accessErr != nil {
+			return nil
+		}
+		if request.State == "open" {
+			next := "succeeded"
+			if workErr != nil {
+				next = "failed"
+			}
+			if _, err := q.FinishBuildIntent(ctx, dbgen.FinishBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, NextState: next}); err != nil {
+				return fmt.Errorf("finish build intent: %w", err)
+			}
+		} else if workErr == nil {
+			if _, err := q.CompleteTeardownRequest(ctx, dbgen.CompleteTeardownRequestParams{ID: request.PullRequestID, Generation: request.Generation}); err != nil {
+				return fmt.Errorf("complete teardown intent: %w", err)
+			}
+		}
+		current, err := readLockedIntent(ctx, q, request.PullRequestID)
+		if err != nil {
 			return err
+		}
+		if _, err := broker.dispatchLockedTx(ctx, tx, scope, current); err != nil {
+			return err
+		}
+		if scope.pr.State == "open" && current != nil && current.State == IntentPending && broker.now().Before(current.AvailableAt) {
+			return broker.wakeTx(ctx, tx, NewRequest(scope.pr.ID, scope.pr.Generation, scope.pr.HeadSha, scope.pr.State), current)
 		}
 		return nil
 	})

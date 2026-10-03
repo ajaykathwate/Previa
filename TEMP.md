@@ -6,20 +6,16 @@ configuration is detailed in [GITHUB_INSTALLATIONS.md](docs/GITHUB_INSTALLATIONS
 
 ## What is implemented
 
-Documentation decision (2026-10-03): repositories default to Manual; opt-in
-Automatic waits for a five-minute trailing quiet period. This is not implemented.
-README/DESIGN and [BUILD_POLICY_AND_USER_FLOW.md](docs/BUILD_POLICY_AND_USER_FLOW.md)
-now distinguish policy, current code and recommended future PR screens. No config,
-schema, application or UI changes were made for this decision.
-
-Required before live builds: persist authorized intent separately from observed
-PR state, adapt `ProcessPR` and `finishJob` (including terminal failure/recovery),
-and enforce current mode/access/deadline/generation before execution. Retain the
-existing durable publication and cleanup guarantees.
+Accepted policy (2026-10-03): Manual by default; opt-in Automatic uses a
+five-minute trailing quiet period. Prompts 2–3 implement current intent persistence,
+durable wake-ups, ownership-scoped manual coordination, eligibility/claim, handoff,
+revision-fenced publication and bounded recovery. These remain tested interfaces;
+production dispatch is disabled until real runtime/publication adapters exist.
+No HTTP webhook endpoint or browser build controls are connected yet.
 
 Recommendations needing implementation review: initial paginated GitHub PR sync
-so newly connected repositories include existing PRs; repository/PR detail pages;
-exact scheduling/request schema and mode-change treatment for already running work.
+and its ordering so newly connected repositories include existing PRs, plus
+repository/PR detail pages. Scheduling coordination is complete; real execution adapters remain later phases.
 Preserve current no-historical-builds MVP scope. These are recorded for review,
 not silently implemented or treated as approved database/API designs.
 
@@ -29,10 +25,59 @@ Next-phase prompt plan: [FEATURE_IMPLEMENTATION_PROMPTS.md](docs/FEATURE_IMPLEME
 contains five individually executable tasks: standalone config; policy/request
 persistence; durable debounce and intent-aware handoff; authenticated webhook
 ingress; PR discovery/pages and owner controls. Creating the plan does not start
-implementation. Prompt 1 is now complete; same-SHA request fencing, in-flight
-mode changes, upstream event ordering and sync mechanics require review in the
-relevant task. Production build admission stays fail-closed until real adapters
+implementation. Prompts 1–3 are now complete. Same-SHA request and in-flight
+mode behavior are approved and documented; upstream event ordering and sync
+mechanics still require review in their tasks. Production build admission stays fail-closed until real adapters
 exist; no fake workers or historical builds archive are proposed.
+
+### Prompt 2: repository policy and durable intent
+
+- Approved both recommended choices: coalescing Build with explicit Retry/Rebuild,
+  fresh idempotency keys and expected revisions; Automatic→Manual cancels pending/
+  queued automatic intent while current running work may finish.
+- Migration 6 adds Manual-default repository mode and one current intent per PR.
+  Ownership/access checks, policy preservation on relink/reinstall, atomic mode
+  cancellation and revision/generation-fenced intent transitions are implemented.
+- No UI, application construction, webhook, scheduler, queue or runtime wiring was
+  added. No new `.env` values. Apply schema updates with `make migrate-up`.
+- Verified: build, tests, vet and lint (0 issues); full PostgreSQL-backed suite;
+  intent tests under the race detector, including mode/request concurrency,
+  rollback, close/new-commit supersession and isolated migration down/up.
+  Local Goose version is 6; River remains 007. No real builds/GitHub calls claimed.
+- Prompt 3 subsequently implements revision across those execution boundaries and
+  generation-zero compatibility; see the next section. No fake lifecycle events.
+- Exact contract, SQL and API use: [BUILD_INTENTS.md](docs/BUILD_INTENTS.md).
+  No new optional improvement or consequential decision requires approval here.
+
+### Prompt 3: durable scheduling and intent-aware handoff
+
+- Migration 7: pending/applied/operation revision, nonnegative generation support,
+  and teardown handoff completion marker. Current local schema: Goose 7, River 007.
+- Parsed events lock installation → repository → PR before updating state. Manual
+  observations authorize no build. Automatic persists a five-minute deadline and
+  River wake-up; close/merge persists immediate teardown wake-up.
+- Manual coordinator requests and wake-ups commit together. Wake keys include PR,
+  generation/revision and have a namespace separate from executable PR uniqueness.
+  Old/early wake-ups exit. Dispatch and worker start recheck access/policy/current
+  intent. Handoff admits only current eligible work, including terminal failures.
+- Result and operation finalization guard generation + revision. The PR lock is
+  taken before the result SQL, so its statement snapshot sees same-generation
+  revision changes after a lock wait. External IO remains outside transactions.
+  Active/pending references and current leased operations remain protected.
+- Verification: build/test/vet/lint (0 issues), full PostgreSQL-backed suite,
+  all environment/scheduling tests under the race detector, real River wake worker,
+  both result-before-new-request and new-request-before-result races, rollback,
+  generation-zero finalization, access/cancellation and close during a build.
+  Worker started, DB health-checked and shut down with OAuth/session/App env unset;
+  required worker queue settings were supplied. No real Docker/GitHub calls claimed.
+- No new `.env` values or production processes; run `make migrate-up` after updating
+  a checkout. No UI change/browser regression needed. Source-generated sqlc updated.
+- API/SQL/queue design and exact integration limits:
+  [BUILD_SCHEDULING.md](docs/BUILD_SCHEDULING.md). No unrelated feature work added.
+- Next: Prompt 4 authenticated durable webhook ingress, then Prompt 5 discovery/UI.
+  External router version fencing, artifact label checks and bounded/idempotent
+  compensation remain required when real adapters are introduced. This is the
+  approved adapter contract, not an extra unapproved architectural change.
 
 ### Prompt 1: approved repository configuration and standalone implementation
 
@@ -58,7 +103,8 @@ exist; no fake workers or historical builds archive are proposed.
 - Remaining boundaries: caller checks installation ownership; lexical Dockerfile
   validation does not resolve symlinks. Source/runtime phases must enforce actual
   containment, health and returned container resource limits. No new approval
-  decision is introduced here; later request/scheduling decisions remain in Prompt 2.
+  decision is introduced here; approved request semantics are now in Prompt 2,
+  with scheduling coordination now implemented in Prompt 3.
 - Contract and local fixture command: [REPO_CONFIGURATION.md](docs/REPO_CONFIGURATION.md).
 
 - PostgreSQL configuration, connection pooling, startup health checks, application

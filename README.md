@@ -419,16 +419,23 @@ Keeping `Runtime` as an interface in `/internal/runtime` is what lets you swap D
 
 - `users` — id, github_id, username, created_at
 - `installations` — id, github_installation_id, owner_user_id
-- `repos` — id, installation_id, full_name, default_config_hash; planned owner-controlled build mode (Manual by default)
+- `repos` — id, installation_id, full_name, default_config_hash, build_mode (owner-controlled; Manual by default)
 - `pull_requests` — id, repo_id, number, head_sha, state, github_comment_id
 - `environments` — id, pull_request_id, container_id, image_tag, subdomain, status (building / running / failed / torn_down), created_at, last_active_at, expires_at
 - `build_logs` — id, environment_id, sequence, line, created_at
 - `env_secrets` — id, repo_id, key, encrypted_value
 
-The accepted scheduling design also needs durable authorized request identity,
-captured PR generation/SHA, source and deadline, distinct from the latest observed
-PR state. Exact schema is deferred to implementation review; these policy/request
-fields do not exist yet. They do not introduce a historical builds archive.
+`build_intents` now stores one current authorized request per PR: revision, captured
+generation/SHA, source, action, idempotency key, state and eligibility deadline.
+Migrations 6–7 and ownership-scoped coordination APIs are implemented. Durable
+five-minute wake-ups and intent-aware dispatch/handoff are tested behind adapters;
+production dispatch and UI wiring remain unbuilt. Repeated Build requests coalesce; explicit Retry after
+failure or Rebuild after success creates a new revision without bumping PR
+generation. Switching to Manual cancels unstarted Automatic intent; running work
+may finish if still current. No historical builds archive is introduced. See
+[BUILD_INTENTS.md](docs/BUILD_INTENTS.md) for request semantics and
+[BUILD_SCHEDULING.md](docs/BUILD_SCHEDULING.md) for atomic admission, wake-up
+uniqueness, revision fencing and remaining production integration.
 
 A unique constraint on (repo_id, number) for `pull_requests` and on `subdomain` for `environments` prevents duplicate environments when webhooks arrive twice.
 

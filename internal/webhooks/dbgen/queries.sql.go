@@ -9,6 +9,44 @@ import (
 	"context"
 )
 
+const findEventRepository = `-- name: FindEventRepository :one
+SELECT installation_id FROM repos WHERE id = $1
+`
+
+func (q *Queries) FindEventRepository(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, findEventRepository, id)
+	var installation_id int64
+	err := row.Scan(&installation_id)
+	return installation_id, err
+}
+
+const lockEventInstallation = `-- name: LockEventInstallation :one
+SELECT id FROM installations WHERE id = $1 AND status = 'active' AND owner_user_id IS NOT NULL FOR UPDATE
+`
+
+func (q *Queries) LockEventInstallation(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lockEventInstallation, id)
+	var id_2 int64
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
+const lockEventRepository = `-- name: LockEventRepository :one
+SELECT id FROM repos WHERE id = $1 AND installation_id = $2 AND accessible FOR UPDATE
+`
+
+type LockEventRepositoryParams struct {
+	ID             int64
+	InstallationID int64
+}
+
+func (q *Queries) LockEventRepository(ctx context.Context, arg LockEventRepositoryParams) (int64, error) {
+	row := q.db.QueryRow(ctx, lockEventRepository, arg.ID, arg.InstallationID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const recordPREvent = `-- name: RecordPREvent :one
 INSERT INTO pull_requests (repo_id, number, head_sha, state, generation)
 VALUES ($1, $2, $3, $4, 1)

@@ -11,6 +11,27 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const cancelUnstartedAutomaticIntents = `-- name: CancelUnstartedAutomaticIntents :execrows
+WITH locked_prs AS MATERIALIZED (
+    SELECT pr.id FROM pull_requests pr JOIN build_intents b ON b.pull_request_id = pr.id
+    WHERE pr.repo_id = $1 AND b.source = 'automatic' AND b.state IN ('pending', 'queued')
+    ORDER BY pr.id FOR UPDATE OF pr
+)
+UPDATE build_intents b SET state = 'cancelled', completed_at = clock_timestamp(),
+    updated_at = clock_timestamp()
+FROM locked_prs pr
+WHERE b.pull_request_id = pr.id AND b.source = 'automatic'
+    AND b.state IN ('pending', 'queued')
+`
+
+func (q *Queries) CancelUnstartedAutomaticIntents(ctx context.Context, repoID int64) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelUnstartedAutomaticIntents, repoID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countRepositoryPage = `-- name: CountRepositoryPage :one
 SELECT count(*) FROM repos r JOIN installations i ON i.id = r.installation_id
 WHERE i.owner_user_id = $1
@@ -41,6 +62,17 @@ VALUES ($1, 'active') ON CONFLICT (github_installation_id) DO NOTHING
 func (q *Queries) EnsureInstallation(ctx context.Context, githubInstallationID int64) error {
 	_, err := q.db.Exec(ctx, ensureInstallation, githubInstallationID)
 	return err
+}
+
+const findPolicyInstallation = `-- name: FindPolicyInstallation :one
+SELECT installation_id FROM repos WHERE id = $1
+`
+
+func (q *Queries) FindPolicyInstallation(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, findPolicyInstallation, id)
+	var installation_id int64
+	err := row.Scan(&installation_id)
+	return installation_id, err
 }
 
 const getInstallationRevision = `-- name: GetInstallationRevision :one
@@ -243,6 +275,48 @@ func (q *Queries) LockInstallation(ctx context.Context, githubInstallationID int
 	return i, err
 }
 
+const lockPolicyInstallation = `-- name: LockPolicyInstallation :one
+SELECT id FROM installations
+WHERE id = $1 AND owner_user_id = $2
+    AND status = 'active'
+FOR UPDATE
+`
+
+type LockPolicyInstallationParams struct {
+	InstallationID int64
+	UserID         pgtype.Int8
+}
+
+func (q *Queries) LockPolicyInstallation(ctx context.Context, arg LockPolicyInstallationParams) (int64, error) {
+	row := q.db.QueryRow(ctx, lockPolicyInstallation, arg.InstallationID, arg.UserID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const lockPolicyRepository = `-- name: LockPolicyRepository :one
+SELECT id, build_mode FROM repos
+WHERE id = $1 AND installation_id = $2 AND accessible
+FOR UPDATE
+`
+
+type LockPolicyRepositoryParams struct {
+	RepoID         int64
+	InstallationID int64
+}
+
+type LockPolicyRepositoryRow struct {
+	ID        int64
+	BuildMode string
+}
+
+func (q *Queries) LockPolicyRepository(ctx context.Context, arg LockPolicyRepositoryParams) (LockPolicyRepositoryRow, error) {
+	row := q.db.QueryRow(ctx, lockPolicyRepository, arg.RepoID, arg.InstallationID)
+	var i LockPolicyRepositoryRow
+	err := row.Scan(&i.ID, &i.BuildMode)
+	return i, err
+}
+
 const markRepositoriesUnavailable = `-- name: MarkRepositoriesUnavailable :exec
 UPDATE repos SET accessible = false WHERE installation_id = $1
 `
@@ -250,6 +324,30 @@ UPDATE repos SET accessible = false WHERE installation_id = $1
 func (q *Queries) MarkRepositoriesUnavailable(ctx context.Context, installationID int64) error {
 	_, err := q.db.Exec(ctx, markRepositoriesUnavailable, installationID)
 	return err
+}
+
+const readOwnedBuildPolicy = `-- name: ReadOwnedBuildPolicy :one
+SELECT r.id, r.build_mode
+FROM repos r JOIN installations i ON i.id = r.installation_id
+WHERE r.id = $1 AND i.owner_user_id = $2
+    AND i.status = 'active' AND r.accessible
+`
+
+type ReadOwnedBuildPolicyParams struct {
+	RepoID int64
+	UserID pgtype.Int8
+}
+
+type ReadOwnedBuildPolicyRow struct {
+	ID        int64
+	BuildMode string
+}
+
+func (q *Queries) ReadOwnedBuildPolicy(ctx context.Context, arg ReadOwnedBuildPolicyParams) (ReadOwnedBuildPolicyRow, error) {
+	row := q.db.QueryRow(ctx, readOwnedBuildPolicy, arg.RepoID, arg.UserID)
+	var i ReadOwnedBuildPolicyRow
+	err := row.Scan(&i.ID, &i.BuildMode)
+	return i, err
 }
 
 const reassignInactiveOwnedRepository = `-- name: ReassignInactiveOwnedRepository :execrows
@@ -290,6 +388,20 @@ type RemoveRepositoryAccessParams struct {
 
 func (q *Queries) RemoveRepositoryAccess(ctx context.Context, arg RemoveRepositoryAccessParams) error {
 	_, err := q.db.Exec(ctx, removeRepositoryAccess, arg.InstallationID, arg.GithubRepoID)
+	return err
+}
+
+const setRepositoryBuildMode = `-- name: SetRepositoryBuildMode :exec
+UPDATE repos SET build_mode = $2 WHERE id = $1
+`
+
+type SetRepositoryBuildModeParams struct {
+	ID        int64
+	BuildMode string
+}
+
+func (q *Queries) SetRepositoryBuildMode(ctx context.Context, arg SetRepositoryBuildModeParams) error {
+	_, err := q.db.Exec(ctx, setRepositoryBuildMode, arg.ID, arg.BuildMode)
 	return err
 }
 

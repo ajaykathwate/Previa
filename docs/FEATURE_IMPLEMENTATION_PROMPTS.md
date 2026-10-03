@@ -9,17 +9,21 @@ Prepared on 2026-10-03 against the current repository. Verify this summary again
   GitHub OAuth, verified App installation linking and cached installation tokens.
 - Prompt 1 completed: standalone commit-specific repo config fetch/parse/validation,
   effective resource limits and hashing; see [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md).
+- Prompt 2 completed: owner-scoped repository mode and durable current intent,
+  idempotent Build, explicit Retry/Rebuild and atomic cancellation; see [BUILD_INTENTS.md](BUILD_INTENTS.md).
+- Prompt 3 completed: durable quiet-period wake-ups, manual coordination, intent-aware
+  admission/handoff/recovery and revision-fenced publication; see [BUILD_SCHEDULING.md](BUILD_SCHEDULING.md).
 - Implemented UI: home, Overview, ownership-scoped repository search/access tabs
   and ten-row pagination, shared layout/theme, logout modal and diagnostic tools.
 - Implemented behind tested interfaces: generation-fenced build/teardown,
   durable publication operations, cleanup and reconciliation contracts.
 - Production River worker executes ping only. Real preview builds, webhook HTTP
   ingress, PR browsing and Docker/router/GitHub publication adapters are unbuilt.
-- Accepted but unimplemented: Manual default per repository; owner-enabled Automatic
-  with a five-minute trailing quiet period. Comments/reviews do not trigger builds.
-- Existing `webhooks.Service.ProcessPR` enqueues unconditionally, and
-  `environments.finishJob` schedules newer generations unconditionally. Both must
-  become intent-aware before real builds are connected.
+- Implemented as standalone domain APIs: Manual default and owner-enabled Automatic.
+  Five-minute scheduling is tested behind interfaces; production runtime integration
+  remains unbuilt. Comments/reviews do not trigger builds.
+- `ProcessPR` and `finishJob` now consult durable authorized intent. Production
+  dispatch fails closed until capable execution/publication adapters are configured.
 
 ## Recommended next phase
 
@@ -31,8 +35,8 @@ execute all five at once. Each numbered prompt is one task with its own stop poi
 | Order | Deliverable | Depends on |
 | --- | --- | --- |
 | 1 — complete | Standalone repo config fetch/parse/validation | Existing App authentication |
-| 2 | Repository policy and durable authorized request model | Accepted build policy |
-| 3 | Debounce, manual request coordination and intent-aware handoff | Prompt 2 |
+| 2 — complete | Repository policy and durable authorized request model | Accepted build policy |
+| 3 — complete | Debounce, manual request coordination and intent-aware handoff | Prompt 2 |
 | 4 | Authenticated, durable GitHub webhook ingress | Prompt 3 |
 | 5 | Existing-PR discovery, repository/PR pages and owner controls | Prompts 1–4 |
 
@@ -79,7 +83,7 @@ End with actual verification, local testing steps and the exact scope still unbu
 ## Prompt 1 — Standalone repository configuration
 
 Completed as a standalone feature. Retained below as its implementation contract;
-the next implementation task is Prompt 2. Confirmed defaults/schema are documented
+the next implementation task is Prompt 4. Confirmed defaults/schema are documented
 in [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md); do not ask to approve them again.
 
 > Read DESIGN.md Section 5 in full, README.md Section 2.3's `.previewrc.yaml`
@@ -125,18 +129,22 @@ in [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md); do not ask to approve them ag
 
 ## Prompt 2 — Repository policy and durable build intent
 
+Completed as standalone persistence/domain APIs. Retained as the implementation
+contract; approved choices and verification are in [BUILD_INTENTS.md](BUILD_INTENTS.md).
+Prompt 3 subsequently connected request revision across the execution boundaries;
+next implementation: Prompt 4.
+
 > Read `docs/BUILD_POLICY_AND_USER_FLOW.md` in full and DESIGN.md Sections 7 and 13.
 > Inspect current PR/event queries, environment job arguments and publication
 > generation guards. Implement only the persistence/domain foundation for
 > repository policy and authorized work; no live webhook, browser controls or
 > production build workers yet.
 >
-> First propose the minimum schema and state transitions. Confirm unresolved choices
-> before coding: repeated requests for the same SHA, explicit retry after completion,
-> request revision/idempotency, and treatment of an already-running build when the
-> owner switches to Manual. The proposed behavior is to cancel unstarted automatic
-> work and let executing work finish under its generation guards, but that latter
-> choice is not yet approved. Do not overload observed generation to fake a webhook
+> Use the approved choices: repeated Build requests coalesce, including completed
+> results. Explicit Retry after failure or Rebuild after success uses a fresh key
+> and expected revision to create the next revision. Switching to Manual cancels
+> unstarted automatic work; running authorized work may finish under current
+> generation/request guards. Do not overload observed generation to fake a webhook
 > whenever a user clicks Build.
 >
 > Add additive Goose migrations and sqlc queries for owner-controlled repository
@@ -170,6 +178,10 @@ in [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md); do not ask to approve them ag
 
 ## Prompt 3 — Durable scheduling and intent-aware worker handoff
 
+Completed behind tested coordination/execution interfaces. Retained as the contract;
+[BUILD_SCHEDULING.md](BUILD_SCHEDULING.md) records schema, atomicity, tests and
+production boundaries. Next: Prompt 4; do not enable runtime dispatch with no-op adapters.
+
 > Continue from Prompt 2. Read DESIGN.md Sections 6, 7 and 13, and the build-policy,
 > generation-ordering and durable-publication docs. Implement coordination using
 > parsed events/direct tests; do not add HTTP webhook ingress or Docker adapters.
@@ -194,6 +206,13 @@ in [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md); do not ask to approve them ag
 > job finishes sooner; keep one active build/teardown per PR and do not lose close
 > intent to uniqueness conflicts. Check request cancellation/access again at worker
 > start. Preserve atomic generation/request fencing, durable cleanup and publication.
+>
+> Carry intent revision through immutable build arguments, result/finalization
+> SQL predicates, durable operation keys/payloads, reporting and cleanup ownership.
+> A retry of the same SHA/generation must fence every obsolete attempt, including
+> already-created publication operations. Resolve bootstrap generation-zero
+> compatibility explicitly: stored intents accept zero, but legacy job/operation
+> validation requires positive generation. Do not fabricate lifecycle events.
 >
 > Review River scheduled-job uniqueness carefully: repeated deadline resets must
 > neither lose the latest wake-up nor monopolize the build/teardown PR uniqueness

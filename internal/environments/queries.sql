@@ -1,20 +1,23 @@
 -- name: LockRequest :one
-SELECT id, head_sha, state, generation FROM pull_requests WHERE id = $1 FOR UPDATE;
+SELECT id, head_sha, state, generation, teardown_completed_generation FROM pull_requests WHERE id = $1 FOR UPDATE;
 
 -- name: ReadRequest :one
-SELECT id, head_sha, state, generation FROM pull_requests WHERE id = $1;
+SELECT id, head_sha, state, generation, teardown_completed_generation FROM pull_requests WHERE id = $1;
 
 -- name: ReadEnvironment :one
 SELECT container_id, image_tag, head_sha, status, applied_generation,
-       pending_container_id, pending_image_tag, pending_generation, pending_head_sha
+       pending_container_id, pending_image_tag, pending_generation, pending_head_sha, applied_revision, pending_revision
 FROM environments WHERE pull_request_id = $1 ORDER BY id DESC LIMIT 1;
 
 -- name: ListProtectingOperationPayloads :many
-SELECT payload FROM environment_operations
-WHERE pull_request_id = $1
-  AND kind IN ('activate_route', 'remove_route')
-  AND state IN ('pending', 'running', 'retryable', 'failed')
-ORDER BY id;
+SELECT o.payload FROM environment_operations o JOIN pull_requests pr ON pr.id = o.pull_request_id
+WHERE o.pull_request_id = $1
+  AND ((o.state = 'running' AND o.lease_expires_at > now()) OR (o.generation = pr.generation
+    AND (pr.state <> 'open' OR EXISTS (SELECT 1 FROM build_intents b WHERE b.pull_request_id = pr.id
+      AND b.revision = o.revision AND b.state IN ('running','succeeded')))))
+  AND o.kind IN ('activate_route', 'remove_route')
+  AND o.state IN ('pending', 'running', 'retryable', 'failed')
+ORDER BY o.id;
 
 -- name: ApplyResult :one
 -- Lock the source-of-truth row, not only the environment. PostgreSQL rechecks
@@ -24,11 +27,18 @@ ORDER BY id;
 WITH current_request AS MATERIALIZED (
     SELECT pr.id FROM pull_requests pr
     WHERE pr.id = sqlc.arg(pr_id) AND pr.generation = sqlc.arg(expected_generation)
+      AND pr.head_sha = sqlc.arg(head_sha)
+      AND ((pr.state IN ('closed','merged') AND sqlc.arg(expected_revision)::bigint = 0)
+        OR (pr.state = 'open' AND EXISTS (
+          SELECT 1 FROM build_intents b WHERE b.pull_request_id = pr.id
+            AND b.generation = pr.generation AND b.head_sha = pr.head_sha
+            AND b.revision = sqlc.arg(expected_revision)
+            AND b.state IN ('running','succeeded')
+        )))
     FOR UPDATE
 ), previous AS MATERIALIZED (
     SELECT e.* FROM environments e
     JOIN current_request p ON p.id = e.pull_request_id
-    WHERE e.status <> 'torn_down'
     FOR UPDATE OF e
 )
 UPDATE environments e
@@ -38,6 +48,11 @@ SET status = CASE sqlc.arg(result_status)::text
         ELSE 'failed' END,
     applied_generation = CASE WHEN sqlc.arg(result_status)::text = 'failed'
         THEN sqlc.arg(expected_generation)::bigint ELSE e.applied_generation END,
+    applied_revision = CASE WHEN sqlc.arg(result_status)::text = 'failed'
+        THEN sqlc.arg(expected_revision)::bigint ELSE e.applied_revision END,
+    pending_revision = CASE WHEN sqlc.arg(result_status)::text = 'running'
+        THEN sqlc.arg(expected_revision)::bigint
+        WHEN sqlc.arg(result_status)::text = 'failed' THEN e.pending_revision ELSE NULL END,
     pending_container_id = CASE WHEN sqlc.arg(result_status)::text = 'running'
         THEN sqlc.narg(container_id)::text
         WHEN sqlc.arg(result_status)::text = 'failed' THEN e.pending_container_id
@@ -62,18 +77,14 @@ RETURNING previous.container_id, previous.image_tag,
 
 -- name: CreateOperation :one
 INSERT INTO environment_operations (
-    pull_request_id, generation, kind, idempotency_key, payload
+    pull_request_id, generation, revision, kind, idempotency_key, payload
 )
-VALUES ($1, $2, $3, $4, $5)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (idempotency_key) DO NOTHING
-RETURNING id, pull_request_id, generation, kind, idempotency_key, payload,
-          state, attempts, available_at, lease_owner, lease_expires_at,
-          last_error_code, created_at, updated_at, completed_at;
+RETURNING *;
 
 -- name: GetOperation :one
-SELECT id, pull_request_id, generation, kind, idempotency_key, payload,
-       state, attempts, available_at, lease_owner, lease_expires_at,
-       last_error_code, created_at, updated_at, completed_at
+SELECT *
 FROM environment_operations WHERE id = $1;
 
 -- name: LockCurrentOperationLease :one
@@ -85,9 +96,7 @@ WHERE id = sqlc.arg(id)
 FOR UPDATE;
 
 -- name: FindOperationByKey :one
-SELECT id, pull_request_id, generation, kind, idempotency_key, payload,
-       state, attempts, available_at, lease_owner, lease_expires_at,
-       last_error_code, created_at, updated_at, completed_at
+SELECT *
 FROM environment_operations WHERE idempotency_key = $1;
 
 -- name: ClaimOperation :one
@@ -98,9 +107,7 @@ SET state = 'running', attempts = attempts + 1, lease_owner = $2,
 WHERE id = $1 AND available_at <= now()
   AND (state IN ('pending', 'retryable')
        OR (state = 'running' AND (lease_expires_at <= now() OR lease_owner = $2)))
-RETURNING id, pull_request_id, generation, kind, idempotency_key, payload,
-          state, attempts, available_at, lease_owner, lease_expires_at,
-          last_error_code, created_at, updated_at, completed_at;
+RETURNING *;
 
 -- name: MarkOperationRetryable :execrows
 UPDATE environment_operations
@@ -129,9 +136,7 @@ SET state = 'failed', lease_owner = NULL, lease_expires_at = NULL,
 WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND lease_expires_at > now();
 
 -- name: ListOperationsForRecovery :many
-SELECT id, pull_request_id, generation, kind, idempotency_key, payload,
-       state, attempts, available_at, lease_owner, lease_expires_at,
-       last_error_code, created_at, updated_at, completed_at
+SELECT *
 FROM environment_operations
 WHERE (state IN ('pending', 'retryable') AND available_at <= now())
    OR (state = 'running' AND lease_expires_at <= now())
@@ -159,6 +164,10 @@ WITH locked AS MATERIALIZED (
     WHERE e.pull_request_id = sqlc.arg(pr_id)
       AND pr.generation = sqlc.arg(expected_generation)
       AND pr.state = 'open'
+      AND EXISTS (SELECT 1 FROM build_intents b WHERE b.pull_request_id = pr.id
+        AND b.generation = pr.generation AND b.revision = sqlc.arg(expected_revision)
+        AND b.state IN ('running','succeeded') AND b.head_sha = pr.head_sha)
+      AND e.pending_revision = sqlc.arg(expected_revision)
       AND e.pending_generation = sqlc.arg(expected_generation)
       AND e.pending_container_id IS NOT NULL
       AND e.pending_image_tag IS NOT NULL
@@ -167,12 +176,14 @@ WITH locked AS MATERIALIZED (
 UPDATE environments e
 SET status = 'running',
     applied_generation = sqlc.arg(expected_generation),
+    applied_revision = sqlc.arg(expected_revision),
     container_id = e.pending_container_id,
     image_tag = e.pending_image_tag,
     head_sha = e.pending_head_sha,
     pending_container_id = NULL,
     pending_image_tag = NULL,
     pending_generation = NULL,
+    pending_revision = NULL,
     pending_head_sha = NULL,
     last_active_at = now()
 FROM locked
@@ -192,18 +203,21 @@ WITH locked AS MATERIALIZED (
     WHERE e.pull_request_id = sqlc.arg(pr_id)
       AND pr.generation = sqlc.arg(expected_generation)
       AND pr.state IN ('closed', 'merged')
+      AND sqlc.arg(expected_revision)::bigint = 0
       AND e.status = 'tearing_down'
     FOR UPDATE OF pr, e
 )
 UPDATE environments e
 SET status = 'torn_down',
     applied_generation = sqlc.arg(expected_generation),
+    applied_revision = sqlc.arg(expected_revision),
     container_id = NULL,
     image_tag = NULL,
     head_sha = NULL,
     pending_container_id = NULL,
     pending_image_tag = NULL,
     pending_generation = NULL,
+    pending_revision = NULL,
     pending_head_sha = NULL
 FROM locked
 WHERE e.id = locked.id

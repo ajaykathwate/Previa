@@ -8,6 +8,24 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type BuildIntent struct {
+	PullRequestID  int64
+	Revision       int64
+	BaseRevision   int64
+	Generation     int64
+	HeadSha        string
+	Source         string
+	RequestAction  string
+	RequestedBy    pgtype.Int8
+	IdempotencyKey string
+	State          string
+	AvailableAt    pgtype.Timestamptz
+	RequestedAt    pgtype.Timestamptz
+	StartedAt      pgtype.Timestamptz
+	CompletedAt    pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
 type BuildLog struct {
 	ID            int64
 	EnvironmentID int64
@@ -40,6 +58,8 @@ type Environment struct {
 	PendingImageTag    pgtype.Text
 	PendingGeneration  pgtype.Int8
 	PendingHeadSha     pgtype.Text
+	AppliedRevision    int64
+	PendingRevision    pgtype.Int8
 }
 
 type EnvironmentOperation struct {
@@ -58,6 +78,7 @@ type EnvironmentOperation struct {
 	CreatedAt      pgtype.Timestamptz
 	UpdatedAt      pgtype.Timestamptz
 	CompletedAt    pgtype.Timestamptz
+	Revision       int64
 }
 
 type Installation struct {
@@ -71,14 +92,15 @@ type Installation struct {
 }
 
 type PullRequest struct {
-	ID              int64
-	RepoID          int64
-	Number          int32
-	HeadSha         string
-	State           string
-	GithubCommentID pgtype.Int8
-	CreatedAt       pgtype.Timestamptz
-	Generation      int64
+	ID                          int64
+	RepoID                      int64
+	Number                      int32
+	HeadSha                     string
+	State                       string
+	GithubCommentID             pgtype.Int8
+	CreatedAt                   pgtype.Timestamptz
+	Generation                  int64
+	TeardownCompletedGeneration int64
 }
 
 type Repo struct {
@@ -89,6 +111,7 @@ type Repo struct {
 	CreatedAt         pgtype.Timestamptz
 	GithubRepoID      pgtype.Int8
 	Accessible        bool
+	BuildMode         string
 }
 
 type Session struct {

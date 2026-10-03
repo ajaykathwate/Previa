@@ -20,6 +20,10 @@ func TestPerKindTimeoutsAndRescue(t *testing.T) {
 	build := &env.BuildWorker{Service: s, Broker: f.broker}
 	teardown := &env.TeardownWorker{Service: s, Broker: f.broker}
 	ping := &queue.PingWorker{Logger: f.logger}
+	wake := &env.WakeWorker{Broker: f.broker}
+	if wake.Timeout(nil) != 15*time.Second || queue.RescueAfter(wake.Timeout(nil)) != 30*time.Second {
+		t.Fatal("incorrect coordination timeout/rescue")
+	}
 	if build.Timeout(nil) != 16*time.Minute || teardown.Timeout(nil) != 3*time.Minute || ping.Timeout(nil) != 5*time.Second {
 		t.Fatal("incorrect per-kind timeouts")
 	}

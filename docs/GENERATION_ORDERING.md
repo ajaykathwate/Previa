@@ -2,11 +2,13 @@
 
 **Scheduling decision:** [BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md)
 changes the target to Manual by default and five-minute Automatic debounce.
-That policy is not implemented. The unconditional event enqueue and newer-generation
-handoff described below are current code behavior, not the intended Manual behavior.
-Before real adapters are wired, separate observed PR state from authorized intent
-and gate initial enqueue, successor handoff, retries and recovery on that intent.
-Atomic generation fencing and durable publication remain required in both modes.
+Policy/current intent persistence (Prompt 2) and durable coordination (Prompt 3)
+are implemented behind tested interfaces. See [BUILD_INTENTS.md](BUILD_INTENTS.md)
+and [BUILD_SCHEDULING.md](BUILD_SCHEDULING.md). Initial admission, successor
+handoff and recovery consult authorized eligible intent. Manual observation alone
+never starts a build. Result/outbox/finalization/reporting/cleanup guards carry
+request revision as well as generation; real adapters must fence that tuple.
+Production dispatch remains disabled without those adapters.
 
 **Status:** generation fencing and the database/River durable-publication
 foundation are implemented. `Repository.Apply` commits environment state plus an
@@ -32,8 +34,8 @@ Migration `0003_pr_generation.sql` adds:
 - `environments.applied_generation` — last applied result's sequence.
 - `environments.head_sha` — SHA of the deployed artifact, distinct from desired SHA.
 
-`webhooks.Service.ProcessPR` accepts an already validated `opened`, `synchronize`,
-or `closed` event. `internal/webhooks/queries.sql` performs:
+`webhooks.Service.ProcessPR` accepts already validated `opened`, `reopened`,
+`synchronize` or `closed` events; closed with merged=true records merged. `internal/webhooks/queries.sql` performs:
 
 ```sql
 INSERT INTO pull_requests (..., generation)
@@ -47,8 +49,9 @@ RETURNING id, head_sha, state, generation;
 
 The counter increments once per successfully processed invocation, including close
 events. PostgreSQL serializes concurrent increments on the same PR. The same
-transaction calls River `InsertTx` with captured PR ID, generation, SHA, and state;
-an enqueue failure rolls back both the event and counter. Generation records
+transaction persists policy-controlled intent and its delayed/immediate River
+wake-up. Manual open observations insert neither intent nor wake-up; close always
+records a wake-up. An insertion failure rolls back event, generation and intent. Generation records
 processing order, not GitHub delivery timestamps. Delivery deduplication belongs
 at the future authenticated webhook ingress, before calling this method.
 
@@ -79,8 +82,10 @@ RETURNING previous.container_id, previous.image_tag;
 ```
 
 The named placeholders above are illustrative; sqlc generates positional bindings.
-The generation check, PR row lock, and environment write are one SQL statement in
-one transaction. A separate optimistic read is used only to skip obsolete work
+The SQL sketch isolates generation fencing; the current query additionally checks
+SHA/state and current intent revision. `Repository.Apply` takes the ownership scope/PR
+lock before this statement, ensuring a fresh statement snapshot after a concurrent
+same-generation revision change. All checks and writes remain in one transaction. A separate optimistic read is used only to skip obsolete work
 early; it never authorizes a write.
 
 Locking the **PR row** is essential. If a webhook already holds that lock, the
@@ -119,13 +124,15 @@ job is active updates the PR's durable desired state instead of creating a secon
 active job or mutating the running job's captured arguments.
 
 On completion, `finishJob` locks that PR row, completes the old River job using
-`JobCompleteTx`, and enqueues the latest captured request if its generation advanced.
+`JobCompleteTx`, and admits only current authorized eligible intent. A new observed
+generation alone is insufficient; future deadlines retain their separate wake-up.
 This is one transaction: the unique key is released and acquired by the successor
 together. A racing event is processed either before this handoff or after it, when
 it can enqueue against the completed row. Terminal worker failures use the pinned
 River driver's conditional discarded-state transition with the same handoff;
 ordinary retryable errors retain River's backoff. Exhausted crash recovery still
-needs the future reconciler to compare desired/applied generations.
+uses the bounded `Broker.RecoverScheduling` contract to recreate wake-ups; a
+production periodic runner remains future integration.
 
 The tests deliberately run A and B concurrently through the service to verify the
 guard independently of River uniqueness. Production admission ordinarily serializes
@@ -140,7 +147,8 @@ The intended adapter behavior is:
 
 1. Locks the PR briefly to read the currently referenced active and pending artifacts.
 2. Finds resources labeled with this PR and a generation at or below the obsolete
-   request's generation, including partial builds/images left by previous attempts.
+   current request version, including partial builds/images left by previous attempts.
+   Resource references and version bounds now include request revision.
 3. Preserves the referenced preview and all resources from newer generations.
 4. Persists cleanup work transactionally. The operation worker removes each
    obsolete container, then its owned image, outside the transaction. Missing

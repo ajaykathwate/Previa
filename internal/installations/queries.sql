@@ -82,3 +82,38 @@ WHERE i.owner_user_id = sqlc.arg(user_id)
    OR (sqlc.arg(access)::text = 'unavailable' AND NOT (r.accessible AND i.status = 'active')))
 ORDER BY lower(r.full_name), r.id
 LIMIT sqlc.arg(page_size)::bigint OFFSET sqlc.arg(page_offset)::bigint;
+
+-- name: ReadOwnedBuildPolicy :one
+SELECT r.id, r.build_mode
+FROM repos r JOIN installations i ON i.id = r.installation_id
+WHERE r.id = sqlc.arg(repo_id) AND i.owner_user_id = sqlc.arg(user_id)
+    AND i.status = 'active' AND r.accessible;
+
+-- name: FindPolicyInstallation :one
+SELECT installation_id FROM repos WHERE id = $1;
+
+-- name: LockPolicyInstallation :one
+SELECT id FROM installations
+WHERE id = sqlc.arg(installation_id) AND owner_user_id = sqlc.arg(user_id)
+    AND status = 'active'
+FOR UPDATE;
+
+-- name: LockPolicyRepository :one
+SELECT id, build_mode FROM repos
+WHERE id = sqlc.arg(repo_id) AND installation_id = sqlc.arg(installation_id) AND accessible
+FOR UPDATE;
+
+-- name: SetRepositoryBuildMode :exec
+UPDATE repos SET build_mode = $2 WHERE id = $1;
+
+-- name: CancelUnstartedAutomaticIntents :execrows
+WITH locked_prs AS MATERIALIZED (
+    SELECT pr.id FROM pull_requests pr JOIN build_intents b ON b.pull_request_id = pr.id
+    WHERE pr.repo_id = $1 AND b.source = 'automatic' AND b.state IN ('pending', 'queued')
+    ORDER BY pr.id FOR UPDATE OF pr
+)
+UPDATE build_intents b SET state = 'cancelled', completed_at = clock_timestamp(),
+    updated_at = clock_timestamp()
+FROM locked_prs pr
+WHERE b.pull_request_id = pr.id AND b.source = 'automatic'
+    AND b.state IN ('pending', 'queued');

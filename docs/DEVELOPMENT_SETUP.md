@@ -6,9 +6,14 @@ in Bash or Zsh (on Windows, use WSL2 with Docker integration enabled).
 
 The accepted Manual/Automatic build policy is described in
 [BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md). It adds no setup
-commands or environment variables today: scheduling, PR browsing and real preview
-execution are not connected yet. Repository installation and the diagnostic ping
-flow are the available checks; build-mode settings will be repository-owned data.
+commands or environment variables today: coordination is tested behind interfaces;
+PR browsing and real preview execution are not connected yet. Repository installation and the diagnostic ping
+flow are the available checks; build-mode settings are repository-owned data.
+After updating this checkout, run `make migrate-up` to apply migrations 6–7
+(policy/intent and scheduling revision fields). No new environment variables are required. Domain/API tests
+are documented in [BUILD_INTENTS.md](BUILD_INTENTS.md) and
+[BUILD_SCHEDULING.md](BUILD_SCHEDULING.md). Existing run-server/run-worker/dev
+commands remain unchanged.
 
 Standalone repository config checks require no new `.env` values or running
 services: `go test -count=1 -v ./internal/repoconfig`. The required repo file,
@@ -200,7 +205,10 @@ docker compose -f deploy/docker-compose.yml exec -T postgres psql -U previa -d p
 
 **Expected:** Goose and River apply pending migrations (or report none pending).
 The table list shows application tables (including `environment_operations` after
-Goose migration 4), `installations`/`repos` extended by migration 5, `goose_db_version`, and River's `river_*` tables.
+Goose migration 4), `installations`/`repos` extended by migration 5,
+`build_intents` and repository build mode from migration 6, `goose_db_version`,
+scheduling/publication revision fields from migration 7 and River's `river_*` tables.
+Current versions are Goose 7 and River 007.
 Re-running `make migrate-up` is safe; it applies only pending migrations.
 
 The migration Make targets load `.env` automatically, falling back to `.env.example`

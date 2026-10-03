@@ -208,7 +208,7 @@ Medium. Small code, high consequence: authenticity, idempotency and ordering all
 - **Idempotency by delivery ID plus natural keys:** duplicate deliveries collapse into one effect.
 - **Out-of-order delivery:** jobs carry the head SHA; a job whose SHA is no longer the latest for that PR is discarded on start (see feature 13).
 - **Fork PRs:** detect them from the payload and apply the fork policy from feature 10 and 16.
-- **Decision status:** Manual-default policy and five-minute Automatic debounce are accepted but not implemented. See [BUILD_POLICY_AND_USER_FLOW.md](docs/BUILD_POLICY_AND_USER_FLOW.md); the parsed-event service and worker successor handoff still require adaptation.
+- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and real runtime integration remain unbuilt. See [BUILD_POLICY_AND_USER_FLOW.md](docs/BUILD_POLICY_AND_USER_FLOW.md); see [BUILD_SCHEDULING.md](docs/BUILD_SCHEDULING.md) for parsed-event coordination and production dispatch boundaries.
 
 ---
 
@@ -237,6 +237,7 @@ High. This is the coordination core of the system.
 - **Transactional outbox for free:** the database-backed queue avoids the classic lost-job window.
 - **Latest-SHA-wins:** if commits arrive faster than builds finish, superseded builds are cancelled or skipped.
 - **Intent-aware handoff:** a newer observed PR generation does not itself authorize a successor build. Completion, terminal failure, retries and recovery must consult durable authorized intent and its deadline; teardown remains immediate in either mode.
+- **Request identity:** one current `build_intents` row per PR captures generation/SHA and an independent monotonic revision. Duplicate Build commands coalesce; explicit Retry/Rebuild uses a fresh key and expected revision. Intent transitions use locked PR state plus guarded SQL. Result/publication guards now carry generation and revision, including operation keys/payloads, pending/active state and resource references. External adapters must enforce the same version fence; production dispatch remains disabled without them.
 - **Manual override:** an ownership-checked, CSRF-protected request builds the current PR SHA without the Automatic delay; coalesce matching pending Automatic work and repeated submissions. Mode is platform-owned, not a repo YAML field.
 - **Backpressure:** a queued job's status is visible in the PR comment ("queued, position N") so waiting is not mistaken for failure.
 
@@ -403,7 +404,7 @@ High. Concurrency and zero-gap swapping.
 - **Latest wins:** intermediate commits may never deploy; only the newest matters.
 - **Orphan protection:** any container labeled for this PR but not referenced by the current record is removed by the reconciler.
 - **Manual freshness:** a new commit fences an older in-flight result but does not authorize its successor in Manual mode. An already deployed healthy preview stays available and the UI distinguishes its deployed SHA from the latest PR SHA.
-- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Exact request revision/schema and already-running mode-change handling require implementation review.
+- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [BUILD_INTENTS.md](docs/BUILD_INTENTS.md). Prompt 3 propagates revision through jobs, results and publication; [BUILD_SCHEDULING.md](docs/BUILD_SCHEDULING.md) records exact SQL and integration limits.
 
 Implementation status and the proposed durable publication boundary are kept
 separate: see [the current generation-ordering implementation](docs/GENERATION_ORDERING.md)

@@ -51,4 +51,5 @@ func (w *TeardownWorker) Work(ctx context.Context, job *river.Job[TeardownArgs])
 func RegisterWorkers(workers *river.Workers, service *Service, broker *Broker) {
 	river.AddWorker(workers, &BuildWorker{Service: service, Broker: broker})
 	river.AddWorker(workers, &TeardownWorker{Service: service, Broker: broker})
+	river.AddWorker(workers, &WakeWorker{Broker: broker})
 }

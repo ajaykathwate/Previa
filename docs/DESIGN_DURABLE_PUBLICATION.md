@@ -10,11 +10,19 @@ tests remain in [GENERATION_ORDERING.md](GENERATION_ORDERING.md).
 ## Decision
 
 Build authorization follows the accepted
-[Manual/Automatic policy](BUILD_POLICY_AND_USER_FLOW.md), which is not implemented
-yet. PR observation is distinct from authorized work: Manual waits for an owner
+[Manual/Automatic policy](BUILD_POLICY_AND_USER_FLOW.md). Policy/current intent
+persistence and coordination scheduling are implemented behind tested interfaces;
+production runtime dispatch remains unconnected. PR observation is distinct from authorized work: Manual waits for an owner
 request; Automatic persists a five-minute trailing deadline. The publication
 protocol below applies only to authorized builds. Generation fencing remains
 independent of scheduling mode; close/merge still requests immediate teardown.
+[BUILD_INTENTS.md](BUILD_INTENTS.md) adds an independent request revision for
+same-generation Retry/Rebuild. Prompt 3 now carries that identity into operation
+keys/payloads, finalization, reporting and cleanup. See [BUILD_SCHEDULING.md](BUILD_SCHEDULING.md).
+All version/fencing/idempotency references below apply to the ordered tuple
+`(generation, revision)`: generation dominates; revision distinguishes deliberate
+requests for the same observed commit. Generation-only examples below describe
+new commits; repeated attempts also require revision fencing at the external adapter.
 
 Use PostgreSQL as the durable source of desired PR state and environment state.
 Use River for at-least-once delivery of durable work. Keep generation checks and

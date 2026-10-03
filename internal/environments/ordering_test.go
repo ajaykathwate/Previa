@@ -67,7 +67,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, name := range []string{"0001_init.sql", "0003_pr_generation.sql", "0004_durable_operations.sql"} {
+	for _, name := range []string{"0001_init.sql", "0003_pr_generation.sql", "0004_durable_operations.sql", "0005_installation_linking.sql", "0006_build_intents.sql", "0007_intent_dispatch.sql"} {
 		data, err := os.ReadFile("../../db/migrations/" + name)
 		if err != nil {
 			t.Fatal(err)
@@ -99,18 +99,50 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broker := env.NewBroker(pool, producer)
 	operationBroker, err := env.NewOperationBroker(producer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fixture{pool: pool, repo: env.NewRepository(pool, operationBroker), broker: broker, events: webhooks.NewService(pool, broker), logger: logger, repoID: repoID}
+	repo := env.NewRepository(pool, operationBroker)
+	runtime := newRuntime()
+	s, err := env.NewService(repo, runtime, logger, queue.DefaultBuildTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := env.NewOperationWorker(repo, &fakePublisher{runtime: runtime}, logger, time.Minute, map[env.OperationKind]time.Duration{env.ActivateRoute: time.Second, env.RemoveRoute: time.Second, env.ReportStatus: time.Second, env.CleanupArtifact: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, err := env.NewExecutionBroker(pool, producer, s, op, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), "UPDATE repos SET build_mode='automatic' WHERE id=$1", repoID); err != nil {
+		t.Fatal(err)
+	}
+	return &fixture{pool: pool, repo: repo, broker: broker, events: webhooks.NewService(pool, broker), logger: logger, repoID: repoID}
 }
 
 func (f *fixture) event(t *testing.T, action, sha string) env.Request {
 	t.Helper()
 	r, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{RepoID: f.repoID, Number: 1, HeadSHA: sha, Action: action})
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Ordering regressions exercise already-eligible automatic work. Debounce
+	// timing is verified independently by scheduling tests with an injected clock.
+	if _, err := f.pool.Exec(t.Context(), "UPDATE build_intents SET available_at=now()-interval '1 second' WHERE pull_request_id=$1", r.PullRequestID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := f.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.broker.EnqueueTx(t.Context(), tx, r); err != nil {
+		_ = tx.Rollback(t.Context())
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	return r
@@ -125,6 +157,7 @@ func (f *fixture) provision(t *testing.T, request env.Request) {
 type fakeRuntime struct {
 	mu                               sync.Mutex
 	resources                        map[int64]env.Artifact
+	revisions                        map[int64]int64
 	started                          chan int64
 	gate                             map[int64]chan struct{}
 	fail                             map[int64]bool
@@ -133,7 +166,7 @@ type fakeRuntime struct {
 }
 
 func newRuntime() *fakeRuntime {
-	return &fakeRuntime{resources: map[int64]env.Artifact{}, started: make(chan int64, 20), gate: map[int64]chan struct{}{}, fail: map[int64]bool{}}
+	return &fakeRuntime{resources: map[int64]env.Artifact{}, revisions: map[int64]int64{}, started: make(chan int64, 20), gate: map[int64]chan struct{}{}, fail: map[int64]bool{}}
 }
 func (r *fakeRuntime) Build(ctx context.Context, request env.Request) (env.Artifact, error) {
 	a := env.Artifact{ContainerID: fmt.Sprintf("container-%d", request.Generation), ImageTag: fmt.Sprintf("image-%d", request.Generation)}
@@ -151,6 +184,7 @@ func (r *fakeRuntime) Build(ctx context.Context, request env.Request) (env.Artif
 	}
 	r.mu.Lock()
 	r.resources[request.Generation] = a
+	r.revisions[request.Generation] = request.Revision
 	r.mu.Unlock()
 	if fail {
 		return a, errors.New("simulated build failure")
@@ -166,7 +200,7 @@ func (r *fakeRuntime) Resources(_ context.Context, prID int64) ([]env.Resource, 
 	}
 	var resources []env.Resource
 	for gen, a := range r.resources {
-		resources = append(resources, env.Resource{PullRequestID: prID, Generation: gen, Artifact: a})
+		resources = append(resources, env.Resource{PullRequestID: prID, Generation: gen, Revision: r.revisions[gen], Artifact: a})
 	}
 	return resources, nil
 }
@@ -436,7 +470,7 @@ func TestAtomicGuardWaitsForConcurrentGenerationBump(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		var waiting bool
-		err := f.pool.QueryRow(t.Context(), "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '-- name: ApplyResult%')").Scan(&waiting)
+		err := f.pool.QueryRow(t.Context(), "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '-- name: LockIntentPR%')").Scan(&waiting)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -510,10 +544,10 @@ func TestGenerationCaptureAndRiverHandoff(t *testing.T) {
 			b := f.event(t, eventAction, "sha-B")
 			var count int
 			var args []byte
-			if err := f.pool.QueryRow(t.Context(), "SELECT count(*) FROM river_job WHERE state IN ('available','running')").Scan(&count); err != nil || count != 1 {
+			if err := f.pool.QueryRow(t.Context(), "SELECT count(*) FROM river_job WHERE kind IN ('build','teardown') AND state IN ('available','running')").Scan(&count); err != nil || count != 1 {
 				t.Fatalf("lost uniqueness: %d %v", count, err)
 			}
-			if err := f.pool.QueryRow(t.Context(), "SELECT args FROM river_job ORDER BY id LIMIT 1").Scan(&args); err != nil {
+			if err := f.pool.QueryRow(t.Context(), "SELECT args FROM river_job WHERE kind IN ('build','teardown') ORDER BY id LIMIT 1").Scan(&args); err != nil {
 				t.Fatal(err)
 			}
 			var captured env.Request
@@ -553,7 +587,7 @@ func TestGenerationCaptureAndRiverHandoff(t *testing.T) {
 			}
 			if action == "terminal-failure" {
 				var state string
-				if err := f.pool.QueryRow(t.Context(), "SELECT state FROM river_job ORDER BY id LIMIT 1").Scan(&state); err != nil {
+				if err := f.pool.QueryRow(t.Context(), "SELECT state FROM river_job WHERE kind IN ('build','teardown') ORDER BY id LIMIT 1").Scan(&state); err != nil {
 					t.Fatal(err)
 				}
 				if state != "discarded" {
@@ -566,8 +600,8 @@ func TestGenerationCaptureAndRiverHandoff(t *testing.T) {
 
 type failingEnqueuer struct{}
 
-func (failingEnqueuer) EnqueueTx(context.Context, pgx.Tx, env.Request) (int64, error) {
-	return 0, errors.New("queue unavailable")
+func (failingEnqueuer) ObserveTx(context.Context, pgx.Tx, env.Request) (env.Request, error) {
+	return env.Request{}, errors.New("queue unavailable")
 }
 
 type failingOperationInserter struct{}
@@ -897,7 +931,7 @@ func TestConcurrentEventsIncrementExactlyOnce(t *testing.T) {
 		t.Fatalf("generation increments lost: %d", snapshot.Generation)
 	}
 	var count int
-	if err := f.pool.QueryRow(t.Context(), "SELECT count(*) FROM river_job").Scan(&count); err != nil {
+	if err := f.pool.QueryRow(t.Context(), "SELECT count(*) FROM river_job WHERE kind IN ('build','teardown')").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {

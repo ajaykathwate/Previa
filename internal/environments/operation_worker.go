@@ -16,7 +16,7 @@ import (
 )
 
 // OperationExecutor performs exactly one external side effect. Implementations
-// must be idempotent, honor the context, and enforce generation fencing for route
+// must be idempotent, honor the context, and enforce generation/revision fencing for route
 // changes. It is called only after the claim transaction has committed.
 type OperationExecutor interface {
 	Execute(context.Context, Operation) error
@@ -123,7 +123,7 @@ func (w *OperationWorker) Process(ctx context.Context, operationID int64, owner 
 		if err := w.repo.markOperationSuperseded(ctx, op.ID, owner); err != nil {
 			return err
 		}
-		w.logger.InfoContext(ctx, "environment operation superseded", "operation_id", op.ID, "kind", op.Kind, "pr_id", op.PullRequestID, "generation", op.Generation)
+		w.logger.InfoContext(ctx, "environment operation superseded", "operation_id", op.ID, "kind", op.Kind, "pr_id", op.PullRequestID, "generation", op.Generation, "revision", op.Revision)
 		return nil
 	}
 
@@ -142,7 +142,7 @@ func (w *OperationWorker) Process(ctx context.Context, operationID int64, owner 
 	if err := w.repo.completeOperation(ctx, op, owner); err != nil {
 		return fmt.Errorf("complete environment operation %d: %w", op.ID, err)
 	}
-	w.logger.InfoContext(ctx, "environment operation completed", "operation_id", op.ID, "kind", op.Kind, "pr_id", op.PullRequestID, "generation", op.Generation)
+	w.logger.InfoContext(ctx, "environment operation completed", "operation_id", op.ID, "kind", op.Kind, "pr_id", op.PullRequestID, "generation", op.Generation, "revision", op.Revision)
 	return nil
 }
 
@@ -165,13 +165,13 @@ func (w *OperationWorker) failClaim(ctx context.Context, op Operation, owner, co
 		if err := w.repo.markOperationFailed(writeCtx, op.ID, owner, code); err != nil {
 			return errors.Join(errors.New("terminal environment operation failed"), err)
 		}
-		w.logger.ErrorContext(ctx, "environment operation permanently failed", "operation_id", op.ID, "kind", op.Kind, "pr_id", op.PullRequestID, "generation", op.Generation, "error_code", code)
+		w.logger.ErrorContext(ctx, "environment operation permanently failed", "operation_id", op.ID, "kind", op.Kind, "pr_id", op.PullRequestID, "generation", op.Generation, "revision", op.Revision, "error_code", code)
 		return river.JobCancel(errors.New("environment operation permanently failed: " + code))
 	}
 	if err := w.repo.markOperationRetryable(writeCtx, op.ID, owner, code); err != nil {
 		return errors.Join(errors.New("environment operation failed"), err)
 	}
-	w.logger.WarnContext(ctx, "environment operation will retry", "operation_id", op.ID, "kind", op.Kind, "pr_id", op.PullRequestID, "generation", op.Generation, "error_code", code)
+	w.logger.WarnContext(ctx, "environment operation will retry", "operation_id", op.ID, "kind", op.Kind, "pr_id", op.PullRequestID, "generation", op.Generation, "revision", op.Revision, "error_code", code)
 	return errors.New("environment operation failed: " + code)
 }
 
@@ -199,13 +199,9 @@ func (r *Repository) operation(ctx context.Context, id int64) (Operation, error)
 
 func (r *Repository) operationStillRelevant(ctx context.Context, op Operation) (bool, error) {
 	if op.Kind != CleanupArtifact {
-		pr, err := dbgen.New(r.pool).ReadRequest(ctx, op.PullRequestID)
-		if err != nil {
-			return false, fmt.Errorf("read desired PR generation for operation: %w", err)
-		}
-		return pr.Generation == op.Generation, nil
+		return currentOperationRequest(ctx, dbgen.New(r.pool), op.Payload.Request, op.Kind)
 	}
-	if op.Payload.Resource.PullRequestID != op.PullRequestID || op.Payload.Resource.Generation <= 0 {
+	if op.Payload.Resource.PullRequestID != op.PullRequestID || op.Payload.Resource.Generation < 0 || op.Payload.Resource.Revision < 0 {
 		return false, nil
 	}
 	var safe bool
@@ -215,7 +211,11 @@ func (r *Repository) operationStillRelevant(ctx context.Context, op Operation) (
 		if err != nil {
 			return fmt.Errorf("lock PR for cleanup operation: %w", err)
 		}
-		if op.Payload.Resource.Generation > pr.Generation {
+		current, err := q.ReadBuildIntent(ctx, op.PullRequestID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read cleanup intent: %w", err)
+		}
+		if op.Payload.Resource.Generation > pr.Generation || (op.Payload.Resource.Generation == pr.Generation && op.Payload.Resource.Revision > current.Revision) {
 			return nil
 		}
 		e, err := q.ReadEnvironment(ctx, op.PullRequestID)
@@ -286,6 +286,22 @@ func requireOperationTransition(id int64, state string, affected int64) error {
 func (r *Repository) completeOperation(ctx context.Context, op Operation, owner string) error {
 	return database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
+		authorized := true
+		if op.Kind != CleanupArtifact && op.Payload.Request.State == "open" {
+			user, err := q.FindPROwner(ctx, op.PullRequestID)
+			if err != nil {
+				return fmt.Errorf("find finalization owner: %w", err)
+			}
+			if _, err := lockIntentScope(ctx, q, user.Int64, op.PullRequestID); err != nil {
+				if !errors.Is(err, ErrIntentUnavailable) {
+					return err
+				}
+				authorized = false
+			}
+		}
+		if _, err := q.LockRequest(ctx, op.PullRequestID); err != nil {
+			return fmt.Errorf("lock PR before operation finalization: %w", err)
+		}
 		if _, err := q.LockCurrentOperationLease(ctx, dbgen.LockCurrentOperationLeaseParams{
 			ID: op.ID, LeaseOwner: pgtype.Text{String: owner, Valid: true},
 		}); err != nil {
@@ -299,7 +315,12 @@ func (r *Repository) completeOperation(ctx context.Context, op Operation, owner 
 			if err != nil {
 				return fmt.Errorf("lock PR to finalize operation: %w", err)
 			}
-			if pr.Generation != op.Generation {
+			_ = pr // The locked PR serializes all generation/revision mutations.
+			relevant, err := currentOperationRequest(ctx, q, op.Payload.Request, op.Kind)
+			if err != nil {
+				return err
+			}
+			if !authorized || !relevant {
 				affected, err := q.MarkOperationSuperseded(ctx, dbgen.MarkOperationSupersededParams{ID: op.ID, LeaseOwner: pgtype.Text{String: owner, Valid: true}})
 				if err != nil {
 					return fmt.Errorf("supersede operation after external effect: %w", err)
@@ -309,7 +330,7 @@ func (r *Repository) completeOperation(ctx context.Context, op Operation, owner 
 		}
 		switch op.Kind {
 		case ActivateRoute:
-			active, err := q.ActivatePendingEnvironment(ctx, dbgen.ActivatePendingEnvironmentParams{PrID: op.PullRequestID, ExpectedGeneration: op.Generation})
+			active, err := q.ActivatePendingEnvironment(ctx, dbgen.ActivatePendingEnvironmentParams{PrID: op.PullRequestID, ExpectedGeneration: op.Generation, ExpectedRevision: op.Revision})
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return errors.New("route activation has no current pending candidate")
@@ -323,13 +344,13 @@ func (r *Repository) completeOperation(ctx context.Context, op Operation, owner 
 				if (previous.ContainerID == "" && previous.ImageTag == "") || artifactReferenced(previous, []Artifact{op.Payload.Artifact}) {
 					continue
 				}
-				resource := Resource{PullRequestID: op.PullRequestID, Generation: op.Generation, Artifact: previous}
+				resource := Resource{PullRequestID: op.PullRequestID, Generation: op.Generation, Revision: op.Revision, Artifact: previous}
 				if err := r.enqueueCleanupTx(ctx, tx, op.Payload.Request, resource); err != nil {
 					return err
 				}
 			}
 		case RemoveRoute:
-			removed, err := q.FinalizePendingTeardown(ctx, dbgen.FinalizePendingTeardownParams{PrID: op.PullRequestID, ExpectedGeneration: op.Generation})
+			removed, err := q.FinalizePendingTeardown(ctx, dbgen.FinalizePendingTeardownParams{PrID: op.PullRequestID, ExpectedGeneration: op.Generation, ExpectedRevision: op.Revision})
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return errors.New("route removal has no current teardown")
@@ -343,7 +364,7 @@ func (r *Repository) completeOperation(ctx context.Context, op Operation, owner 
 				if artifact.ContainerID == "" && artifact.ImageTag == "" {
 					continue
 				}
-				resource := Resource{PullRequestID: op.PullRequestID, Generation: op.Generation, Artifact: artifact}
+				resource := Resource{PullRequestID: op.PullRequestID, Generation: op.Generation, Revision: op.Revision, Artifact: artifact}
 				if err := r.enqueueCleanupTx(ctx, tx, op.Payload.Request, resource); err != nil {
 					return err
 				}

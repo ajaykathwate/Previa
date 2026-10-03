@@ -7,13 +7,14 @@ owner-controlled Automatic option. Automatic builds use a **five-minute trailing
 quiet period**: each relevant new head commit resets that PR's deadline. Manual
 builds bypass this delay, but still obey capacity, authorization and safety limits.
 
-This is a design decision, not an implemented runtime feature. Today, installation
-linking and paginated repository browsing work. Builds and Environments are
-placeholder pages; PR browsing, manual build controls, policy persistence and
-debounce scheduling are not implemented. Production workers execute only ping.
-The tested orchestration core currently enqueues on every supported PR event and
-automatically hands off to a newer generation; it must change before connecting
-the real webhook/build adapters.
+Policy persistence and ownership-scoped intent APIs are implemented by Prompt 2;
+see [BUILD_INTENTS.md](BUILD_INTENTS.md). Prompt 3 implements coordination and
+River scheduling behind tested interfaces; see [BUILD_SCHEDULING.md](BUILD_SCHEDULING.md).
+Production preview dispatch is not connected.
+Installation linking and paginated repository browsing work. Builds and Environments
+are placeholder pages; PR browsing and manual build controls remain unbuilt. Production workers execute only ping.
+The tested orchestration core now admits only current authorized eligible intent.
+Production must supply real runtime/publication adapters before enabling dispatch.
 
 The screen structure below is a **recommended next UI design**, not authorization
 to implement new screens, routes, database columns or a PR synchronization runner.
@@ -103,7 +104,8 @@ all PRs. Local PR browsing is not currently connected.
    Distinguish **observed PR state** from **authorized build intent**. Merely
    observing a newer SHA in Manual mode must never authorize another build.
 3. Persist the pending request identity, captured generation/SHA, source and due
-   time in PostgreSQL. The exact schema is left for the implementation review.
+   time in PostgreSQL. Migration 6 implements one current `build_intents` row per PR
+   with a monotonic request revision; see [BUILD_INTENTS.md](BUILD_INTENTS.md).
    Automatic mode moves the deadline to five minutes after the latest relevant
    change. Older River wake-ups recheck durable eligibility and exit cleanly.
 4. Record state, scheduling intent and necessary River wake-up in a short atomic
@@ -115,8 +117,9 @@ all PRs. Local PR browsing is not currently connected.
    generation. A pending future deadline remains durable until eligible.
 6. A manual request resolves the current PR SHA under the ordering boundary and
    creates immediate intent without pretending a webhook occurred. Deduplicate
-   repeated clicks; refreshes/retries must not create parallel requests. Exact
-   request revision semantics need review, especially retries of the same SHA.
+   repeated clicks. Ordinary Build coalesces with current work/result. Explicit Retry
+   after failure or Rebuild after success requires a fresh key and expected revision;
+   it advances revision even for the same SHA, without advancing PR generation.
 7. Keep atomic result generation checks and durable publication. A new commit
    supersedes an older in-flight result even in Manual mode, but does not start
    the new build in Manual mode. Cleanup stale candidates; preserve an existing
@@ -125,10 +128,9 @@ all PRs. Local PR browsing is not currently connected.
    immediately; there is no quiet period for teardown. Actual cleanup still follows
    the existing uniqueness, publication and resource ownership constraints.
 9. Switching to Manual cancels unstarted automatic intent, including queued work
-   that has not begun. It does not itself remove a deployed preview. Recommended
-   treatment for review: let an already executing authorized build finish under
-   its PR generation/result guards rather than implicitly cancelling it on a mode
-   change. This in-flight policy needs confirmation before implementation.
+   that has not begun. It does not itself remove a deployed preview. Approved:
+   an already executing authorized build may finish under its current PR generation
+   and request guards; a mode change alone does not cancel running work.
 10. Enabling Automatic applies to subsequent relevant events. It does not bulk-build
     existing PRs; those remain available for an explicit manual request.
 
@@ -146,17 +148,21 @@ capacity can add queue wait. Manual “Build latest commit” bypasses the quiet
   still needed; debounce is not a spending cap.
 - Tracking PRs and authorized work separately adds persistence and race tests,
   but is required to keep the existing successor mechanism from defeating Manual.
-- Build history, initial-sync mechanics, exact mutation routes and scheduling schema
-  require a feature implementation review. No new library or schema is chosen here.
+- Initial-sync mechanics, exact mutation routes and production runtime integration
+  remain later tasks; River coordination is implemented behind tested interfaces. The current policy/intent schema is implemented; historical
+  builds remain outside the agreed MVP scope. Current-only idempotency retention
+  rejects stale commands through expected revision instead of an unbounded ledger.
 
 ## Implementation sequence and checks
 
 1. Standalone `repoconfig` is complete; build mode stays outside repo YAML.
    Approved defaults, tiers and checks are in [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md).
-2. Review and implement repository policy + durable request/deadline persistence.
-3. Adapt parsed-event processing, broker handoff, retries and recovery before wiring
-   live webhook ingress. Test Manual no-build, deadline reset, stale wake-up, manual
-   override, queued cancellation, restart recovery and close-during-build races.
+2. Complete: repository policy + durable request/deadline persistence. PostgreSQL
+   tests cover concurrency, rollback, access checks and same-SHA request fencing.
+3. Complete: parsed-event processing, broker handoff, retries and recovery enforce
+   intent. Tests cover Manual no-build, deadline reset, stale wake-ups, manual
+   override, cancellation, recovery, same-SHA revision and close-during-build races.
+   Next: authenticated durable webhook ingress (Prompt 4).
 4. Add PR discovery/list/detail queries and pages with ownership boundaries. Test
    existing-PR discovery, pagination and stale-sync/webhook races.
 5. Add mode/build controls and connect real build/runtime/publication integrations
