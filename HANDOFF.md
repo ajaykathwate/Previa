@@ -12,7 +12,7 @@ Last updated: 2026-10-03
 - Feature packages stay flat; shared infrastructure is under `internal/platform`.
   Presentation lives under `web/`; see `docs/UI_ARCHITECTURE.md`.
 - `docs/BUILD_POLICY_AND_USER_FLOW.md`: accepted Manual default + opt-in Automatic
-  five-minute debounce, not implemented; PR browsing/sync UI remains a recommendation.
+  five-minute debounce, not implemented; next tasks: docs/FEATURE_IMPLEMENTATION_PROMPTS.md.
   Adapt ProcessPR/finishJob to authorized intent before live builds; no build history.
 
 ## Run and verify
@@ -94,6 +94,6 @@ Last updated: 2026-10-03
   durable operation retry/finalization/recovery, pending artifact protection, and
   nonblocking external publication.
 - Worker/OAuth-unset and credential-free migrations verified earlier. README/DESIGN
-  now document the accepted build policy; latest task changed documentation only.
+  document accepted policy; five next-feature prompts drafted, no implementation started.
 - Local `.env` line 38 is not a shell assignment; sourcing fails. Configuration left
   unchanged. Comment/remove that non-assignment before using make run-server/dev.

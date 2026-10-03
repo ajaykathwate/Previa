@@ -28,6 +28,15 @@ vet and golangci-lint: zero issues). Local Markdown targets resolve; HANDOFF has
 99 lines. No TEST_DATABASE_URL was supplied for this documentation task, so DB
 integration checks were not rerun. Application/config/schema/UI files are unchanged.
 
+Next-phase prompt plan: [FEATURE_IMPLEMENTATION_PROMPTS.md](docs/FEATURE_IMPLEMENTATION_PROMPTS.md)
+contains five individually executable tasks: standalone config; policy/request
+persistence; durable debounce and intent-aware handoff; authenticated webhook
+ingress; PR discovery/pages and owner controls. Creating the plan does not start
+implementation. YAML defaults/resource schema, same-SHA request fencing, in-flight
+mode changes, upstream event ordering and sync mechanics require review in the
+relevant task. Production build admission stays fail-closed until real adapters
+exist; no fake workers or historical builds archive are proposed.
+
 - PostgreSQL configuration, connection pooling, startup health checks, application
   migrations, and generated queries.
 - HTTP server, request logging/IDs, panic recovery, templ layout, local HTMX assets,
