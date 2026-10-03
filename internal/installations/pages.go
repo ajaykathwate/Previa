@@ -24,15 +24,25 @@ func (h *Handler) repositories(w http.ResponseWriter, r *http.Request) {
 	userID, _, _ := h.users.UserIDs(r.Context())
 	target := r.Header.Get("HX-Target")
 	partial := r.Header.Get("HX-Request") == "true"
-	if partial && (target == "repository-detail" || target == "pull-request-results") {
-		panel, err := h.selectedPanel(r, userID, selected, target)
-		if err != nil {
+	if selected > 0 {
+		if h.navigator == nil {
+			http.NotFound(w, r)
+			return
+		}
+		if err := h.navigator.ValidateSelection(r.Context(), userID, selected, r.URL.Query()); err != nil {
 			h.panelFailure(w, r, err)
 			return
 		}
-		templ.Handler(panel).ServeHTTP(w, r)
+		location := repositorypages.WorkspaceURL(selected, r.URL.Query())
+		if partial {
+			w.Header().Set("HX-Redirect", location)
+			w.WriteHeader(http.StatusOK)
+		} else {
+			http.Redirect(w, r, location, http.StatusSeeOther)
+		}
 		return
 	}
+
 	filter := RepositoryFilter{Page: 1, Search: strings.TrimSpace(r.URL.Query().Get("q")), Access: r.URL.Query().Get("access")}
 	if filter.Access == "" {
 		filter.Access = "available"
@@ -72,7 +82,7 @@ func (h *Handler) repositories(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	page := repositorypages.Page{Total: result.Total, Number: result.Page, Pages: result.Pages, Search: filter.Search, Access: filter.Access, Installations: summary.Installations, Enabled: h.slug != "", SelectedRepoID: selected, Query: r.URL.RawQuery}
+	page := repositorypages.Page{Total: result.Total, Number: result.Page, Pages: result.Pages, Search: filter.Search, Access: filter.Access, Installations: summary.Installations, Enabled: h.slug != "", Query: r.URL.RawQuery}
 	if result.Total > 0 {
 		page.Start = (result.Page-1)*RepositoryPageSize + 1
 		page.End = page.Start + int64(len(result.Rows)) - 1
@@ -84,24 +94,10 @@ func (h *Handler) repositories(w http.ResponseWriter, r *http.Request) {
 		templ.Handler(repositorypages.Results(page)).ServeHTTP(w, r)
 		return
 	}
-	panel, err := h.selectedPanel(r, userID, selected, "")
-	if err != nil {
-		h.panelFailure(w, r, err)
-		return
-	}
+
 	page.Connected = h.sessions.PopString(r.Context(), "installation_notice") == "linked"
 	username, _ := h.users.Username(r.Context())
-	templ.Handler(repositorypages.Index(username, h.users.CSRFToken(r.Context()), page, panel)).ServeHTTP(w, r)
-}
-
-func (h *Handler) selectedPanel(r *http.Request, userID, repoID int64, target string) (templ.Component, error) {
-	if repoID == 0 {
-		return repositorypages.Unselected(), nil
-	}
-	if h.workspace == nil {
-		return nil, ErrPolicyUnavailable
-	}
-	return h.workspace.RepositoryPanel(r.Context(), userID, repoID, r.URL.Query(), h.users.CSRFToken(r.Context()), target)
+	templ.Handler(repositorypages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
 }
 
 func (h *Handler) panelFailure(w http.ResponseWriter, r *http.Request, err error) {

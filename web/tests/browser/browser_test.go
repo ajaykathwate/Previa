@@ -109,6 +109,30 @@ func TestBrowserRegression(t *testing.T) {
 				templ.Handler(prpages.Panel(panel(r, id), handler.CSRFToken(r.Context()))).ServeHTTP(w, r)
 			})
 		}
+		for _, path := range []string{"/repositories/{repoID}", "/repositories/{repoID}/pull-requests/{number}"} {
+			r.With(auth.RequireUser).Get(path, func(w http.ResponseWriter, r *http.Request) {
+				id, _ := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+				q := r.URL.Query()
+				if n := chi.URLParam(r, "number"); n != "" {
+					q.Set("pr", n)
+				} else {
+					q.Del("pr")
+				}
+				r.URL.RawQuery = q.Encode()
+				p := panel(r, id)
+				if r.Header.Get("HX-Request") == "true" {
+					if r.Header.Get("HX-Target") == "pull-request-results" {
+						templ.Handler(prpages.Results(p)).ServeHTTP(w, r)
+						return
+					}
+					if r.Header.Get("HX-Target") == "repository-detail" {
+						templ.Handler(prpages.Panel(p, handler.CSRFToken(r.Context()))).ServeHTTP(w, r)
+						return
+					}
+				}
+				templ.Handler(prpages.Index("design-review", handler.CSRFToken(r.Context()), p)).ServeHTTP(w, r)
+			})
+		}
 		// Test-only paged repository views. Database pagination is verified separately.
 		r.With(auth.RequireUser).Get("/repositories", func(w http.ResponseWriter, r *http.Request) {
 			number, _ := strconv.ParseInt(r.URL.Query().Get("page"), 10, 64)
@@ -116,7 +140,11 @@ func TestBrowserRegression(t *testing.T) {
 				number = 1
 			}
 			selected, _ := strconv.ParseInt(r.URL.Query().Get("repo_id"), 10, 64)
-			data := repositorypages.Page{SelectedRepoID: selected, Query: r.URL.RawQuery, Installations: 2, Enabled: true, Search: r.URL.Query().Get("q"), Access: r.URL.Query().Get("access")}
+			if selected > 0 {
+				http.Redirect(w, r, repositorypages.WorkspaceURL(selected, r.URL.Query()), http.StatusSeeOther)
+				return
+			}
+			data := repositorypages.Page{Query: r.URL.RawQuery, Installations: 2, Enabled: true, Search: r.URL.Query().Get("q"), Access: r.URL.Query().Get("access")}
 			if data.Access == "" {
 				data.Access = "available"
 			}
@@ -145,18 +173,7 @@ func TestBrowserRegression(t *testing.T) {
 				templ.Handler(repositorypages.Results(data)).ServeHTTP(w, r)
 				return
 			}
-			detail := repositorypages.Unselected()
-			if selected > 0 {
-				detail = prpages.Panel(panel(r, selected), handler.CSRFToken(r.Context()))
-			}
-			if r.Header.Get("HX-Request") == "true" {
-				if r.Header.Get("HX-Target") == "pull-request-results" {
-					detail = prpages.Results(panel(r, selected))
-				}
-				templ.Handler(detail).ServeHTTP(w, r)
-				return
-			}
-			templ.Handler(repositorypages.Index("design-review", handler.CSRFToken(r.Context()), data, detail)).ServeHTTP(w, r)
+			templ.Handler(repositorypages.Index("design-review", handler.CSRFToken(r.Context()), data)).ServeHTTP(w, r)
 		})
 	})
 	server.Start()

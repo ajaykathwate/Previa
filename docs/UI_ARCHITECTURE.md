@@ -2,7 +2,7 @@
 
 Accepted scheduling policy and the recommended repository → PR → build → preview
 screen flow are in [BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md).
-Manual-default mode controls and repository/PR panels are implemented.
+Manual-default mode controls and dedicated repository/PR pages are implemented.
 Automatic intent follows a five-minute quiet period; real preview execution remains
 unavailable. See [APP_USER_FLOW.md](APP_USER_FLOW.md) for current screen behavior.
 
@@ -30,14 +30,20 @@ larger screens can define view models in their page package. Avoid shared DTO
 packages until actual reuse calls for one. Use aliases such as `authpages` and
 `dashboardpages` to distinguish backend and presentation imports.
 
-`/repositories?repo_id=<id>&pr=<number>` renders the whole repository workspace.
-HTMX requests use `HX-Target: repository-results` for the directory,
-`repository-detail` for source/PR selection and mutations, or `pull-request-results`
-for PR filtering/pagination. Only the requested fragment is rendered; selected
-repository and PR queries always recheck the installation owner. `Vary` separates
-full and partial representations. Legacy repository/detail paths redirect after
-ownership checks. Navigation values are whitelisted, and mutations never accept
-arbitrary return URLs. Directory and PR filters use independent query namespaces.
+`/repositories` renders only the repository directory. `/repositories/{id}` and
+`/repositories/{id}/pull-requests/{number}` render dedicated pages owned by
+`internal/pullrequests`. Source and PR selection use ordinary page links;
+breadcrumbs preserve directory and PR filters. Earlier query-selection URLs
+redirect after ownership checks through a small consumer-defined navigator.
+HTMX uses `repository-results` for directory search/pagination,
+`pull-request-results` for PR search/pagination, and `repository-detail` for sync
+polling and policy saves. Only the requested fragment is rendered. Every query
+rechecks installation ownership; `Vary` separates full/partial representations.
+Navigation values are whitelisted and mutations never accept arbitrary return
+URLs. Last synced, Sync Pull Requests and the Manual-default Automatic switch
+remain at the top of the repository/PR page; enabling requires modal confirmation.
+Desktop search/filter controls share a row; tablet/mobile controls stack. Pages
+have bounded scrolling regions and motion respects reduced-motion preferences.
 
 The root `web` package stays focused on assets; it does not aggregate page packages.
 The public home page is in `web/pages/home`; authenticated dashboard/session pages
@@ -45,8 +51,7 @@ are in `web/pages/dashboard`, and auth error pages are in `web/pages/auth`.
 Successful OAuth redirects to `/dashboard`; logout returns to `/`. Overview,
 Repositories, Builds, Environments and Developer tools are separate authenticated
 HTTP pages. `internal/installations` owns `/repositories`; `internal/dashboard` owns overview, session and tools. `internal/pullrequests`
-provides the selected repository/PR component through a small interface consumed
-by the installations handler, and owns discovery/policy actions and ownership-scoped current
+owns dedicated repository/PR pages, discovery/policy actions and ownership-scoped current
 Builds/Environments queries. Their page wrappers reuse the shared activity presentation;
 view models contain display data, never backend types. Build execution remains disabled.
 
@@ -224,8 +229,8 @@ An empty query restores all owned repositories within the selected access filter
 Full GET forms/page links remain usable without JavaScript. Partial responses
 retain the same authentication/ownership checks and vary by HX request/target headers.
 
-The repository panel uses the same centered 1100px content boundary as other
-workspace pages, with balanced desktop/mobile padding. Live search has no
+The repository workspace uses a centered, capped 1440px content boundary with
+balanced desktop/mobile padding and independent scroll regions. Live search has no
 Search/Reset buttons; clearing the field restores results and Enter remains
 the ordinary GET-form fallback. Search focus uses a subtle forest border
 rather than the detached outer ring. This is now the shared text-input, textarea

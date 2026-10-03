@@ -25,9 +25,9 @@ type UserSession interface {
 	CSRFToken(context.Context) string
 }
 
-// The PR feature supplies the selected panel; installations owns the directory.
-type repositoryWorkspace interface {
-	RepositoryPanel(context.Context, int64, int64, url.Values, string, string) (templ.Component, error)
+// Old query-based bookmarks validate ownership through the PR feature.
+type repositoryNavigator interface {
+	ValidateSelection(context.Context, int64, int64, url.Values) error
 }
 
 var ErrWorkspaceInput = errors.New("invalid repository workspace filters")
@@ -38,11 +38,11 @@ type Handler struct {
 	sessions  *scs.SessionManager
 	slug      string
 	logger    *slog.Logger
-	workspace repositoryWorkspace
+	navigator repositoryNavigator
 }
 
-func (h *Handler) WithWorkspace(workspace repositoryWorkspace) *Handler {
-	h.workspace = workspace
+func (h *Handler) WithNavigator(navigator repositoryNavigator) *Handler {
+	h.navigator = navigator
 	return h
 }
 

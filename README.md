@@ -200,11 +200,14 @@ workflow. Owners need repository mode controls and a way to select a PR and requ
 its latest commit. GitHub comments/checks remain the review-facing feedback channel.
 
 Current pages are Overview, Repositories, Builds, Environments and Developer Tools.
-Repositories is a single master–detail workspace: the searchable, paginated source
-list stays visible while HTMX loads a repository's PRs and PR details into the
-adjacent panel. Selection and filters have shareable URLs; ordinary GET navigation
-works without JavaScript. Refresh progress updates in place, and build mode is
-changed through an owner-controlled, CSRF-protected modal.
+Repositories shows only a full-width searchable, paginated repository list.
+Selecting a source opens its dedicated repository page; selecting a PR opens its
+dedicated detail page. Clickable owner/repository/PR breadcrumbs and Back links
+preserve list filters. Search and filters share a row on desktop and stack on
+narrow screens. Repository pages show the last sync time and **Sync Pull Requests**.
+The **Automatic** switch is off in Manual mode; enabling requires an owner-controlled,
+CSRF-protected confirmation modal. Search, sync progress and policy saves update
+in place through HTMX. Page URLs are shareable and navigation works without JavaScript.
 
 PR discovery and latest/requested/deployed commit views are implemented. Builds
 and Environments show actual saved state. Build execution, live logs, preview

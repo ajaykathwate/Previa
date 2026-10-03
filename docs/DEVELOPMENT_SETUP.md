@@ -307,20 +307,24 @@ in; successful authentication opens `/dashboard`, with the account navbar and
 workspace sidebar. Each navigation item opens its own page:
 
 - **Overview** (`/dashboard`): database-derived installation/repository/access counts.
-- **Repositories** (`/repositories`): a persistent narrow repository directory and
-  right-hand PR panel. Each list has ten records per page and independent search
-  (300ms debounce) and filters. Available repositories and Open PRs are the defaults.
-  Click a repository, then a PR: both swap only the detail panel through HTMX.
-  Back to pull requests preserves the PR search/state/page. On narrow screens,
-  panels stack and selection brings the detail panel into view. Manage connections
-  stays in the header.
-- **Repository/PR panel**: Refresh pull requests queues discovery. With the configured
-  worker running, progress updates every three seconds in place; no reload is needed.
-  Build mode uses an accessible confirmation modal and saves in place. Failed requests
-  preserve visible content and show inline feedback. Current selection/filter URLs
-  can be bookmarked and reopened; old repository/PR URLs redirect into this workspace.
-  Without JavaScript, Enter applies repository search, Apply filters submits PR search,
-  links reload the complete workspace and an inline policy form remains available.
+- **Repositories** (`/repositories`): only the repository list, with ten rows per
+  page, debounced search and Available/Unavailable/All access tabs. Available is
+  the default; Manage connections stays in the header.
+- **Repository page** (`/repositories/<local-repo-id>`): its PR list, defaulting to
+  Open, search/state filters, Last synced, Sync Pull Requests and Automatic mode.
+  Search and filters share a desktop row and stack on tablet/mobile. Search, sync
+  and policy updates use HTMX; selecting a repository or PR uses ordinary page navigation.
+- **PR detail** (`/repositories/<id>/pull-requests/<number>`): latest observed,
+  requested and deployed commits, real saved state and the actual GitHub link.
+  Breadcrumbs and Back to pull requests preserve PR filters; Repositories returns
+  to the directory with its previous search/access/page.
+- **Sync and policy**: Sync Pull Requests queues discovery; a configured worker
+  updates its compact progress every three seconds. Automatic is off for Manual.
+  Enabling requires an accessible confirmation modal; Cancel/Escape leaves it off.
+  Turning it off saves Manual directly. Failed partial requests preserve current
+  records and allow retry. Pages and filters are bookmarkable; old query-based
+  selection URLs redirect after ownership checks. Without JavaScript, Enter/Apply
+  filters submit ordinary GET forms and native modal confirmation remains usable.
 - **Builds** (`/builds`) and **Environments** (`/environments`): actual current intent
   and persisted deployment records; empty when there are none. Build execution is
   disabled until real runtime/publication adapters are connected.
@@ -466,7 +470,7 @@ make test-browser
 
 - Run the first command once to install locked Playwright v1.58.2 and Chromium.
 - The second prepares assets/templates and starts a temporary test-only server.
-  **Expected:** all twelve browser scenarios pass and the server stops automatically.
+  **Expected:** all browser scenarios pass and the server stops automatically.
 - No Postgres, `.env`, or GitHub credentials are needed. GitHub and queue providers
   are fakes; session rotation, CSRF and logout use the actual middleware.
 - On Linux, missing browser system libraries may require Playwright's OS dependency
@@ -474,23 +478,29 @@ make test-browser
   screenshots and troubleshooting. These checks do not validate real GitHub consent
   or PostgreSQL integrations.
 
-## Verify the repository master–detail workspace
+## Verify repository and PR pages
 
 After `make run-server` (or `make dev`) and sign-in, open
-<http://localhost:8080/repositories>. Select a connected repository: the directory
-stays visible, and PRs appear beside it. Switch sources, filter PRs, open a PR and
-use Back to pull requests; the browser stays on `/repositories` and preserves filters.
-For a direct selection use `/repositories?repo_id=<local-repo-id>`; add `&pr=<number>`
-for PR details. Run `make run-worker` separately to process refresh requests.
-`make run-server`/`make run-worker` load `.env` automatically; the UI changes require
-no new configuration or migrations.
+<http://localhost:8080/repositories>. Only repositories should appear. Select a
+connected source to open `/repositories/<local-repo-id>` with its PR list; select a
+PR to open `/repositories/<id>/pull-requests/<number>` with its full details.
+Use the repository breadcrumb or Back to pull requests to return with PR filters
+preserved. Repositories returns with directory filters/page preserved. Browser
+Back/Forward, reload and bookmarked URLs work across these pages. Older
+`/repositories?repo_id=<id>&pr=<number>` links redirect to the dedicated pages.
+
+Search/filter controls share a row on desktop and stack on tablet/mobile. Enable
+Automatic only after its confirmation; Cancel/Escape must leave it off. Sync Pull
+Requests updates Last synced and compact progress in place. Run `make run-worker`
+separately to process sync requests. `make run-server` and `make run-worker` load
+`.env` automatically; this UI change requires no new configuration or migrations.
 
 Run `make build`, `make test`, `make lint`, then `make test-browser` after
-`make browser-install`. Database integration checks require an explicitly exported
-`TEST_DATABASE_URL` pointing to an isolated test database; the test target does not
+`make browser-install`. Database integration checks require explicitly exported
+`TEST_DATABASE_URL` pointing to an isolated test database; `make test` does not
 load `.env`. The browser fixture needs no GitHub credentials or database. Expected:
-Go tests/build pass, vet/lint report no issues, and browser tests verify partial swaps,
-filter preservation, history, stale/failed requests, policy/refresh, responsive panels,
-accessibility and no-JavaScript forms. For local inspection, set
-`UI_BROWSER_SCREENSHOTS=1` when running the browser suite; screenshots are saved in
-`web/tests/browser/artifacts/` (ignored by Git).
+build/tests pass, vet/lint report no issues, and browser checks verify full-page
+navigation, aligned controls, breadcrumbs/filter preservation, history, failed
+searches, Automatic confirmation/retry, polling, responsive layout, accessibility
+and no-JavaScript navigation/forms. Set `UI_BROWSER_SCREENSHOTS=1` for screenshots
+in `web/tests/browser/artifacts/` (ignored by Git).

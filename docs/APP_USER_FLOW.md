@@ -48,20 +48,20 @@ For installation/configuration commands, use [DEVELOPMENT_SETUP.md](DEVELOPMENT_
 
 ## Discover and browse pull requests
 
-1. Select a repository in the left column. Its PRs load in the right panel on the
-   same Repositories page; switch sources without losing the directory or its filters.
-2. Click **Refresh pull requests** for initial discovery or to refresh known state.
+1. Repositories shows only the source list. Select one to open its dedicated
+   repository page with its PRs, sync state and build policy.
+2. Click **Sync Pull Requests** for initial discovery or to refresh known state.
    This queues metadata discovery; it does not start builds.
 3. Keep the configured worker running. Queued/syncing progress updates automatically
-   every three seconds in the selected panel, with
-   fetched count and last successful completion. Each API page continues durably
+   every three seconds on that page. Last synced shows the latest successful
+   completion beneath the clickable owner/repository title. Each API page continues durably
    until the list finishes. If refresh fails, existing records remain visible;
    check App permissions/worker configuration and retry.
 4. The list defaults to **Open**, with **Closed**, **Merged** and **All** tabs. Search
    title, PR number, author or branch. Each page contains ten PRs; clearing search
    restores the selected state filter. Search and pagination also work with ordinary
    GET forms when JavaScript is disabled.
-5. Click a PR to open its details in the same right panel. **Back to pull requests**
+5. Click a PR to open its dedicated detail page. **Back to pull requests**
    restores the search, state and page you were browsing. Review:
    - **Latest observed commit**: current GitHub head known to Previa.
    - **Current build request**: authorized work and its captured commit/deadline.
@@ -70,22 +70,27 @@ For installation/configuration commands, use [DEVELOPMENT_SETUP.md](DEVELOPMENT_
    no environment exists. Connecting/discovering PRs never creates an empty environment.
 7. A **Refresh required** notice means conflicting source observations were handled
    conservatively; refresh to obtain a current authoritative GitHub snapshot.
-8. **View on GitHub** opens the actual PR. The repository footer links to its scoped
-   Builds and Environments pages.
+8. The title adds the selected PR number/title. Click the repository breadcrumb
+   or **Back to pull requests** to return to its list. **Repositories** or the
+   owner breadcrumb returns to the directory. **View on GitHub** opens the actual
+   PR. Builds and Environments remain in the sidebar.
 
-Selection and filters are bookmarkable at `/repositories?repo_id=123` (with
-`pr=7` for a selected PR). Browser Back/Forward and reload restore the workspace.
-Repository filters use `q`, `access`, `page`; PR filters use `pr_q`, `pr_state`,
-`pr_page`. On phones, the directory stays above the detail panel; selection scrolls
-the panel into view. Scroll back up to switch repositories. With JavaScript disabled,
-the same URLs and GET forms render the full workspace, and policy has an inline form.
+Pages are bookmarkable at `/repositories/123` and
+`/repositories/123/pull-requests/7`. Browser Back/Forward and reload retain the
+current page. Repository filters use `q`, `access`, `page`; PR filters use `pr_q`,
+`pr_state`, `pr_page`. Breadcrumbs preserve these filters when returning to a list.
+Search/filter controls share a row on desktop and stack on tablet/mobile. Each
+page uses the full content area. With JavaScript disabled, ordinary page links,
+GET forms and native modal confirmation remain usable. Old query-based selection
+URLs redirect to dedicated pages after ownership checks.
 
 ## Choose a repository build policy
 
-1. In the selected available repository panel, click **Build mode**.
-2. A confirmation modal opens over the current page. Choose **Manual** or
-   **Automatic**, then **Save build mode**. The panel updates in place;
-   Cancel, Close or Escape dismisses without saving.
+1. **Automatic** is off by default in Manual mode. Click its switch in an available
+   repository's page to enable it.
+2. A confirmation modal opens over the current page. Click **Enable automatic**
+   to save in place; Cancel, Close or Escape leaves it off. Turning the switch off
+   directly saves Manual. Failed saves keep the existing mode and allow retry.
 3. **Manual** is the default: PR events update tracking but do not automatically
    authorize builds.
 4. **Automatic** applies to subsequent relevant PR events. Each new commit resets
@@ -135,10 +140,10 @@ flowchart TD
     R --> I[Install or manage GitHub App connection]
     I --> V[Verify account and installation]
     V --> R
-    R --> D[Right panel: selected repository PRs]
-    D --> S[Refresh: durable paginated discovery]
+    R --> D[Repository page: its pull requests]
+    D --> S[Sync: durable paginated discovery]
     S --> D
-    D --> P[Same panel: latest/requested/deployed commit]
+    D --> P[PR detail page: latest/requested/deployed commit]
     P --> D
     D --> M[Build policy confirmation modal]
     M --> D
@@ -160,9 +165,9 @@ sequenceDiagram
     HTTP->>DB: Atomic receipt + source-ordered state + intent
     DB-->>HTTP: Commit
     HTTP-->>GH: 204 accepted
-    U->>HTTP: Owned, CSRF-protected Refresh POST
+    U->>HTTP: Owned, CSRF-protected Sync POST
     HTTP->>DB: Sync revision + first page job
-    HTTP-->>U: Redirect to repository
+    HTTP-->>U: Updated fragment or no-JS redirect
     W->>DB: Capture installation/observation revisions
     W->>GH: Fetch at most 100 PRs, outside transaction
     W->>DB: Recheck revisions, persist page + continuation

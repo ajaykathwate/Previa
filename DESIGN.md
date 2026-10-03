@@ -530,13 +530,18 @@ Medium.
 6. Log retention has a size and age cap; old logs are pruned.
 
 The accepted manual build policy requires owner-controlled per-repository mode and
-an explicit per-PR build action. Repositories uses a single master–detail workspace: the narrow repository list
-remains visible while HTMX swaps PR lists and PR details into the right panel.
-Selection/filter query parameters support bookmarking, history and ordinary GET
-fallback. Short screens scroll within the workspace; narrow screens stack the
-source directory above the detail panel. Refresh and policy actions update that
-same panel; active refreshes poll every three seconds without interrupting user
-requests, focused search or an open policy modal. Current build/logs and deployed
+an explicit per-PR build action. Repositories lists sources at `/repositories`;
+`/repositories/{id}` is a dedicated repository/PR-list page, and
+`/repositories/{id}/pull-requests/{number}` is a dedicated PR detail page. Selection
+uses ordinary navigation, with clickable breadcrumbs and Back links preserving
+filters. Earlier query-based workspace bookmarks redirect after ownership checks.
+Directory and PR filters use independent query keys. Search and filters share a
+desktop row; narrow screens stack them. Short screens scroll within the current
+page's results. HTMX updates search results, Sync Pull Requests and policy saves
+without reloading the page. Automatic is off for Manual; enabling requires an
+accessible confirmation modal, while turning it off directly saves Manual.
+Active syncs poll every three seconds without interrupting user requests, focused
+search or an open policy modal. Current build/logs and deployed
 preview controls remain dependent on the execution adapters. Builds is
 a cross-repository view of current/latest work; Environments is a deployment view,
 not another name for Builds. Do not add historical build storage implicitly.

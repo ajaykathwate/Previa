@@ -16,43 +16,37 @@ type Page struct {
 	Total, Number, Pages, Start, End, Installations int64
 	Search, Access                                  string
 	Enabled, Connected                              bool
-	SelectedRepoID                                  int64
 	Query                                           string
 }
 
-// Only workspace query keys survive navigation; actions never accept redirect URLs.
+// Navigation is local and whitelisted; the PR number selects a dedicated path.
 func WorkspaceURL(repoID int64, query url.Values) string {
 	values := url.Values{}
-	for _, key := range []string{"q", "access", "page", "pr_q", "pr_state", "pr_page", "pr"} {
+	keys := []string{"q", "access", "page"}
+	path := "/repositories"
+	if repoID > 0 {
+		path += "/" + strconv.FormatInt(repoID, 10)
+		keys = append(keys, "pr_q", "pr_state", "pr_page")
+		if number, err := strconv.ParseInt(query.Get("pr"), 10, 32); err == nil && number > 0 {
+			path += "/pull-requests/" + strconv.FormatInt(number, 10)
+		}
+	}
+	for _, key := range keys {
 		if value, exists := query[key]; exists && len(value) > 0 {
 			values.Set(key, value[0])
 		}
 	}
-	if repoID > 0 {
-		values.Set("repo_id", strconv.FormatInt(repoID, 10))
+	if len(values) > 0 {
+		path += "?" + values.Encode()
 	}
-	if len(values) == 0 {
-		return "/repositories"
-	}
-	return "/repositories?" + values.Encode()
+	return path
 }
 
 func (p Page) URL(number int64) string {
-	v, _ := url.ParseQuery(p.Query)
-	v.Set("page", strconv.FormatInt(number, 10))
-	v.Set("q", p.Search)
-	v.Set("access", p.Access)
-	return WorkspaceURL(p.SelectedRepoID, v)
+	return PageURL(number, p.Search, p.Access)
 }
-
 func (p Page) SelectURL(repoID int64) string {
-	v, _ := url.ParseQuery(p.Query)
-	for _, key := range []string{"pr", "pr_q", "pr_state", "pr_page"} {
-		v.Del(key)
-	}
-	v.Set("page", strconv.FormatInt(p.Number, 10))
-	v.Set("q", p.Search)
-	v.Set("access", p.Access)
+	v := url.Values{"q": {p.Search}, "access": {p.Access}, "page": {strconv.FormatInt(p.Number, 10)}}
 	return WorkspaceURL(repoID, v)
 }
 
@@ -75,15 +69,4 @@ func PageNumbers(current, pages int64) []int64 {
 		result = append(result, number)
 	}
 	return result
-}
-
-func (p Page) PRFilters() map[string]string {
-	v, _ := url.ParseQuery(p.Query)
-	values := make(map[string]string)
-	for _, key := range []string{"pr", "pr_q", "pr_state", "pr_page"} {
-		if v.Has(key) {
-			values[key] = v.Get(key)
-		}
-	}
-	return values
 }

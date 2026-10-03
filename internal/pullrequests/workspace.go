@@ -15,9 +15,13 @@ import (
 	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
 )
 
-// RepositoryPanel is the small presentation boundary consumed by installations.
-// Full workspace, panel selection, polling and PR filters share ownership checks.
-func (h *Handler) RepositoryPanel(ctx context.Context, userID, repoID int64, params url.Values, csrf, target string) (templ.Component, error) {
+// ValidateSelection protects old query-based bookmarks before redirecting them.
+func (h *Handler) ValidateSelection(ctx context.Context, userID, repoID int64, params url.Values) error {
+	_, err := h.page(ctx, userID, repoID, params)
+	return err
+}
+
+func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Values) (pages.Page, error) {
 	f := Filter{Page: 1, State: params.Get("pr_state"), Search: strings.TrimSpace(params.Get("pr_q"))}
 	if f.State == "" {
 		f.State = "open"
@@ -26,23 +30,23 @@ func (h *Handler) RepositoryPanel(ctx context.Context, userID, repoID int64, par
 		var err error
 		f.Page, err = strconv.ParseInt(value, 10, 32)
 		if err != nil || f.Page < 1 {
-			return nil, installations.ErrWorkspaceInput
+			return pages.Page{}, installations.ErrWorkspaceInput
 		}
 	}
 	if len([]rune(f.Search)) > 100 || f.State != "open" && f.State != "closed" && f.State != "merged" && f.State != "all" {
-		return nil, installations.ErrWorkspaceInput
+		return pages.Page{}, installations.ErrWorkspaceInput
 	}
 	var number int64
 	if value := params.Get("pr"); value != "" {
 		var err error
 		number, err = strconv.ParseInt(value, 10, 32)
 		if err != nil || number < 1 {
-			return nil, installations.ErrWorkspaceInput
+			return pages.Page{}, installations.ErrWorkspaceInput
 		}
 	}
 	data, err := h.repo.Page(ctx, userID, repoID, f)
 	if err != nil {
-		return nil, panelError(err)
+		return pages.Page{}, panelError(err)
 	}
 	page := pages.Page{RepoID: repoID, Name: data.Repo.FullName, Mode: data.Repo.BuildMode,
 		Available: data.Repo.Accessible && data.Repo.Status == "active", DiscoveryEnabled: h.enabled,
@@ -54,13 +58,10 @@ func (h *Handler) RepositoryPanel(ctx context.Context, userID, repoID int64, par
 			Branch: row.HeadBranch, SHA: row.HeadSha, State: row.State, Build: row.BuildState,
 			Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh})
 	}
-	if target == "pull-request-results" {
-		return pages.Results(page), nil
-	}
 	if number > 0 {
 		row, err := h.repo.Detail(ctx, userID, repoID, int32(number))
 		if err != nil {
-			return nil, panelError(err)
+			return pages.Page{}, panelError(err)
 		}
 		page.SelectedPR = &pages.PR{Number: row.Number, Title: row.Title, Author: row.Author,
 			Branch: row.HeadBranch, SHA: row.HeadSha, State: row.State, Build: row.BuildState,
@@ -68,7 +69,7 @@ func (h *Handler) RepositoryPanel(ctx context.Context, userID, repoID int64, par
 			Environment: row.EnvironmentStatus, Available: row.Available.Bool,
 			Deadline: timestamp(row.AvailableAt), Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh}
 	}
-	return pages.Panel(page, csrf), nil
+	return page, nil
 }
 
 func panelError(err error) error {
@@ -89,12 +90,12 @@ func (h *Handler) finishMutation(w http.ResponseWriter, r *http.Request, userID,
 		http.Redirect(w, r, location, http.StatusSeeOther)
 		return
 	}
-	panel, err := h.RepositoryPanel(r.Context(), userID, repoID, params, h.users.CSRFToken(r.Context()), "repository-detail")
+	page, err := h.page(r.Context(), userID, repoID, params)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
 	w.Header().Set("HX-Push-Url", location)
 	w.Header().Add("Vary", "HX-Request, HX-Target")
-	templ.Handler(panel).ServeHTTP(w, r)
+	templ.Handler(pages.Panel(page, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
 }

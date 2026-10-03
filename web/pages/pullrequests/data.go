@@ -56,7 +56,11 @@ func (p Page) CurrentURL() string {
 
 func (p Page) Query() string {
 	_, query, _ := strings.Cut(p.CurrentURL(), "?")
-	return query
+	v, _ := url.ParseQuery(query)
+	if p.SelectedPR != nil {
+		v.Set("pr", strconv.Itoa(int(p.SelectedPR.Number)))
+	}
+	return v.Encode()
 }
 
 func Label(value string) string {
@@ -156,3 +160,31 @@ func TimeLabel(value string) string {
 }
 
 func (p Page) Selected() PR { return *p.SelectedPR }
+
+func (p Page) Owner() string { owner, _, _ := strings.Cut(p.Name, "/"); return owner }
+func (p Page) RepositoryName() string {
+	_, name, found := strings.Cut(p.Name, "/")
+	if !found {
+		return p.Name
+	}
+	return name
+}
+func (p Page) CloseURL() string {
+	v := url.Values{}
+	for key, value := range p.DirectoryFilters() {
+		v.Set(key, value)
+	}
+	return repositorypages.WorkspaceURL(0, v)
+}
+func (p Page) PolicyMode(modal bool) string {
+	if !modal && p.Mode == "automatic" {
+		return "manual"
+	}
+	return "automatic"
+}
+func (p Page) PolicyAction(modal bool) string {
+	if p.PolicyMode(modal) == "manual" {
+		return "Turn off automatic"
+	}
+	return "Enable automatic"
+}

@@ -52,7 +52,7 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 	router := chi.NewRouter()
 	router.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
 	authHandler.Mount(router)
-	installations.NewHandler(installations.NewService(installations.NewRepository(f.pool), nil, nil, nil), authHandler, sessions, "fixture-app", f.log).WithWorkspace(h).Mount(router, auth.RequireUser)
+	installations.NewHandler(installations.NewService(installations.NewRepository(f.pool), nil, nil, nil), authHandler, sessions, "fixture-app", f.log).WithNavigator(h).Mount(router, auth.RequireUser)
 	h.Mount(router, auth.RequireUser)
 	var cookies []*http.Cookie
 	request := func(method, path, body string, targets ...string) *httptest.ResponseRecorder {
@@ -73,7 +73,7 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 		return w
 	}
 	base := "/repositories/1"
-	workspace := "/repositories?repo_id=1"
+	workspace := base + "?pr_state=open"
 	if w := request("GET", workspace, ""); w.Code != 303 {
 		t.Fatal("unauthenticated access", w.Code)
 	}
@@ -88,6 +88,15 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 	w = request("GET", workspace, "")
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "repository-filters") || !strings.Contains(w.Body.String(), "<!doctype") {
+		t.Fatal("repository must render its own full page")
+	}
+	if legacy := request("GET", "/repositories?repo_id=1&pr=7&pr_q=Improve", ""); legacy.Code != 303 || !strings.HasPrefix(legacy.Header().Get("Location"), base+"/pull-requests/7?") {
+		t.Fatal("query bookmark redirect", legacy.Code)
+	}
+	if directory := request("GET", "/repositories", ""); directory.Code != 200 || strings.Contains(directory.Body.String(), "repository-detail") {
+		t.Fatal("directory must list only repositories", directory.Code)
 	}
 	match := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(w.Body.String())
 	if len(match) != 2 {
@@ -129,8 +138,8 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 	if w := request("GET", base+"?page=999&q=Improve&state=open", ""); w.Code != 303 || !strings.Contains(w.Header().Get("Location"), "pr_q=Improve") {
 		t.Fatal("legacy filter redirect", w.Code)
 	}
-	if w := request("GET", base+"/pull-requests/7", ""); w.Code != 303 || w.Header().Get("Location") != "/repositories?pr=7&repo_id=1" {
-		t.Fatal("legacy detail redirect", w.Code)
+	if w := request("GET", base+"/pull-requests/7", ""); w.Code != 200 || !strings.Contains(w.Body.String(), "Latest observed commit") {
+		t.Fatal("dedicated detail page", w.Code)
 	}
 	for _, target := range []string{"repository-detail", "pull-request-results"} {
 		w := request("GET", workspace+"&pr_q=Improve&pr_state=open", "", target)
@@ -140,7 +149,7 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 		if target == "pull-request-results" && strings.Contains(w.Body.String(), "build-policy") {
 			t.Fatal("results included whole panel")
 		}
-		if w := request("GET", "/repositories?repo_id=999", "", target); w.Code != 404 {
+		if w := request("GET", "/repositories/999", "", target); w.Code != 404 {
 			t.Fatal("partial unowned selection", target, w.Code)
 		}
 	}
@@ -150,14 +159,14 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 		}
 	}
 	w = request("POST", base+"/policy", "csrf_token="+token+"&mode=automatic&workspace_query="+url.QueryEscape("q=owner&access=all&page=1&pr=7&pr_q=Improve"), "repository-detail")
-	if w.Code != 200 || strings.Contains(w.Body.String(), "<!doctype") || !strings.Contains(w.Body.String(), "Build mode: Automatic") || !strings.Contains(w.Header().Get("HX-Push-Url"), "pr=7") {
+	if w.Code != 200 || strings.Contains(w.Body.String(), "<!doctype") || !strings.Contains(w.Body.String(), `role="switch" aria-checked="true"`) || !strings.Contains(w.Header().Get("HX-Push-Url"), "/pull-requests/7") {
 		t.Fatal("inline policy response", w.Code, w.Body.String())
 	}
 	w = request("POST", base+"/refresh", "csrf_token="+token, "repository-detail")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "every 3s") || strings.Contains(w.Body.String(), "<!doctype") {
 		t.Fatal("inline refresh response", w.Code)
 	}
-	if w := request("GET", workspace+"&pr=7", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Not requested") {
+	if w := request("GET", base+"/pull-requests/7", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Not requested") {
 		t.Fatal("PR detail", w.Code)
 	}
 	if f.count(t, "SELECT count(*) FROM build_intents") != 0 {
@@ -169,7 +178,7 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 	if w := request("GET", workspace, ""); w.Code != 200 || !strings.Contains(w.Body.String(), "Repository unavailable") {
 		t.Fatal("unavailable page")
 	}
-	if w := request("GET", workspace+"&pr=7", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Repository unavailable") {
+	if w := request("GET", base+"/pull-requests/7", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Repository unavailable") {
 		t.Fatal("unavailable detail", w.Code)
 	}
 	if w := request("POST", base+"/policy", "csrf_token="+token+"&mode=manual"); w.Code != 404 {

@@ -638,3 +638,20 @@ rerun; existing HTTP auth/session/CSRF tests passed. No database schema changed.
   ten browser scenarios pass with native access tabs, Available default, All
   switching, preserved search/pagination and subtle focus on copied/native inputs.
   No repository write queries or lifecycle methods were changed. README.md unchanged.
+
+
+## Repository/PR page navigation refinement (2026-10-03)
+
+- User chose dedicated pages instead of master–detail: `/repositories` lists only
+  repositories; `/repositories/<id>` shows its PRs; `/repositories/<id>/pull-requests/<n>`
+  shows full PR details. Ordinary links and breadcrumbs preserve list filters.
+- Retained HTMX live search, pagination, compact Last synced/Sync Pull Requests and
+  CSRF-protected policy saves. Automatic is off for Manual and requires confirmation
+  before enabling; turning it off directly saves Manual. Old query bookmarks resolve
+  after ownership checks. No changes to PR discovery or historical tracking.
+- Shared palette/fonts and responsive controls remain; short screens scroll the
+  current page so filters cannot collapse the PR list. Fixed the GitHub icon rendering
+  as template text. README/DESIGN/UI/setup updated.
+- Verification: build, full PostgreSQL-backed Go suite, vet, lint (0 issues), and all
+  19 browser cases pass. Screenshot fixtures checked; no real GitHub/build executed.
+- Phase 3 remains unstarted pending user confirmation.

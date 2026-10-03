@@ -14,7 +14,6 @@ import (
 	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
 	environmentpages "github.com/ajaykathwatee/previa/web/pages/environments"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
-	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -97,49 +96,69 @@ func timestamp(t pgtype.Timestamptz) string {
 	return t.Time.UTC().Format(time.RFC3339)
 }
 
-// Existing bookmarks resolve to the same workspace used by ordinary GET fallbacks.
-func (h *Handler) repository(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) repository(w http.ResponseWriter, r *http.Request) { h.servePage(w, r, false) }
+func (h *Handler) detail(w http.ResponseWriter, r *http.Request)     { h.servePage(w, r, true) }
+func (h *Handler) servePage(w http.ResponseWriter, r *http.Request, detail bool) {
 	user, id, err := h.identity(r)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	f, err := parseFilter(r)
-	if err != nil {
+	params := r.URL.Query()
+	// Preserve older repository bookmarks which explicitly used state/q/page.
+	if params.Has("state") {
+		f, err := parseFilter(r)
+		if err != nil {
+			http.Error(w, "Invalid pull request filters.", http.StatusBadRequest)
+			return
+		}
+		params.Set("pr_q", f.Search)
+		params.Set("pr_state", f.State)
+		params.Set("pr_page", strconv.FormatInt(f.Page, 10))
+		params.Del("q")
+		params.Del("state")
+		params.Del("page")
+	}
+	if detail {
+		n, err := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
+		if err != nil || n < 1 {
+			http.NotFound(w, r)
+			return
+		}
+		params.Set("pr", strconv.FormatInt(n, 10))
+	} else {
+		params.Del("pr")
+	}
+	page, err := h.page(r.Context(), user, id, params)
+	if errors.Is(err, installations.ErrWorkspaceInput) {
 		http.Error(w, "Invalid pull request filters.", http.StatusBadRequest)
 		return
 	}
-	if _, err = h.repo.Page(r.Context(), user, id, f); err != nil {
-		h.fail(w, r, err)
-		return
-	}
-	query := r.URL.Query()
-	query.Set("pr_q", f.Search)
-	query.Set("pr_state", f.State)
-	query.Set("pr_page", strconv.FormatInt(f.Page, 10))
-	query.Del("q")
-	query.Del("state")
-	query.Del("page")
-	http.Redirect(w, r, repositorypages.WorkspaceURL(id, query), http.StatusSeeOther)
-}
-func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
-	user, id, err := h.identity(r)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	n, err := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
-	if err != nil || n <= 0 {
-		http.NotFound(w, r)
+	partial := r.Header.Get("HX-Request") == "true"
+	w.Header().Add("Vary", "HX-Request, HX-Target")
+	if requested := params.Get("pr_page"); requested != "" && requested != strconv.FormatInt(page.Number, 10) || r.URL.Query().Has("state") {
+		location := page.CurrentURL()
+		if partial {
+			w.Header().Set("HX-Replace-Url", location)
+		} else {
+			http.Redirect(w, r, location, http.StatusSeeOther)
+			return
+		}
+	}
+	if partial && r.Header.Get("HX-Target") == "pull-request-results" {
+		templ.Handler(pages.Results(page)).ServeHTTP(w, r)
 		return
 	}
-	if _, err = h.repo.Detail(r.Context(), user, id, int32(n)); err != nil {
-		h.fail(w, r, err)
+	if partial && r.Header.Get("HX-Target") == "repository-detail" {
+		templ.Handler(pages.Panel(page, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
 		return
 	}
-	query := r.URL.Query()
-	query.Set("pr", strconv.FormatInt(n, 10))
-	http.Redirect(w, r, repositorypages.WorkspaceURL(id, query), http.StatusSeeOther)
+	username, _ := h.users.Username(r.Context())
+	templ.Handler(pages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
 }
 func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	user, id, err := h.identity(r)

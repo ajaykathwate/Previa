@@ -177,78 +177,57 @@
   }
 
   function initRepositorySearch() {
-    if (!document.querySelector('#repository-filters')) return;
+    if (!document.querySelector('#repository-filters, #repository-detail')) return;
     const requests = new Map();
     const targets = new Set(['repository-results', 'repository-detail', 'pull-request-results']);
+    const queryKeys = ['q', 'access', 'page', 'pr_q', 'pr_state', 'pr_page'];
     const feedbackFor = target => target.id === 'repository-detail'
-      ? document.querySelector('dialog[open] [data-policy-feedback]') || target.querySelector('[data-detail-feedback]')
+      ? document.querySelector('dialog[open] [data-policy-feedback]') || document.querySelector('[data-detail-feedback]')
       : target.parentElement.querySelector('[data-repository-feedback]');
-    const directoryContext = () => {
-      const form = document.getElementById('repository-filters');
-      return {q: form.elements.q.value, access: form.elements.access.value,
-        page: document.querySelector('[data-directory-page]')?.dataset.directoryPage || '1'};
-    };
     document.addEventListener('htmx:configRequest', event => {
-      const target = event.detail.target;
+      const {target, elt, verb, parameters} = event.detail;
       if (!targets.has(target?.id)) return;
-      const parameters = event.detail.parameters;
       const requestURL = new URL(event.detail.path, window.location.href);
-      const currentPRContext = query => {
-        const current = new URLSearchParams(window.location.search);
-        for (const key of ['pr', 'pr_q', 'pr_state', 'pr_page']) {
-          if (current.has(key)) query.set(key, current.get(key));
-          else query.delete(key);
-        }
-      };
-      if (target.id === 'repository-results') {
-        if (event.detail.elt.hasAttribute('data-clear-directory')) {
-          const form = document.getElementById('repository-filters');
-          form.elements.q.value = '';
-          form.querySelector('input[value="all"]').checked = true;
-          parameters.q = ''; parameters.access = 'all'; parameters.page = '1';
-        }
-        const current = new URLSearchParams(window.location.search);
-        for (const key of ['repo_id', 'pr', 'pr_q', 'pr_state', 'pr_page']) {
-          requestURL.searchParams.delete(key);
-          if (current.has(key)) parameters[key] = current.get(key);
-          else delete parameters[key];
-        }
-      } else {
-        const context = directoryContext();
-        if (event.detail.verb === 'get') {
-          Object.assign(parameters, context);
-          Object.keys(context).forEach(key => requestURL.searchParams.delete(key));
-          if (event.detail.elt.getAttribute('hx-trigger')?.includes('every ')) {
-            const query = new URLSearchParams(); currentPRContext(query);
-            for (const key of ['pr', 'pr_q', 'pr_state', 'pr_page']) {
-              requestURL.searchParams.delete(key);
-              if (query.has(key)) parameters[key] = query.get(key); else delete parameters[key];
-            }
-          }
-        }
-        else {
-          const query = new URLSearchParams(parameters.workspace_query || '');
-          currentPRContext(query);
-          Object.entries(context).forEach(([key, value]) => query.set(key, value));
-          parameters.workspace_query = query.toString();
-        }
+      if (elt.hasAttribute('data-clear-directory')) {
+        const form = document.getElementById('repository-filters');
+        form.elements.q.value = '';
+        form.querySelector('input[value="all"]').checked = true;
+        parameters.q = ''; parameters.access = 'all'; parameters.page = '1';
       }
-      if (event.detail.verb === 'get') event.detail.path = requestURL.pathname + requestURL.search;
+      if (verb === 'get') {
+        // A poll follows current filters, rather than the heading's older snapshot.
+        if (elt.getAttribute('hx-trigger')?.includes('every ')) {
+          const current = new URLSearchParams(window.location.search);
+          queryKeys.forEach(key => {
+            requestURL.searchParams.delete(key);
+            if (current.has(key)) parameters[key] = current.get(key); else delete parameters[key];
+          });
+        }
+        // Form parameters replace URL values; duplicate keys would keep stale filters.
+        queryKeys.forEach(key => {
+          if (Object.hasOwn(parameters, key)) requestURL.searchParams.delete(key);
+        });
+        event.detail.path = requestURL.pathname + requestURL.search;
+      } else if (target.id === 'repository-detail') {
+        const query = new URLSearchParams();
+        const current = new URLSearchParams(window.location.search);
+        queryKeys.forEach(key => {if (current.has(key)) query.set(key, current.get(key));});
+        const pr = window.location.pathname.match(/\/pull-requests\/(\d+)$/);
+        if (pr) query.set('pr', pr[1]);
+        parameters.workspace_query = query.toString();
+      }
     });
     document.addEventListener('htmx:beforeRequest', event => {
       const {target, xhr, elt} = event.detail;
       if (!targets.has(target?.id)) return;
-      if (elt.getAttribute('hx-trigger')?.includes('every ') &&
-          (document.querySelector('#build-policy[open]') || document.activeElement?.closest('#pull-request-filters'))) {
+      const polling = elt.getAttribute('hx-trigger')?.includes('every ');
+      if (polling && (document.querySelector('#build-policy[open]') || document.activeElement?.closest('#pull-request-filters'))) {
         event.preventDefault(); return;
       }
-      requests.set(target.id, {xhr, userAction: !elt.hasAttribute('hx-trigger') || !elt.getAttribute('hx-trigger').includes('every ')});
+      requests.set(target.id, {xhr, userAction: !polling});
       target.setAttribute('aria-busy', 'true');
       const feedback = feedbackFor(target);
-      if (feedback) {
-        delete feedback.dataset.error;
-        feedback.textContent = 'Updating…';
-      }
+      if (feedback) {delete feedback.dataset.error; feedback.textContent = 'Updating…';}
     });
     document.addEventListener('htmx:afterRequest', event => {
       const {target, xhr, successful} = event.detail;
@@ -257,42 +236,25 @@
       const feedback = feedbackFor(target);
       if (!feedback) return;
       if (successful) feedback.textContent = '';
-      else {
-        feedback.dataset.error = 'true';
-        feedback.textContent = 'Could not update this view. Check your connection or refresh to sign in again, then retry.';
-      }
+      else {feedback.dataset.error = 'true'; feedback.textContent = 'Could not update this view. Check your connection or sign in again, then retry.';}
     });
-    const updateSelection = () => {
-      const selected = document.querySelector('[data-selected-repo]')?.dataset.selectedRepo;
-      document.querySelectorAll('[data-repo-link]').forEach(link => {
-        if (link.dataset.repoLink === selected) link.setAttribute('aria-current', 'true');
-        else link.removeAttribute('aria-current');
-      });
-      const input = document.querySelector('#repository-filters input[name="repo_id"]');
-      if (input && selected) input.value = selected;
-    };
     document.addEventListener('htmx:afterSettle', event => {
       const {target} = event.detail;
       if (!targets.has(target?.id)) return;
       target.removeAttribute('aria-busy');
-      updateSelection();
       if (target.id === 'repository-detail' && requests.get(target.id)?.userAction) {
         target.querySelector('[data-detail-heading]')?.focus({preventScroll:true});
-        if (window.matchMedia('(max-width:700px)').matches) target.scrollIntoView({block:'start',behavior:'instant'});
       } else target.querySelector('.repository-table-scroll')?.scrollTo({top:0,behavior:'instant'});
     });
     document.addEventListener('htmx:historyRestore', () => {
       targets.forEach(id => {
         const target = document.getElementById(id);
         if (!target) return;
-        requests.get(target.id)?.xhr.abort();
-        target.removeAttribute('aria-busy');
+        requests.get(id)?.xhr.abort(); target.removeAttribute('aria-busy');
         const feedback = feedbackFor(target);
         if (feedback) {feedback.textContent = ''; delete feedback.dataset.error;}
       });
-      updateSelection();
     });
-    updateSelection();
   }
 
   initMotion();

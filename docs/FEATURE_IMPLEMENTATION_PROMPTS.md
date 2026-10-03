@@ -34,8 +34,9 @@ Prepared on 2026-10-03 against the current repository. Verify this summary again
 Phase 1 audit: Prompts 1–5 were checked sequentially against code and tests.
 Prompt 3 needed lifetime environment uniqueness and admitted-build log clearing;
 those gaps are fixed. See [PHASE1_AUDIT.md](PHASE1_AUDIT.md). The user-requested
-master–detail UI (Phase 2) and open-only PR tracking (Phase 3) require separate
-confirmation and have not started.
+UI (Phase 2) is implemented. The user subsequently chose dedicated repository and
+PR pages with breadcrumbs instead of a split workspace. Open-only PR tracking
+(Phase 3) still awaits separate confirmation and has not started.
 
 Build the **configuration, policy and PR control plane** in the five steps below.
 This closes the scheduling correctness gap before adding expensive execution.

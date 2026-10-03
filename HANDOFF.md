@@ -4,10 +4,8 @@ Last updated: 2026-10-03
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
 - Phase 1 complete: docs/PHASE1_AUDIT.md covers Prompts 1–5 and environment/log fixes.
-- Phase 2 complete: persistent repository directory + HTMX PR/detail panels.
+- Phase 2 refined: user chose dedicated repository and PR pages, replacing the split UI.
 - STOP: await confirmation before Phase 3 (open-only PR discovery/tracking); not started.
-- docs/APP_USER_FLOW.md: working browser features, steps and Mermaid flows.
-- docs/WEBHOOKS_AND_PR_DISCOVERY.md: ingress/discovery contracts, setup and fixtures.
 - docs/DEVELOPMENT_SETUP.md, .env.example, Makefile, deploy/docker-compose.yml:
   setup/config; TEMP.md records remaining integration work.
 - Intent/publication contracts: docs/BUILD_INTENTS.md, BUILD_SCHEDULING.md,
@@ -42,12 +40,15 @@ Last updated: 2026-10-03
 - OAuth/users, signed state, SCS sessions (24h/30m idle), rotation, CSRF/logout modal.
 - Home, protected Overview, Repositories, PR detail, current Builds/Environments,
   Developer Tools ping and /protected. Installation-owner scoping on queries/actions.
-- Repositories: persistent narrow directory; 10 rows, search and access tabs.
-  /repositories?repo_id=<id>&pr=<number> selects PRs/details; legacy paths redirect.
-- HTMX targets: repository-results, repository-detail, pull-request-results.
-  Independent filters/history/no-JS fallback; stacked mobile panels and inline errors.
-- Refresh/policy stay in place; 3s polling pauses for focused PR search/open modal.
-  PR state tabs, actual sync progress/last success, accessible build-mode modal.
+- Repositories lists only sources at /repositories; rows open /repositories/<id>.
+  PRs open /repositories/<id>/pull-requests/<number>; full pages with shared shell.
+- Breadcrumbs/Back preserve filters; old query bookmarks redirect after ownership
+  validation via installations' navigator. Safe local URLs only.
+- HTMX targets: repository-results, pull-request-results and repository-detail.
+  Live search/pagination, sync/policy saves, history/no-JS and inline retries covered.
+- Last synced + Sync Pull Requests; Automatic switch off for Manual. Enabling needs
+  modal confirmation; off saves Manual directly. Sync polls every 3s, pausing for
+  focused PR search/open modal. Desktop filters one row; short/mobile pages scroll.
 - PR detail: latest/requested/deployed SHA, actual GitHub link, fork/refresh/access
   notices. Build button disabled; direct POST rejects without authorizing work.
 - Builds shows actual current/latest intents, no archive. Environments shows actual
@@ -84,15 +85,15 @@ Last updated: 2026-10-03
   implement exact-SHA source/config, Docker build/runtime, fork/secrets, routing,
   GitHub reporting, durable cleanup and recovery/expiry scheduling.
 - Discovery still uses state=all and explicit initial Refresh; Phase 3 changes this.
-- README/DESIGN/UI/setup docs reflect the workspace; PR-scoping update awaits Phase 3.
 
 ## Verification
 - Build/tests/vet/lint pass; PostgreSQL-backed full suite and webhook/discovery race
   tests pass. Real River pagination, concurrent dedup, rollback/retry, source/access
   races, Manual no-build, policy, ownership and CSRF covered.
-- All 19 browser checks pass: panel-only selection, stale/failed requests, filters,
-  history, policy retries, polling/modal focus, session expiry, mobile and no-JS flow.
+- All 19 revised browser checks pass: dedicated navigation, bookmarks, breadcrumbs,
+  filter/history preservation, failed searches, confirmed Automatic/retry, polling
+  on list/detail, session expiry, 320–1917px responsive layout and native no-JS flow.
 - Compiled localhost server DB health/startup, invalid signature 401 and signed
   make test-webhook 204 verified; worker starts with all GitHub/session env unset.
-- Phase 1/2 isolated test DBs/env files cleaned up; application DB not migrated.
+- Phase 1/2 and refinement test DBs/env files cleaned; application DB not migrated.
 - No real GitHub delivery or preview build tested; execution controls stay disabled.

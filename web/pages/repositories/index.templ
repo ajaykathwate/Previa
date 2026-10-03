@@ -5,11 +5,11 @@ import "github.com/ajaykathwatee/previa/web/components"
 import "github.com/ajaykathwatee/previa/web/components/button"
 import "github.com/ajaykathwatee/previa/web/layouts"
 
-templ Index(username string, csrfToken string, page Page, panels ...templ.Component) {
+templ Index(username string, csrfToken string, page Page) {
 	@layouts.App("Repositories", username, csrfToken, components.NavRepositories) {
 		<div class="repository-workspace">
 			<header class="workspace-page-heading">
-				<div><span class="eyebrow">YOUR SOURCE, CONNECTED</span><h1>Repositories</h1><p>Select a repository to review pull requests, commits and previews.</p></div>
+				<div><span class="eyebrow">YOUR SOURCE, CONNECTED</span><h1>Repositories</h1></div>
 				<div class="repository-action">
 					if page.Enabled {
 						<form method="post" action="/installations/start">
@@ -36,7 +36,7 @@ templ Index(username string, csrfToken string, page Page, panels ...templ.Compon
 			if page.Connected {
 				<p class="connection-notice" role="status">GitHub connection verified. Your selected repositories are linked.</p>
 			}
-			<div class="repository-master-detail">
+			<div class="repository-directory-view">
 				<section class="workspace-panel repository-browser repository-directory" aria-label="Repository browser">
 					<form
 						id="repository-filters"
@@ -53,12 +53,6 @@ templ Index(username string, csrfToken string, page Page, panels ...templ.Compon
 						hx-request='{"timeout":10000}'
 						data-repository-search
 					>
-						if page.SelectedRepoID > 0 {
-							<input type="hidden" name="repo_id" value={ strconv.FormatInt(page.SelectedRepoID, 10) }/>
-						}
-						for key,value:=range page.PRFilters() {
-							<input type="hidden" name={ key } value={ value }/>
-						}
 						<div class="repository-search"><label for="repository-search">Find a repository</label><input id="repository-search" name="q" type="search" value={ page.Search } maxlength="100" placeholder="Owner or repository name"/></div>
 						<fieldset class="repository-access">
 							<legend>Access</legend>
@@ -75,15 +69,7 @@ templ Index(username string, csrfToken string, page Page, panels ...templ.Compon
 						@Results(page)
 					</div>
 				</section>
-				<section id="repository-detail" class="repository-detail" aria-label="Selected repository" hx-sync="this:replace" hx-request='{"timeout":10000}'>
-					if len(panels)>0 {
-						@panels[0]
-					} else {
-						@Unselected()
-					}
-				</section>
 			</div>
-			<p class="repository-help">GitHub controls repository access. Manage connections to add another account or update your selection; then complete the verification flow to refresh the list.</p>
 		</div>
 	}
 }
@@ -98,15 +84,7 @@ templ Results(page Page) {
 							<a
 								class="repository-select"
 								href={ templ.SafeURL(page.SelectURL(row.ID)) }
-								hx-get={ page.SelectURL(row.ID) }
-								hx-target="#repository-detail"
-								hx-swap="innerHTML"
-								hx-sync="#repository-detail:replace"
-								hx-push-url="true"
 								data-repo-link={ strconv.FormatInt(row.ID, 10) }
-								if page.SelectedRepoID==row.ID {
-									aria-current="true"
-								}
 							>
 								<div class="repository-name">
 									@components.BranchIcon()
@@ -189,7 +167,7 @@ templ Results(page Page) {
 					} else if page.Search!="" || page.Access!="all" {
 						<h2>No repositories match these filters.</h2>
 						<p>Try a different name or include all access states.</p>
-						<a href={ templ.SafeURL(WorkspaceURL(page.SelectedRepoID, nil)) } data-clear-directory hx-get={ WorkspaceURL(page.SelectedRepoID, nil) } hx-target="#repository-results" hx-sync="#repository-filters:replace" hx-push-url="true" class="text-link">
+						<a href={ templ.SafeURL(WorkspaceURL(0, nil)) } data-clear-directory hx-get={ WorkspaceURL(0, nil) } hx-target="#repository-results" hx-sync="#repository-filters:replace" hx-push-url="true" class="text-link">
 							Clear filters
 							@components.ArrowUpRight()
 						</a>
@@ -203,16 +181,5 @@ templ Results(page Page) {
 				</div>
 			</div>
 		}
-	</div>
-}
-
-templ Unselected() {
-	<div class="workspace-panel repository-unselected">
-		<div class="empty-source-icon" aria-hidden="true">
-			@components.BranchIcon()
-		</div>
-		<h2>Select a repository</h2>
-		<p>Choose your code on the left to see pull requests and preview status here.</p>
-		<p class="repository-search-feedback" data-detail-feedback role="status" aria-live="polite"></p>
 	</div>
 }
