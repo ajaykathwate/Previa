@@ -12,13 +12,31 @@ import (
 
 // Runtime is the boundary for the unbuilt Docker integration. Build must return
 // an unregistered healthy container, honor cancellation, and label containers AND
-// uniquely tagged images with PR ID/generation/revision. Resources must also discover
-// partial builds after process crashes. Removal is idempotent (not-found succeeds).
+// uniquely tagged images with PR ID/generation/revision. Build and startup output
+// goes only to a log writer bound to the given Attempt, and never after Build
+// returns. Resources must also discover partial builds after process crashes.
+// Removal is idempotent (not-found succeeds).
 type Runtime interface {
-	Build(context.Context, Request) (Artifact, error)
+	Build(context.Context, Request, Attempt) (Artifact, error)
 	Resources(context.Context, int64) ([]Resource, error)
 	RemoveContainer(context.Context, string) error
 	RemoveImage(context.Context, string) error
+}
+
+// Attempt identifies one admitted execution of a request. LogEpoch changes on
+// every admission, including a River retry of the same revision, so output from
+// a superseded execution can never reach the current attempt's logs.
+// EnvironmentID is 0 when the PR has no lifetime environment row yet; such an
+// attempt has no log stream.
+type Attempt struct {
+	EnvironmentID int64
+	LogEpoch      int64
+}
+
+// BuildLogs closes an attempt's log stream once its execution has returned, so
+// viewers know no more output is coming. Later writes are rejected by the epoch.
+type BuildLogs interface {
+	Finish(ctx context.Context, environmentID, epoch int64) error
 }
 
 type Resource struct {
@@ -31,6 +49,7 @@ type Resource struct {
 type Service struct {
 	repo         *Repository
 	runtime      Runtime
+	logs         BuildLogs
 	logger       *slog.Logger
 	buildTimeout time.Duration
 	now          func() time.Time
@@ -51,6 +70,23 @@ func NewService(repo *Repository, runtime Runtime, logger *slog.Logger, buildTim
 		now = clocks[0]
 	}
 	return &Service{repo: repo, runtime: runtime, logger: logger, buildTimeout: buildTimeout, now: now}, nil
+}
+
+// WithBuildLogs closes each attempt's log stream when its execution returns.
+// Without it, streams stay open until the next admission replaces them.
+func (s *Service) WithBuildLogs(logs BuildLogs) *Service {
+	s.logs = logs
+	return s
+}
+
+func (s *Service) finishLogs(ctx context.Context, request Request, attempt Attempt) {
+	if s.logs == nil || attempt.EnvironmentID == 0 {
+		return
+	}
+	if err := s.logs.Finish(ctx, attempt.EnvironmentID, attempt.LogEpoch); err != nil {
+		// The build outcome is still recorded; the next admission resets the stream.
+		s.logger.WarnContext(ctx, "finish build log stream failed", "pr_id", request.PullRequestID, "generation", request.Generation, "revision", request.Revision, "error", err)
+	}
 }
 
 func (s *Service) cleanup(ctx context.Context, request Request) error {
@@ -96,7 +132,7 @@ func (s *Service) build(ctx context.Context, request Request, finalAttempt bool)
 	if before.PendingGeneration == request.Generation && before.PendingRevision == request.Revision && before.PendingArtifact.ContainerID != "" && before.PendingArtifact.ImageTag != "" {
 		return s.cleanup(ctx, request)
 	}
-	allowed, err := s.repo.claimBuild(ctx, request, s.now())
+	attempt, allowed, err := s.repo.claimBuild(ctx, request, s.now())
 	if err != nil {
 		return err
 	}
@@ -104,7 +140,7 @@ func (s *Service) build(ctx context.Context, request Request, finalAttempt bool)
 		return s.superseded(ctx, request)
 	}
 	buildCtx, cancel := context.WithTimeout(ctx, s.buildTimeout)
-	artifact, buildErr := s.runtime.Build(buildCtx, request)
+	artifact, buildErr := s.runtime.Build(buildCtx, request, attempt)
 	cancel()
 	result := Result{Status: "running", Artifact: artifact}
 	if buildErr != nil {
@@ -118,6 +154,7 @@ func (s *Service) build(ctx context.Context, request Request, finalAttempt bool)
 	// chance to record a CURRENT failure and clean up, never a stale final state.
 	completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), queue.CompletionGrace)
 	defer completeCancel()
+	s.finishLogs(completeCtx, request, attempt)
 	applied, err := s.repo.Apply(completeCtx, request, result)
 	if err != nil {
 		return errors.Join(err, s.cleanup(completeCtx, request))

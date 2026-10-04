@@ -381,6 +381,125 @@
     if (!document.hidden) connect(); else setState('paused');
   }
 
+  // Build logs: the server streams the current attempt's lines with ids
+  // "<epoch>.<next>". A "reset" means a new attempt replaced the logs. Lines are
+  // inserted as text, never markup. Hidden tabs release the connection.
+  function initBuildLogs() {
+    const panel = document.querySelector('[data-log-events]');
+    const list = panel?.querySelector('[data-log-lines]');
+    if (!panel || !list || !('EventSource' in window)) return;
+    const base = new URL(panel.dataset.logEvents, window.location.href);
+    const empty = panel.querySelector('[data-log-empty]');
+    const follow = panel.querySelector('[data-log-follow]');
+    const connection = document.querySelector('[data-log-connection]');
+    const status = document.querySelector('.log-status');
+    let cursor = panel.dataset.logCursor || '';
+    let source = null;
+    let failures = 0;
+    let retry = 0;
+    panel.querySelector('[data-log-follow-control]')?.removeAttribute('hidden');
+    const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 24;
+    const stick = () => { if (follow?.checked) list.scrollTop = list.scrollHeight; };
+    list.addEventListener('scroll', () => { if (follow) follow.checked = nearBottom(); }, { passive: true });
+    follow?.addEventListener('change', stick);
+    const setState = (state, text) => {
+      if (!connection) return;
+      connection.dataset.state = state;
+      connection.textContent = text;
+    };
+    const append = (lines) => {
+      const fragment = document.createDocumentFragment();
+      for (const line of lines) {
+        const number = String(line.n + 1);
+        const item = document.createElement('li');
+        item.id = 'L' + number;
+        item.className = line.system ? 'log-line log-system' : 'log-line';
+        const anchor = document.createElement('a');
+        anchor.className = 'log-number';
+        anchor.href = '#L' + number;
+        anchor.tabIndex = -1;
+        anchor.textContent = number;
+        const text = document.createElement('span');
+        text.className = 'log-text';
+        text.textContent = line.text;
+        item.append(anchor, text);
+        fragment.append(item);
+      }
+      const wasAtBottom = nearBottom();
+      list.append(fragment);
+      if (empty) empty.hidden = list.childElementCount > 0;
+      if (follow?.checked || wasAtBottom) stick();
+    };
+    const showState = (state) => {
+      const badge = status?.querySelector('[data-log-badge]');
+      if (badge) {
+        badge.className = 'badge ' + state.tone;
+        badge.querySelector('[data-log-label]').textContent = state.label;
+      }
+      const summary = status?.querySelector('[data-log-summary]');
+      if (summary && summary.textContent !== state.summary) summary.textContent = state.summary;
+      let sha = status?.querySelector('[data-log-sha]');
+      if (state.sha && !sha && summary) {
+        sha = document.createElement('code');
+        sha.className = 'sha';
+        sha.dataset.logSha = '';
+        summary.after(sha);
+      }
+      if (sha) { sha.textContent = state.sha.slice(0, 12); sha.title = state.sha; sha.hidden = !state.sha; }
+      const notices = status?.querySelector('[data-log-notices]');
+      const template = status?.querySelector('[data-log-notice-template]');
+      if (notices && template) {
+        notices.replaceChildren(...state.notices.map((notice) => {
+          const item = template.content.firstElementChild.cloneNode(true);
+          item.classList.add(notice.tone);
+          item.querySelector('span').textContent = notice.text;
+          return item;
+        }));
+      }
+      if (empty && state.empty) empty.textContent = state.empty;
+    };
+    const remember = (event) => { if (event.lastEventId) cursor = event.lastEventId; };
+    const connect = () => {
+      clearTimeout(retry);
+      const url = new URL(base);
+      if (cursor) url.searchParams.set('since', cursor);
+      source = new EventSource(url);
+      source.addEventListener('reset', (event) => {
+        remember(event);
+        list.replaceChildren();
+        if (empty) empty.hidden = false;
+      });
+      source.addEventListener('lines', (event) => {
+        remember(event);
+        failures = 0;
+        setState('live', 'Live');
+        append(JSON.parse(event.data).lines);
+      });
+      source.addEventListener('state', (event) => {
+        remember(event);
+        failures = 0;
+        setState('live', 'Live');
+        showState(JSON.parse(event.data));
+      });
+      source.addEventListener('error', () => {
+        if (source?.readyState !== EventSource.CLOSED) { setState('reconnecting', 'Reconnecting…'); return; }
+        source = null;
+        failures++;
+        if (failures > 5) { setState('offline', 'Live updates unavailable — reload to retry'); return; }
+        setState('reconnecting', 'Reconnecting…');
+        retry = setTimeout(connect, Math.min(30000, 1000 * 2 ** failures));
+      });
+    };
+    const disconnect = () => { clearTimeout(retry); source?.close(); source = null; };
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { disconnect(); setState('paused', 'Paused while hidden'); } else if (!source) { failures = 0; connect(); }
+    });
+    window.addEventListener('pagehide', disconnect);
+    window.addEventListener('pageshow', (event) => { if (event.persisted && !source && !document.hidden) connect(); });
+    if (!window.location.hash) stick();
+    if (!document.hidden) connect(); else setState('paused', 'Paused while hidden');
+  }
+
   function initRepositorySearch() {
     if (!document.querySelector('#repository-filters, #repository-detail')) return;
     const requests = new Map();
@@ -482,4 +601,5 @@
   initCommandPalette();
   initRepositorySearch();
   initLiveUpdates();
+  initBuildLogs();
 })();

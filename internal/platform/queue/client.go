@@ -20,13 +20,14 @@ func NewProducer(pool *pgxpool.Pool, logger *slog.Logger) (*river.Client[pgx.Tx]
 	return client, nil
 }
 
-// NewWorker registers ping and accepts feature registrations from the composition root.
-func NewWorker(pool *pgxpool.Pool, cfg config.WorkerConfig, logger *slog.Logger, registrations ...func(*river.Workers, map[string]river.QueueConfig)) (*river.Client[pgx.Tx], error) {
+// NewWorker registers ping and accepts feature registrations from the
+// composition root. A registration may add workers, queues and periodic jobs.
+func NewWorker(pool *pgxpool.Pool, cfg config.WorkerConfig, logger *slog.Logger, registrations ...func(*river.Config)) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &PingWorker{Logger: logger})
 	workerCfg := workerConfig(cfg, logger, workers)
 	for _, register := range registrations {
-		register(workers, workerCfg.Queues)
+		register(workerCfg)
 	}
 	client, err := river.NewClient(riverpgxv5.New(pool), workerCfg)
 	if err != nil {

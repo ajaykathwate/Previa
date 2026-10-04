@@ -136,3 +136,28 @@ func TestSSEFramesMultilineDataAndStripsIDNewlines(t *testing.T) {
 		t.Fatal("stream headers missing")
 	}
 }
+
+func TestLimiterCapsTotalAndPerKey(t *testing.T) {
+	l := NewLimiter(3, 2)
+	a1, ok1 := l.Acquire("a")
+	_, ok2 := l.Acquire("a")
+	if _, ok := l.Acquire("a"); !ok1 || !ok2 || ok {
+		t.Fatal("per-key cap not enforced")
+	}
+	b1, ok := l.Acquire("b")
+	if !ok {
+		t.Fatal("another key must get a slot")
+	}
+	if _, ok := l.Acquire("c"); ok {
+		t.Fatal("total cap not enforced")
+	}
+	a1()
+	a1() // Releasing twice must not free a second slot.
+	if _, ok := l.Acquire("c"); !ok {
+		t.Fatal("released slot not reusable")
+	}
+	if _, ok := l.Acquire("d"); ok {
+		t.Fatal("double release freed an extra slot")
+	}
+	b1()
+}

@@ -34,6 +34,9 @@ func RepoURL(id int64) string { return fmt.Sprintf("/repositories/%d", id) }
 func PRURL(id int64, number int32) string {
 	return repositorypages.WorkspaceURL(id, url.Values{"pr": {strconv.Itoa(int(number))}})
 }
+
+// LogsURL is a PR's current-build log page.
+func LogsURL(id int64, number int32) string { return PRURL(id, number) + "/logs" }
 func (p Page) PageURL(n int64) string {
 	v, _ := url.ParseQuery(p.WorkspaceQuery)
 	v.Set("pr_page", strconv.FormatInt(n, 10))

@@ -20,8 +20,9 @@ type Message struct {
 // SSE writes Server-Sent Events frames. Streams that replay their own records
 // (for example build logs keyed by sequence number) can use it directly.
 type SSE struct {
-	w  http.ResponseWriter
-	rc *http.ResponseController
+	w       http.ResponseWriter
+	rc      *http.ResponseController
+	timeout time.Duration
 }
 
 // NewSSE prepares w for streaming: event-stream headers, no proxy buffering and
@@ -43,6 +44,10 @@ func NewSSE(w http.ResponseWriter) (*SSE, error) {
 	}
 	return s, nil
 }
+
+// WriteTimeout bounds each later frame, so a client that stops reading is
+// dropped instead of holding the handler. Zero (the default) disables it.
+func (s *SSE) WriteTimeout(d time.Duration) { s.timeout = d }
 
 // Retry sets how long the browser waits before reconnecting.
 func (s *SSE) Retry(d time.Duration) error {
@@ -71,6 +76,11 @@ func (s *SSE) Send(m Message) error {
 }
 
 func (s *SSE) write(frame string) error {
+	if s.timeout > 0 {
+		if err := s.rc.SetWriteDeadline(time.Now().Add(s.timeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			return fmt.Errorf("set stream write deadline: %w", err)
+		}
+	}
 	if _, err := s.w.Write([]byte(frame)); err != nil {
 		return fmt.Errorf("write event stream: %w", err)
 	}

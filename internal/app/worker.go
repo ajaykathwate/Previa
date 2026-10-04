@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
@@ -41,12 +42,16 @@ func RunWorker(ctx context.Context, logger *slog.Logger) error {
 		source = pullrequests.NewGitHubSource(appClient)
 	}
 	syncService := pullrequests.NewSyncService(pool, producer, source, environments.NewBroker(pool, producer))
-	client, err := queue.NewWorker(pool, cfg, logger, func(workers *river.Workers, queues map[string]river.QueueConfig) {
+	client, err := queue.NewWorker(pool, cfg, logger, func(rc *river.Config) {
 		if source != nil {
-			river.AddWorker(workers, &pullrequests.SyncWorker{Service: syncService})
-			river.AddWorker(workers, &pullrequests.MergeabilityWorker{Service: syncService})
-			queues[pullrequests.SyncQueue] = river.QueueConfig{MaxWorkers: 2}
+			river.AddWorker(rc.Workers, &pullrequests.SyncWorker{Service: syncService})
+			river.AddWorker(rc.Workers, &pullrequests.MergeabilityWorker{Service: syncService})
+			rc.Queues[pullrequests.SyncQueue] = river.QueueConfig{MaxWorkers: 2}
 		}
+		// Current-build log retention needs only the database.
+		river.AddWorker(rc.Workers, &buildlogs.PruneWorker{Store: buildlogs.NewStore(pool), Logger: logger})
+		rc.Queues[buildlogs.PruneQueue] = river.QueueConfig{MaxWorkers: 1}
+		rc.PeriodicJobs = append(rc.PeriodicJobs, buildlogs.PeriodicPrune())
 	})
 	if err != nil {
 		return err

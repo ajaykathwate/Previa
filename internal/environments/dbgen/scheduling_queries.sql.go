@@ -189,3 +189,43 @@ func (q *Queries) QueueCurrentIntent(ctx context.Context, arg QueueCurrentIntent
 	}
 	return result.RowsAffected(), nil
 }
+
+const resetBuildLogStream = `-- name: ResetBuildLogStream :one
+INSERT INTO build_log_streams (environment_id, epoch, generation, revision, head_sha)
+SELECT e.id, 1, $1::bigint, $2::bigint, $3::text
+FROM environments e WHERE e.pull_request_id = $4
+ON CONFLICT (environment_id) DO UPDATE SET epoch = build_log_streams.epoch + 1,
+    generation = EXCLUDED.generation, revision = EXCLUDED.revision, head_sha = EXCLUDED.head_sha,
+    state = 'open', next_sequence = 0, stored_bytes = 0, truncated = false, omitted_lines = 0,
+    lost_lines = 0, opened_at = clock_timestamp(), finished_at = NULL, pruned_at = NULL,
+    updated_at = clock_timestamp()
+RETURNING environment_id, epoch
+`
+
+type ResetBuildLogStreamParams struct {
+	Generation int64
+	Revision   int64
+	HeadSha    string
+	PrID       int64
+}
+
+type ResetBuildLogStreamRow struct {
+	EnvironmentID int64
+	Epoch         int64
+}
+
+// Opens the admitted attempt's log stream. epoch increases even when the same
+// revision is admitted again (a River retry), which fences writers and browser
+// cursors from the earlier attempt. Taking this row lock before deleting lines
+// makes a concurrent late append either commit first (and be deleted) or fail.
+func (q *Queries) ResetBuildLogStream(ctx context.Context, arg ResetBuildLogStreamParams) (ResetBuildLogStreamRow, error) {
+	row := q.db.QueryRow(ctx, resetBuildLogStream,
+		arg.Generation,
+		arg.Revision,
+		arg.HeadSha,
+		arg.PrID,
+	)
+	var i ResetBuildLogStreamRow
+	err := row.Scan(&i.EnvironmentID, &i.Epoch)
+	return i, err
+}

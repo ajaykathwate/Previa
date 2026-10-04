@@ -51,3 +51,11 @@ sql:
         package: dbgen
         out: internal/secrets/dbgen
         sql_package: pgx/v5
+  - engine: postgresql
+    schema: db/migrations
+    queries: internal/buildlogs/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: internal/buildlogs/dbgen
+        sql_package: pgx/v5

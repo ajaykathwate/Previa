@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/auth"
+	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/dashboard"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
@@ -68,9 +70,32 @@ func TestBrowserRegression(t *testing.T) {
 			}
 		}()
 	}
+	// Real build log handler and live stream over an in-memory store. Test-only
+	// routes change the logs and publish like the database trigger does.
+	logs := &fixtureLogs{}
+	logs.seed()
+	publishLogs := func() { hub.Publish(buildlogs.Topic(fixtureLogEnvironment), "build_logs") }
+	router.Post("/__fixture/logs/seed", func(w http.ResponseWriter, r *http.Request) {
+		logs.seed()
+		publishLogs()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	router.Post("/__fixture/logs/append", func(w http.ResponseWriter, r *http.Request) {
+		logs.add(r.FormValue("text"))
+		publishLogs()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	router.Post("/__fixture/logs/restart", func(w http.ResponseWriter, r *http.Request) {
+		logs.restart(r.FormValue("text"))
+		publishLogs()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	router.Group(func(r chi.Router) {
 		r.Use(sessions.LoadAndSave, handler.LoadUser, handler.CSRF)
 		handler.Mount(r)
+		buildlogs.NewHandler(logs, handler, logger).
+			WithLiveUpdates(hub, realtime.StreamOptions{Retry: 500 * time.Millisecond, Heartbeat: 10 * time.Second, MaxDuration: time.Minute}).
+			Mount(r, auth.RequireUser)
 		dashboard.Mount(r, handler, auth.RequireUser)
 		for _, path := range []string{"/builds", "/environments"} {
 			r.With(auth.RequireUser).Get(path, func(w http.ResponseWriter, r *http.Request) {
@@ -321,3 +346,77 @@ func (f *fixtureSecrets) Delete(ctx context.Context, user, repoID int64, name st
 type fixturePings struct{}
 
 func (fixturePings) EnqueuePing(context.Context, string) (int64, bool, error) { return 17, false, nil }
+
+// fixtureLogs serves the current-build logs of PR #3 in repository 1.
+type fixtureLogs struct {
+	mu    sync.Mutex
+	epoch int64
+	lines []buildlogs.Line
+}
+
+const fixtureLogEnvironment = 7001
+
+func (f *fixtureLogs) seed() {
+	f.mu.Lock()
+	f.epoch++
+	f.lines = nil
+	f.mu.Unlock()
+	for i := 1; i <= 517; i++ {
+		f.add(fmt.Sprintf("#%d step output line %d", i/40+1, i))
+	}
+	f.add(`<script>window.__pwned = true</script>`, `<img src=x onerror="window.__pwned = true">`, "\tindented output")
+}
+
+func (f *fixtureLogs) add(texts ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, text := range texts {
+		f.lines = append(f.lines, buildlogs.Line{Sequence: int64(len(f.lines)), Text: text})
+	}
+}
+
+func (f *fixtureLogs) restart(text string) {
+	f.mu.Lock()
+	f.epoch++
+	f.lines = nil
+	f.mu.Unlock()
+	f.add(text)
+}
+
+func (f *fixtureLogs) Target(_ context.Context, userID, repoID int64, number int32) (buildlogs.Target, error) {
+	if userID <= 0 || repoID != 1 || number != 3 {
+		return buildlogs.Target{}, buildlogs.ErrUnavailable
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return buildlogs.Target{PullRequestID: 3, RepoID: 1, Number: 3, Title: "A careful change to preview 3", Repository: "fixture-owner/repository-1", Available: true,
+		EnvironmentID: fixtureLogEnvironment, Intent: &buildlogs.Intent{Generation: 1, Revision: f.epoch, HeadSHA: "1234567890abcdef", State: "running"}}, nil
+}
+
+func (f *fixtureLogs) Stream(_ context.Context, environmentID int64) (buildlogs.Stream, error) {
+	if environmentID != fixtureLogEnvironment {
+		return buildlogs.Stream{}, buildlogs.ErrNoStream
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return buildlogs.Stream{EnvironmentID: environmentID, Epoch: f.epoch, Generation: 1, Revision: f.epoch, HeadSHA: "1234567890abcdef", Lines: int64(len(f.lines))}, nil
+}
+
+func (f *fixtureLogs) LinesFrom(_ context.Context, _, epoch, from int64, limit int) ([]buildlogs.Line, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if epoch != f.epoch || from >= int64(len(f.lines)) {
+		return nil, nil
+	}
+	return append([]buildlogs.Line(nil), f.lines[from:min(int(from)+limit, len(f.lines))]...), nil
+}
+
+func (f *fixtureLogs) LinesBefore(_ context.Context, _, epoch, before int64, limit int) ([]buildlogs.Line, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if epoch != f.epoch {
+		return nil, nil
+	}
+	before = min(before, int64(len(f.lines)))
+	return append([]buildlogs.Line(nil), f.lines[max(int(before)-limit, 0):before]...), nil
+}

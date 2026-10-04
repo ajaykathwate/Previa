@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/auth"
+	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/dashboard"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
@@ -98,6 +99,7 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	secretHandler := secrets.NewHandler(secretService, authHandler, logger)
+	logHandler := buildlogs.NewHandler(buildlogs.NewStore(pool), authHandler, logger).WithLiveUpdates(hub, realtime.DefaultStreamOptions)
 	router.Group(func(r chi.Router) {
 		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
 		authHandler.Mount(r)
@@ -105,6 +107,7 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		installationHandler.Mount(r, auth.RequireUser)
 		prs.Mount(r, auth.RequireUser)
 		secretHandler.Mount(r, auth.RequireUser)
+		logHandler.Mount(r, auth.RequireUser)
 		dashboard.MountPing(r, pings, auth.RequireUser, logger)
 	})
 	server := &http.Server{

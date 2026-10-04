@@ -339,17 +339,20 @@ templ PRDetail(p Page, pr PR) {
 				@components.BuildIcon()
 				Build latest commit
 			}
+			<a class="text-link logs-link" href={ templ.SafeURL(LogsURL(p.RepoID, pr.Number)) }>
+				@components.LogsIcon()
+				Build logs
+			</a>
 			if pr.URL!="" {
 				<a class="text-link github-link" href={ templ.SafeURL(pr.URL) } target="_blank" rel="noopener noreferrer">
 					View on GitHub
 					@components.ArrowUpRight()
 				</a>
 			}
-			<p id="build-unavailable" class="repository-help">Build execution, runtime health, live logs and teardown controls are not available yet.</p>
+			<p id="build-unavailable" class="repository-help">Build execution, runtime health and teardown controls are not available yet. Build logs show the current attempt once execution runs.</p>
 		</div>
 		<section class="upcoming-grid" aria-labelledby="upcoming-title">
 			<h2 id="upcoming-title" class="upcoming-title">Coming with build execution</h2>
-			@upcoming("Live build logs", "Streamed output for this pull request's current build.", components.LogsIcon())
 			@upcoming("Preview URL and health", "A routed subdomain with readiness checks.", components.LinkIcon())
 			@upcoming("Teardown control", "Remove the preview on demand, before it expires.", components.EyeIcon())
 		</section>
@@ -452,6 +455,7 @@ templ ActivityIndex(username, csrf string, p Activity) {
 												Requested SHA
 											}
 										</th>
+										<th><span class="sr-only">Build logs</span></th>
 									</tr>
 								</thead>
 								<tbody>
@@ -496,6 +500,12 @@ templ ActivityIndex(username, csrf string, p Activity) {
 												} else {
 													<code class="sha">{ Short(row.Requested) }</code>
 												}
+											</td>
+											<td class="pr-cell-logs" data-label="Logs">
+												<a class="text-link" href={ templ.SafeURL(LogsURL(row.RepoID, row.Number)) } aria-label={ "Build logs for " + row.Name + " #" + strconv.Itoa(int(row.Number)) }>
+													@components.LogsIcon()
+													Logs
+												</a>
 											</td>
 										</tr>
 									}

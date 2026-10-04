@@ -32,6 +32,26 @@ type BuildLog struct {
 	Sequence      int64
 	Line          string
 	CreatedAt     pgtype.Timestamptz
+	Epoch         int64
+	Kind          string
+}
+
+type BuildLogStream struct {
+	EnvironmentID int64
+	Epoch         int64
+	Generation    int64
+	Revision      int64
+	HeadSha       string
+	State         string
+	NextSequence  int64
+	StoredBytes   int64
+	Truncated     bool
+	OmittedLines  int64
+	LostLines     int64
+	OpenedAt      pgtype.Timestamptz
+	FinishedAt    pgtype.Timestamptz
+	PrunedAt      pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
 }
 
 type EnvSecret struct {

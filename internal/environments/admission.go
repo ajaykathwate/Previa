@@ -12,8 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-func (r *Repository) claimBuild(ctx context.Context, request Request, now time.Time) (allowed bool, err error) {
+func (r *Repository) claimBuild(ctx context.Context, request Request, now time.Time) (attempt Attempt, allowed bool, err error) {
 	err = database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
+		attempt, allowed = Attempt{}, false
 		q := dbgen.New(tx)
 		owner, e := q.FindPROwner(ctx, request.PullRequestID)
 		if e != nil {
@@ -37,15 +38,28 @@ func (r *Repository) claimBuild(ctx context.Context, request Request, now time.T
 		}
 		allowed = affected == 1
 		if allowed {
-			// Clear the previous attempt only after admission, in the same
-			// transaction. Rejected/stale jobs must preserve current logs.
+			// Open the new attempt's log stream and clear the previous attempt only
+			// after admission, in the same transaction. Rejected/stale jobs must
+			// preserve current logs and the current stream epoch.
+			stream, e := q.ResetBuildLogStream(ctx, dbgen.ResetBuildLogStreamParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, HeadSha: request.HeadSHA})
+			switch {
+			case e == nil:
+				attempt = Attempt{EnvironmentID: stream.EnvironmentID, LogEpoch: stream.Epoch}
+			case errors.Is(e, pgx.ErrNoRows):
+				// No lifetime environment row yet, so there is no log stream to open.
+			default:
+				return fmt.Errorf("open build log stream: %w", e)
+			}
 			if e := q.ClearBuildLogs(ctx, request.PullRequestID); e != nil {
 				return fmt.Errorf("clear previous build logs: %w", e)
 			}
 		}
 		return nil
 	})
-	return allowed, err
+	if err != nil {
+		return Attempt{}, false, err
+	}
+	return attempt, allowed, nil
 }
 
 // currentOperationRequest is an optimization before external work. Finalization

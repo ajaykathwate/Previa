@@ -34,6 +34,7 @@ var ErrTooManyPatterns = errors.New("too many values to redact")
 type Redactor struct {
 	patterns [][]byte
 	maxLen   int
+	first    [256]bool // first bytes of patterns, to skip impossible match starts
 }
 
 // NewRedactor builds a redactor for values. Each line of a multi-line value is
@@ -66,6 +67,7 @@ func (r *Redactor) add(values ...string) error {
 			seen[candidate] = true
 			r.patterns = append(r.patterns, []byte(candidate))
 			r.maxLen = max(r.maxLen, len(candidate))
+			r.first[candidate[0]] = true
 		}
 	}
 	// Longer patterns first, so the longest overlapping match wins the region.
@@ -109,6 +111,25 @@ func (r *Redactor) matches(data []byte) []interval {
 	return merged
 }
 
+// holdFrom returns the earliest position whose remainder could still grow into
+// a pattern occurrence, or len(data) when none can. Output before it is final,
+// so a stream that pauses mid-line is shown at once unless its tail is the
+// beginning of a known value. Only the last maxLen-1 bytes can start such a tail.
+func (r *Redactor) holdFrom(data []byte) int {
+	for i := max(0, len(data)-(r.maxLen-1)); i < len(data); i++ {
+		if !r.first[data[i]] {
+			continue
+		}
+		rest := data[i:]
+		for _, pattern := range r.patterns {
+			if len(pattern) > len(rest) && bytes.HasPrefix(pattern, rest) {
+				return i
+			}
+		}
+	}
+	return len(data)
+}
+
 // redactUpTo rewrites data[:boundary], moving the boundary left so no match that
 // crosses it is split, and returns the rewritten prefix and the new boundary.
 func (r *Redactor) redactUpTo(data []byte, boundary int) ([]byte, int) {
@@ -135,8 +156,10 @@ func (r *Redactor) redactUpTo(data []byte, boundary int) ([]byte, int) {
 }
 
 // Writer returns a WriteCloser that redacts everything written to it and writes
-// the result to dst. It holds back at most one pattern's length so a value split
-// across writes is still caught; Close flushes the remainder.
+// the result to dst. It holds back only a tail that could be the start of a
+// known value (at most one pattern's length), so a value split across writes is
+// still caught while ordinary output passes through at once; Close flushes the
+// remainder.
 func (r *Redactor) Writer(dst io.Writer) *RedactingWriter {
 	return &RedactingWriter{r: r, dst: dst}
 }
@@ -167,7 +190,7 @@ func (w *RedactingWriter) Write(p []byte) (int, error) {
 	}
 	w.pending = append(w.pending, p...)
 	// Any match that starts before this boundary is entirely visible already.
-	boundary := len(w.pending) - (w.r.maxLen - 1)
+	boundary := w.r.holdFrom(w.pending)
 	if boundary <= 0 {
 		return len(p), nil
 	}

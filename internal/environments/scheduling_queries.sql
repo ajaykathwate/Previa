@@ -18,6 +18,21 @@ WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
     AND b.state IN ('pending','queued','running') AND b.available_at <= sqlc.arg(now_at)
     AND (b.source = 'manual' OR sqlc.arg(build_mode)::text = 'automatic' OR b.state = 'running');
 
+-- name: ResetBuildLogStream :one
+-- Opens the admitted attempt's log stream. epoch increases even when the same
+-- revision is admitted again (a River retry), which fences writers and browser
+-- cursors from the earlier attempt. Taking this row lock before deleting lines
+-- makes a concurrent late append either commit first (and be deleted) or fail.
+INSERT INTO build_log_streams (environment_id, epoch, generation, revision, head_sha)
+SELECT e.id, 1, sqlc.arg(generation)::bigint, sqlc.arg(revision)::bigint, sqlc.arg(head_sha)::text
+FROM environments e WHERE e.pull_request_id = sqlc.arg(pr_id)
+ON CONFLICT (environment_id) DO UPDATE SET epoch = build_log_streams.epoch + 1,
+    generation = EXCLUDED.generation, revision = EXCLUDED.revision, head_sha = EXCLUDED.head_sha,
+    state = 'open', next_sequence = 0, stored_bytes = 0, truncated = false, omitted_lines = 0,
+    lost_lines = 0, opened_at = clock_timestamp(), finished_at = NULL, pruned_at = NULL,
+    updated_at = clock_timestamp()
+RETURNING environment_id, epoch;
+
 -- name: ClearBuildLogs :exec
 DELETE FROM build_logs l USING environments e
 WHERE l.environment_id = e.id AND e.pull_request_id = $1;

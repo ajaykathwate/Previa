@@ -67,7 +67,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, name := range []string{"0001_init.sql", "0003_pr_generation.sql", "0004_durable_operations.sql", "0005_installation_linking.sql", "0006_build_intents.sql", "0007_intent_dispatch.sql", "0008_pr_workspace.sql", "0009_environment_identity.sql", "0010_pr_mergeability.sql"} {
+	for _, name := range []string{"0001_init.sql", "0003_pr_generation.sql", "0004_durable_operations.sql", "0005_installation_linking.sql", "0006_build_intents.sql", "0007_intent_dispatch.sql", "0008_pr_workspace.sql", "0009_environment_identity.sql", "0010_pr_mergeability.sql", "0013_build_log_streams.sql"} {
 		data, err := os.ReadFile("../../db/migrations/" + name)
 		if err != nil {
 			t.Fatal(err)
@@ -163,14 +163,16 @@ type fakeRuntime struct {
 	fail                             map[int64]bool
 	cleanupFailures                  int
 	removedContainers, removedImages []string
+	attempts                         []env.Attempt
 }
 
 func newRuntime() *fakeRuntime {
 	return &fakeRuntime{resources: map[int64]env.Artifact{}, revisions: map[int64]int64{}, started: make(chan int64, 20), gate: map[int64]chan struct{}{}, fail: map[int64]bool{}}
 }
-func (r *fakeRuntime) Build(ctx context.Context, request env.Request) (env.Artifact, error) {
+func (r *fakeRuntime) Build(ctx context.Context, request env.Request, attempt env.Attempt) (env.Artifact, error) {
 	a := env.Artifact{ContainerID: fmt.Sprintf("container-%d", request.Generation), ImageTag: fmt.Sprintf("image-%d", request.Generation)}
 	r.mu.Lock()
+	r.attempts = append(r.attempts, attempt)
 	gate := r.gate[request.Generation]
 	fail := r.fail[request.Generation]
 	r.mu.Unlock()

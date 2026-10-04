@@ -598,3 +598,56 @@ test('repository secrets tab saves names only and confirms deletion in a modal',
  await page.locator('.repo-tabs').getByRole('link',{name:'Pull requests',exact:true}).click();
  await page.waitForURL(`${origin}/repositories/1`);
 });
+
+test('build logs stream live, reset for a new attempt and render output as text',async()=>{
+ await context.request.post(`${origin}/__fixture/logs/seed`);
+ await login();await page.goto(`${origin}/repositories/1/pull-requests/3`);
+ await page.getByRole('link',{name:'Build logs',exact:true}).click();
+ await page.waitForURL(`${origin}/repositories/1/pull-requests/3/logs`);
+ assert.match(await page.locator('.pr-breadcrumb').innerText(),/repository-1[\s\S]*#3[\s\S]*Build logs/);
+ await page.waitForFunction(()=>document.querySelector('[data-log-connection]')?.dataset.state==='live');
+ assert.equal(await page.locator('.log-line').count(),500,'the newest 500 lines render first');
+ assert.equal(await page.evaluate(()=>window.__pwned),undefined,'script-looking output must stay inert');
+ assert.equal(await page.locator('.log-lines script, .log-lines img').count(),0);
+ assert.equal(await page.locator('#L519 .log-text').innerText(),'<img src=x onerror="window.__pwned = true">');
+ assert(await page.locator('.log-lines').evaluate(e=>e.scrollHeight-e.scrollTop-e.clientHeight<24),'the newest output is in view');
+ let documents=0;page.on('request',request=>{if(request.resourceType()==='document') documents++;});
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'Step 3/3 : RUN <b>npm test</b>'}});
+ await page.locator('#L521').waitFor();
+ assert.equal(await page.locator('#L521 .log-text').innerText(),'Step 3/3 : RUN <b>npm test</b>');
+ assert(await page.locator('.log-lines').evaluate(e=>e.scrollHeight-e.scrollTop-e.clientHeight<24),'following keeps new output in view');
+ // Scrolling up pauses following; new output must not pull the reader down.
+ await page.locator('.log-lines').evaluate(e=>{e.scrollTop=0;e.dispatchEvent(new Event('scroll'));});
+ assert.equal(await page.locator('[data-log-follow]').isChecked(),false);
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'more output'}});
+ await page.locator('#L522').waitFor();
+ assert.equal(await page.locator('.log-lines').evaluate(e=>e.scrollTop),0);
+ // A new attempt replaces the logs instead of being appended to the old ones.
+ await context.request.post(`${origin}/__fixture/logs/restart`,{form:{text:'Retry attempt output'}});
+ await page.locator('.log-line').filter({hasText:'Retry attempt output'}).waitFor();
+ assert.equal(await page.locator('.log-line').count(),1);
+ assert.equal(await page.locator('#L1 .log-text').innerText(),'Retry attempt output');
+ assert.equal(documents,0,'live logs never reload the page');
+ for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
+});
+
+test('build logs paginate and stay readable without JavaScript',async()=>{
+ await context.request.post(`${origin}/__fixture/logs/seed`);
+ const noJS=await browser.newContext({javaScriptEnabled:false});
+ try {
+  const plain=await noJS.newPage();
+  await plain.goto(`${origin}/auth/github/login`);await plain.waitForURL(`${origin}/dashboard`);
+  await plain.goto(`${origin}/repositories/1/pull-requests/3/logs`);
+  assert.equal(await plain.locator('.log-line').count(),500);
+  assert.equal(await plain.locator('.log-line').first().getAttribute('id'),'L21');
+  assert.equal(await plain.locator('[data-log-connection]').innerText(),'Live updates off');
+  assert(await plain.locator('[data-log-follow-control]').isHidden());
+  await plain.getByRole('link',{name:'Earlier lines',exact:true}).click();
+  await plain.waitForURL(url=>url.searchParams.get('before')==='20');
+  assert.equal(await plain.locator('.log-line').count(),20);
+  await plain.getByRole('link',{name:'Later lines',exact:true}).click();
+  await plain.waitForURL(url=>url.searchParams.get('after')==='20');
+  assert.equal(await plain.locator('.log-line').first().getAttribute('id'),'L21');
+  await plain.getByRole('link',{name:'Refresh',exact:true}).waitFor();
+ } finally {await noJS.close();}
+});

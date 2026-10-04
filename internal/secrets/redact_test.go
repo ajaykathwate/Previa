@@ -129,3 +129,36 @@ func TestRedactingWriterHoldsBackOnlyAPossibleMatch(t *testing.T) {
 		t.Fatal("writes after Close must fail")
 	}
 }
+
+// Live logs depend on this: a stream that pauses mid-line must not hide its
+// tail unless that tail could be the start of a known value.
+func TestRedactingWriterEmitsEverythingThatCannotStartAValue(t *testing.T) {
+	r, err := NewRedactor("topsecretvalue", "another-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	w := r.Writer(&out)
+	line := "Listening on :8080\n"
+	if _, err := w.Write([]byte(line)); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != line {
+		t.Fatalf("output held back with no possible match: %q", out.String())
+	}
+	if _, err := w.Write([]byte("ready; token=top")); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != line+"ready; token=" {
+		t.Fatalf("only the possible start of a value may be held back: %q", out.String())
+	}
+	if _, err := w.Write([]byte("ic")); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != line+"ready; token=topic" {
+		t.Fatalf("a tail that can no longer match must be released: %q", out.String())
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
