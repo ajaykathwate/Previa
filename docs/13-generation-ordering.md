@@ -1,11 +1,11 @@
-# 11 · Generation ordering and fencing (implementation)
+# 13 · Generation ordering and fencing (implementation)
 
 How the code guarantees that a newer commit, a close or a deliberate rebuild always
 beats older work, even when jobs retry, overlap or finish late. This is the
-implementation of the decision in [10](10-durable-publication-design.md); the
+implementation of the decision in [12](12-durable-publication-design.md); the
 request revision it carries alongside generation comes from
-[08](08-build-policy-and-intents.md), and admission/handoff from
-[09](09-build-scheduling.md).
+[10](10-build-policy-and-intents.md), and admission/handoff from
+[11](11-build-scheduling.md).
 
 **Status:** generation and revision fencing, guarded results and the database/River
 publication outbox are implemented in `internal/environments` and tested with real

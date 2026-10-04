@@ -10,8 +10,8 @@ period. Previews are torn down when the PR closes or merges.
 
 Manual/Automatic policy, durable build intent and scheduling are implemented;
 building and serving previews is not connected yet. See
-[build policy and build intent](docs/08-build-policy-and-intents.md) and the
-[roadmap](docs/14-roadmap.md). Start with the [documentation index](docs/README.md)
+[build policy and build intent](docs/10-build-policy-and-intents.md) and the
+[roadmap](docs/16-roadmap.md). Start with the [documentation index](docs/README.md)
 for a guided reading order.
 
 This document is written for the builder (me), not an end user — every step
@@ -230,8 +230,10 @@ given to fork PRs). Page URLs are shareable
 and navigation works without JavaScript.
 
 PR discovery and latest/requested/deployed commit views are implemented. Builds
-and Environments show actual saved state. Build execution, live logs, preview
-routing and teardown controls remain unavailable until their adapters are connected.
+and Environments show actual saved state and link to each PR's **Build logs** page,
+which shows the current attempt's output live over Server-Sent Events (bounded,
+redacted, readable without JavaScript). Build execution, preview routing and
+teardown controls remain unavailable until their adapters are connected.
 See [03-user-guide.md](docs/03-user-guide.md) for the current browser workflow.
 
 - **Builds** describes current/latest execution work and its commit/logs, not a
@@ -483,8 +485,8 @@ production dispatch and UI wiring remain unbuilt. Repeated Build requests coales
 failure or Rebuild after success creates a new revision without bumping PR
 generation. Switching to Manual cancels unstarted Automatic intent; running work
 may finish if still current. No historical builds archive is introduced. See
-[08-build-policy-and-intents.md](docs/08-build-policy-and-intents.md) for request semantics and
-[09-build-scheduling.md](docs/09-build-scheduling.md) for atomic admission, wake-up
+[10-build-policy-and-intents.md](docs/10-build-policy-and-intents.md) for request semantics and
+[11-build-scheduling.md](docs/11-build-scheduling.md) for atomic admission, wake-up
 uniqueness, revision fencing and remaining production integration.
 
 A unique constraint on (repo_id, number) for `pull_requests` and on `subdomain` for `environments` prevents duplicate environments when webhooks arrive twice.
@@ -506,6 +508,7 @@ This system runs other people's code on your machine, so isolation is a core req
 - Runtime: gVisor (`runsc`) as the Docker runtime for a large isolation upgrade at low cost
 - Never run builds for fork PRs with secrets available; consider requiring maintainer approval for PRs from forks
 - Docker socket: only the worker touches it; never mount it into a preview container
+- Builds: each runs in a fresh rootless BuildKit container with CPU/memory/PID limits on a private network whose only exit is an egress proxy that reaches public addresses only (see [docs/09-image-builds.md](docs/09-image-builds.md))
 
 ### 4.7 Secrets handling
 
@@ -525,6 +528,7 @@ includes settings for features that are not built yet.
 - `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`)
 - `SESSION_SECRET`, `SECRETS_ENCRYPTION_KEYS`, `SECRETS_ACTIVE_KEY_VERSION` (versioned keyring for repository secrets)
 - `MAX_CONCURRENT_BUILDS`, `ENV_TTL_HOURS`
+- `BUILD_TIMEOUT`, `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS`, `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK`, `BUILDKIT_IMAGE`, `BUILD_EGRESS_IMAGE` (worker; isolated image builds)
 - `DNS_PROVIDER_API_TOKEN` (for Traefik's wildcard cert challenge)
 
 ### 4.9 Infrastructure and deployment

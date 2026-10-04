@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 12**, **River 007**. After pulling changes, run
+Current schema: **Goose 13**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker.
 
 ## 1. Prerequisites
@@ -59,6 +59,9 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | `GITHUB_WEBHOOK_SECRET` | server | `openssl rand -hex 32`, same value in the App settings. | Verifies webhook signatures ([05](05-webhooks-and-pr-discovery.md)). |
 | `SECRETS_ENCRYPTION_KEYS` | server (worker from Prompt 5) | `1:` + output of `openssl rand -base64 32`; comma-separate versions. | Encrypts repository secrets ([07](07-repository-secrets.md)). |
 | `SECRETS_ACTIVE_KEY_VERSION` | server (worker from Prompt 5) | The version new values use, e.g. `1`. | Selects the key for new values. |
+| `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS` | worker | Optional; defaults `2`, `4GiB`, `2048`. | Per-build limits for the isolated builder ([09](09-image-builds.md)). |
+| `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK` | worker | Optional; defaults `20GiB`, `4GiB`, `15GiB`. | Disk and image bounds; sizes take `KiB`, `MiB`, `GiB` or `TiB`. |
+| `BUILDKIT_IMAGE`, `BUILD_EGRESS_IMAGE` | worker | Optional; defaults to the pinned rootless BuildKit image and `previa-build-egress:dev`. | Builder and egress proxy images. |
 
 - Sign-in needs real OAuth values; placeholders start the server but cannot log in.
 - The five server App settings are all-or-nothing. Omit them all to run with
@@ -68,13 +71,16 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 - The two `SECRETS_*` values go together. Without them, the Secrets tab explains that
   secrets are not configured; a malformed keyring stops the server with a message
   that never shows key material. Restart the server after changing them.
+- The `BUILD*` settings have working defaults. The worker validates them at start
+  (an invalid value stops it with the variable's name) but does not build images yet;
+  `make test-builder` uses them, and build execution will from Prompt 10.
 
 ### How configuration is loaded
 
 | Command | Loads `.env`? |
 | --- | --- |
 | `make run-server`, `make run-worker`, `make dev` | Yes; already-exported variables take precedence. Restart Air after editing `.env`. |
-| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `secrets-reencrypt` | Yes; falls back to `.env.example` for migrations if `.env` is absent. |
+| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `secrets-reencrypt`, `build-egress-image`, `test-builder` | Yes; falls back to `.env.example` for migrations if `.env` is absent. |
 | Direct `go run`, manual Goose commands | No; run `set -a; . ./.env; set +a` once per terminal. |
 | `make build`, `make lint`, `make generate` | No configuration needed. |
 | `make test` | Database tests need an explicitly exported `TEST_DATABASE_URL`. |
@@ -113,6 +119,7 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0010 | Nullable PR mergeability and derived `build_status` (existing rows start as Checking). |
 | 0011 | Realtime triggers that raise `NOTIFY previa_events` after commits. |
 | 0012 | Repository secrets: `key_version`, `updated_at`, name and ciphertext-size checks. |
+| 0013 | Current-build log streams (attempt `epoch`, counters), line `epoch`/`kind`, line-size check and a log realtime trigger. |
 
 Optional check that live updates are wired:
 
@@ -121,8 +128,9 @@ docker compose -f deploy/docker-compose.yml exec -T postgres psql -U previa -d p
   -c "SELECT tgname FROM pg_trigger WHERE tgname LIKE '%_realtime'"
 ```
 
-**Expected:** six rows. Without them the dashboard still works but refreshes only
-on navigation or your own actions.
+**Expected:** seven rows (six repository triggers and `build_log_streams_realtime`).
+Without them the dashboard still works but refreshes only on navigation or your own
+actions, and log pages update only on reload.
 
 `make migrate-down` rolls back the latest application migration only (never River's
 schema). Rolling back 0001 drops application tables; use it only on disposable data.
@@ -146,14 +154,15 @@ TEST_DATABASE_URL="$DATABASE_URL" go test -count=1 ./...
 discovery, scheduling, publication, secrets and realtime integration tests. Most
 tests create isolated schemas and drop them afterwards. The migration-constraint,
 auth repository and queue tests instead run in rolled-back transactions on your
-migrated schema, so they fail if it is behind the code (for example, the
-`key_version` NOT NULL error before migration 12). No test resets your data.
-External systems (GitHub, Docker) are fakes. Useful focused runs:
+migrated schema, so they fail if it is behind the code (for example, a
+`key_version` or `epoch` NOT NULL error before migrations 12 or 13). No test resets
+your data. External systems (GitHub, Docker) are fakes; real Docker builds run only
+with `make test-builder`. Useful focused runs:
 
 ```sh
 go test -count=1 -race ./internal/environments ./internal/pullrequests ./internal/webhooks
-go test -count=1 -race ./internal/platform/realtime
-go test -count=1 -race ./internal/source ./internal/repoconfig ./internal/secrets   # no credentials needed
+go test -count=1 -race ./internal/platform/realtime ./internal/buildlogs
+go test -count=1 -race ./internal/source ./internal/repoconfig ./internal/secrets ./internal/builds   # no credentials needed
 ```
 
 ### Real-source check (optional)
@@ -170,6 +179,27 @@ TEST_GITHUB_INSTALLATION_ID=<1st> TEST_GITHUB_REPO_ID=<2nd> TEST_GITHUB_PR_NUMBE
 **Expected:** `PASS`, with log lines stating that the archive declared the head
 commit and extracted safely, then either the parsed config hash or a configuration
 outcome such as `missing_file` when the repository has no `.previewrc.yaml`.
+
+### Real image builder check (optional)
+
+Needs Docker and internet access (Docker pulls the pinned BuildKit image; builds
+pull `alpine` through the egress proxy). No database or GitHub access is used.
+
+```sh
+make build-egress-image   # expect an image ID; creates previa-build-egress:dev
+make test-builder         # about 4 minutes
+```
+
+**Expected:** every `TestRealBuilder…` test passes: real and cached builds,
+isolation probes (logged as `probe: … blocked`, with only `proxied-public REACHED`),
+memory, disk, image-size, timeout and cancellation limits, fork cache separation and
+cleanup. Afterwards only the long-lived `previa-build-egress` container and network
+remain. To remove them and any build caches:
+
+```sh
+docker rm -f previa-build-egress && docker network rm previa-build-egress
+docker volume ls -q --filter label=io.previa.kind=build-cache | xargs -r docker volume rm
+```
 
 ### Browser regression checks (optional)
 
@@ -205,7 +235,9 @@ make run-worker
 **Expected:** `database health check passed`, then `River worker started`. The
 server inserts jobs; the worker executes them. With App credentials it also runs
 the `pr_discovery` queue (two workers, 45-second timeout) for sync pages and
-mergeability checks. `Ctrl+C` drains active work before exiting.
+mergeability checks. It always runs `build_log_prune` at start and hourly, deleting
+build logs 14 days after their attempt finished. `Ctrl+C` drains active work before
+exiting.
 
 `make dev` runs Air: it compiles CSS, regenerates templates, rebuilds and restarts
 the server when Go, templ, CSS, JS or SQL files change (polling works on
@@ -233,6 +265,10 @@ SELECT queue, state, count(*) FROM river_job GROUP BY queue, state ORDER BY 1, 2
 
 SELECT id, pull_request_id, generation, revision, kind, state, attempts, available_at
 FROM environment_operations ORDER BY id DESC LIMIT 20;
+
+SELECT environment_id, epoch, generation, revision, state, next_sequence AS lines,
+       truncated, omitted_lines, lost_lines, pruned_at
+FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
 ```
 
 - `\watch 2` refreshes a query every two seconds; `\q` exits.
@@ -283,8 +319,13 @@ FROM environment_operations ORDER BY id DESC LIMIT 20;
   generated `web/static/css/app.css`.
 - **Stylesheet missing after a manual build:** run `make assets` before compiling;
   the server embeds assets at build time.
-- **Live indicator never turns green:** apply migration 0011, and make sure any
-  proxy in front of the server does not buffer `text/event-stream` ([12](12-realtime-updates.md)).
+- **Live indicator never turns green:** apply migrations 0011 and 0013, and make sure
+  any proxy in front of the server does not buffer `text/event-stream` ([14](14-realtime-updates.md)).
+- **Builder errors:** `egress proxy image … is not available` means run
+  `make build-egress-image`. `builder did not become ready` usually means user
+  namespaces are disabled or Docker is too old for rootless BuildKit. `disk_low`
+  means less than `BUILD_MIN_FREE_DISK` is free on Docker's storage. Repeated pull
+  failures for public images can be Docker Hub's anonymous rate limit ([09](09-image-builds.md)).
 - **Editor says templ components are undefined:** run `make generate && go build ./...`;
   generated `*_templ.go` files are ignored and must exist locally. If the build
   passes, restart the Go/templ language servers. `make watch-templates` regenerates

@@ -1,6 +1,6 @@
-# 09 · Build scheduling and worker handoff
+# 11 · Build scheduling and worker handoff
 
-How an authorized intent ([08](08-build-policy-and-intents.md)) becomes executable
+How an authorized intent ([10](10-build-policy-and-intents.md)) becomes executable
 work: durable deadlines, River wake-ups, atomic admission, one build per PR, handoff
 to the next request and crash recovery. Everything here is implemented and tested
 with real PostgreSQL and River; what is missing is the real build/runtime adapters.
@@ -37,7 +37,7 @@ production execution is not supported.
   Each relevant event advances observed generation and replaces the request/deadline.
   Changing mode alone does not schedule existing PRs.
 - `Broker.RequestBuild` resolves owner access/current SHA, applies the
-  Build/Retry/Rebuild contract ([08](08-build-policy-and-intents.md)), and inserts its
+  Build/Retry/Rebuild contract ([10](10-build-policy-and-intents.md)), and inserts its
   wake-up in the same transaction.
   Manual override is immediate. The low-level `IntentService.Request` remains a
   persistence API; future browser handlers must use the coordinator rather than
@@ -204,4 +204,4 @@ observation/request changes, same-generation stale success/failure/publication,
 generation-zero finalization, real River wake-up processing and PR uniqueness,
 future handoff deadlines, success/terminal-failure handoff and close-during-build
 cleanup. Real source/build/runtime/router/reporting adapters are the next step
-([14-roadmap.md](14-roadmap.md)).
+([16-roadmap.md](16-roadmap.md)).

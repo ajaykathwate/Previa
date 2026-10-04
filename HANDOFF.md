@@ -3,88 +3,81 @@ Last updated: 2026-10-04
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
-- docs/README.md indexes 14 numbered docs in reading order (01 overview, 02 setup,
-  03 user guide, 06 source/config, 07 secrets ... 14 roadmap). Update the matching
-  doc with every change.
-- docs/14-roadmap.md: Prompts 1-2 done; next is Prompt 3 (bounded,
-  redacted current-build logs + resumable SSE), then 4-12.
-- Contracts to preserve: docs/06 verification/source, 07 secrets, 08 intents,
-  09 scheduling, 10 publication, 11 ordering, 12 realtime. Live hosted GitHub
-  webhook/mergeability proof still pending (docs/05).
+- docs/README.md indexes 16 numbered docs in reading order (01 overview, 02 setup,
+  03 user guide, 06 source, 07 secrets, 08 build logs, 09 image builds ... 16 roadmap).
+  Update the matching doc with every change; new docs take their reading-order slot.
+- docs/16-roadmap.md: Prompts 1-4 done; next is Prompt 5 (hardened
+  Docker candidates and readiness, internal/runtime), then 6-12.
+- Contracts to preserve: docs/06 verification/source, 07 secrets, 08 logs, 09 builds,
+  10 intents, 11 scheduling, 12 publication, 13 ordering, 14 realtime. Live hosted
+  GitHub webhook/mergeability proof still pending (docs/05).
 - Backend features flat under internal/<feature>; construction in internal/app;
   presentation in web/ with view models and no backend imports.
-- Preserve the "signal" theme, quiet input focus, modal confirmations,
-  server-rendered navigation, live search and ordinary GET/POST fallbacks.
+- Preserve the "signal" theme, modal confirmations, server-rendered navigation and
+  ordinary GET/POST fallbacks.
 
 ## Run and configuration
 - make build/test/lint generate assets/templates/sqlc; lint = go vet + golangci-lint.
-- PostgreSQL 17 via Compose; make migrate-up applies Goose 12 and River 007.
-  Migrate before DB tests: migration-constraint, auth and queue tests use the live
-  schema (rolled back); the rest create isolated schemas.
-- make run-server/run-worker/dev autoload .env; exported overrides win.
-- Server: DATABASE_URL, HTTP/OAuth/session, optional five-setting App group,
-  optional GITHUB_WEBHOOK_SECRET, optional SECRETS_ENCRYPTION_KEYS +
-  SECRETS_ACTIVE_KEY_VERSION (both or neither; malformed keyring stops startup).
-- Worker: ping concurrency, BUILD_TIMEOUT, optional App ID/key pair. It does not
-  read the secrets keyring yet; it will need the same keyring from Prompt 5.
-- make test-source (opt-in real archive check), make secrets-reencrypt (rotation),
-  make test-webhook, make test-github-app. All load .env; no credentials as args.
-- Browser tests here need UI_BROWSER_EXECUTABLE=/snap/bin/chromium (Playwright's
-  bundled Chromium is not installed).
+- PostgreSQL 17 via Compose; make migrate-up applies Goose 13 and River 007.
+  The dev DB was last seen at Goose 12: run make migrate-up, restart server/worker.
+- Live-schema tests (migration constraints, auth, queue) need the DB at the latest
+  migration; others create isolated schemas.
+- Worker: BUILD_TIMEOUT plus optional BUILD_CPUS/MEMORY/PIDS/DISK_BUDGET/
+  MAX_IMAGE_SIZE/MIN_FREE_DISK, BUILDKIT_IMAGE, BUILD_EGRESS_IMAGE (validated at start,
+  unused until Prompt 10). It always runs the build_log_prune periodic job.
+- make build-egress-image (needed before builds), make test-builder (real Docker,
+  ~4 min), make test-source, make secrets-reencrypt. Browser tests here need
+  UI_BROWSER_EXECUTABLE=/snap/bin/chromium.
+- Docker Desktop 29.8 (WSL2) is available; previa-build-egress container/network stay
+  running after builder tests (docs/02 shows how to remove them).
 
-## Prompt 1: verification and source (done, not wired into execution)
-- environments.UpstreamVerifier + UpstreamSnapshot (consumer-owned) implemented by
-  pullrequests.SyncService.VerifyUpstream: capture install revision, repo
-  observation_version and PR generation; bounded GitHub read (GetByID + PR GET)
-  with no transaction; re-lock install->repo->PR; changed => ErrUpstreamChanged.
-  Observation committed even on refusal; closed/conflicts/checking/inaccessible/
-  unavailable fail closed (checking schedules a recheck). Never authorizes;
-  carries event-authorized Automatic intent across a recorded status change.
-- internal/source: base repo resolved by numeric ID, tarball for full lowercase SHA,
-  credential-free download from allowlisted https host (codeload.github.com, <=3
-  redirects), git global header must declare the SHA. Extraction: one top dir,
-  canonical local paths, dirs/files/in-tree relative symlinks only (links created
-  last, writes via os.Root), byte/entry/path/time caps. 0700 workspaces with a
-  marker written first; Workspaces.List/Remove find crash leftovers. Config and
-  Dockerfile read from the same tree via repoconfig.Parse and os.Root.
-- Real check 2026-10-04 (PR #5, same-repo): header declared the head SHA, extracted
-  safely, config outcome missing_file (repo has no .previewrc.yaml); cleaned up.
-- Prompt 10 must call VerifyUpstream before RequestBuild and before claimBuild,
-  compare snapshot.Matches(request), then source.Preparer.Prepare/Release.
+## Prompts 1-2
+- environments.UpstreamVerifier via pullrequests.SyncService.VerifyUpstream (fresh,
+  fenced, fail-closed); internal/source exact-SHA archive, hardened extraction,
+  crash-discoverable workspaces, config from the same tree.
+- internal/secrets: AES-256-GCM keyring + rotation, owner Secrets tab, fork withholding,
+  secret-over-YAML, Provider.ForContainer, streaming Redactor (now holds back only a
+  tail that could start a known value, so paused output shows at once).
 
-## Prompt 2: repository secrets (done; runtime injection in Prompt 5)
-- Migration 12: env_secrets.key_version/updated_at, name and size checks.
-- AES-256-GCM, random nonce, AAD = repo ID + name + key version. Keyring env vars
-  above; rotation = add version, set active, restart, make secrets-reencrypt
-  (optimistic, repeatable, prints counts), remove old key only at zero.
-- /repositories/{id}/secrets tab (internal/secrets handler, web/pages/secrets):
-  owner-only, CSRF, write-only (names + update time), replace by name, delete via
-  modal, limit 100, PREVIA_ prefix reserved, revoked repos delete-only,
-  unconfigured server explains itself. RepositoryTabs on the PR list page.
-- Worker contract: secrets.Provider.ForContainer(repo, Source{Base,Head}, yamlEnv):
-  untrusted (fork/unknown head) decrypts nothing; trusted => secret overrides YAML
-  (user decision), notice by name; any decrypt failure fails closed. ContainerEnv:
-  Environ for container config only (never build args/context/layers), Wipe.
-- secrets.Redactor: exact values + per-line parts, split-safe streaming Writer,
-  chunking-independent output, min 4 bytes, max 512 patterns; limits documented.
-  Prompt 3 log sink must wrap output with ContainerEnv.Redactor(platform creds).
-- Not implemented by design: maintainer approval for forks; lazy re-encryption
-  (DESIGN 16 said lazily; explicit command chosen and documented).
+## Prompt 3: build logs (done)
+- Migration 13: build_log_streams (one per environment: epoch, gen/rev, state,
+  counters) and build_logs epoch/kind; trigger raises buildlog:<env>.
+- environments.claimBuild resets the stream (epoch+1) then clears lines in the
+  admission tx; Runtime.Build(ctx, request, Attempt{EnvironmentID, LogEpoch}).
+  Service.WithBuildLogs(store) finishes the stream when execution returns.
+  No environment row => Attempt{} (no log); rows are provisioned in Prompts 6/10.
+- buildlogs.Store.Open(Binding, redactor, Limits) -> Writer: strip controls, redact,
+  split (8 KiB), cap (5 MiB / 20k lines, marker), batch, epoch-fenced append,
+  Done() on supersede, lost lines counted and marked. Retention 14 days.
+- /repositories/{id}/pull-requests/{n}/logs + /events: owner-only, tail 500 lines with
+  paging, SSE ids "<epoch>.<next>", reset on new attempt, caps 256/8 per user, 10 s
+  frame timeout. Linked from PR detail and Builds/Environments rows.
 
-## Earlier work still relevant
-- SSE live updates: migration 11 triggers -> NOTIFY -> realtime hub -> owner-checked
-  /repositories/<id>/events with resumable cursors; no polling (docs/12).
-- Webhooks: 2 MiB HMAC-verified ingress outside session/CSRF; atomic delivery receipt
-  + PR/lifecycle + intent; source-ordered snapshots; revocation sets cleanup_pending.
-- Discovery: open-only, River pr_discovery (2 workers, 45s, <=100/page), revision
-  fences; mergeability rechecks with generation/SHA fences; Build disabled (409/503).
-- Build/teardown/wake/publication workers remain unregistered; no fake runtime.
+## Prompt 4: image builds (done; not wired to the worker)
+- Owner decisions: fresh rootless BuildKit container per build; public internet
+  only via the Go egress proxy (80/443, public addresses, vetted dial); cache per
+  base+source repository (DESIGN 9 refinement); Balanced limits.
+- builds.Builder.Build(ctx, Job{PR, gen, rev, SHA, base/head repo, ContextDir,
+  Dockerfile, Logs}) -> Image{Ref, ID, Size, Reused}; typed failures (builds.Error).
+  Resources(pr)/Remove(artifact) for cleanup. Tag previa/pr-<id>:g<g>-r<r>-<sha12>.
+- Builder hardening: cap-drop ALL + SETUID/SETGID, read-only root, owned tmpfs,
+  seccomp/AppArmor unconfined + unmasked paths (rootless requirement), cgroup limits,
+  no socket/host paths. Client v0.33.0 (v0.33.1 needs Go 1.26.8), daemon v0.33.1
+  pinned by digest and pulled by Docker when missing.
+- Prompt 5 must: build via builds.Builder with a buildlogs.Writer as Logs, release
+  the source workspace, then start the candidate; wire Resources into cleanup.
 
-## Verification (2026-10-04, Prompts 1-2)
-- Each commit checked in a clean worktree: make build (no generated drift), make lint
-  0 issues, go test ./... with TEST_DATABASE_URL on the Goose 12 dev DB all pass.
-  -race on source, secrets, pullrequests, realtime, environments, config pass.
-  Migration 12 up/down verified in a throwaway schema.
-- Browser 24/24 including the Secrets tab scenario. Real source check passed.
-- Not run: hosted webhook delivery; worker/runtime use of verification, source and
-  secrets (later prompts).
+## Verification (2026-10-04, Prompts 3-4)
+- make build; make lint 0 issues; go test ./... against a throwaway schema at
+  Goose 13 + River 007: all pass except one run where
+  TestOlderBuildFinishesAfterNewerResult hit its 2 s operation lease under full
+  parallel load (passed in the other full run and 10/10 alone).
+- -race: buildlogs, builds, environments, pullrequests, realtime, config, secrets,
+  queue pass. Fixed a pre-existing test race in realtime stream_test (WriteTimeout
+  set after the server started); 30/30 under -race now.
+- Migration 13 down/up verified in a throwaway schema; migration-constraint test
+  covers 0013 and passes at Goose 13. Browser 26/26 (two new log scenarios).
+- make test-builder from a cold image cache: all pass; probes from a build step:
+  direct internet, Docker-bridge service, host, metadata blocked (direct and via
+  proxy); no socket, no credentials; public site via proxy reached.
+- Not run: hosted webhook delivery; runtime/worker use of logs and builder.

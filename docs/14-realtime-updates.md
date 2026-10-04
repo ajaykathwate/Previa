@@ -1,4 +1,4 @@
-# 12 · Realtime updates (Server-Sent Events)
+# 14 · Realtime updates (Server-Sent Events)
 
 Open repository and PR pages update when committed state changes, without
 polling. This document explains the pipeline and how to extend it.
@@ -94,6 +94,23 @@ ownership-scoped GET handlers.
   expose an ownership-checked endpoint that calls `Hub.Subscribe` and
   `realtime.Stream`, and give the page a `data-live-events` URL plus a
   `data-live-refresh` element.
-- **Build logs:** use `realtime.NewSSE` directly with log sequence numbers as
-  event ids, replaying rows after `Last-Event-ID` from PostgreSQL, and use a hub
-  subscription only as the wake-up signal for new rows.
+- **Records with their own positions** (as build logs do): use `realtime.NewSSE`
+  directly, make your record position the event id, replay rows after
+  `Last-Event-ID` from PostgreSQL, and use hub subscriptions only as wake-ups.
+
+## Build log streams
+
+Build logs ([08](08-build-logs.md)) are the first feature to stream records rather
+than invalidation signals. They reuse this pipeline as follows:
+
+- Migration 13 adds a row trigger on `build_log_streams` that raises
+  `buildlog:<environment id>` on every append, reset, finish and prune. The log
+  stream subscribes to it and to its repository topic (intent and environment
+  changes); both only wake the handler.
+- Event ids are `<epoch>.<next sequence>`, not hub cursors. A cursor from another
+  epoch means a new attempt replaced the logs: the stream sends `reset` and replays
+  the current attempt from sequence 0. Lines are read in frames of at most 200 with
+  short queries; no transaction or pool connection is held per viewer.
+- `realtime.SSE.WriteTimeout` bounds each frame (10 seconds for logs), so a client
+  that stops reading is dropped. `realtime.Limiter` caps log streams at 256 per
+  server and 8 per user. The repository stream keeps its earlier behaviour.

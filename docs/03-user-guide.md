@@ -1,9 +1,9 @@
 # 03 · User guide
 
 A walk through the working screens: sign in, connect repositories, track pull
-requests and choose a build policy. Setup commands are in
-[02-development-setup.md](02-development-setup.md). Building and serving previews
-is not available yet; the screens show real saved state only.
+requests, choose a build policy, manage secrets and read build logs. Setup commands
+are in [02-development-setup.md](02-development-setup.md). Building and serving
+previews is not available yet; the screens show real saved state only.
 
 ## Before you start
 
@@ -18,8 +18,8 @@ is not available yet; the screens show real saved state only.
 ## Moving around
 
 - The sidebar groups **Workspace** (Overview, Repositories), **Delivery** (Builds,
-  Environments) and **System** (Developer tools). **Coming next** items (live logs,
-  preview URLs) are labels, not links.
+  Environments) and **System** (Developer tools). **Coming next** items (preview
+  URLs) are labels, not links.
 - Medium screens collapse the sidebar to icons; phones use the menu button.
 - **Ctrl K** (**⌘K** on macOS) or the header search opens the command palette. Type
   to filter pages, repository filters and account actions; arrow keys and Enter
@@ -76,8 +76,9 @@ discovery for each newly accessible repository.
    - **Deployed preview:** what a preview actually serves. It can lag the latest commit.
 
    **Not requested** means no build intent exists; **Not deployed** means no
-   environment exists. Placeholders for live logs, preview URL/health and teardown
-   are labelled **Soon**. **View on GitHub** opens the real PR.
+   environment exists. **Build logs** opens the PR's log page (below). Placeholders
+   for preview URL/health and teardown are labelled **Soon**. **View on GitHub**
+   opens the real PR.
 7. **Back to pull requests**, the breadcrumb and **Repositories** return to the
    previous list with its search, tab and page preserved.
 
@@ -96,7 +97,7 @@ repository's PR list, never on PR details.
   in either mode.
 
 **Build latest commit is disabled.** It needs exact-SHA source fetching, image
-builds, isolated containers, routing and cleanup first ([14-roadmap.md](14-roadmap.md)).
+builds, isolated containers, routing and cleanup first ([16-roadmap.md](16-roadmap.md)).
 Direct POSTs are refused too: HTTP 409 with the reason for Checking, Conflicts or
 Refresh required PRs, otherwise HTTP 503 "not available yet". No intent is created.
 
@@ -124,12 +125,38 @@ Good to know:
   you can delete secrets but not add or replace them. If the server has no
   encryption keys, the tab says so and only lists existing names.
 
+## Read build logs
+
+Open **Build logs** from a PR's detail page, or **Logs** on any row of **Builds** or
+**Environments**. The page belongs to that PR and shows only its **current** build
+attempt; a new attempt replaces it. Builds do not run yet, so today it normally says
+**No build requested** or shows a queued request.
+
+- The status line states only recorded facts: **No build requested**, **Waiting**
+  (Automatic quiet period, with the time it becomes eligible), **Queued**, **Running**,
+  or how the attempt ended. If the stored output belongs to an earlier attempt than
+  the current request, a notice says so and names its commit.
+- The newest 500 lines appear first. While a build runs, new lines stream in and the
+  view follows them as long as you stay at the bottom; scroll up to read and it stops
+  following (**Follow output** turns it back on). The indicator shows **Live**,
+  **Reconnecting…**, **Paused while hidden** or that live updates are unavailable.
+- When a new attempt starts, the page clears and shows the new output from its first
+  line.
+- **Earlier lines** and **Later lines** page through long logs; **Refresh** reloads.
+  These work without JavaScript. Each line number links to that line.
+- Notices explain gaps instead of hiding them: **Logs truncated** (an attempt keeps at
+  most 5 MiB / 20,000 lines; later lines are counted, not stored), lines that could
+  not be stored, and logs that **expired** (kept 14 days after an attempt finishes).
+- Output is shown as plain text, never as markup, and repository secrets and Previa
+  credentials are replaced with `[redacted]` before anything is stored
+  ([08](08-build-logs.md)).
+
 ## Other screens
 
 | Screen | What it shows |
 | --- | --- |
-| Builds | Current/latest authorized build requests across your repositories, with captured commits and deadlines. Not an attempt history. |
-| Environments | Persisted deployment state and deployed commit per PR. URLs, health and teardown arrive with execution. |
+| Builds | Current/latest authorized build requests across your repositories, with captured commits, deadlines and a **Logs** link. Not an attempt history. |
+| Environments | Persisted deployment state and deployed commit per PR, with a **Logs** link. URLs, health and teardown arrive with execution. |
 | Developer tools | Queue diagnostic: submit a ping and watch the worker process it. |
 | Session | Your GitHub identity; reached from the account menu. |
 
@@ -152,6 +179,7 @@ flowchart TD
     D --> P[PR detail: observed / requested / deployed]
     D --> M[Automatic builds confirmation]
     P --> G[PR on GitHub]
+    P --> B[Build logs: current attempt, live]
 ```
 
 ```mermaid

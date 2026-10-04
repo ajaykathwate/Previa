@@ -4,7 +4,7 @@ Owners give previews the configuration they need at runtime (API keys, database
 URLs) without putting it in the repository, without exposing it to fork authors and
 without leaking it into logs. This document covers how values are stored, who
 receives them, how keys rotate and what redaction can and cannot do. Containers
-start in the next phases ([14-roadmap.md](14-roadmap.md)); the worker contract
+start in the next phases ([16-roadmap.md](16-roadmap.md)); the worker contract
 below is what they will call.
 
 ## Decisions

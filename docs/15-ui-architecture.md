@@ -1,4 +1,4 @@
-# 13 · UI architecture
+# 15 · UI architecture
 
 How the dashboard is built: server-rendered pages, progressive enhancement, the
 visual system and the browser behaviours layered on top. Screen behaviour from a
@@ -64,8 +64,9 @@ repository's Secrets tab).
   **Pull requests** (`/repositories/{id}`) and **Secrets** (`/repositories/{id}/secrets`).
   Both are full pages, so the switch works without JavaScript and view transitions
   keep it smooth. PR detail pages do not show the tabs.
-- **Dedicated pages.** `/repositories`, `/repositories/{id}` and
-  `/repositories/{id}/pull-requests/{number}` are separate, bookmarkable pages.
+- **Dedicated pages.** `/repositories`, `/repositories/{id}`,
+  `/repositories/{id}/pull-requests/{number}` and its `/logs` page are separate,
+  bookmarkable pages. PR detail and every Builds/Environments row link to the logs.
   Breadcrumbs and Back links preserve filters (`q`, `access`, `page` for the
   directory; `pr_q`, `pr_state`, `pr_page` for PRs). Old query-style bookmarks
   redirect after ownership checks.
@@ -90,7 +91,7 @@ Making full-page navigation feel instant, without giving up MPA semantics:
   on `HX-Request`/`HX-Target`. An expired session returns `HX-Redirect` to sign-in.
 - Requests to one target share a replacement slot so older responses are discarded.
   Failed requests keep current content and show retry feedback.
-- Live refreshes come from the event stream ([12](12-realtime-updates.md)). A hidden
+- Live refreshes come from the event stream ([14](14-realtime-updates.md)). A hidden
   `[data-live-refresh]` element refetches `#repository-detail` with the current
   URL's filters. While PR search is focused or the policy modal is open, a refresh
   is deferred, then run when the user leaves the field or closes the modal.
@@ -103,8 +104,11 @@ One IIFE of small, independent initializers: `initMotion` (home reveal, hero pau
 offscreen), `initTheme`, `initNavigation` (drawer dismissal, platform shortcut label),
 `initPrefetch`, `initConfirmationDialogs` (focus trap, backdrop close, focus return,
 `?confirm=logout` deep link), `initAccountMenus`, `initQueueForms`,
-`initCommandPalette`, `initRepositorySearch` (request/feedback/focus handling) and
-`initLiveUpdates` (EventSource lifecycle). A `js-enabled` class on `<html>` scopes
+`initCommandPalette`, `initRepositorySearch` (request/feedback/focus handling),
+`initLiveUpdates` (repository EventSource lifecycle) and `initBuildLogs` (the log
+page's EventSource: appends lines as text nodes, clears on `reset`, updates the
+status card from `state`, follows output only while the reader is at the bottom,
+pauses in hidden tabs). A `js-enabled` class on `<html>` scopes
 CSS that only makes sense with scripting. No third-party JavaScript besides HTMX.
 
 ## Confirmations
@@ -125,6 +129,18 @@ JavaScript. A rejected submission re-renders the form with the error but never t
 submitted value; the value textarea is never prefilled. See
 [07](07-repository-secrets.md).
 
+## Build log page
+
+`web/pages/builds/logs.templ` renders a status card (badge, one-sentence summary that
+is a polite `role="status"` region, commit, connection indicator, notices) and an
+output panel: an ordered list in its own scroll area (so following output never moves
+the page), monospace, with per-line anchor links and system notices in the info
+tone. Without JavaScript it is a complete page: the newest 500 lines plus
+**Earlier lines**, **Later lines** and **Refresh**; the indicator says **Live
+updates off** and the follow control stays hidden. Notices are cloned from a
+server-rendered `<template>` so live updates look identical to the first render.
+Styles live in `web/styles/logs.css`. See [08](08-build-logs.md).
+
 ## Repository directory queries
 
 `internal/installations` scopes every count and list to the signed-in owner's
@@ -139,7 +155,7 @@ redirect to the last valid page. The PR list follows the same 10-row pattern.
 - **Tailwind CSS v4.1.18** standalone CLI, checksum-pinned. `make assets` compiles
   `web/styles/app.css` into `web/static/css/app.css` (ignored, embedded at build).
   `site.css` imports `base`, `home`, `workspace`, `command`, `repositories`,
-  `confirmation` and `motion` modules.
+  `logs`, `confirmation` and `motion` modules.
 - **templUI v1.13.2** (MIT) supplies copied button, card, alert and input source;
   provenance and local changes are in [web/components/README.md](../web/components/README.md).
   Use complete class strings so Tailwind can find them.
@@ -154,8 +170,9 @@ real auth, session, CSRF and realtime stream code and fake GitHub/queue provider
 It covers responsive layout and overflow, navigation and the drawer, modal focus and
 dismissal, logout, CSRF, live search, pagination, Automatic confirmation, live
 updates without polling, the command palette, theme persistence, the repository
-Secrets tab (write-only saving, replacing, modal deletion), reduced motion and
-no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-optional).
+Secrets tab (write-only saving, replacing, modal deletion), build logs (live append,
+following, reset for a new attempt, inert script-looking output, paging without
+JavaScript), reduced motion and no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-optional).
 
 ## Decisions and trade-offs
 
@@ -166,4 +183,4 @@ no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-
 | View transitions + prefetch, not `hx-boost` | Smooth navigation while keeping real document loads and no-JS behaviour. | Effects only in supporting browsers. |
 | Command palette as a layer over links | Faster navigation for keyboard users without a second navigation model. | Duplicate entry points to keep in sync. |
 | System fonts, no CDNs | Self-hosted, private, fast first paint. | Less typographic control. |
-| SSE invalidation, refetch via GET | No polling; authorization stays in ordinary handlers ([12](12-realtime-updates.md)). | One connection per open page. |
+| SSE invalidation, refetch via GET | No polling; authorization stays in ordinary handlers ([14](14-realtime-updates.md)). | One connection per open page. |

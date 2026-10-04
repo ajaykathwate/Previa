@@ -20,10 +20,12 @@ per-feature design lives in [DESIGN.md](../DESIGN.md).
 | Fresh upstream verification before authorization/execution | Implemented and tested; connected to the Build action and worker in Prompt 10 |
 | Exact-commit source fetch, safe extraction, `.previewrc.yaml` from the same tree | Implemented and tested, including a real GitHub check; not yet called by a build |
 | Repository secrets: encrypted storage, Secrets tab, key rotation, fork withholding, redaction | Working for owners; containers receive them once the runtime exists (Prompt 5) |
-| Image build, container runtime, routing/TLS, PR comments, live logs, expiry | **Not built** (placeholder packages only) |
+| Current-build logs: bounded, redacted storage, live log page with resume/reset, retention | Working page and store; empty until builds execute |
+| Isolated image builds: rootless BuildKit per build, egress proxy, per-source caches, limits | Implemented and verified on real Docker (`make test-builder`); not yet called by the worker |
+| Container runtime, routing/TLS, PR comments, expiry | **Not built** (placeholder packages only) |
 
 The **Build latest commit** action is deliberately disabled and its endpoint refuses
-work. Nothing deploys a preview yet. [14-roadmap.md](14-roadmap.md) lists the
+work. Nothing deploys a preview yet. [16-roadmap.md](16-roadmap.md) lists the
 remaining work in order.
 
 ## Architecture
@@ -48,6 +50,9 @@ flowchart LR
   mergeability checks. Each process loads only its own configuration.
 - **Server-rendered UI.** Go `templ` pages enhanced with local HTMX and one plain
   JavaScript file. No SPA, frontend build service or Node.js runtime.
+- **Docker for builds.** The image builder ([09](09-image-builds.md)) drives a Docker
+  Engine: one rootless BuildKit container per build on a private network whose only
+  exit is the `previa-build-egress` proxy container. The worker does not call it yet.
 
 ## Code layout
 
@@ -56,7 +61,7 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 
 | Path | What it holds |
 | --- | --- |
-| `cmd/server`, `cmd/worker`, `cmd/river-migrate`, `cmd/secrets-reencrypt` | Thin entry points (the last two are maintenance commands run through Make). |
+| `cmd/server`, `cmd/worker`, `cmd/river-migrate`, `cmd/secrets-reencrypt`, `cmd/build-egress` | Thin entry points (`river-migrate` and `secrets-reencrypt` are maintenance commands run through Make; `build-egress` runs in the egress proxy container). |
 | `internal/app` | Composition root: builds dependencies, starts and stops processes. |
 | `internal/auth` | GitHub OAuth login, user upsert, SCS sessions, CSRF, logout. |
 | `internal/installations` | Verified App linking, installation lifecycle, repository directory, build-mode policy. |
@@ -66,11 +71,14 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | `internal/repoconfig` | `.previewrc.yaml` strict validation, defaults, resource tiers, effective hash. |
 | `internal/source` | Exact-commit archive download through the base repository, identity check, hardened extraction, workspaces, config from the tree. |
 | `internal/secrets` | Encrypted repository secrets, Secrets tab, worker `ContainerEnv` contract, streaming redaction, re-encryption. |
+| `internal/buildlogs` | Current-attempt log streams: fenced bounded writer, owner page, live SSE, retention job. |
+| `internal/builds` | Isolated BuildKit image builder, egress proxy, size-capped export, labelled cleanup. |
 | `internal/dashboard` | Home, overview, session and developer-tools pages; queue ping. |
-| `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub + SSE). |
-| `internal/{builds,runtime,routing,reporting,buildlogs,housekeeping}` | Placeholders for unbuilt features (`doc.go` only). |
+| `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub, SSE, stream limiter), `dockerx` (Docker client). |
+| `internal/{runtime,routing,reporting,housekeeping}` | Placeholders for unbuilt features (`doc.go` only). |
 | `web/` | `pages/<feature>`, `layouts`, `components`, `styles` (Tailwind), `static` (HTMX, compiled CSS, `ui.js`), browser tests. |
-| `db/migrations` | Goose migrations 0001–0011; sqlc generates typed queries into each feature's `dbgen/`. |
+| `db/migrations` | Goose migrations 0001–0013; sqlc generates typed queries into each feature's `dbgen/`. |
+| `deploy/build-egress` | Dockerfile for the egress proxy image (`make build-egress-image`). |
 | `tools/go.mod` | Pinned dev tools: templ, sqlc, Goose, Air, golangci-lint. |
 
 ## Data model
@@ -85,7 +93,8 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | `build_intents` | One current authorized build request per PR, with `revision`. |
 | `environments`, `environment_operations` | One lifetime preview per PR (active and pending artifacts) and the durable publication outbox. |
 | `env_secrets` | Repository secrets: nonce ‖ AES-256-GCM ciphertext bound to repository, name and key version. |
-| `build_logs` | Current-build logs (cleared on build admission; no writer yet). |
+| `build_log_streams` | One row per environment for the current build attempt: `epoch`, generation/revision, state, line and byte counts, truncation and loss counters. |
+| `build_logs` | That attempt's lines (`epoch`, `sequence`, `kind`); replaced on admission, pruned after 14 days. |
 | `river_*` | River's own job tables, migrated separately. |
 
 ## Key decisions and trade-offs
@@ -106,6 +115,9 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | Repository secrets withheld from forks, secrets override YAML | Fork authors control the code; owner values must beat contributor-editable YAML. | Fork previews run without secrets. |
 | Outbox/saga for publication | PostgreSQL cannot commit atomically with Docker, Traefik and GitHub. | Eventual convergence; adapters must be idempotent and fenced. |
 | SSE invalidation instead of polling | Idle pages send nothing; changes arrive within moments; reuses Postgres. | One long-lived connection per open page; proxies must not buffer. |
+| Current-attempt logs with an admission epoch | The useful log is the current one; an epoch fences stale writers and browser cursors even on same-revision retries. | No build history; a failed attempt's log disappears when the next one starts. |
+| A fresh rootless BuildKit container per build, behind an egress proxy | Limits cover every step, builds cannot touch each other, and nothing internal is reachable. | A few seconds of startup per build; builder needs relaxed outer seccomp/AppArmor (steps keep BuildKit's). |
+| Build caches per base and source repository | Forks cannot poison caches that trusted, secret-receiving builds reuse. | Fork PRs build with less cache. |
 | Package by feature, consumer-defined interfaces | Features evolve independently; no global handler/store layers. | Some small duplication across features. |
 
 ## Hard problems and how they are handled
@@ -116,12 +128,12 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
   ([05](05-webhooks-and-pr-discovery.md)).
 - **Stale work finishing late.** Every job captures the PR generation and request
   revision; result writes lock the PR row and refuse anything not current
-  ([11](11-generation-ordering.md)).
+  ([13](13-generation-ordering.md)).
 - **Same-commit retries.** Rebuilding an unchanged SHA advances the intent revision,
-  so old operations cannot collide with new ones ([08](08-build-policy-and-intents.md)).
+  so old operations cannot collide with new ones ([10](10-build-policy-and-intents.md)).
 - **No transactions across systems.** Desired state commits in PostgreSQL with a
   durable operation row; external calls run outside transactions and a reconciler
-  repairs partial failures ([10](10-durable-publication-design.md)).
+  repairs partial failures ([12](12-durable-publication-design.md)).
 - **Long locks versus slow IO.** GitHub/Docker calls never run while a row lock or
   transaction is open; revisions are captured before IO and rechecked after.
 - **Asynchronous mergeability.** Unknown results trigger a bounded, fenced recheck
@@ -132,11 +144,17 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 - **Secrets near untrusted code.** Values are encrypted at rest, decrypted only in
   worker memory just before container start, never given to forks and redacted from
   logs, with the limits of redaction stated plainly ([07](07-repository-secrets.md)).
+- **Late log writers and stale cursors.** Each admission bumps the stream epoch in the
+  same transaction that clears old lines; appends are fenced on it, and browsers with
+  another epoch's cursor get a reset ([08](08-build-logs.md)).
+- **Untrusted Dockerfiles.** Every build runs in its own rootless, resource-limited
+  BuildKit container with no route anywhere except a proxy that only reaches public
+  addresses; probes from inside builds verify it ([09](09-image-builds.md)).
 - **Revoked access.** Revocation records durable `cleanup_pending`; no absent
   adapter is ever reported as having cleaned up.
 - **Live UI without missed updates.** SSE streams carry resumable cursors; the page
   cursor is read before page state, so a commit in between is replayed
-  ([12](12-realtime-updates.md)).
+  ([14](14-realtime-updates.md)).
 
 ## Glossary
 
@@ -153,6 +171,9 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | Upstream snapshot | A PR as GitHub reported it moments ago, recorded under the usual fences. |
 | Workspace | A worker-owned directory holding one extracted commit and its marker file. |
 | Trusted source | A head repository that is provably the base repository; only these receive secrets. |
+| Attempt / log epoch | One admitted execution of a request; its epoch changes on every admission, even a retry. |
+| Egress proxy | The only route out of build networks: ports 80/443 to public addresses. |
+| Cache scope | Base repository plus source repository; builds share a BuildKit cache only within one. |
 
 ## Read next
 
