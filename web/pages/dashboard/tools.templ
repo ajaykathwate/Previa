@@ -9,13 +9,33 @@ import (
 
 templ Tools(username string, csrfToken string) {
 	@layouts.App("Developer tools", username, csrfToken, components.NavTools) {
+		<header class="page-header">
+			<div class="page-header-text">
+				<span class="eyebrow">System</span>
+				<h1>Developer tools</h1>
+				<p>Local diagnostics for the control plane. Nothing here creates a preview or touches GitHub.</p>
+			</div>
+		</header>
 		<section id="queue-check" tabindex="-1" class="developer-tools" aria-labelledby="tools-title">
-			<details class="tools-disclosure" open>
-				<summary><span><span class="eyebrow">FOR LOCAL DEVELOPMENT</span><strong id="tools-title">Developer tools</strong><span class="tools-subtitle">Check the existing queue without creating a preview.</span></span><span class="tools-chevron" aria-hidden="true">⌄</span></summary>
+			<details class="tools-disclosure panel" open>
+				<summary>
+					<span class="tools-summary-icon" aria-hidden="true">
+						@components.TerminalIcon()
+					</span>
+					<span class="tools-summary-text"><span class="eyebrow">For local development</span><strong id="tools-title">Queue ping</strong><span class="tools-subtitle">Check the existing queue without creating a preview.</span></span>
+					<span class="tools-chevron">
+						@components.ChevronDownIcon()
+					</span>
+				</summary>
 				<div class="tools-content">
-					<div>
+					<div class="tools-explainer">
 						<h2>Send a queue ping</h2>
 						<p>This diagnostic inserts a job into River. Run the worker alongside the server to process it. The result below confirms enqueueing, not completion.</p>
+						<ol class="tools-flow" aria-label="How a ping travels">
+							<li><span class="tools-flow-step">1</span><div><strong>Server</strong><span>Validates the key and inserts a job</span></div></li>
+							<li><span class="tools-flow-step">2</span><div><strong>River queue</strong><span>Stores it durably in PostgreSQL</span></div></li>
+							<li><span class="tools-flow-step">3</span><div><strong>Worker</strong><span>Picks it up when it is running</span></div></li>
+						</ol>
 						<a href="/protected" class="text-link">
 							View your session
 							@components.Arrow()
@@ -23,15 +43,18 @@ templ Tools(username string, csrfToken string) {
 					</div>
 					<form method="post" action="/queue/ping" class="queue-form" data-queue-form>
 						<input type="hidden" name="csrf_token" value={ csrfToken }/>
-						<div class="space-y-2">
+						<div class="field">
 							<label for="pr-key">Ping PR key</label>
-							@input.Input(input.Props{ID: "pr-key", Name: "pr_key", Value: "demo:pr:1", Required: true, Attributes: templ.Attributes{"maxlength": "128", "aria-describedby": "ping-help"}})
+							@input.Input(input.Props{ID: "pr-key", Name: "pr_key", Value: "demo:pr:1", Required: true, Attributes: templ.Attributes{"maxlength": "128", "aria-describedby": "ping-help", "spellcheck": "false"}})
 							<p id="ping-help" class="field-help">A diagnostic key, not a repository connection.</p>
 						</div>
 						@button.Button(button.Props{Type: button.TypeSubmit, Class: "queue-submit"}) {
 							Send a ping
 						}
-						<p class="queue-result" data-queue-result role="status" aria-live="polite" aria-atomic="true"></p>
+						<div class="queue-output">
+							<div class="queue-console" aria-hidden="true"><span class="queue-console-dot"></span><span class="queue-console-dot"></span><span class="queue-console-dot"></span><span>queue output</span></div>
+							<p class="queue-result" data-queue-result role="status" aria-live="polite" aria-atomic="true"></p>
+						</div>
 					</form>
 				</div>
 			</details>

@@ -7,7 +7,10 @@ import "github.com/ajaykathwatee/previa/web/components/button"
 templ ConfirmationDialog(id string, title string, description string) {
 	<dialog id={ id } class="confirmation-dialog" aria-labelledby={ id + "-title" } aria-describedby={ id + "-description" } data-confirmation-dialog>
 		<button type="button" class="dialog-close" aria-label="Close confirmation" commandfor={ id } command="close" data-close-dialog><span aria-hidden="true">×</span></button>
-		<span class="eyebrow">PLEASE CONFIRM</span>
+		<span class="dialog-icon" aria-hidden="true">
+			@InfoIcon()
+		</span>
+		<span class="eyebrow">Please confirm</span>
 		<h2 id={ id + "-title" }>{ title }</h2>
 		<p id={ id + "-description" }>{ description }</p>
 		{ children... }

@@ -8,13 +8,18 @@ import "github.com/ajaykathwatee/previa/web/layouts"
 templ Index(username string, csrfToken string, page Page) {
 	@layouts.App("Repositories", username, csrfToken, components.NavRepositories) {
 		<div class="repository-workspace repository-catalog">
-			<header class="workspace-page-heading">
-				<div><span class="eyebrow">YOUR SOURCE, CONNECTED</span><h1>Repositories</h1></div>
+			<header class="page-header workspace-page-heading">
+				<div class="page-header-text">
+					<span class="eyebrow">Sources</span>
+					<h1>Repositories</h1>
+					<p>Repositories your GitHub App installations can reach. Open one to browse its pull requests and build policy.</p>
+				</div>
 				<div class="repository-action">
 					if page.Enabled {
 						<form method="post" action="/installations/start">
 							<input type="hidden" name="csrf_token" value={ csrfToken }/>
 							@button.Button(button.Props{Type: button.TypeSubmit}) {
+								@components.GitHubMark()
 								if page.Installations > 0 {
 									Manage connections
 								} else {
@@ -34,7 +39,10 @@ templ Index(username string, csrfToken string, page Page) {
 				</div>
 			</header>
 			if page.Connected {
-				<p class="connection-notice" role="status">GitHub connection verified. Your selected repositories are linked.</p>
+				<p class="connection-notice tone-ok" role="status">
+					@components.CheckIcon()
+					GitHub connection verified. Your selected repositories are linked.
+				</p>
 			}
 			<div class="repository-directory-view">
 				<section class="repository-directory" aria-label="Repository browser">
@@ -53,10 +61,16 @@ templ Index(username string, csrfToken string, page Page) {
 						hx-request='{"timeout":10000}'
 						data-repository-search
 					>
-						<div class="repository-search"><label for="repository-search">Find a repository</label><input id="repository-search" name="q" type="search" value={ page.Search } maxlength="100" placeholder="Owner or repository name"/></div>
+						<div class="repository-search search-field">
+							<label for="repository-search" class="sr-only">Find a repository</label>
+							<span class="search-field-icon">
+								@components.SearchIcon()
+							</span>
+							<input id="repository-search" name="q" type="search" value={ page.Search } maxlength="100" placeholder="Find a repository by owner or name" autocomplete="off"/>
+						</div>
 						<fieldset class="repository-access">
-							<legend>Access</legend>
-							<div class="repository-access-tabs">
+							<legend class="sr-only">Access</legend>
+							<div class="repository-access-tabs segmented">
 								for _, option := range []struct{Value,Label string}{{"available","Available"},{"unavailable","Unavailable"},{"all","All"}} {
 									<label><input class="sr-only repository-access-option" type="radio" name="access" value={ option.Value } checked?={ page.Access==option.Value }/><span>{ option.Label }</span></label>
 								}
@@ -76,14 +90,19 @@ templ Index(username string, csrfToken string, page Page) {
 
 templ Results(page Page) {
 	<div data-directory-page={ strconv.FormatInt(page.Number, 10) } class="repository-results-content">
-		<p class="repository-count" role="status" aria-live="polite">
-			{ strconv.FormatInt(page.Total, 10) }
-			if page.Total==1 {
-				repository
-			} else {
-				repositories
+		<div class="results-meta">
+			<p class="repository-count" role="status" aria-live="polite">
+				{ strconv.FormatInt(page.Total, 10) }
+				if page.Total==1 {
+					repository
+				} else {
+					repositories
+				}
+			</p>
+			if page.Pages>1 {
+				<span class="results-page" aria-hidden="true">Page { strconv.FormatInt(page.Number,10) } of { strconv.FormatInt(page.Pages,10) }</span>
 			}
-		</p>
+		</div>
 		if len(page.Rows)>0 {
 			<div class="repository-card-results" role="region" aria-label="Repository list">
 				<ul class="repository-list">
@@ -99,9 +118,9 @@ templ Results(page Page) {
 										@components.BranchIcon()
 									</span>
 									if row.Accessible {
-										<span class="repository-status available">Available</span>
+										<span class="repository-status available badge tone-ok"><span class="badge-dot" aria-hidden="true"></span>Available</span>
 									} else {
-										<span class="repository-status unavailable">Unavailable</span>
+										<span class="repository-status unavailable badge tone-neutral"><span class="badge-dot" aria-hidden="true"></span>Unavailable</span>
 									}
 								</div>
 								<div class="repository-card-name"><h2>{ row.Name() }</h2><p>{ row.Owner() }</p></div>

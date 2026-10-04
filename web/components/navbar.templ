@@ -2,51 +2,49 @@ package components
 
 import "github.com/ajaykathwatee/previa/web/components/button"
 
+// BrandMark is the stacked-preview logo: a commit frame with a live lens.
+templ BrandMark() {
+	<svg class="brand-mark" viewBox="0 0 28 28" width="26" height="26" aria-hidden="true">
+		<rect x="1.5" y="1.5" width="18" height="18" rx="5.5" fill="none" stroke="currentColor" stroke-width="2" opacity=".32"></rect>
+		<rect x="8" y="8" width="18.5" height="18.5" rx="5.5" class="brand-mark-front"></rect>
+		<circle cx="17.25" cy="17.25" r="3.4" class="brand-mark-lens"></circle>
+	</svg>
+}
+
 templ Brand() {
 	<a href="/" class="brand" aria-label="Previa home">
-		<span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
-		<span>previa<span class="brand-period">.</span></span>
+		@BrandMark()
+		<span class="brand-word">previa<span class="brand-period">.</span></span>
 	</a>
+}
+
+// ThemeToggle is a progressive enhancement; without JavaScript the OS theme applies.
+templ ThemeToggle() {
+	<button type="button" class="icon-button theme-toggle" data-theme-toggle aria-label="Switch colour theme" title="Switch colour theme">
+		@SunIcon()
+		@MoonIcon()
+	</button>
 }
 
 templ Navbar(loggedIn bool) {
 	<header class="site-header">
 		<nav aria-label="Main navigation" class="site-container site-nav">
 			@Brand()
-			<div class="site-nav-links"><a href="/#workflow">The workflow</a><a href="/#principles">Our approach</a></div>
-			if loggedIn {
-				@button.Button(button.Props{Href: "/dashboard", Class: "nav-cta"}) {
-					Open dashboard
-					@Arrow()
+			<div class="site-nav-links"><a href="/#workflow">The workflow</a><a href="/#principles">Principles</a><a href="/#status">What's live</a></div>
+			<div class="site-nav-actions">
+				@ThemeToggle()
+				if loggedIn {
+					@button.Button(button.Props{Href: "/dashboard", Class: "nav-cta"}) {
+						Open dashboard
+						@Arrow()
+					}
+				} else {
+					@button.Button(button.Props{Href: "/auth/github/login", Class: "nav-cta"}) {
+						<span class="hidden sm:inline">Get started</span><span class="sm:hidden">Sign in</span>
+						@Arrow()
+					}
 				}
-			} else {
-				@button.Button(button.Props{Href: "/auth/github/login", Class: "nav-cta"}) {
-					<span class="hidden sm:inline">Get started</span><span class="sm:hidden">Sign in</span>
-					@Arrow()
-				}
-			}
+			</div>
 		</nav>
 	</header>
-}
-
-templ Arrow() {
-	<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"></path></svg>
-}
-
-templ GitHubMark() {
-	<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .75a11.25 11.25 0 0 0-3.56 21.92c.56.1.77-.24.77-.54v-2.1c-3.13.68-3.79-1.33-3.79-1.33-.51-1.3-1.25-1.65-1.25-1.65-1.02-.7.08-.68.08-.68 1.13.08 1.72 1.16 1.72 1.16 1 1.72 2.64 1.22 3.28.93.1-.73.39-1.22.71-1.5-2.5-.28-5.13-1.25-5.13-5.56 0-1.23.44-2.23 1.16-3.02-.12-.28-.5-1.43.11-2.98 0 0 .95-.3 3.09 1.16a10.75 10.75 0 0 1 5.62 0c2.15-1.46 3.09-1.16 3.09-1.16.62 1.55.23 2.7.12 2.98.72.79 1.15 1.8 1.15 3.02 0 4.32-2.64 5.28-5.15 5.56.4.35.76 1.04.76 2.1v3.07c0 .3.2.65.77.54A11.25 11.25 0 0 0 12 .75Z"></path></svg>
-}
-
-templ BranchIcon() {
-	<svg class="branch-icon" aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="4" r="2"></circle><circle cx="6" cy="20" r="2"></circle><circle cx="18" cy="6" r="2"></circle><path d="M6 6v12M18 8v2a4 4 0 0 1-4 4H6"></path></svg>
-}
-
-// ArrowUpRight uses the shared stroke style for outward-pointing link icons.
-templ ArrowUpRight() {
-	<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"></path></svg>
-}
-
-// ArrowLeft matches Arrow for previous-page navigation.
-templ ArrowLeft() {
-	<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 5l-7 7 7 7"></path></svg>
 }

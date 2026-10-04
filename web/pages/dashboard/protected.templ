@@ -1,24 +1,39 @@
 package dashboard
 
 import (
- "github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components"
 	"github.com/ajaykathwatee/previa/web/components/button"
-	"github.com/ajaykathwatee/previa/web/components/card"
 	"github.com/ajaykathwatee/previa/web/layouts"
 )
 
 templ Protected(username string, csrfToken string) {
 	@layouts.App("Session", username, csrfToken, components.NavNone) {
-		@card.Card(card.Props{Class: "mx-auto max-w-lg"}) {
-			@card.Header() {
-				<h1 class="text-2xl font-semibold tracking-tight">Your session</h1>
-				<p class="text-muted-foreground">Signed in as { username }</p>
-			}
-			@card.Content() {
+		<section class="session-card panel" aria-labelledby="session-title">
+			<div class="session-identity">
+				<span class="user-avatar user-avatar-xl" aria-hidden="true">{ components.Initial(username) }</span>
+				<div>
+					<span class="eyebrow">Your session</span>
+					<h1 id="session-title">{ username }</h1>
+					<p class="text-muted-foreground">Signed in as { username }</p>
+				</div>
+			</div>
+			<dl class="session-facts">
+				<div>
+					<dt>Identity provider</dt>
+					<dd>
+						@components.GitHubMark()
+						GitHub OAuth
+					</dd>
+				</div>
+				<div><dt>Repository access</dt><dd>Granted separately through the GitHub App</dd></div>
+				<div><dt>GitHub session</dt><dd>Unaffected when you log out of Previa</dd></div>
+			</dl>
+			<div class="session-actions">
 				@button.Button(button.Props{Href: "/dashboard", Variant: button.VariantOutline}) {
+					@components.ArrowLeft()
 					Back to dashboard
 				}
-			}
-		}
+			</div>
+		</section>
 	}
 }

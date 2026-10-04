@@ -30,6 +30,8 @@ uses a test-only authenticated presentation path, never a production route.
 Repository/PR cases also verify dedicated-page navigation, filter-preserving
 breadcrumbs/history, aligned desktop controls, legacy bookmarks, failed searches,
 Automatic confirmation/cancel/retry and in-place sync on list/detail pages.
+Command palette keyboard access, filtering, navigation and logout hand-off, and
+the persisted light/dark theme toggle are also covered.
 
 To capture ignored screenshots:
 

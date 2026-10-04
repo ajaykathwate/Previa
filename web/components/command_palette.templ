@@ -1,0 +1,62 @@
+package components
+
+// CommandPalette is a keyboard shortcut layer over ordinary links. Every entry
+// also exists in the sidebar, so the workspace stays usable without JavaScript.
+templ CommandPalette() {
+	<dialog id="command-palette" class="command-palette" aria-label="Command menu" data-command-palette>
+		<div class="command-search">
+			@SearchIcon()
+			<input id="command-input" type="text" role="combobox" aria-expanded="true" aria-controls="command-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search pages and actions…" aria-label="Search pages and actions"/>
+			<kbd class="kbd">Esc</kbd>
+		</div>
+		<div id="command-list" class="command-list" role="listbox" aria-label="Commands">
+			<div class="command-group" role="group" aria-label="Navigate">
+				<p class="command-group-label" aria-hidden="true">Navigate</p>
+				@CommandItem("cmd-overview", "/dashboard", "", "Overview", "Workspace summary", "home dashboard summary", OverviewIcon())
+				@CommandItem("cmd-repositories", "/repositories", "", "Repositories", "Connected sources", "repos sources github", RepositoryIcon())
+				@CommandItem("cmd-builds", "/builds", "", "Builds", "Current build requests", "build intents queue", BuildIcon())
+				@CommandItem("cmd-environments", "/environments", "", "Environments", "Deployment state", "previews deployments", EnvironmentIcon())
+				@CommandItem("cmd-tools", "/developer-tools", "", "Developer tools", "Queue diagnostics", "ping river worker queue", TerminalIcon())
+			</div>
+			<div class="command-group" role="group" aria-label="Repository filters">
+				<p class="command-group-label" aria-hidden="true">Repository filters</p>
+				@CommandItem("cmd-repos-available", "/repositories?access=available", "", "Available repositories", "Access granted", "filter accessible", RepositoryIcon())
+				@CommandItem("cmd-repos-unavailable", "/repositories?access=unavailable", "", "Unavailable repositories", "Access removed or suspended", "filter revoked suspended", RepositoryIcon())
+				@CommandItem("cmd-repos-all", "/repositories?access=all", "", "All repositories", "Every linked source", "filter everything", RepositoryIcon())
+			</div>
+			<div class="command-group" role="group" aria-label="Account">
+				<p class="command-group-label" aria-hidden="true">Account</p>
+				@CommandItem("cmd-theme", "", "theme", "Switch colour theme", "Light or dark", "dark light mode appearance", SunIcon())
+				@CommandItem("cmd-session", "/protected", "", "View session", "Your GitHub identity", "account profile", UserIcon())
+				@CommandItem("cmd-home", "/", "", "Home page", "Public site", "landing marketing", HomeIcon())
+				@CommandItem("cmd-logout", "", "logout", "Log out…", "Confirm before ending", "sign out exit", LogoutIcon())
+			</div>
+		</div>
+		<p class="command-empty" data-command-empty hidden>No matching pages or actions.</p>
+		<footer class="command-footer" aria-hidden="true"><span><kbd class="kbd">↑</kbd><kbd class="kbd">↓</kbd> move</span><span><kbd class="kbd">↵</kbd> open</span><span><kbd class="kbd">Esc</kbd> close</span></footer>
+	</dialog>
+}
+
+// CommandItem is either a destination (href) or a named client action.
+templ CommandItem(id, href, action, label, hint, keywords string, icon templ.Component) {
+	<div
+		id={ id }
+		class="command-item"
+		role="option"
+		aria-selected="false"
+		data-command-item
+		data-keywords={ label + " " + hint + " " + keywords }
+		if href != "" {
+			data-href={ href }
+		}
+		if action != "" {
+			data-action={ action }
+		}
+	>
+		<span class="command-item-icon">
+			@icon
+		</span>
+		<span class="command-item-label">{ label }</span>
+		<span class="command-item-hint">{ hint }</span>
+	</div>
+}

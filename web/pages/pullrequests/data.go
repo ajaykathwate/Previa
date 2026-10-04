@@ -149,11 +149,23 @@ func (p Page) DirectoryFilters() map[string]string {
 	}
 	return values
 }
-func StateClass(state string) string {
-	if state == "open" {
-		return "available"
+// Tone maps a saved state to a presentation colour class; unknown or empty
+// states (for example "Not requested") stay neutral.
+func Tone(state string) string {
+	switch state {
+	case "open", "succeeded":
+		return "tone-ok"
+	case "queued", "running", "publishing", "pending", "checking":
+		return "tone-info"
+	case "conflicts", "tearing_down":
+		return "tone-warn"
+	case "failed":
+		return "tone-danger"
+	case "merged":
+		return "tone-merged"
+	default:
+		return "tone-neutral"
 	}
-	return "unavailable"
 }
 func TimeLabel(value string) string {
 	parsed, err := time.Parse(time.RFC3339, value)

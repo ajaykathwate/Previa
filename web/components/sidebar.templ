@@ -1,52 +1,77 @@
 package components
 
+// SidebarContent is shared by the desktop sidebar and the mobile drawer.
 templ SidebarContent(active NavItem) {
-	<div class="sidebar-label">WORKSPACE</div>
 	<nav aria-label="Workspace navigation" class="sidebar-nav">
-		@WorkspaceLink("/dashboard", "Overview", "◈", NavOverview, active)
-		@WorkspaceLink("/repositories", "Repositories", "⌘", NavRepositories, active)
-		@WorkspaceLink("/environments", "Environments", "◎", NavEnvironments, active)
-		@WorkspaceLink("/builds", "Builds", "↗", NavBuilds, active)
-		@WorkspaceLink("/developer-tools", "Developer tools", "↗", NavTools, active)
+		<div class="nav-group">
+			<p class="nav-group-label">Workspace</p>
+			@WorkspaceLink("/dashboard", "Overview", OverviewIcon(), NavOverview, active)
+			@WorkspaceLink("/repositories", "Repositories", RepositoryIcon(), NavRepositories, active)
+		</div>
+		<div class="nav-group">
+			<p class="nav-group-label">Delivery</p>
+			@WorkspaceLink("/builds", "Builds", BuildIcon(), NavBuilds, active)
+			@WorkspaceLink("/environments", "Environments", EnvironmentIcon(), NavEnvironments, active)
+		</div>
+		<div class="nav-group">
+			<p class="nav-group-label">System</p>
+			@WorkspaceLink("/developer-tools", "Developer tools", TerminalIcon(), NavTools, active)
+		</div>
 	</nav>
-	<div class="sidebar-note">
-		<span class="eyebrow">A little room to grow</span>
-		<p>One place for the work between a pull request and a merge.</p>
-		<a href="/#workflow">
-			Explore the vision
-			@Arrow()
-		</a>
+	<div class="nav-group nav-upcoming" aria-label="Coming next" role="group">
+		<p class="nav-group-label">Coming next</p>
+		<ul>
+			<li title="Live build logs: coming soon">
+				<span class="nav-icon">
+					@LogsIcon()
+				</span><span class="nav-label">Live logs</span><span class="soon-tag">Soon</span>
+			</li>
+			<li title="Preview secrets: coming soon">
+				<span class="nav-icon">
+					@KeyIcon()
+				</span><span class="nav-label">Secrets</span><span class="soon-tag">Soon</span>
+			</li>
+			<li title="Preview URLs: coming soon">
+				<span class="nav-icon">
+					@LinkIcon()
+				</span><span class="nav-label">Preview URLs</span><span class="soon-tag">Soon</span>
+			</li>
+		</ul>
 	</div>
 }
 
 templ Sidebar(active NavItem) {
-	<aside class="app-sidebar">
+	<aside class="app-sidebar" aria-label="Workspace">
 		<div class="sidebar-brand">
 			@Brand()
-			<span class="version-label">EARLY ACCESS</span>
+			<span class="version-label">Early access</span>
 		</div>
-		@SidebarContent(active)
-		<div class="sidebar-bottom"><span class="status-dot" aria-hidden="true"></span>Built to be yours.<span>Self-hosted by design</span></div>
+		<div class="sidebar-scroll">
+			@SidebarContent(active)
+		</div>
+		<div class="sidebar-bottom">
+			<button type="button" class="sidebar-command" data-command-open aria-haspopup="dialog" aria-controls="command-palette">
+				@SearchIcon()
+				<span class="nav-label">Quick jump</span>
+				<kbd class="kbd" data-shortcut-label>Ctrl K</kbd>
+			</button>
+			<p class="sidebar-status"><span class="status-dot" aria-hidden="true"></span><span class="nav-label">Self-hosted control plane</span></p>
+		</div>
 	</aside>
 }
 
 // WorkspaceLink renders identical desktop/mobile navigation with explicit selection.
-templ WorkspaceLink(href string, label string, symbol string, item NavItem, active NavItem) {
+templ WorkspaceLink(href string, label string, icon templ.Component, item NavItem, active NavItem) {
 	<a
 		href={ href }
+		class="nav-link"
+		title={ label }
 		if active==item {
 			aria-current="page"
 		}
 	>
-		<span class="nav-symbol" aria-hidden="true">
-			if symbol == "↗" {
-				@ArrowUpRight()
-			} else {
-				{ symbol }
-			}
-		</span>{ label }
-		if active==item {
-			<span class="active-dot" aria-hidden="true"></span>
-		}
+		<span class="nav-icon">
+			@icon
+		</span><span class="nav-label">{ label }</span>
 	</a>
 }

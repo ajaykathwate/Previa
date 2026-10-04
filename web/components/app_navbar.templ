@@ -2,28 +2,61 @@ package components
 
 import "strings"
 
+// Initial returns the avatar letter for a GitHub login.
+func Initial(username string) string {
+	return strings.ToUpper(string([]rune(username + "u")[0]))
+}
+
 templ AppNavbar(username string, title string, active NavItem) {
 	<header class="app-header">
-		<div class="app-breadcrumb"><span>Workspace</span><span aria-hidden="true">/</span><strong>{ title }</strong></div>
+		<details class="mobile-workspace-nav" data-mobile-nav>
+			<summary aria-label="Workspace navigation">
+				@MenuIcon()
+			</summary>
+			<div class="mobile-drawer">
+				<div class="mobile-drawer-brand">
+					@Brand()
+					<span class="version-label">Early access</span>
+				</div>
+				@SidebarContent(active)
+			</div>
+			<span class="mobile-drawer-backdrop" data-mobile-nav-close aria-hidden="true"></span>
+		</details>
+		<div class="app-breadcrumb"><span class="app-breadcrumb-root">Workspace</span><span class="app-breadcrumb-sep" aria-hidden="true">/</span><strong>{ title }</strong></div>
 		<div class="app-header-actions">
-			<a class="back-to-site" href="/">
-				Home page
-				@Arrow()
-			</a>
+			<button type="button" class="command-trigger" data-command-open aria-haspopup="dialog" aria-controls="command-palette">
+				@SearchIcon()
+				<span class="command-trigger-label">Search or jump to…</span>
+				<kbd class="kbd" data-shortcut-label>Ctrl K</kbd>
+			</button>
+			@ThemeToggle()
 			<details class="account-menu" data-menu>
-				<summary aria-label={ "Account menu for " + username }><span class="user-avatar">{ strings.ToUpper(string([]rune(username + "u")[0])) }</span><span class="account-name">{ username }</span><span class="account-chevron" aria-hidden="true">⌄</span></summary>
+				<summary aria-label={ "Account menu for " + username }>
+					<span class="user-avatar" aria-hidden="true">{ Initial(username) }</span>
+					<span class="account-name">{ username }</span>
+					<span class="account-chevron">
+						@ChevronDownIcon()
+					</span>
+				</summary>
 				<div class="account-popover">
-					<span class="eyebrow">SIGNED IN WITH GITHUB</span><strong>{ username }</strong><a href="/protected">View session</a>
-					<button type="button" commandfor="logout-confirmation" command="show-modal" data-open-dialog="logout-confirmation" aria-haspopup="dialog" aria-controls="logout-confirmation">
+					<div class="account-identity">
+						<span class="user-avatar user-avatar-lg" aria-hidden="true">{ Initial(username) }</span>
+						<div><strong>{ username }</strong><span>Signed in with GitHub</span></div>
+					</div>
+					<a href="/protected">
+						@UserIcon()
+						View session
+					</a>
+					<a href="/">
+						@HomeIcon()
+						Home page
+					</a>
+					<button type="button" class="account-logout" commandfor="logout-confirmation" command="show-modal" data-open-dialog="logout-confirmation" aria-haspopup="dialog" aria-controls="logout-confirmation">
+						@LogoutIcon()
 						Log out
-						@Arrow()
 					</button>
 				</div>
 			</details>
 		</div>
 	</header>
-	<details class="mobile-workspace-nav" data-mobile-nav>
-		<summary>Workspace navigation <span aria-hidden="true">⌄</span></summary>
-		@SidebarContent(active)
-	</details>
 }

@@ -20,47 +20,65 @@ templ Panel(p Page, csrf string) {
 	<div class="pr-workspace" data-selected-repo={ strconv.FormatInt(p.RepoID, 10) }>
 		<header class="pr-panel-heading">
 			<div class="pr-heading-text">
-				<nav aria-label="Repository location">
+				<nav aria-label="Repository location" class="pr-location">
 					<a href={ templ.SafeURL(p.CloseURL()) } class="text-link pr-directory-link">
 						@components.ArrowLeft()
 						Repositories
 					</a>
-					<h1 tabindex="-1" data-detail-heading class="pr-breadcrumb">
-						<a href={ templ.SafeURL(p.CloseURL()) } title={ p.Owner() }>{ p.Owner() }</a>
-						<span aria-hidden="true">/</span>
-						<a
-							href={ templ.SafeURL(p.PageURL(p.Number)) }
-							title={ p.RepositoryName() }
-							if p.SelectedPR==nil {
-								aria-current="page"
+					<div class="pr-title-row">
+						<span class="pr-repo-icon" aria-hidden="true">
+							if p.SelectedPR!=nil {
+								@components.PullRequestIcon()
+							} else {
+								@components.RepositoryIcon()
 							}
-						>{ p.RepositoryName() }</a>
-						if p.SelectedPR!=nil {
-							<span aria-hidden="true">/</span><span aria-current="page" class="pr-current-crumb" title={ p.Selected().Title }>#{ strconv.Itoa(int(p.Selected().Number)) } · { p.Selected().Title }</span>
-						}
-					</h1>
+						</span>
+						<h1 tabindex="-1" data-detail-heading class="pr-breadcrumb">
+							<a href={ templ.SafeURL(p.CloseURL()) } title={ p.Owner() }>{ p.Owner() }</a>
+							<span aria-hidden="true">/</span>
+							<a
+								href={ templ.SafeURL(p.PageURL(p.Number)) }
+								title={ p.RepositoryName() }
+								if p.SelectedPR==nil {
+									aria-current="page"
+								}
+							>{ p.RepositoryName() }</a>
+							if p.SelectedPR!=nil {
+								<span aria-hidden="true">/</span><span aria-current="page" class="pr-current-crumb" title={ p.Selected().Title }>#{ strconv.Itoa(int(p.Selected().Number)) } · { p.Selected().Title }</span>
+							}
+						</h1>
+					</div>
 				</nav>
 				<p class="pr-summary" role="status">
-					Last synced ·
-					if p.LastRefresh!="" {
-						<time datetime={ p.LastRefresh }>{ TimeLabel(p.LastRefresh) }</time>
-					} else {
-						<span>Never</span>
-					}
+					<span class="pr-summary-item">
+						@components.ClockIcon()
+						<span>
+							Last synced ·
+							if p.LastRefresh!="" {
+								<time datetime={ p.LastRefresh }>{ TimeLabel(p.LastRefresh) }</time>
+							} else {
+								<span>Never</span>
+							}
+						</span>
+					</span>
+					<span class="pr-summary-item pr-mode">
+						@components.BuildIcon()
+						<span>{ Label(p.Mode) } builds</span>
+					</span>
 					if !p.Available {
-						<span class="sync-state">Repository unavailable</span>
+						<span class="sync-state tone-neutral">Repository unavailable</span>
 					} else if !p.DiscoveryEnabled {
-						<span class="sync-state">Sync not configured</span>
+						<span class="sync-state tone-neutral">Sync not configured</span>
 					}
 					if p.SyncState=="queued" || p.SyncState=="syncing" {
-						<span class="sync-state" hx-get={ p.CurrentURL() } hx-trigger="every 3s" hx-target="#repository-detail" hx-sync="#repository-detail:drop">Syncing</span>
+						<span class="sync-state tone-info is-syncing" hx-get={ p.CurrentURL() } hx-trigger="every 3s" hx-target="#repository-detail" hx-sync="#repository-detail:drop">Syncing</span>
 					} else if p.LiveStatus() {
-                        <span class="sr-only" hx-get={ p.CurrentURL() } hx-trigger="every 3s" hx-target="#repository-detail" hx-sync="#repository-detail:drop">Refresh PR status</span>
-                        if p.SyncState=="failed" {
-                          <span class="sync-state sync-failed" title={ p.SyncMessage }>Sync failed</span>
-                        }
-                    } else if p.SyncState=="failed" {
-						<span class="sync-state sync-failed" title={ p.SyncMessage }>Sync failed</span>
+						<span class="sr-only" hx-get={ p.CurrentURL() } hx-trigger="every 3s" hx-target="#repository-detail" hx-sync="#repository-detail:drop">Refresh PR status</span>
+						if p.SyncState=="failed" {
+							<span class="sync-state sync-failed tone-danger" title={ p.SyncMessage }>Sync failed</span>
+						}
+					} else if p.SyncState=="failed" {
+						<span class="sync-state sync-failed tone-danger" title={ p.SyncMessage }>Sync failed</span>
 					}
 				</p>
 			</div>
@@ -68,7 +86,8 @@ templ Panel(p Page, csrf string) {
 				<div class="pr-header-actions">
 					<form method="post" action={ RepoURL(p.RepoID) + "/refresh" } hx-post={ RepoURL(p.RepoID) + "/refresh" } hx-target="#repository-detail" hx-sync="#repository-detail:replace">
 						<input type="hidden" name="csrf_token" value={ csrf }/><input type="hidden" name="workspace_query" value={ p.Query() }/>
-						@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline, Disabled: !p.Available || !p.DiscoveryEnabled || p.SyncState == "queued" || p.SyncState == "syncing"}) {
+						@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline, Class: "sync-button", Disabled: !p.Available || !p.DiscoveryEnabled || p.SyncState == "queued" || p.SyncState == "syncing"}) {
+							@components.SyncIcon()
 							Sync Pull Requests
 						}
 					</form>
@@ -79,13 +98,27 @@ templ Panel(p Page, csrf string) {
 		if p.SelectedPR!=nil {
 			@PRDetail(p, p.Selected())
 		} else {
+			<p class="policy-hint">
+				@components.InfoIcon()
+				if p.Mode=="automatic" {
+					<span><strong>Automatic mode.</strong> New commits on open pull requests schedule work after five quiet minutes. Existing pull requests are not bulk-built.</span>
+				} else {
+					<span><strong>Manual mode.</strong> Pull request events update tracking only. Nothing builds without an explicit request.</span>
+				}
+			</p>
 			<section class="workspace-panel repository-browser" aria-label="Pull request browser">
 				<form id="pull-request-filters" method="get" action={ RepoURL(p.RepoID) } class="repository-toolbar" role="search" hx-get={ RepoURL(p.RepoID) } hx-trigger="submit, input delay:300ms from:#pull-request-search, change from:.pr-state-option" hx-target="#pull-request-results" hx-sync="#repository-detail:replace" hx-replace-url="true" hx-request='{"timeout":10000}' data-repository-search="pull requests">
 					@ContextFields(p)
-					<div class="repository-search"><label for="pull-request-search">Find a pull request</label><input id="pull-request-search" type="search" name="pr_q" value={ p.Search } maxlength="100" placeholder="Title, number, author or branch"/></div>
+					<div class="repository-search search-field">
+						<label for="pull-request-search" class="sr-only">Find a pull request</label>
+						<span class="search-field-icon">
+							@components.SearchIcon()
+						</span>
+						<input id="pull-request-search" type="search" name="pr_q" value={ p.Search } maxlength="100" placeholder="Search title, number, author or branch" autocomplete="off"/>
+					</div>
 					<fieldset class="repository-access">
-						<legend>State</legend>
-						<div class="repository-access-tabs">
+						<legend class="sr-only">State</legend>
+						<div class="repository-access-tabs segmented">
 							for _,state:=range []string{"open","closed","merged","all"} {
 								<label><input class="sr-only pr-state-option" type="radio" name="pr_state" value={ state } checked?={ p.State==state }/><span>{ Label(state) }</span></label>
 							}
@@ -150,28 +183,42 @@ templ PolicyForm(p Page, csrf string, modal bool) {
 templ Results(p Page) {
 	<div class="repository-table-scroll" tabindex="0" role="region" aria-label="Pull request list">
 		if len(p.Rows)==0 {
-			<div class="repository-empty"><h3>No pull requests in this view</h3></div>
+			<div class="repository-empty">
+				<span class="empty-source-icon" aria-hidden="true">
+					@components.PullRequestIcon()
+				</span>
+				<h3>No pull requests in this view</h3>
+				<p>Try another state or search. Sync Pull Requests refreshes what Previa knows from GitHub.</p>
+			</div>
 		} else {
 			<table class="pr-table">
 				<thead><tr><th>Pull request</th><th>Head commit</th><th>State</th><th>Latest request</th></tr></thead>
 				<tbody>
 					for _,pr:=range p.Rows {
 						<tr>
-							<td>
-								<a href={ templ.SafeURL(p.DetailURL(pr.Number)) }>#{ strconv.Itoa(int(pr.Number)) } · { pr.Title }</a>
-								<small>
-									{ pr.Author } · { pr.Branch }
-									if pr.Fork {
-										<span>· Fork</span>
-									}
-									if pr.NeedsRefresh {
-										<span>· Refresh required</span>
-									}
-								</small>
+							<td class="pr-cell-main">
+								<div class="pr-cell-wrap">
+									<span class={ "pr-state-icon", Tone(pr.State) } aria-hidden="true">
+										@components.PullRequestIcon()
+									</span>
+									<div class="pr-cell-text">
+										<a href={ templ.SafeURL(p.DetailURL(pr.Number)) }>#{ strconv.Itoa(int(pr.Number)) } · { pr.Title }</a>
+										<small>
+											<span>{ pr.Author }</span>
+											<code class="branch-chip">{ pr.Branch }</code>
+											if pr.Fork {
+												<span class="meta-flag">· Fork</span>
+											}
+											if pr.NeedsRefresh {
+												<span class="meta-flag tone-warn">· Refresh required</span>
+											}
+										</small>
+									</div>
+								</div>
 							</td>
-							<td><code>{ Short(pr.SHA) }</code></td>
-							<td><span class={ "repository-status", StateClass(pr.State) }>{ Label(pr.State) }</span></td>
-							<td>{ Label(pr.Build) }</td>
+							<td class="pr-cell-sha" data-label="Head"><code class="sha">{ Short(pr.SHA) }</code></td>
+							<td class="pr-cell-state" data-label="State"><span class={ "repository-status", "badge", Tone(pr.State) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.State) }</span></td>
+							<td class="pr-cell-build" data-label="Latest request"><span class={ "badge", "badge-quiet", Tone(pr.Build) }>{ Label(pr.Build) }</span></td>
 						</tr>
 					}
 				</tbody>
@@ -182,12 +229,18 @@ templ Results(p Page) {
 		<p role="status" aria-live="polite">
 			{ strconv.FormatInt(p.Total,10) } pull requests · Page { strconv.FormatInt(p.Number,10) } of { strconv.FormatInt(p.Pages,10) }
 		</p>
-		<nav aria-label="Pull request pages">
+		<nav aria-label="Pull request pages" class="pager">
 			if p.Number>1 {
-				<a href={ templ.SafeURL(p.PageURL(p.Number - 1)) } hx-get={ p.PageURL(p.Number - 1) } hx-target="#pull-request-results" hx-sync="#repository-detail:replace" hx-push-url="true" rel="prev">Previous</a>
+				<a href={ templ.SafeURL(p.PageURL(p.Number - 1)) } hx-get={ p.PageURL(p.Number - 1) } hx-target="#pull-request-results" hx-sync="#repository-detail:replace" hx-push-url="true" rel="prev">
+					@components.ArrowLeft()
+					Previous
+				</a>
 			}
 			if p.Number<p.Pages {
-				<a href={ templ.SafeURL(p.PageURL(p.Number + 1)) } hx-get={ p.PageURL(p.Number + 1) } hx-target="#pull-request-results" hx-sync="#repository-detail:replace" hx-push-url="true" rel="next">Next</a>
+				<a href={ templ.SafeURL(p.PageURL(p.Number + 1)) } hx-get={ p.PageURL(p.Number + 1) } hx-target="#pull-request-results" hx-sync="#repository-detail:replace" hx-push-url="true" rel="next">
+					Next
+					@components.Arrow()
+				</a>
 			}
 		</nav>
 	</footer>
@@ -195,70 +248,118 @@ templ Results(p Page) {
 
 templ PRDetail(p Page, pr PR) {
 	<div class="pr-detail-content">
-		<a href={ templ.SafeURL(p.PageURL(p.Number)) } class="text-link">
-			@components.ArrowLeft()
-			Back to pull requests
-		</a>
 		<header class="pr-detail-heading">
-			<p>
+			<a href={ templ.SafeURL(p.PageURL(p.Number)) } class="text-link back-link">
+				@components.ArrowLeft()
+				Back to pull requests
+			</a>
+			<p class="pr-meta">
+				<span class={ "badge", Tone(pr.State) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.State) }</span>
 				if pr.Author!="" {
-					<span>{ pr.Author } · </span>
+					<span class="pr-meta-item"><span class="user-avatar user-avatar-sm" aria-hidden="true">{ components.Initial(pr.Author) }</span>{ pr.Author }</span>
 				}
 				if pr.Branch!="" {
-					<span>{ pr.Branch } · </span>
+					<code class="branch-chip">
+						@components.BranchIcon()
+						{ pr.Branch }
+					</code>
 				}
-				{ Label(pr.State) }
 				if pr.Fork {
-					<span>· Fork</span>
+					<span class="badge tone-warn">Fork</span>
 				}
 			</p>
 		</header>
 		if pr.State=="conflicts" {
- <p class="connection-notice">Build refused: resolve merge conflicts and push a new commit first.</p>
- } else if pr.State=="checking" {
- <p class="connection-notice">Build paused: GitHub is checking mergeability. Wait for the check or sync pull requests again.</p>
- }
- if pr.NeedsRefresh {
-			<p class="connection-notice">Conflicting upstream observations need a fresh GitHub snapshot. Refresh this repository before requesting work.</p>
+			<p class="connection-notice tone-warn">
+				@components.AlertIcon()
+				Build refused: resolve merge conflicts and push a new commit first.
+			</p>
+		} else if pr.State=="checking" {
+			<p class="connection-notice tone-info">
+				@components.ClockIcon()
+				Build paused: GitHub is checking mergeability. Wait for the check or sync pull requests again.
+			</p>
 		}
-		<div class="pr-detail-grid">
-			<section class="workspace-panel">
-				<h4>Latest observed commit</h4><code>{ pr.SHA }</code>
-				<p>
-					{ Label(pr.State) }
-				</p>
+		if pr.NeedsRefresh {
+			<p class="connection-notice tone-warn">
+				@components.AlertIcon()
+				Conflicting upstream observations need a fresh GitHub snapshot. Refresh this repository before requesting work.
+			</p>
+		}
+		<div class="pr-detail-grid lifecycle" role="list" aria-label="Commit lifecycle">
+			<section class="workspace-panel lifecycle-step" role="listitem">
+				<header>
+					<span class="lifecycle-index" aria-hidden="true">01</span>
+					<span class="lifecycle-icon" aria-hidden="true">
+						@components.CommitIcon()
+					</span>
+				</header>
+				<h2>Latest observed commit</h2>
+				<code class="sha sha-full">{ pr.SHA }</code>
+				<p><span class={ "badge", Tone(pr.State) }>{ Label(pr.State) }</span></p>
 			</section>
-			<section class="workspace-panel">
-				<h4>Current build request</h4>
+			<section class="workspace-panel lifecycle-step" role="listitem">
+				<header>
+					<span class="lifecycle-index" aria-hidden="true">02</span>
+					<span class="lifecycle-icon" aria-hidden="true">
+						@components.BuildIcon()
+					</span>
+				</header>
+				<h2>Current build request</h2>
+				<code class="sha">{ Short(pr.RequestedSHA) }</code>
 				<p>
-					{ Label(pr.Build) }
-				</p><code>{ Short(pr.RequestedSHA) }</code>
+					<span class={ "badge", Tone(pr.Build) }>{ Label(pr.Build) }</span>
+				</p>
 				if pr.Deadline!="" && pr.Build=="pending" {
-					<p>Eligible after <time datetime={ pr.Deadline }>{ TimeLabel(pr.Deadline) }</time>.</p>
+					<p class="lifecycle-note">Eligible after <time datetime={ pr.Deadline }>{ TimeLabel(pr.Deadline) }</time>.</p>
 				}
 			</section>
-			<section class="workspace-panel">
-				<h4>Deployed preview</h4>
+			<section class="workspace-panel lifecycle-step" role="listitem">
+				<header>
+					<span class="lifecycle-index" aria-hidden="true">03</span>
+					<span class="lifecycle-icon" aria-hidden="true">
+						@components.EnvironmentIcon()
+					</span>
+				</header>
+				<h2>Deployed preview</h2>
+				<code class="sha">{ Short(pr.DeployedSHA) }</code>
 				<p>
-					{ Label(pr.Environment) }
-				</p><code>{ Short(pr.DeployedSHA) }</code>
+					<span class={ "badge", Tone(pr.Environment) }>{ Label(pr.Environment) }</span>
+				</p>
 				if pr.DeployedSHA!="" && pr.DeployedSHA!=pr.SHA {
-					<p>This deployment reflects an older commit.</p>
+					<p class="lifecycle-note tone-warn">This deployment reflects an older commit.</p>
 				}
 			</section>
 		</div>
 		<div class="pr-detail-actions">
 			@button.Button(button.Props{Disabled: true, Attributes: templ.Attributes{"aria-describedby": "build-unavailable"}}) {
+				@components.BuildIcon()
 				Build latest commit
 			}
 			if pr.URL!="" {
-				<a class="text-link" href={ templ.SafeURL(pr.URL) } target="_blank" rel="noopener noreferrer">
+				<a class="text-link github-link" href={ templ.SafeURL(pr.URL) } target="_blank" rel="noopener noreferrer">
 					View on GitHub
 					@components.ArrowUpRight()
 				</a>
 			}
+			<p id="build-unavailable" class="repository-help">Build execution, runtime health, live logs and teardown controls are not available yet.</p>
 		</div>
-		<p id="build-unavailable" class="repository-help">Build execution, runtime health, live logs and teardown controls are not available yet.</p>
+		<section class="upcoming-grid" aria-labelledby="upcoming-title">
+			<h2 id="upcoming-title" class="upcoming-title">Coming with build execution</h2>
+			@upcoming("Live build logs", "Streamed output for this pull request's current build.", components.LogsIcon())
+			@upcoming("Preview URL and health", "A routed subdomain with readiness checks.", components.LinkIcon())
+			@upcoming("Teardown control", "Remove the preview on demand, before it expires.", components.EyeIcon())
+		</section>
+	</div>
+}
+
+templ upcoming(title, detail string, icon templ.Component) {
+	<div class="upcoming-card">
+		<span class="upcoming-icon" aria-hidden="true">
+			@icon
+		</span>
+		<div><strong>{ title }</strong><span>{ detail }</span></div>
+		<span class="soon-tag">Soon</span>
 	</div>
 }
 
@@ -272,10 +373,10 @@ templ ActivityIndex(username, csrf string, p Activity) {
 		}
 	}}
 	@layouts.App(title, username, csrf, nav) {
-		<div class="repository-workspace">
-			<header class="workspace-page-heading">
-				<div>
-					<span class="eyebrow">YOUR WORKSPACE</span>
+		<div class="repository-workspace activity-page">
+			<header class="page-header workspace-page-heading">
+				<div class="page-header-text">
+					<span class="eyebrow">Delivery</span>
 					<h1>{ title }</h1>
 					if p.Environments {
 						<p>Persisted deployment state. Runtime health and public routing are not connected yet.</p>
@@ -283,18 +384,59 @@ templ ActivityIndex(username, csrf string, p Activity) {
 						<p>Current/latest authorized requests, not a permanent attempt history. Execution is not available yet.</p>
 					}
 				</div>
-				<a class="text-link" href="/repositories">
-					Repositories
-					@components.ArrowUpRight()
-				</a>
+				<nav class="segmented segmented-nav" aria-label="Delivery views">
+					<a
+						href="/builds"
+						if !p.Environments {
+							aria-current="page"
+						}
+					>
+						@components.BuildIcon()
+						<span>Builds</span>
+					</a>
+					<a
+						href="/environments"
+						if p.Environments {
+							aria-current="page"
+						}
+					>
+						@components.EnvironmentIcon()
+						<span>Environments</span>
+					</a>
+				</nav>
 			</header>
 			<section class="workspace-panel repository-browser">
 				<div class="repository-results">
 					<div class="repository-table-scroll" tabindex="0" role="region" aria-label={ title + " list" }>
 						if len(p.Rows)==0 {
-							<div class="repository-empty"><h2>No { title } to show.</h2><p>Only real saved records appear here. Connecting or discovering a repository does not create a deployment.</p></div>
+							<div class="repository-empty activity-empty">
+								<span class="empty-source-icon" aria-hidden="true">
+									if p.Environments {
+										@components.EnvironmentIcon()
+									} else {
+										@components.BuildIcon()
+									}
+								</span>
+								<h2>No { title } to show.</h2>
+								<p>Only real saved records appear here. Connecting or discovering a repository does not create a deployment.</p>
+								<ul class="empty-explainer">
+									if p.Environments {
+										<li><strong>Status</strong><span>Deployment lifecycle per pull request</span></li>
+										<li><strong>Deployed SHA</strong><span>The commit a preview is serving</span></li>
+										<li><strong>URL, health, expiry</strong><span class="soon-tag">Soon</span></li>
+									} else {
+										<li><strong>Status</strong><span>Waiting, queued, running and outcome</span></li>
+										<li><strong>Requested SHA</strong><span>The exact commit captured for work</span></li>
+										<li><strong>Live logs</strong><span class="soon-tag">Soon</span></li>
+									}
+								</ul>
+								<a class="text-link" href="/repositories">
+									Browse repositories
+									@components.Arrow()
+								</a>
+							</div>
 						} else {
-							<table class="pr-table">
+							<table class="pr-table activity-table">
 								<thead>
 									<tr>
 										<th>Repository / PR</th>
@@ -312,26 +454,44 @@ templ ActivityIndex(username, csrf string, p Activity) {
 								<tbody>
 									for _,row:=range p.Rows {
 										<tr>
-											<td>
-												<a href={ PRURL(row.RepoID, row.Number) }>{ row.Name } · #{ strconv.Itoa(int(row.Number)) }</a>
-												if !row.Available {
-													<small>Access unavailable</small>
-												}
+											<td class="pr-cell-main">
+												<div class="pr-cell-wrap">
+													<span class={ "pr-state-icon", Tone(row.State) } aria-hidden="true">
+														if p.Environments {
+															@components.EnvironmentIcon()
+														} else {
+															@components.BuildIcon()
+														}
+													</span>
+													<div class="pr-cell-text">
+														<a href={ PRURL(row.RepoID, row.Number) }>{ row.Name } · #{ strconv.Itoa(int(row.Number)) }</a>
+														if !row.Available {
+															<small>Access unavailable</small>
+														}
+													</div>
+												</div>
 											</td>
-											<td>
-												{ Label(row.State) }
+											<td class="pr-cell-state" data-label="Status">
+												<span class={ "badge", Tone(row.State) }><span class="badge-dot" aria-hidden="true"></span>{ Label(row.State) }</span>
 												if !p.Environments&&row.State=="pending" {
 													<small>
 														Eligible: { row.Deadline }
 													</small>
 												}
 											</td>
-											<td><code>{ Short(row.Latest) }</code></td>
-											<td>
+											<td class="pr-cell-sha" data-label="Latest"><code class="sha">{ Short(row.Latest) }</code></td>
+											<td
+												class="pr-cell-sha"
 												if p.Environments {
-													<code>{ Short(row.Deployed) }</code>
+													data-label="Deployed"
 												} else {
-													<code>{ Short(row.Requested) }</code>
+													data-label="Requested"
+												}
+											>
+												if p.Environments {
+													<code class="sha">{ Short(row.Deployed) }</code>
+												} else {
+													<code class="sha">{ Short(row.Requested) }</code>
 												}
 											</td>
 										</tr>
@@ -344,12 +504,18 @@ templ ActivityIndex(username, csrf string, p Activity) {
 						<p>
 							{ strconv.FormatInt(p.Total,10) } records · Page { strconv.FormatInt(p.Number,10) } of { strconv.FormatInt(p.Pages,10) }
 						</p>
-						<nav aria-label={ title + " pages" }>
+						<nav aria-label={ title + " pages" } class="pager">
 							if p.Number>1 {
-								<a href={ templ.SafeURL(p.PageURL(p.Number - 1)) } rel="prev">Previous</a>
+								<a href={ templ.SafeURL(p.PageURL(p.Number - 1)) } rel="prev">
+									@components.ArrowLeft()
+									Previous
+								</a>
 							}
 							if p.Number<p.Pages {
-								<a href={ templ.SafeURL(p.PageURL(p.Number + 1)) } rel="next">Next</a>
+								<a href={ templ.SafeURL(p.PageURL(p.Number + 1)) } rel="next">
+									Next
+									@components.Arrow()
+								</a>
 							}
 						</nav>
 					</footer>

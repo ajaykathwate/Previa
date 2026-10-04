@@ -10,143 +10,234 @@ templ Index(loggedIn bool) {
 	@layouts.Document("A clearer view of what's next") {
 		@components.Navbar(loggedIn)
 		<main id="content" tabindex="-1" class="marketing">
-			<section class="site-container hero" aria-labelledby="hero-title">
-				<div class="hero-copy">
-					<div class="hero-eyebrow reveal"><span class="tiny-orbit" aria-hidden="true"></span>A fresh perspective on pull requests</div>
-					<h1 id="hero-title" class="hero-title reveal delay-1">Review the branch.<br/>See the <em>possibility.</em></h1>
-					<p class="hero-description reveal delay-2">Code tells part of the story. Previa is being built to give every pull request a shared place to come to life—on infrastructure you control.</p>
-					<div class="hero-actions reveal delay-3">
-						if loggedIn {
-							@button.Button(button.Props{Href: "/dashboard", Class: "hero-cta", Size: button.SizeLg}) {
-								Open your dashboard
+			<section class="hero" aria-labelledby="hero-title">
+				<div class="hero-backdrop" aria-hidden="true"><span class="hero-grid"></span><span class="hero-glow"></span></div>
+				<div class="site-container hero-inner">
+					<div class="hero-copy">
+						<a href="#status" class="hero-pill reveal"><span class="pulse-dot" aria-hidden="true"></span>Early access · GitHub sign-in is available today</a>
+						<h1 id="hero-title" class="hero-title reveal delay-1">Review the branch.<br/><span class="hero-title-accent">See it running.</span></h1>
+						<p class="hero-description reveal delay-2">Previa is a self-hosted control plane that gives every GitHub pull request its own isolated preview, on infrastructure you control. Repository linking and pull request tracking work today. Builds and live preview URLs are next.</p>
+						<div class="hero-actions reveal delay-3">
+							@cta(loggedIn)
+							<a href="#workflow" class="text-link hero-secondary">
+								Explore the workflow
 								@components.Arrow()
-							}
-						} else {
-							@button.Button(button.Props{Href: "/auth/github/login", Class: "hero-cta", Size: button.SizeLg}) {
-								@components.GitHubMark()
-								Get started with GitHub
-								@components.Arrow()
-							}
-						}
-						<a href="#workflow" class="text-link">Explore the workflow <span aria-hidden="true">↘</span></a>
-					</div>
-					<p class="hero-note reveal delay-3">Early access · GitHub sign-in is available today.</p>
-				</div>
-				<figure class="preview-art reveal delay-2" aria-label="An illustration of a pull request becoming a shared preview">
-					<div class="art-grid" aria-hidden="true"></div>
-					<div class="art-orbit orbit-one" aria-hidden="true"></div>
-					<div class="art-orbit orbit-two" aria-hidden="true"></div>
-					<div class="branch-tag">
-						<span class="branch-symbol" aria-hidden="true">
-							@components.BranchIcon()
-						</span>your next pull request<span class="branch-tag-dot" aria-hidden="true"></span>
-					</div>
-					<div class="preview-layer layer-back" aria-hidden="true"></div>
-					<div class="preview-layer layer-middle" aria-hidden="true"></div>
-					<div class="preview-window">
-						<div class="preview-window-bar">
-							<span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>the bigger picture</span>
-							<span aria-hidden="true">
-								@components.ArrowUpRight()
-							</span>
+							</a>
 						</div>
-						<div class="preview-window-content"><div class="mini-brand" aria-hidden="true">p.</div><p>One branch.<br/><em>A shared perspective.</em></p><div class="art-line" aria-hidden="true"></div><div class="art-line short" aria-hidden="true"></div><span class="art-button">See it. Discuss it. Refine it.</span></div>
+						<ul class="hero-facts reveal delay-3" aria-label="Product direction">
+							<li>
+								@components.ServerIcon()
+								Self-hosted
+							</li>
+							<li>
+								@components.PullRequestIcon()
+								One preview per PR
+							</li>
+							<li>
+								@components.ShieldIcon()
+								Isolated by design
+							</li>
+						</ul>
 					</div>
-					<div class="review-tag">
-						<span class="review-tag-icon" aria-hidden="true">
-							@components.ArrowUpRight()
-						</span>
-						<div><strong>Beyond the diff</strong><span>Made for the conversation.</span></div>
-					</div>
-					<figcaption><span class="art-caption-line" aria-hidden="true"></span>WORKFLOW CONCEPT · NOT A LIVE PREVIEW</figcaption>
-				</figure>
+					<figure class="preview-art reveal delay-2" aria-label="An illustration of a pull request becoming a shared preview">
+						<div class="preview-window">
+							<div class="preview-window-bar">
+								<span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+								<span class="preview-window-title">previa · pull request #42</span>
+								<span class="preview-window-status" aria-hidden="true"><span class="pulse-dot"></span>concept</span>
+							</div>
+							<div class="preview-window-body" aria-hidden="true">
+								<div class="console-pane">
+									<div class="console-pr">
+										<span class="console-pr-icon">
+											@components.PullRequestIcon()
+										</span>
+										<div><strong>feat: a calmer checkout</strong><span>#42 · feature/checkout</span></div>
+									</div>
+									<ol class="console-steps">
+										<li class="console-step step-1"><span class="console-dot"></span><span>Pull request opened</span><code>a1f9c3e</code></li>
+										<li class="console-step step-2"><span class="console-dot"></span><span>Mergeability checked</span><code>clean</code></li>
+										<li class="console-step step-3"><span class="console-dot"></span><span>Image built from commit</span><code>1m 12s</code></li>
+										<li class="console-step step-4"><span class="console-dot"></span><span>Preview ready</span><code>healthy</code></li>
+									</ol>
+									<div class="console-url">
+										@components.LinkIcon()
+										<span>pr-42.preview.your-domain.dev</span>
+									</div>
+								</div>
+								<div class="browser-pane">
+									<div class="browser-bar"><span></span><span class="browser-url">pr-42.preview…</span></div>
+									<div class="browser-content">
+										<span class="sk sk-nav"></span>
+										<span class="sk sk-title"></span>
+										<span class="sk sk-line"></span>
+										<span class="sk sk-line short"></span>
+										<div class="sk-cards"><span class="sk sk-card"></span><span class="sk sk-card"></span></div>
+										<span class="sk sk-button"></span>
+									</div>
+								</div>
+							</div>
+						</div>
+						<figcaption><span class="art-caption-line" aria-hidden="true"></span>WORKFLOW CONCEPT · NOT A LIVE PREVIEW</figcaption>
+					</figure>
+				</div>
 			</section>
-			<div class="principle-strip"><div class="site-container"><span>GitHub at the heart</span><span class="strip-cross" aria-hidden="true">✳</span><span>Your infrastructure</span><span class="strip-cross" aria-hidden="true">✳</span><span>Pull requests in focus</span><span class="strip-cross" aria-hidden="true">✳</span><span>Room for better feedback</span></div></div>
-			<section id="workflow" class="site-container section-block" aria-labelledby="workflow-title">
-				<div class="section-heading" data-scroll-reveal><div><span class="eyebrow">LESS GUESSWORK. MORE CONTEXT.</span><h2 id="workflow-title">A little closer to<br/>the <em>real thing.</em></h2></div><p>A screenshot is a moment. A preview is a place to explore. This is the pull-request workflow we're building toward.</p></div>
-				<div class="workflow-grid">
-					<article class="workflow-card" data-scroll-reveal>
-						<div class="workflow-symbol branch-diagram" aria-hidden="true"><span></span><span></span><span></span><i></i></div><span class="eyebrow">FROM YOUR BRANCH</span>
-						<h3>Make the change.</h3>
-						<p>Start where your team already works: a GitHub pull request. Keep the code, the conversation, and the context together.</p>
-						<div class="workflow-card-footer">
-							A familiar starting point
-							<span aria-hidden="true">
-								@components.ArrowUpRight()
-							</span>
-						</div>
-					</article>
-					<article class="workflow-card featured" data-scroll-reveal>
-						<div class="workflow-symbol stacked-diagram" aria-hidden="true"><span></span><span></span><span></span></div><span class="eyebrow">INTO A SHARED VIEW</span>
-						<h3>Explore the idea.</h3>
-						<p>The goal: an isolated preview for each pull request, so reviewers can experience a change instead of imagining it.</p>
-						<div class="workflow-card-footer">
-							Built around real feedback
-							<span aria-hidden="true">
-								@components.ArrowUpRight()
-							</span>
-						</div>
-					</article>
-					<article class="workflow-card" data-scroll-reveal>
-						<div class="workflow-symbol merge-diagram" aria-hidden="true">
-							<span></span><i></i>
-							<b>
-								@components.ArrowUpRight()
-							</b>
-						</div><span class="eyebrow">BACK TO THE WORK</span>
-						<h3>Move it forward.</h3>
-						<p>Review, refine, and merge. The intended lifecycle keeps previews tied to their pull requests, from open to close.</p>
-						<div class="workflow-card-footer">
-							A natural finish
-							<span aria-hidden="true">
-								@components.ArrowUpRight()
-							</span>
-						</div>
-					</article>
+			<div class="stack-strip" aria-label="Built on">
+				<div class="stack-track">
+					<ul class="stack-items">
+						@stackList()
+					</ul>
+					<ul class="stack-items" aria-hidden="true">
+						@stackList()
+					</ul>
 				</div>
+			</div>
+			<section id="workflow" class="site-container section-block" aria-labelledby="workflow-title">
+				<div class="section-heading" data-scroll-reveal>
+					<span class="eyebrow">The workflow</span>
+					<h2 id="workflow-title">From pull request to preview, <em>in four steps.</em></h2>
+					<p>A screenshot is a moment. A preview is a place to explore. This is the lifecycle Previa is built around, and how much of it works today.</p>
+				</div>
+				<ol class="workflow-steps">
+					@workflowStep("01", "Connect", "Install the GitHub App on the repositories you choose. Previa verifies your account before linking anything.", true, components.GitHubMark())
+					@workflowStep("02", "Open a pull request", "Signed webhooks and durable sync keep open pull requests, commits and mergeability current.", true, components.PullRequestIcon())
+					@workflowStep("03", "Build and run", "The exact commit becomes an image and runs in an isolated, resource-limited container.", false, components.BuildIcon())
+					@workflowStep("04", "Review and merge", "Reviewers get a URL in the pull request. Closing it tears the preview down.", false, components.EnvironmentIcon())
+				</ol>
 			</section>
 			<section id="principles" class="principles-section" aria-labelledby="principles-title">
 				<div class="site-container principles-grid" data-scroll-reveal>
-					<div><span class="eyebrow">A PLATFORM WITH A POINT OF VIEW</span><h2 id="principles-title">Your work.<br/>Your infrastructure.<br/><em>Your perspective.</em></h2><p>Previa's direction is deliberately simple: make reviewing a change feel closer to using it, while keeping control in your hands.</p></div>
-					<div class="principles-list">
-						<article>
-							<span aria-hidden="true">
-								@components.ArrowUpRight()
+					<div class="principles-intro">
+						<span class="eyebrow">Principles</span>
+						<h2 id="principles-title">Your work. Your infrastructure. <em>Your call.</em></h2>
+						<p>Make reviewing a change feel closer to using it, while keeping control in your hands.</p>
+					</div>
+					<div class="bento">
+						<article class="bento-card bento-wide">
+							<span class="bento-icon" aria-hidden="true">
+								@components.ServerIcon()
 							</span>
-							<div><h3>Self-hosted by design</h3><p>A preview platform designed to run on infrastructure you own, with a clear boundary between the platform and previewed applications.</p></div>
+							<h3>Self-hosted by design</h3>
+							<p>One server binary, one worker and PostgreSQL on a machine you own, with a clear boundary between the platform and the applications it previews.</p>
+							<div class="bento-diagram" aria-hidden="true"><span class="bento-node is-core">control plane</span><span class="bento-link"></span><span class="bento-node">pr-41</span><span class="bento-node">pr-42</span><span class="bento-node">pr-43</span></div>
 						</article>
-						<article>
-							<span aria-hidden="true">
+						<article class="bento-card">
+							<span class="bento-icon" aria-hidden="true">
+								@components.ShieldIcon()
+							</span>
+							<h3>Isolated by default</h3>
+							<p>Previews are designed to run with dropped capabilities and hard resource limits. Forked pull requests never receive secrets.</p>
+						</article>
+						<article class="bento-card">
+							<span class="bento-icon" aria-hidden="true">
 								@components.BranchIcon()
 							</span>
-							<div><h3>A pull request is the starting point</h3><p>Repository connections, changes, and preview lifecycles are being designed around GitHub's existing workflow.</p></div>
+							<h3>A pull request is the starting point</h3>
+							<p>Sign-in, repository connections and feedback live where your team already works: GitHub.</p>
 						</article>
-						<article><span aria-hidden="true">◎</span><div><h3>Clarity over noise</h3><p>A shared view should help you understand the change. No invented activity, inflated counters, or distractions.</p></div></article>
+						<article class="bento-card bento-wide">
+							<span class="bento-icon" aria-hidden="true">
+								@components.EyeIcon()
+							</span>
+							<h3>Clarity over noise</h3>
+							<p>No invented activity, inflated counters or fake health checks. When something isn't connected yet, Previa says so.</p>
+						</article>
+					</div>
+				</div>
+			</section>
+			<section id="status" class="site-container section-block status-section" aria-labelledby="status-title">
+				<div class="section-heading" data-scroll-reveal>
+					<span class="eyebrow">What's live</span>
+					<h2 id="status-title">Built in the open, <em>one stage at a time.</em></h2>
+				</div>
+				<div class="status-columns" data-scroll-reveal>
+					<div class="status-column is-live">
+						<h3><span class="badge tone-ok"><span class="badge-dot" aria-hidden="true"></span>Available today</span></h3>
+						<ul>
+							<li>GitHub sign-in with secure sessions</li>
+							<li>GitHub App installation and repository linking</li>
+							<li>Pull request discovery and signed webhooks</li>
+							<li>Mergeability gates and Manual/Automatic build policy</li>
+							<li>Queue diagnostics for local development</li>
+						</ul>
+					</div>
+					<div class="status-column is-next">
+						<h3><span class="badge tone-neutral">Coming next</span></h3>
+						<ul>
+							<li>Exact-commit image builds</li>
+							<li>Isolated preview containers</li>
+							<li>Subdomain routing with TLS</li>
+							<li>Pull request comments and check runs</li>
+							<li>Teardown, expiry, live logs and secrets</li>
+						</ul>
 					</div>
 				</div>
 			</section>
 			<section class="site-container start-section" data-scroll-reveal aria-labelledby="start-title">
-				<div class="start-spark" aria-hidden="true">✳</div><span class="eyebrow">EVERY GOOD IDEA STARTS SOMEWHERE</span>
-				<h2 id="start-title">See what comes <em>next.</em></h2>
-				<p>Start with your GitHub identity. Your workspace is the first step.</p>
-				if loggedIn {
-					@button.Button(button.Props{Href: "/dashboard", Class: "hero-cta", Size: button.SizeLg}) {
-						Open your dashboard
-						@components.Arrow()
-					}
-				} else {
-					@button.Button(button.Props{Href: "/auth/github/login", Class: "hero-cta", Size: button.SizeLg}) {
-						@components.GitHubMark()
-						Get started with GitHub
-						@components.Arrow()
-					}
-				}
-				<p class="start-disclosure">Sign-in is available now. Repository connections and live previews are coming next.<br/>Signing in does not grant access to your repositories.</p>
+				<div class="start-card">
+					<span class="start-mark" aria-hidden="true">
+						@components.BrandMark()
+					</span>
+					<span class="eyebrow">Every good idea starts somewhere</span>
+					<h2 id="start-title">See what comes <em>next.</em></h2>
+					<p>Start with your GitHub identity. Your workspace is the first step.</p>
+					@cta(loggedIn)
+					<p class="start-disclosure">Sign-in, repository connections and pull request tracking are available now. Live previews are coming next. Signing in does not grant access to your repositories.</p>
+				</div>
 			</section>
 		</main>
-		<footer class="site-footer site-container">
-			@components.Brand()
-			<p>A clearer view of what comes next.</p><a href="#content">Back to top <span aria-hidden="true">↑</span></a>
+		<footer class="site-footer">
+			<div class="site-container footer-inner">
+				<div class="footer-brand">
+					@components.Brand()
+					<p>A clearer view of what comes next.</p>
+				</div>
+				<nav class="footer-links" aria-label="Footer"><a href="#workflow">How it works</a><a href="#status">Status</a><a href="#content">Back to top <span aria-hidden="true">↑</span></a></nav>
+			</div>
 		</footer>
 	}
+}
+
+templ cta(loggedIn bool) {
+	if loggedIn {
+		@button.Button(button.Props{Href: "/dashboard", Class: "hero-cta", Size: button.SizeLg}) {
+			Open your dashboard
+			@components.Arrow()
+		}
+	} else {
+		@button.Button(button.Props{Href: "/auth/github/login", Class: "hero-cta", Size: button.SizeLg}) {
+			@components.GitHubMark()
+			Get started with GitHub
+			@components.Arrow()
+		}
+	}
+}
+
+templ stackList() {
+	<li>GitHub App</li>
+	<li>OAuth sign-in</li>
+	<li>PostgreSQL</li>
+	<li>River queue</li>
+	<li>Docker isolation</li>
+	<li>Traefik routing</li>
+	<li>templ + HTMX</li>
+	<li>Single Go binary</li>
+}
+
+templ workflowStep(number, title, detail string, live bool, icon templ.Component) {
+	<li class="workflow-card" data-scroll-reveal>
+		<div class="workflow-card-top">
+			<span class="workflow-number">{ number }</span>
+			if live {
+				<span class="badge tone-ok"><span class="badge-dot" aria-hidden="true"></span>Live</span>
+			} else {
+				<span class="badge tone-neutral">Next</span>
+			}
+		</div>
+		<span class="workflow-icon" aria-hidden="true">
+			@icon
+		</span>
+		<h3>{ title }</h3>
+		<p>{ detail }</p>
+	</li>
 }

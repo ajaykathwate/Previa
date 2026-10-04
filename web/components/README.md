@@ -14,14 +14,16 @@ License: [LICENSE.templui](LICENSE.templui) (MIT).
   feature, icons, and script loader are omitted because no current page uses them.
   Password inputs therefore behave as native inputs without a visibility toggle.
   Upstream input focus-ring classes are omitted; all text fields use the shared
-  quiet forest-border focus style in `web/styles/base.css`. Invalid borders retain
+  quiet border focus style in `web/styles/base.css`. Invalid borders retain
   their error colour. Button/radio keyboard indicators remain separate.
-- `navbar.templ`, `app_navbar.templ`, and `sidebar.templ` are application-specific
-  composition, not copied library code. `confirmation.templ` is an application-owned
+- `navbar.templ`, `app_navbar.templ`, `sidebar.templ`, `icons.templ` and
+  `command_palette.templ` are application-specific composition, not copied library
+  code. The command palette is a keyboard layer over existing links and the logout
+  confirmation; every destination also exists in the sidebar. `confirmation.templ` is an application-owned
   native dialog shell and logout form; it reuses the local button primitive. Native details/summary menus are enhanced
   by `web/static/js/ui.js` for Escape and outside-click dismissal.
-- Theme tokens in `web/styles/theme.css` are adapted from the same upstream
-  release. Official Tailwind CSS v4.1.18 compiles the CSS independently.
+- Theme token names in `web/styles/theme.css` follow the same upstream release;
+  their values map onto Previa's own light/dark "signal" palette. Official Tailwind CSS v4.1.18 compiles the CSS independently.
 
 Copied `.templ` source is committed; generated `*_templ.go` stays beside it and
 is ignored. Updates are explicit source reviews against a pinned upstream tag,

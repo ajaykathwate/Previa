@@ -46,19 +46,74 @@
     document.querySelectorAll('[data-mobile-nav] a').forEach(link => {
       link.addEventListener('click', () => { link.closest('details').open = false; });
     });
-
+    document.addEventListener('click', (event) => {
+      const backdrop = event.target.closest('[data-mobile-nav-close]');
+      if (backdrop) backdrop.closest('details').open = false;
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+      document.querySelectorAll('[data-mobile-nav][open]').forEach((nav) => {
+        nav.open = false;
+        nav.querySelector('summary').focus();
+      });
+    });
+    const mac = /Mac|iPhone|iPad/.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
+    if (mac) document.querySelectorAll('[data-shortcut-label]').forEach(label => { label.textContent = '⌘K'; });
   }
+
+  // Theme choice is a per-browser preference; without a choice the OS theme applies.
+  const themeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  const effectiveTheme = () => document.documentElement.dataset.theme || (themeQuery.matches ? 'dark' : 'light');
+  function labelThemeToggles() {
+    const next = effectiveTheme() === 'dark' ? 'light' : 'dark';
+    document.querySelectorAll('[data-theme-toggle]').forEach((toggle) => {
+      toggle.setAttribute('aria-label', `Switch to ${next} theme`);
+      toggle.title = `Switch to ${next} theme`;
+    });
+  }
+  function toggleTheme() {
+    const next = effectiveTheme() === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('previa-theme', next); } catch { /* Storage may be unavailable. */ }
+    labelThemeToggles();
+  }
+  function initTheme() {
+    labelThemeToggles();
+    themeQuery.addEventListener('change', labelThemeToggles);
+    document.addEventListener('click', (event) => {
+      if (event.target.closest('[data-theme-toggle]')) toggleTheme();
+    });
+  }
+
+  // Prefetch workspace pages on hover so ordinary navigation feels immediate.
+  // HTMX-driven links, mutations and authentication routes are never prefetched.
+  function initPrefetch() {
+    if (!document.querySelector('.app-shell') || !HTMLScriptElement.supports?.('speculationrules')) return;
+    const rules = document.createElement('script');
+    rules.type = 'speculationrules';
+    rules.textContent = JSON.stringify({prefetch: [{
+      source: 'document',
+      where: {and: [
+        {href_matches: '/*'},
+        {not: {href_matches: ['/', '/auth/*', '/installations/*', '/queue/*', '/webhooks/*', '/static/*']}},
+        {not: {selector_matches: '[target], [download], [hx-get], [hx-post]'}},
+      ]},
+      eagerness: 'moderate',
+    }]});
+    document.head.append(rules);
+  }
+
+  const dialogReturnTargets = new WeakMap();
+  const openDialog = (dialog, trigger) => {
+    if (!(dialog instanceof HTMLDialogElement) || dialog.open) return;
+    const menu = trigger?.closest('[data-menu]');
+    dialogReturnTargets.set(dialog, menu ? menu.querySelector('summary') : trigger);
+    if (menu) menu.open = false;
+    dialog.showModal();
+  };
 
   function initConfirmationDialogs() {
     const boundDialogs = new WeakSet();
-    const dialogReturnTargets = new WeakMap();
-    const openDialog = (dialog, trigger) => {
-      if (!(dialog instanceof HTMLDialogElement) || dialog.open) return;
-      const menu = trigger?.closest('[data-menu]');
-      dialogReturnTargets.set(dialog, menu ? menu.querySelector('summary') : trigger);
-      if (menu) menu.open = false;
-      dialog.showModal();
-    };
     document.addEventListener('click', (event) => {
       const trigger = event.target.closest('[data-open-dialog]');
       if (trigger) {
@@ -176,6 +231,97 @@
     });
   }
 
+  function initCommandPalette() {
+    const palette = document.querySelector('[data-command-palette]');
+    if (!palette) return;
+    const input = palette.querySelector('#command-input');
+    const items = [...palette.querySelectorAll('[data-command-item]')];
+    const groups = [...palette.querySelectorAll('.command-group')];
+    const empty = palette.querySelector('[data-command-empty]');
+    let active = null;
+    let returnTarget = null;
+    const visible = () => items.filter(item => !item.hidden);
+    const select = (item) => {
+      active?.setAttribute('aria-selected', 'false');
+      active = item;
+      if (!item) { input.removeAttribute('aria-activedescendant'); return; }
+      item.setAttribute('aria-selected', 'true');
+      input.setAttribute('aria-activedescendant', item.id);
+      item.scrollIntoView({block: 'nearest'});
+    };
+    const filter = () => {
+      const terms = input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      items.forEach((item) => {
+        const text = item.dataset.keywords.toLowerCase();
+        item.hidden = !terms.every(term => text.includes(term));
+      });
+      groups.forEach((group) => { group.hidden = !group.querySelector('[data-command-item]:not([hidden])'); });
+      empty.hidden = visible().length > 0;
+      select(visible()[0] || null);
+    };
+    const open = (trigger) => {
+      if (palette.open || document.querySelector('[data-confirmation-dialog][open]')) return;
+      document.querySelectorAll('[data-menu][open], [data-mobile-nav][open]').forEach((details) => { details.open = false; });
+      returnTarget = trigger;
+      input.value = '';
+      filter();
+      palette.showModal();
+      input.focus();
+    };
+    const run = (item, newTab) => {
+      if (!item) return;
+      const {href, action} = item.dataset;
+      if (action === 'theme') { toggleTheme(); palette.close(); return; }
+      if (action === 'logout') {
+        returnTarget = null;
+        palette.close();
+        openDialog(document.getElementById('logout-confirmation'), document.querySelector('.account-menu summary'));
+        return;
+      }
+      if (!href) return;
+      if (newTab) { window.open(href, '_blank', 'noopener'); return; }
+      returnTarget = null;
+      palette.close();
+      window.location.assign(href);
+    };
+    palette.addEventListener('close', () => {
+      if (returnTarget?.isConnected) returnTarget.focus({preventScroll: true});
+      returnTarget = null;
+    });
+    input.addEventListener('input', filter);
+    input.addEventListener('keydown', (event) => {
+      const list = visible();
+      const index = list.indexOf(active);
+      if (event.key === 'ArrowDown') { event.preventDefault(); select(list[(index + 1) % list.length] || null); }
+      else if (event.key === 'ArrowUp') { event.preventDefault(); select(list[(index - 1 + list.length) % list.length] || null); }
+      else if (event.key === 'Home' && list.length) { event.preventDefault(); select(list[0]); }
+      else if (event.key === 'End' && list.length) { event.preventDefault(); select(list[list.length - 1]); }
+      else if (event.key === 'Enter') { event.preventDefault(); run(active, event.metaKey || event.ctrlKey); }
+      else if (event.key === 'Tab') event.preventDefault();
+    });
+    palette.addEventListener('pointermove', (event) => {
+      const item = event.target.closest('[data-command-item]');
+      if (item && item !== active) select(item);
+    });
+    palette.addEventListener('click', (event) => {
+      const item = event.target.closest('[data-command-item]');
+      if (item) { run(item, event.metaKey || event.ctrlKey); return; }
+      if (event.target !== palette) return;
+      const rect = palette.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right ||
+          event.clientY < rect.top || event.clientY > rect.bottom) palette.close();
+    });
+    document.addEventListener('click', (event) => {
+      const trigger = event.target.closest('[data-command-open]');
+      if (trigger) { event.preventDefault(); open(trigger); }
+    });
+    document.addEventListener('keydown', (event) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLowerCase() !== 'k') return;
+      event.preventDefault();
+      if (palette.open) palette.close(); else open(document.activeElement);
+    });
+  }
+
   function initRepositorySearch() {
     if (!document.querySelector('#repository-filters, #repository-detail')) return;
     const requests = new Map();
@@ -244,7 +390,15 @@
       target.removeAttribute('aria-busy');
       if (target.id === 'repository-detail' && requests.get(target.id)?.userAction) {
         target.querySelector('[data-detail-heading]')?.focus({preventScroll:true});
-      } else target.querySelector('.repository-table-scroll')?.scrollTo({top:0,behavior:'instant'});
+      } else if (requests.get(target.id)?.userAction) {
+        // Bring the start of new results back under the sticky filters.
+        const scroller = document.querySelector('.app-content');
+        const toolbar = target.parentElement.querySelector('.repository-toolbar');
+        if (!scroller) return;
+        const offset = (toolbar?.offsetHeight || 0) + 8;
+        const top = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+        if (top < offset) scroller.scrollBy({top: top - offset, behavior: 'smooth'});
+      }
     });
     document.addEventListener('htmx:historyRestore', () => {
       targets.forEach(id => {
@@ -258,9 +412,12 @@
   }
 
   initMotion();
+  initTheme();
   initNavigation();
+  initPrefetch();
   initConfirmationDialogs();
   initAccountMenus();
   initQueueForms();
+  initCommandPalette();
   initRepositorySearch();
 })();

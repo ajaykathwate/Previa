@@ -1,4 +1,6 @@
-/* Neutral tokens adapted from templUI v1.13.2 (MIT). */
+/* Previa "signal" theme: graphite neutrals, a lime signal accent and semantic
+   status tones. Light is the base; dark follows the OS unless the viewer picks
+   a theme (stored as data-theme on <html>). templUI names map onto these tokens. */
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -22,56 +24,155 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-code);
 }
 
 :root {
-  --background: #faf9f6;
-  --foreground: #21332e;
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: #dd693e;
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: #c85d37;
+  color-scheme: light;
+
+  /* Surfaces and ink */
+  --canvas: #f4f5f7;
+  --canvas-sunken: #eceef2;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-muted: #f8f9fb;
+  --surface-hover: #f1f3f6;
+  --line: #e2e5ea;
+  --line-strong: #cfd4dc;
+  --ink: #0c1015;
+  --ink-soft: #2a313c;
+  --text-muted: #5c6674;
+  --text-faint: #8a93a1;
+  --overlay: rgb(8 11 15 / .46);
+  --shadow-sm: 0 1px 2px rgb(12 16 21 / .06);
+  --shadow-md: 0 1px 2px rgb(12 16 21 / .05), 0 8px 24px -8px rgb(12 16 21 / .12);
+  --shadow-lg: 0 2px 6px rgb(12 16 21 / .06), 0 28px 70px -20px rgb(12 16 21 / .28);
+
+  /* Brand signal */
+  --signal: #9fe02b;
+  --signal-strong: #86c516;
+  --signal-ink: #3b6a02;
+  --signal-soft: #eefadb;
+  --signal-line: #cdeb9b;
+  --on-signal: #0c1408;
+
+  /* Status tones: ink for text, soft for fills, line for borders */
+  --ok-ink: #3b6a02;       --ok-soft: #eefadb;     --ok-line: #cdeb9b;     --ok-dot: #7cc312;
+  --info-ink: #1f5fc4;     --info-soft: #e9f1fe;   --info-line: #c4d8fb;   --info-dot: #3b82f6;
+  --warn-ink: #9a5b00;     --warn-soft: #fff4dd;   --warn-line: #f5d79a;   --warn-dot: #f2a516;
+  --danger-ink: #c0302b;   --danger-soft: #fdecea; --danger-line: #f6c2bf; --danger-dot: #ef4444;
+  --merged-ink: #6d3fd0;   --merged-soft: #f2ecfd; --merged-line: #d9c9f7; --merged-dot: #8b5cf6;
+  --neutral-ink: #4f5967;  --neutral-soft: #f0f2f5; --neutral-line: #dde1e7; --neutral-dot: #9aa3af;
+
+  /* Primary action: ink on light, signal on dark */
+  --action: #0c1015;
+  --action-hover: #262d37;
+  --action-ink: #ffffff;
+
+  /* templUI tokens */
+  --background: var(--canvas);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface-raised);
+  --popover-foreground: var(--ink);
+  --primary: var(--action);
+  --primary-foreground: var(--action-ink);
+  --secondary: var(--surface-hover);
+  --secondary-foreground: var(--ink);
+  --muted: var(--surface-muted);
+  --muted-foreground: var(--text-muted);
+  --accent: var(--surface-hover);
+  --accent-foreground: var(--ink);
+  --destructive: var(--danger-ink);
+  --border: var(--line);
+  --input: var(--line-strong);
+  --ring: #6aa80c;
   --radius: 0.625rem;
 
-  /* Approved composition tokens: exact existing palette and font stacks. */
-  --ui-white: #fff;
-  --ui-text-muted: #66735c;
-  --ui-surface-card: #fffefb;
-  --ui-text-strong: #30402b;
-  --ui-text-heading: #3c4d30;
-  --ui-accent-forest: #728451;
-  --ui-border: #e0e5d5;
-  --ui-border-shell: #e1e5d7;
-  --ui-border-muted: #dce2cf;
-  --ui-border-panel: #dfe5d5;
-  --ui-border-page: #e7e6df;
-  --ui-action: #b94e2d;
-  --ui-action-hover: #a84223;
-  --ui-action-shadow: #b9532f;
-  --ui-action-glow: #cf6e3c20;
-  --ui-art-grid: #aeb8b51b;
-  --ui-art-branch: #bcc4ad;
-  --ui-text-on-forest: #a3b09c;
-  --ui-surface-sidebar: #f0f2e9;
-  --ui-text-navigation: #344631;
-  --ui-text-link: #526745;
-  --ui-surface-badge: #f0f4e9;
-  --ui-surface-icon: #edf2e5;
-  --ui-border-footer: #e9eddf;
-  --font-editorial: Georgia, 'Times New Roman', serif;
-  --font-illustration: Georgia, serif;
-  --font-code: ui-monospace, monospace;
+  /* Type */
+  --font-ui: "Inter", "InterVariable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-code: ui-monospace, "SFMono-Regular", "JetBrains Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
 
+  /* Shell metrics */
+  --header-height: 60px;
+  --sidebar-width: 252px;
+  --rail-width: 68px;
+  --content-max: 1240px;
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-spring: cubic-bezier(.34, 1.4, .64, 1);
+}
+
+/* One dark palette, applied by OS preference or explicit choice. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --canvas: #0a0c0f;
+    --canvas-sunken: #07080a;
+    --surface: #111418;
+    --surface-raised: #161a20;
+    --surface-muted: #0e1114;
+    --surface-hover: #1a1f26;
+    --line: #20262e;
+    --line-strong: #2d343e;
+    --ink: #eef1f5;
+    --ink-soft: #c9d0d9;
+    --text-muted: #8f99a7;
+    --text-faint: #636c79;
+    --overlay: rgb(0 0 0 / .62);
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / .4);
+    --shadow-md: 0 1px 2px rgb(0 0 0 / .4), 0 10px 28px -10px rgb(0 0 0 / .6);
+    --shadow-lg: 0 2px 6px rgb(0 0 0 / .5), 0 30px 80px -20px rgb(0 0 0 / .8);
+    --signal: #b6f23e;
+    --signal-strong: #c8f86a;
+    --signal-ink: #c3f565;
+    --signal-soft: #18220c;
+    --signal-line: #34481a;
+    --ok-ink: #c3f565;    --ok-soft: #18220c;    --ok-line: #34481a;    --ok-dot: #a3e635;
+    --info-ink: #8ab8ff;  --info-soft: #0f1a2c;  --info-line: #1f3557;  --info-dot: #60a5fa;
+    --warn-ink: #ffc35c;  --warn-soft: #251a07;  --warn-line: #4b3611;  --warn-dot: #fbbf24;
+    --danger-ink: #ff8a84; --danger-soft: #2a0f0f; --danger-line: #532020; --danger-dot: #f87171;
+    --merged-ink: #c2a6ff; --merged-soft: #1c1430; --merged-line: #382a5e; --merged-dot: #a78bfa;
+    --neutral-ink: #aab3bf; --neutral-soft: #171b21; --neutral-line: #2a3039; --neutral-dot: #6b7380;
+    --action: #b6f23e;
+    --action-hover: #c8f86a;
+    --action-ink: #0c1408;
+    --ring: #b6f23e;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #0a0c0f;
+  --canvas-sunken: #07080a;
+  --surface: #111418;
+  --surface-raised: #161a20;
+  --surface-muted: #0e1114;
+  --surface-hover: #1a1f26;
+  --line: #20262e;
+  --line-strong: #2d343e;
+  --ink: #eef1f5;
+  --ink-soft: #c9d0d9;
+  --text-muted: #8f99a7;
+  --text-faint: #636c79;
+  --overlay: rgb(0 0 0 / .62);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / .4);
+  --shadow-md: 0 1px 2px rgb(0 0 0 / .4), 0 10px 28px -10px rgb(0 0 0 / .6);
+  --shadow-lg: 0 2px 6px rgb(0 0 0 / .5), 0 30px 80px -20px rgb(0 0 0 / .8);
+  --signal: #b6f23e;
+  --signal-strong: #c8f86a;
+  --signal-ink: #c3f565;
+  --signal-soft: #18220c;
+  --signal-line: #34481a;
+  --ok-ink: #c3f565;    --ok-soft: #18220c;    --ok-line: #34481a;    --ok-dot: #a3e635;
+  --info-ink: #8ab8ff;  --info-soft: #0f1a2c;  --info-line: #1f3557;  --info-dot: #60a5fa;
+  --warn-ink: #ffc35c;  --warn-soft: #251a07;  --warn-line: #4b3611;  --warn-dot: #fbbf24;
+  --danger-ink: #ff8a84; --danger-soft: #2a0f0f; --danger-line: #532020; --danger-dot: #f87171;
+  --merged-ink: #c2a6ff; --merged-soft: #1c1430; --merged-line: #382a5e; --merged-dot: #a78bfa;
+  --neutral-ink: #aab3bf; --neutral-soft: #171b21; --neutral-line: #2a3039; --neutral-dot: #6b7380;
+  --action: #b6f23e;
+  --action-hover: #c8f86a;
+  --action-ink: #0c1408;
+  --ring: #b6f23e;
 }

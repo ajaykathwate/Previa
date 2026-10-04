@@ -1,27 +1,34 @@
 package auth
 
 import (
-	"github.com/ajaykathwatee/previa/web/layouts"
+	"github.com/ajaykathwatee/previa/web/components"
 	"github.com/ajaykathwatee/previa/web/components/alert"
 	"github.com/ajaykathwatee/previa/web/components/button"
-	"github.com/ajaykathwatee/previa/web/components/card"
+	"github.com/ajaykathwatee/previa/web/layouts"
 )
 
 templ Error(message string) {
 	@layouts.Base("Sign-in") {
-		@card.Card(card.Props{Class: "mx-auto max-w-lg"}) {
-			@card.Header() {
-				<h1 class="text-2xl font-semibold tracking-tight">Sign-in</h1>
-			}
-			@card.Content() {
-				@alert.Alert(alert.Props{Variant: alert.VariantDestructive}) {
-					@alert.Description() { { message } }
+		<section class="standalone-card panel" aria-labelledby="signin-error-title">
+			<span class="standalone-icon" aria-hidden="true">
+				@components.AlertIcon()
+			</span>
+			<span class="eyebrow">GitHub sign-in</span>
+			<h1 id="signin-error-title">Sign-in</h1>
+			@alert.Alert(alert.Props{Variant: alert.VariantDestructive, Class: "standalone-alert"}) {
+				@alert.Description() {
+					{ message }
 				}
 			}
-			@card.Footer(card.FooterProps{Class: "flex flex-wrap gap-3"}) {
-				@button.Button(button.Props{Href: "/auth/github/login"}) { Try signing in again }
-				@button.Button(button.Props{Href: "/", Variant: button.VariantOutline}) { Back to home }
-			}
-		}
+			<div class="standalone-actions">
+				@button.Button(button.Props{Href: "/auth/github/login"}) {
+					@components.GitHubMark()
+					Try signing in again
+				}
+				@button.Button(button.Props{Href: "/", Variant: button.VariantOutline}) {
+					Back to home 
+				}
+			</div>
+		</section>
 	}
 }

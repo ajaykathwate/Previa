@@ -473,7 +473,7 @@ test('sync and automatic controls appear only on the PR list and breadcrumbs use
  assert.equal(await page.getByRole('switch',{name:'Enable Automatic Builds'}).count(),0);
  assert.equal(await page.getByRole('button',{name:'Sync Pull Requests'}).count(),0);assert.equal(await page.locator('#build-policy').count(),0);
  const sizes=await page.locator('.pr-breadcrumb').evaluate(e=>Array.from(e.children).map(child=>getComputedStyle(child).fontSize));
- assert(sizes.every(size=>size==='17px'), 'breadcrumb text and separators share a compact size');
+ assert(sizes.length>2 && sizes.every(size=>size===sizes[0]), 'breadcrumb text and separators share one size');
  await page.getByRole('link',{name:'Back to pull requests'}).click();await page.waitForURL(url=>url.pathname==='/repositories/1');
  assert.equal(await page.locator('.automatic-switch').getAttribute('aria-checked'),'true');
  assert.equal(new URL(page.url()).searchParams.get('page'),'2');
@@ -494,16 +494,54 @@ test('small repository collections use compact cards with natural height and no 
   for(const width of [320,390,768,1440,1917]) {
    await page.setViewportSize({width,height:960});await assertNoOverflow();
    const cards=await page.locator('.repository-select').evaluateAll(items=>items.map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};}));
-   if(count>1 && width>700) assert.equal(cards[0].y,cards[1].y,'desktop cards share a row');
+   if(count>1 && width>700) assert(Math.abs(cards[0].y-cards[1].y)<4,'desktop cards share a row (hover lift allowed)');
    if(count>1 && width<=700) assert(cards[1].y>cards[0].y,'mobile cards stack');
    assert(cards.every(c=>c.height<280), 'long repository names fit compact cards');
    if(count<=2 && width>700) {
     const catalog=await page.locator('.repository-catalog').boundingBox();
     assert(catalog.height<500, 'small collections do not stretch toward the footer');
-    assert(catalog.width<=1001,'catalog has a compact width');
+    assert(catalog.width<=1241,'catalog stays within the content column');
    }
   }
   if(process.env.UI_BROWSER_SCREENSHOTS==='1') await page.screenshot({path:path.join(__dirname,'artifacts',`repository-cards-${count}.png`)});
  }
  await page.locator('[data-repo-link="1"]').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+});
+
+test('command palette filters destinations, navigates and restores focus',async()=>{
+ await login();await page.goto(`${origin}/repositories`);
+ const trigger=page.locator('.command-trigger');
+ await trigger.click();await page.waitForFunction(()=>document.querySelector('#command-palette').matches(':modal'));
+ assert(await page.locator('#command-input').evaluate(e=>e===document.activeElement));
+ await page.keyboard.press('Escape');
+ await page.waitForFunction(()=>document.activeElement===document.querySelector('.command-trigger'));
+ await page.keyboard.press('Control+k');await page.waitForFunction(()=>document.querySelector('#command-palette').open);
+ await page.locator('#command-input').fill('environ');
+ assert.equal(await page.locator('[data-command-item]:not([hidden])').count(),1);
+ assert.match(await page.locator('[data-command-item][aria-selected=true]').innerText(),/Environments/);
+ await page.keyboard.press('Enter');await page.waitForURL(`${origin}/environments`);
+ assert.equal(await page.locator('h1').innerText(),'Environments');
+ await page.keyboard.press('Control+k');await page.waitForFunction(()=>document.querySelector('#command-palette').open);
+ await page.locator('#command-input').fill('zzz-no-match');
+ assert.equal(await page.locator('[data-command-empty]').isVisible(),true);
+ await page.locator('#command-input').fill('log out');await page.keyboard.press('Enter');
+ await page.waitForFunction(()=>document.querySelector('#logout-confirmation').matches(':modal'));
+ assert.equal(await page.locator('#command-palette').evaluate(e=>e.open),false);
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();
+ assert.equal((await context.request.get(`${origin}/dashboard`,{maxRedirects:0})).status(),200);
+});
+
+test('theme toggle switches and persists the colour theme',async()=>{
+ await page.emulateMedia({colorScheme:'light'});
+ await login();
+ const toggle=page.locator('.app-header [data-theme-toggle]');
+ assert.equal(await toggle.getAttribute('aria-label'),'Switch to dark theme');
+ const before=await page.evaluate(()=>getComputedStyle(document.body).backgroundColor);
+ await toggle.click();
+ assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),'dark');
+ await page.waitForFunction(b=>getComputedStyle(document.body).backgroundColor!==b,before);
+ await page.reload();
+ assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),'dark');
+ assert.equal(await toggle.getAttribute('aria-label'),'Switch to light theme');
+ for(const width of [320,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
 });

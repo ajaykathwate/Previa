@@ -9,11 +9,13 @@ templ App(title string, username string, csrfToken string, active components.Nav
 			<div class="app-column">
 				@components.AppNavbar(username, title, active)
 				<main id="content" tabindex="-1" class="app-content">
-					{ children... }
+					<div class="app-page">
+						{ children... }
+					</div>
 				</main>
-				<footer class="app-footer"><span>Previa workspace</span><span>A clearer view of what comes next.</span></footer>
 			</div>
 		</div>
+		@components.CommandPalette()
 		@components.LogoutConfirmation(csrfToken)
 	}
 }

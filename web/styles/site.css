@@ -2,6 +2,7 @@
 @import "./base.css";
 @import "./home.css";
 @import "./workspace.css";
+@import "./command.css";
 @import "./repositories.css";
 @import "./confirmation.css";
 @import "./motion.css";
