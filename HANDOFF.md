@@ -3,14 +3,11 @@ Last updated: 2026-10-04
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
-- Phase 3 committed as 88e077d: docs/PHASE3_REPORT.md records open-only tracking,
-  mergeability, test evidence and the pending live GitHub proof.
-- docs/FEATURE_IMPLEMENTATION_PROMPTS.md replaces completed prompts with 12 remaining
-  MVP tasks, source through deployment acceptance. These tasks are not yet executed.
-- docs/DEVELOPMENT_SETUP.md, .env.example, Makefile, deploy/docker-compose.yml:
-  setup/config; TEMP.md records remaining integration work.
-- Intent/publication contracts: docs/BUILD_INTENTS.md, BUILD_SCHEDULING.md,
-  GENERATION_ORDERING.md and DESIGN_DURABLE_PUBLICATION.md.
+- docs/README.md indexes 13 numbered docs in reading order (01 overview, 02 setup,
+  03 user guide ... 13 roadmap). Update the matching doc with every change.
+- docs/13-roadmap.md: 12 remaining MVP tasks (source -> release acceptance), not started.
+- Contracts to preserve: docs/07 policy/intents, 08 scheduling, 09 publication design,
+  10 generation ordering, 11 realtime. Live hosted GitHub proof pending (docs/05).
 - Backend features stay flat under internal/<feature>; construction in internal/app.
   Presentation stays in web/, with view models and no backend imports.
 - Preserve the "signal" theme (theme.css light/dark tokens, system sans + mono),
@@ -29,7 +26,7 @@ Last updated: 2026-10-04
 - Worker: ping concurrency, BUILD_TIMEOUT (12m), optional App ID/private-key pair.
   No OAuth/session secrets needed; without App pair discovery/checks stay queued.
   PEM must have owner-only access.
-- Real GitHub setup: docs/GITHUB_INSTALLATIONS.md; OAuth callback
+- Real GitHub setup: docs/04-github-sign-in-and-app.md; OAuth callback
   http://localhost:8080/auth/github/callback; App setup /installations/callback,
   App authorization callback /installations/authorize/callback.
 - make test-webhook loads env and signs a harmless ping; App webhooks need the
@@ -52,7 +49,7 @@ Last updated: 2026-10-04
   focused PR search/open modal. Desktop filters one row; short/mobile pages scroll.
 - PR detail: saved SHA/link/fork/access, Open/Checking/Conflicts/Closed/Merged.
   No polling: migration 11 triggers -> NOTIFY -> realtime hub -> SSE /repositories/<id>/events
-  (owner-checked, resumable cursors); see docs/REALTIME_UPDATES.md.
+  (owner-checked, resumable cursors); see docs/11-realtime-updates.md.
   Build disabled; direct POST gives conflict/checking reason, never authorizes work.
 - Builds shows actual current/latest intents, no archive. Environments shows actual
   deployment state; no fabricated URL/health/logs. Empty records stay empty.

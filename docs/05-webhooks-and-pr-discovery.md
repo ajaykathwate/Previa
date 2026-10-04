@@ -1,8 +1,9 @@
-# Webhooks and pull-request discovery
+# 05 · Webhooks and pull-request discovery
 
-Prompts 4 and 5 implement authenticated event ingestion, existing-PR discovery and
-owner-scoped browser controls. Real preview execution remains a separate phase.
-The browser walkthrough is in [APP_USER_FLOW.md](APP_USER_FLOW.md).
+How Previa learns about pull requests: signed webhooks for changes as they happen,
+bounded API discovery for PRs that already exist, and targeted mergeability checks.
+All three only *observe* state; none of them authorizes a build. The screens are in
+[03-user-guide.md](03-user-guide.md).
 
 ## Decisions and alternatives
 
@@ -36,6 +37,8 @@ The browser walkthrough is in [APP_USER_FLOW.md](APP_USER_FLOW.md).
 - A crash before commit leaves no receipt/effects. A crash after commit but before
   the response is safe: retry reads the existing receipt and applies nothing again.
 - Receipt rows contain delivery identity, event type, hash and time, not raw bodies.
+  They are kept without automatic pruning; housekeeping must choose an explicit
+  replay window before deleting any, or old redeliveries could apply twice.
   Logs contain safe delivery/event identities, never tokens, signatures or payloads.
 - Supported PR actions: opened, reopened, synchronize, closed; merged close records
   `merged`. Comments/reviews neither authorize builds nor reset quiet periods.
@@ -50,7 +53,8 @@ The browser walkthrough is in [APP_USER_FLOW.md](APP_USER_FLOW.md).
 - A unique receipt is transport acceptance; it is distinct from applying a fresh
   PR state. Older source observations are acknowledged and ignored.
 - Fresh applicable webhook observations advance PR generation once and compose
-  with the existing Prompt 3 coordinator. Duplicate receipts advance nothing.
+  with the scheduling coordinator ([08](08-build-scheduling.md)). Duplicate
+  receipts advance nothing.
 - Equal-time conflicting heads retain the existing head, mark `needs_refresh`,
   advance generation and supersede active intent, preventing guessed state from
   authorizing/publishing a result. A later source observation or fenced API refresh
@@ -135,44 +139,63 @@ WEBHOOK_EVENT=pull_request WEBHOOK_DELIVERY_ID=fixture-pr-1 \
 WEBHOOK_FIXTURE=internal/webhooks/testdata/pull_request.json make test-webhook
 ```
 
-The normal integration command from [DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md)
-sets `TEST_DATABASE_URL`; then run:
+Export `TEST_DATABASE_URL` as described in [02](02-development-setup.md#5-build-and-check), then run:
 
 ```sh
 go test -count=1 -race ./internal/pullrequests ./internal/webhooks
 ```
 
- Tests create/drop isolated schemas and include real River
+Tests create/drop isolated schemas and include real River
 continuation, concurrent deduplication, transaction rollback/retry, stale/ambiguous
 PR ordering, revocation, ownership, CSRF and observational sync without builds.
 
-## Phase 3 mergeability
+## Mergeability
 
-Migration 10 stores nullable `mergeable`, the raw `mergeable_state`, and derived
-`build_status`. Lifecycle remains open/closed/merged; open PRs display Checking,
-Conflicts or Open in the dashboard. Dirty/false takes precedence over clean/true;
-null without clean remains Checking. Every opened/reopened/synchronize observation
-replaces the saved signal, including resetting to Checking on a new push.
+GitHub computes whether a PR can merge asynchronously, and the answer changes when
+the base branch moves, even without a push to the PR. Previa therefore treats the
+saved value as a hint for the dashboard and re-checks it at every build boundary.
 
-Unresolved observations enqueue `pr_mergeability` jobs on the existing discovery
-queue. After two seconds the worker GETs only the tracked PR by number. Ordinary
-unresolved checks retry after two seconds, at most eight attempts; rate limits
-respect GitHub's retry-after/reset. Exhaustion leaves Checking visible and builds
-blocked; another event or open-only sync can retry. No API IO runs inside a DB
-transaction. Installation/repository revision and PR generation/SHA fences reject
-stale checks. Resolving an event-driven check resumes policy coordination; checks
-originating from initial discovery do not authorize automatic builds. An existing
-event-authorized Automatic request is preserved if an overlapping sync check
-resolves first. Committed PR, sync and mergeability changes notify open
-repository pages through PostgreSQL triggers and Server-Sent Events
-([REALTIME_UPDATES.md](REALTIME_UPDATES.md)); the browser refetches saved data and
-never queries GitHub.
+Migration 10 stores nullable `mergeable`, the raw `mergeable_state` and a derived
+`build_status`, separate from the lifecycle (`open`, `closed`, `merged`):
 
-Manual intent requests, scheduled dispatch and runtime admission all gate on the
-saved status, with runtime admission under the same locks as generation checking.
-Conflict feedback says “Build refused: resolve merge conflicts and push a new
-commit first.” Checking requests ask contributors to wait or sync again. The
-existing dashboard carries these reasons and direct Build POSTs return 409.
-Production runtime and GitHub publication remain unbuilt; no live comments or
-Docker builds are claimed. See [PHASE3_REPORT.md](PHASE3_REPORT.md) for test evidence
-and the remaining live GitHub verification.
+| GitHub signal for an open PR | Status shown | Build eligibility |
+| --- | --- | --- |
+| `mergeable=false` or `mergeable_state=dirty` | Conflicts | Refused: resolve conflicts and push a commit |
+| `mergeable=true` or `mergeable_state=clean` | Open | Eligible, subject to access, generation and policy gates |
+| Null/unresolved without `clean` | Checking | Refused: wait for the check or sync again |
+
+Contradictory signals favour Conflicts. Every opened/reopened/synchronize event
+replaces the saved signal, so a push resets the status to Checking.
+
+- An unresolved observation schedules a `pr_mergeability` job on the discovery queue
+  two seconds later. It GETs only that already-tracked PR
+  (`GET /repos/{owner}/{repo}/pulls/{number}`) and never discovers history.
+- Still-unresolved results retry every two seconds, at most eight ordinary attempts;
+  rate limits respect retry-after/reset. Exhaustion leaves Checking visible and
+  builds blocked until another event or sync retries.
+- API calls run outside transactions. Installation/repository revisions and PR
+  generation/SHA fence stale responses, so an old check cannot overwrite a newer commit.
+- A check triggered by a webhook resumes Automatic coordination when it resolves;
+  checks from discovery never authorize builds. An existing event-authorized request
+  survives an overlapping sync check that resolves first.
+- Manual requests, scheduled dispatch and runtime admission all gate on the saved
+  status, with runtime admission checking it under the same lock as the generation.
+  The dashboard shows the reason; direct Build POSTs return 409.
+- Committed changes reach open pages through database triggers and Server-Sent
+  Events ([11](11-realtime-updates.md)); the browser refetches saved data and never
+  calls GitHub.
+
+## Verification status
+
+Automated tests use signed fixtures, an HTTP fake of the GitHub API and real
+PostgreSQL/River. One test creates a genuine local Git merge conflict and shows that
+manual requests, scheduled dispatch and runtime admission all refuse it until a
+resolving push restores Open. A **hosted** proof is still pending: delivering real
+GitHub webhooks to a public URL, and watching a real PR move from Checking to
+Conflicts to Open, needs a disposable repository with write access. Steps:
+
+1. Configure the webhook secret and public URL (above), run server and worker.
+2. Link a disposable repository with two open PRs plus some closed/merged ones;
+   expect only the two open PRs after discovery.
+3. Create a conflicting change on the base branch; expect Conflicts and the refusal
+   reason. Push a resolution; expect Checking, then Open.

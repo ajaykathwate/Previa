@@ -1,4 +1,4 @@
-# Realtime updates
+# 11 · Realtime updates (Server-Sent Events)
 
 Open repository and PR pages update when committed state changes, without
 polling. This document explains the pipeline and how to extend it.
@@ -9,7 +9,7 @@ Pages previously re-rendered every three seconds for as long as they were open,
 whether or not anything changed. That cost a request and several queries per tab
 every three seconds and still lagged real changes. GitHub was never polled by the
 dashboard; worker-side mergeability checks are separate, event-triggered and
-bounded (see [WEBHOOKS_AND_PR_DISCOVERY.md](WEBHOOKS_AND_PR_DISCOVERY.md)).
+bounded (see [05](05-webhooks-and-pr-discovery.md#mergeability)).
 
 ## Pipeline
 

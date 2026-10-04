@@ -1,12 +1,18 @@
-# Repository preview configuration
+# 06 · Repository configuration (`.previewrc.yaml`)
 
 Place `.previewrc.yaml` at the repository root. Previa reads it at the exact
 requested full commit SHA using the existing GitHub App installation credentials,
 not the default branch or a contributor's OAuth token.
 
-The standalone feature is implemented in `internal/repoconfig`. It is not wired
-to jobs, webhooks, pages, containers or GitHub comments. This guide describes its
-approved parsing contract, not a claim that installing the App builds a preview.
+`internal/repoconfig` implements fetching and validation as a standalone library.
+Nothing calls it yet: the build pipeline will load the file for the exact commit it
+is about to build ([13-roadmap.md](13-roadmap.md)). This guide is the contract that
+pipeline will rely on.
+
+**Why per-commit and strict:** the file comes from the PR author, so it is
+untrusted input. Reading it at the exact SHA means a preview always matches the code
+it builds; strict parsing and named tiers stop a contributor from smuggling in
+unexpected keys, paths outside the repository or unbounded resources.
 
 ## YAML contract
 
@@ -37,7 +43,7 @@ publication when no HTTP endpoint is declared.
 Only one YAML mapping/document is supported. Unknown/duplicate keys, tags, anchors,
 aliases, merges and complex keys are rejected. Numeric resource objects, build mode
 and Automatic debounce settings are not allowed in repository YAML. Build policy
-is owner-controlled platform data; see [BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md).
+is owner-controlled platform data; see [07](07-build-policy-and-intents.md).
 
 ## Resource tiers and ceilings
 
@@ -52,7 +58,7 @@ Docker build-process budgets. Default platform ceilings are **2000 millicpu and
 2147483648 bytes (2 GiB)**. `DefaultLimits()` supplies these values.
 
 Platform callers can pass positive `Resources{CPUMillis, MemoryBytes}` ceilings to
-`NewService` or `Parse`. No new `.env` setting is added in this standalone phase.
+`NewService` or `Parse`. There is no `.env` setting for ceilings yet.
 Lower ceilings clamp the selected tier and return `cpu_clamped`/`memory_clamped`
 notices alongside the effective values. For example, large under 750 millicpu /
 768 MiB ceilings becomes 0.75 vCPU / 768 MiB; the requested tier stays visible.

@@ -1,36 +1,19 @@
-# PR generation ordering
+# 10 · Generation ordering and fencing (implementation)
 
-**Scheduling decision:** [BUILD_POLICY_AND_USER_FLOW.md](BUILD_POLICY_AND_USER_FLOW.md)
-changes the target to Manual by default and five-minute Automatic debounce.
-Policy/current intent persistence (Prompt 2) and durable coordination (Prompt 3)
-are implemented behind tested interfaces. See [BUILD_INTENTS.md](BUILD_INTENTS.md)
-and [BUILD_SCHEDULING.md](BUILD_SCHEDULING.md). Initial admission, successor
-handoff and recovery consult authorized eligible intent. Manual observation alone
-never starts a build. Result/outbox/finalization/reporting/cleanup guards carry
-request revision as well as generation; real adapters must fence that tuple.
-Production dispatch remains disabled without those adapters.
+How the code guarantees that a newer commit, a close or a deliberate rebuild always
+beats older work, even when jobs retry, overlap or finish late. This is the
+implementation of the decision in [09](09-durable-publication-design.md); the
+request revision it carries alongside generation comes from
+[07](07-build-policy-and-intents.md), and admission/handoff from
+[08](08-build-scheduling.md).
 
-Phase 1 audit fixes: migration 9 enforces one lifetime environment row per PR.
-Worker admission clears prior logs transactionally after current-request checks;
-rejected jobs and failed admission preserve logs. See [PHASE1_AUDIT.md](PHASE1_AUDIT.md)
-for the executed regression matrix and production boundaries.
-
-**Status:** generation fencing and the database/River durable-publication
-foundation are implemented. `Repository.Apply` commits environment state plus an
-outbox row and River wake-up in one short transaction; external operations run in
-a separate worker boundary. Real Docker, route, GitHub-reporting adapters and
-production reconciliation scheduling remain unimplemented. See
-[DESIGN_DURABLE_PUBLICATION.md](DESIGN_DURABLE_PUBLICATION.md) for architecture
-and adapter requirements.
-
-The ordering core is implemented behind the runtime and publication interfaces in
-`internal/environments`. The signed HTTP webhook receiver and PR discovery are now implemented; see
-[WEBHOOKS_AND_PR_DISCOVERY.md](WEBHOOKS_AND_PR_DISCOVERY.md) for receipt/source ordering.
-Docker build/runtime, Traefik routing and GitHub comment adapters remain unimplemented. Per
-AGENTS.md scope discipline, these dependencies remain interfaces. The default
-server tracks signed events and renders the PR workspace; workers process ping and configured discovery. Integration tests
-exercise the new processing flow with real PostgreSQL/River and simulated external
-operations; they do not build Docker images or contact GitHub.
+**Status:** generation and revision fencing, guarded results and the database/River
+publication outbox are implemented in `internal/environments` and tested with real
+PostgreSQL and River plus simulated runtime/publication adapters. Docker, routing,
+GitHub reporting and a production reconciliation timer are not connected, so these
+tests prove database behaviour, not real deployments. Migration 9 keeps one
+environment row per PR for its whole life; admission clears the previous build's
+logs only after its checks pass.
 
 ## Recording an event and capturing its generation
 

@@ -1,0 +1,143 @@
+# 01 · System overview
+
+Previa is a self-hosted control plane that gives each GitHub pull request its own
+temporary preview environment. This document is the map: what exists today, how
+the pieces fit, the decisions behind them and the hard problems they solve.
+Requirements and the technology comparison live in [README.md](../README.md);
+per-feature design lives in [DESIGN.md](../DESIGN.md).
+
+## Status at a glance
+
+| Area | State |
+| --- | --- |
+| GitHub sign-in, sessions, CSRF, logout | Working |
+| GitHub App installation linking and repository access | Working |
+| Signed, deduplicated webhook ingestion | Working (local signed fixtures verified; hosted delivery not yet observed) |
+| Open-only PR discovery, sync and mergeability checks | Working |
+| Manual/Automatic build policy, durable build intent, five-minute debounce | Working as persisted coordination; **no build executes** |
+| Repository/PR dashboard with live updates (SSE) | Working |
+| Build/teardown orchestration, durable publication outbox, reconciler | Implemented and tested behind interfaces; **not registered in production** |
+| `.previewrc.yaml` fetch and validation | Implemented as a standalone library; not yet called by a build |
+| Source fetch, image build, container runtime, routing/TLS, PR comments, secrets, live logs, expiry | **Not built** (placeholder packages only) |
+
+The **Build latest commit** action is deliberately disabled and its endpoint refuses
+work. Nothing deploys a preview yet. [13-roadmap.md](13-roadmap.md) lists the
+remaining work in order.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    B[Browser] -->|HTML, HTMX, SSE| S[Server<br/>cmd/server]
+    GH[GitHub] -->|signed webhooks| S
+    S -->|OAuth, App API| GH
+    S <-->|pgx| DB[(PostgreSQL 17)]
+    W[Worker<br/>cmd/worker] <-->|River jobs| DB
+    W -->|App API: PR pages, mergeability| GH
+    DB -.->|NOTIFY previa_events| S
+```
+
+- **One database does everything stateful.** PostgreSQL stores application data,
+  sessions (SCS `pgxstore`), the job queue (River) and change notifications
+  (`LISTEN/NOTIFY`). There is no Redis, broker or separate queue server.
+- **Two processes.** The server handles HTTP, OAuth, webhooks, the dashboard and
+  live event streams, and inserts jobs. The worker runs River jobs: the `ping`
+  diagnostic and, when App credentials are configured, PR discovery and
+  mergeability checks. Each process loads only its own configuration.
+- **Server-rendered UI.** Go `templ` pages enhanced with local HTMX and one plain
+  JavaScript file. No SPA, frontend build service or Node.js runtime.
+
+## Code layout
+
+`cmd → internal/app → feature packages → internal/platform`. Features own their
+handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
+
+| Path | What it holds |
+| --- | --- |
+| `cmd/server`, `cmd/worker`, `cmd/river-migrate` | Thin entry points. |
+| `internal/app` | Composition root: builds dependencies, starts and stops processes. |
+| `internal/auth` | GitHub OAuth login, user upsert, SCS sessions, CSRF, logout. |
+| `internal/installations` | Verified App linking, installation lifecycle, repository directory, build-mode policy. |
+| `internal/webhooks` | Signed ingress, delivery deduplication, lifecycle dispatch. |
+| `internal/pullrequests` | PR observations, discovery/sync, mergeability, repository/PR pages, event stream endpoint. |
+| `internal/environments` | Build intent, scheduling, admission, generation-fenced results, publication outbox, reconciler. |
+| `internal/repoconfig` | Exact-SHA `.previewrc.yaml` fetch, strict validation, resource tiers. |
+| `internal/dashboard` | Home, overview, session and developer-tools pages; queue ping. |
+| `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub + SSE). |
+| `internal/{source,builds,runtime,routing,reporting,secrets,buildlogs,housekeeping}` | Placeholders for unbuilt features (`doc.go` only). |
+| `web/` | `pages/<feature>`, `layouts`, `components`, `styles` (Tailwind), `static` (HTMX, compiled CSS, `ui.js`), browser tests. |
+| `db/migrations` | Goose migrations 0001–0011; sqlc generates typed queries into each feature's `dbgen/`. |
+| `tools/go.mod` | Pinned dev tools: templ, sqlc, Goose, Air, golangci-lint. |
+
+## Data model
+
+| Table | Purpose |
+| --- | --- |
+| `users`, `sessions` | GitHub identities and server-side sessions. |
+| `installations`, `repos` | Linked App installations (owner, status, revision) and repositories (access, `build_mode`, observation version). |
+| `installation_repository_events`, `webhook_deliveries` | Lifecycle ordering tombstones and delivery receipts (hash, not payload). |
+| `pull_requests` | Observed PR state: head SHA, lifecycle, `generation`, source timestamp, mergeability, fork data. |
+| `pr_syncs` | Discovery run state per repository. |
+| `build_intents` | One current authorized build request per PR, with `revision`. |
+| `environments`, `environment_operations` | One lifetime preview per PR (active and pending artifacts) and the durable publication outbox. |
+| `build_logs`, `env_secrets` | Current-build logs (cleared on build admission; no writer yet) and preview secrets (unused until the secrets feature). |
+| `river_*` | River's own job tables, migrated separately. |
+
+## Key decisions and trade-offs
+
+| Decision | Why | Trade-off accepted |
+| --- | --- | --- |
+| Go + templ + HTMX, server-rendered | One binary, one deploy, no frontend toolchain; works without JavaScript. | Rich client interactions take more care than in a SPA. |
+| PostgreSQL for queue, sessions and events | One stateful dependency to run, back up and reason about; job inserts share transactions with state changes. | Throughput ceilings are lower than dedicated brokers; fine at preview-platform scale. |
+| River with at-least-once delivery | Transactional enqueue (`InsertTx`), retries, uniqueness, rescue. | Every job must be idempotent and fenced; exactly-once is never assumed. |
+| Generation + revision fencing | A newer commit, close or deliberate rebuild must always beat stale work. | Extra columns, guards and tests on every write path. |
+| Manual build policy by default | Contributors cannot trigger platform spend; owners opt into Automatic. | Manual users must click to update a preview. |
+| Five-minute trailing debounce for Automatic | Bursts of pushes produce one build, not many. | Continuous pushing postpones builds; Manual is the override. |
+| Transactional webhook ingestion (no inbox) | Receipt, state change and intent commit together; no external IO in ingress. | Ingress must stay short; an inbox is the upgrade path if it cannot. |
+| Open-only PR discovery | Avoids importing history and API fan-out. | Closed PRs appear only if Previa tracked them while open. |
+| Mergeability as a hint, gate re-checked at build time | GitHub computes it asynchronously and it changes when the base branch moves. | The UI can briefly show Checking. |
+| Outbox/saga for publication | PostgreSQL cannot commit atomically with Docker, Traefik and GitHub. | Eventual convergence; adapters must be idempotent and fenced. |
+| SSE invalidation instead of polling | Idle pages send nothing; changes arrive within moments; reuses Postgres. | One long-lived connection per open page; proxies must not buffer. |
+| Package by feature, consumer-defined interfaces | Features evolve independently; no global handler/store layers. | Some small duplication across features. |
+
+## Hard problems and how they are handled
+
+- **Out-of-order and duplicate events.** GitHub can redeliver or reorder webhooks.
+  Unique delivery receipts make retries no-ops; PR `updated_at` orders snapshots;
+  equal-time conflicts are marked `needs_refresh` instead of guessed
+  ([05](05-webhooks-and-pr-discovery.md)).
+- **Stale work finishing late.** Every job captures the PR generation and request
+  revision; result writes lock the PR row and refuse anything not current
+  ([10](10-generation-ordering.md)).
+- **Same-commit retries.** Rebuilding an unchanged SHA advances the intent revision,
+  so old operations cannot collide with new ones ([07](07-build-policy-and-intents.md)).
+- **No transactions across systems.** Desired state commits in PostgreSQL with a
+  durable operation row; external calls run outside transactions and a reconciler
+  repairs partial failures ([09](09-durable-publication-design.md)).
+- **Long locks versus slow IO.** GitHub/Docker calls never run while a row lock or
+  transaction is open; revisions are captured before IO and rechecked after.
+- **Asynchronous mergeability.** Unknown results trigger a bounded, fenced recheck
+  job; builds fail closed while Checking or Conflicts.
+- **Revoked access.** Revocation records durable `cleanup_pending`; no absent
+  adapter is ever reported as having cleaned up.
+- **Live UI without missed updates.** SSE streams carry resumable cursors; the page
+  cursor is read before page state, so a commit in between is replayed
+  ([11](11-realtime-updates.md)).
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| Observation | A PR state learned from a webhook, sync or targeted API read. |
+| Generation | Monotonic counter on a PR, advanced by each fresh relevant observation. |
+| Intent | The single current authorized build request for a PR (`build_intents`). |
+| Revision | Monotonic counter on an intent; distinguishes deliberate requests for the same SHA. |
+| Wake-up | A delayed River job that rechecks durable intent when its deadline arrives. |
+| Environment | The one lifetime preview record per PR, holding active and pending artifacts. |
+| Operation | A durable outbox row for an external side effect (route, report, cleanup). |
+| Topic / cursor | A realtime channel name such as `repository:42` and a resumable event position. |
+
+## Read next
+
+[02-development-setup.md](02-development-setup.md) to run it locally, then
+[03-user-guide.md](03-user-guide.md) to walk through the screens.

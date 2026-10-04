@@ -153,7 +153,7 @@ High. Two credential types, a private key to protect, short-lived tokens to mana
 - **Linking installer to user** relies on the browser redirect; the webhook alone does not say which dashboard user did it, so the two events are matched by installation ID.
 - **Verified linking (approved refinement):** do not trust the redirect's installation ID alone. Use expiring, one-use, session-bound state, then a separate GitHub App user authorization flow. Verify its numeric user identity against dashboard sign-in and verify installation access through GitHub before linking. Keep dashboard OAuth credentials separate from App client credentials; discard the App user token after verification.
 - **Persistence:** owner may be NULL until a verified redirect; unlinked records are hidden. Store status, numeric repository IDs and access flags without deleting history. A callback captures installation revision before GitHub calls and verifies it under a row lock in its final short transaction; lifecycle calls bump revision. Existing ownership cannot be reassigned. Same-owner reinstall can retain repository history only after the old installation is inactive.
-- **Current phase boundary:** redirect linking, token caching and parsed lifecycle functions are implemented; webhook HTTP/signature validation and durable cleanup enqueueing remain later phases. Suspension/deletion revoke access and expose an idempotent cleanup boundary; absent a cleanup adapter they explicitly report incomplete cleanup. No runtime teardown is claimed. See `docs/GITHUB_INSTALLATIONS.md` for configuration, real testing and remaining delivery/reconciliation work.
+- **Current implementation:** verified redirect linking, token caching, signed lifecycle webhooks and ordering tombstones are implemented. Suspension, deletion and repository removal revoke access and record durable `cleanup_pending`; with no cleanup adapter yet, nothing is reported as cleaned up and no runtime teardown is claimed. See `docs/04-github-sign-in-and-app.md` for configuration, real testing and lifecycle rules.
 
 
 ---
@@ -184,7 +184,7 @@ Low to Medium. Parsing is easy; useful validation and safe defaults take care.
 - **Approved contract:** the config file is required, but `{}` is valid when defaults match the app. Explicit invalid/null values do not become defaults. Omitting a health path does not require `/health`; runtime readiness still needs implementation.
 - **Safety:** 64 KiB config / 128 KiB API response envelope; 15-second overall fetch context plus existing HTTP timeouts. GitHub 404 is called missing-file only after the installation can verify the exact commit. Errors expose safe fields/codes/locations rather than YAML/env values or raw API bodies.
 - **Filesystem boundary:** validation is lexical; later source extraction/build adapters must reject unsafe symlinks and enforce actual repository containment.
-- **Current implementation:** standalone `internal/repoconfig` fetch/parse/effective-limit/hash APIs and fixtures are implemented. Config hash excludes requested tier metadata and uses resolved resources plus sorted unique env entries. No database persistence, webhook/job/UI wiring, health execution or GitHub comments are implemented here. See [REPO_CONFIGURATION.md](docs/REPO_CONFIGURATION.md).
+- **Current implementation:** standalone `internal/repoconfig` fetch/parse/effective-limit/hash APIs and fixtures are implemented. Config hash excludes requested tier metadata and uses resolved resources plus sorted unique env entries. No database persistence, webhook/job/UI wiring, health execution or GitHub comments are implemented here. See [06-repository-configuration.md](docs/06-repository-configuration.md).
 
 ---
 
@@ -221,10 +221,10 @@ Medium. Small code, high consequence: authenticity, idempotency and ordering all
   bulk-authorizes builds. Installation deletion is terminal; per-repository access
   tombstones preserve revocation on ambiguous timestamp ties. Cleanup remains
   durably pending until a real adapter handles it. See
-  [WEBHOOKS_AND_PR_DISCOVERY.md](docs/WEBHOOKS_AND_PR_DISCOVERY.md).
+  [05-webhooks-and-pr-discovery.md](docs/05-webhooks-and-pr-discovery.md).
 - **Out-of-order delivery:** jobs carry the head SHA; a job whose SHA is no longer the latest for that PR is discarded on start (see feature 13).
 - **Fork PRs:** detect them from the payload and apply the fork policy from feature 10 and 16.
-- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. Real runtime integration remains unbuilt. See [BUILD_POLICY_AND_USER_FLOW.md](docs/BUILD_POLICY_AND_USER_FLOW.md); see [BUILD_SCHEDULING.md](docs/BUILD_SCHEDULING.md) for parsed-event coordination and production dispatch boundaries.
+- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. Real runtime integration remains unbuilt. See [07-build-policy-and-intents.md](docs/07-build-policy-and-intents.md); see [08-build-scheduling.md](docs/08-build-scheduling.md) for parsed-event coordination and production dispatch boundaries.
 
 ---
 
@@ -424,11 +424,11 @@ High. Concurrency and zero-gap swapping.
 - **Latest wins:** intermediate commits may never deploy; only the newest matters.
 - **Orphan protection:** any container labeled for this PR but not referenced by the current record is removed by the reconciler.
 - **Manual freshness:** a new commit fences an older in-flight result but does not authorize its successor in Manual mode. An already deployed healthy preview stays available and the UI distinguishes its deployed SHA from the latest PR SHA.
-- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [BUILD_INTENTS.md](docs/BUILD_INTENTS.md). Prompt 3 propagates revision through jobs, results and publication; [BUILD_SCHEDULING.md](docs/BUILD_SCHEDULING.md) records exact SQL and integration limits.
+- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [07-build-policy-and-intents.md](docs/07-build-policy-and-intents.md). Scheduling propagates revision through jobs, results and publication; [08-build-scheduling.md](docs/08-build-scheduling.md) records exact SQL and integration limits.
 
 Implementation status and the proposed durable publication boundary are kept
-separate: see [the current generation-ordering implementation](docs/GENERATION_ORDERING.md)
-and [the durable publication design](docs/DESIGN_DURABLE_PUBLICATION.md). The target
+separate: see [the current generation-ordering implementation](docs/10-generation-ordering.md)
+and [the durable publication design](docs/09-durable-publication-design.md). The target
 design moves external routing/reporting calls out of the transaction while retaining
 generation fencing and recovery across crashes.
 
@@ -557,7 +557,7 @@ Committed changes stream to open repository/PR pages as Server-Sent Events
 (PostgreSQL triggers -> NOTIFY -> one LISTEN session per server -> in-process hub
 -> per-repository stream). Events are invalidation signals with resumable cursors;
 pages refetch through ordinary authorized GETs, defer while search is focused or a
-policy modal is open, and send nothing while idle. See docs/REALTIME_UPDATES.md;
+policy modal is open, and send nothing while idle. See docs/11-realtime-updates.md;
 build-log streaming reuses the same SSE writer with its own sequence replay. Current build/logs and deployed
 preview controls remain dependent on the execution adapters. Builds is
 a cross-repository view of current/latest work; Environments is a deployment view,
@@ -565,7 +565,7 @@ not another name for Builds. Do not add historical build storage implicitly.
 Initial discovery and detail screens are implemented by a feature-owned
 `internal/pullrequests` package: explicit refresh, bounded River pagination,
 source/access snapshot fences and owned Templ pages. The build action fails closed
-until real execution adapters exist. See [APP_USER_FLOW.md](docs/APP_USER_FLOW.md).
+until real execution adapters exist. See [03-user-guide.md](docs/03-user-guide.md).
 
 ### Design decisions and edge cases
 - **Server-rendered UI** keeps everything in one binary and one deploy.
@@ -955,7 +955,7 @@ Shared palette/font tokens live in `web/styles/theme.css`; `site.css` composes
 base, home, workspace, confirmation and motion styles into the same compiled asset.
 Optional `web/tests/browser` regression tooling uses pinned Playwright v1.58.2 and
 Node.js 20+ only for development; the application has no Node.js runtime dependency.
-See `docs/UI_ARCHITECTURE.md` for the implemented presentation boundary.
+See `docs/12-ui-architecture.md` for the implemented presentation boundary.
 
 ### sqlc and migrations in a feature-based layout
 

@@ -52,7 +52,7 @@ unbuilt feature, stub it behind a minimal interface rather than building it.
 ## Every task
 - When configuration, prerequisites, setup commands, migrations, development
   tooling, or startup/verification behavior changes, update
-  `docs/DEVELOPMENT_SETUP.md` in the same task. Keep instructions consistent with
+  `docs/02-development-setup.md` in the same task. Keep instructions consistent with
   `.env.example`, config loaders, Makefile, and Air; include commands and expected
   results, and distinguish automatic env loading from manual exports.
 - After making changes, run `go build ./...` and existing tests.

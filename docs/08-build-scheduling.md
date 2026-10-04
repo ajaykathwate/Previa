@@ -1,13 +1,16 @@
-# Durable build scheduling and intent-aware handoff
+# 08 · Build scheduling and worker handoff
 
-## Implementation boundary
+How an authorized intent ([07](07-build-policy-and-intents.md)) becomes executable
+work: durable deadlines, River wake-ups, atomic admission, one build per PR, handoff
+to the next request and crash recovery. Everything here is implemented and tested
+with real PostgreSQL and River; what is missing is the real build/runtime adapters.
 
-Prompt 3 connects the tested control-plane interfaces: parsed PR events, repository
-policy, current build intent, River wake-ups, executable admission, worker handoff,
-result/publication guards and recovery. Prompts 4–5 now construct observation coordination in the HTTP server, with signed
-transactional ingress and repository/PR policy UI. Workers execute ping and
-App-configured PR discovery. Real executable build/teardown, route and reporting
-workers remain unregistered; durable preview intent/wake-ups wait for capable adapters.
+## What runs in production today
+
+The server constructs the **observation coordinator**: webhooks and policy changes
+persist intent and wake-ups. Workers execute `ping`, PR discovery and mergeability
+checks. Executable build, teardown, route and reporting workers are **not
+registered**, so durable intent and wake-ups simply wait until capable adapters exist.
 
 `NewBroker` can persist coordination wake-ups but **cannot dispatch executable
 build/teardown work**. Its `RequestBuild`, `EnqueueTx` and `Dispatch` reject execution
@@ -23,17 +26,19 @@ production execution is not supported.
 - `opened`, `reopened`, `synchronize`, and `closed` are supported parsed actions.
   `closed` with `Merged: true` stores `merged`.
 - Every committed supported invocation increments PR generation once. Delivery
-  identity/authentication/source ordering are implemented by Prompt 4; stale source
-  deliveries are acknowledged without regressing state. See [WEBHOOKS_AND_PR_DISCOVERY.md](WEBHOOKS_AND_PR_DISCOVERY.md).
-- Unsupported actions return an error without mutation; future HTTP routing must
-  ignore unrelated event types/actions. Comments/reviews never reset a deadline.
+  authentication, deduplication and source ordering happen in webhook ingestion;
+  stale deliveries are acknowledged without regressing state ([05](05-webhooks-and-pr-discovery.md)).
+- Unsupported actions return an error without mutation, and the HTTP adapter
+  acknowledges unrelated event types without processing them. Comments and reviews
+  never reset a deadline.
 - Manual observations track PR state and supersede stale active intent without
   authorizing a new build or creating an environment.
 - Automatic observations record current intent with `available_at = now + 5m`.
   Each relevant event advances observed generation and replaces the request/deadline.
   Changing mode alone does not schedule existing PRs.
-- `Broker.RequestBuild` resolves owner access/current SHA, applies Prompt 2's
-  Build/Retry/Rebuild contract, and inserts its wake-up in the same transaction.
+- `Broker.RequestBuild` resolves owner access/current SHA, applies the
+  Build/Retry/Rebuild contract ([07](07-build-policy-and-intents.md)), and inserts its
+  wake-up in the same transaction.
   Manual override is immediate. The low-level `IntentService.Request` remains a
   persistence API; future browser handlers must use the coordinator rather than
   bypassing wake-up/dispatch capability checks.
@@ -185,24 +190,18 @@ accepts zero. No synthetic lifecycle event is created. A real authorized build
 still carries a positive request revision. Legacy open work without current intent
 fails closed; existing deployed fields are preserved.
 
-## Local checks and next phase
+## Tests
 
-Run `make migrate-up` after checkout updates. Current schema: Goose 9, River 007.
-No new `.env` fields or extra production processes are needed. With an exported
-local `TEST_DATABASE_URL`:
+Run `make migrate-up`, export `TEST_DATABASE_URL`, then:
 
 ```sh
 go test -count=1 -race ./internal/environments
-go test -count=1 ./...
-make build test lint
 ```
 
-Tests cover Manual no-build, deadline reset, stale/early wake-ups, manual override,
+Covers Manual no-build, deadline reset, stale/early wake-ups, manual override,
 duplicate requests, mode/access revocation, recovery, atomic rollback, concurrent
 observation/request changes, same-generation stale success/failure/publication,
-generation-zero finalization, real River wake-up processing/PR uniqueness, future
-handoff deadlines, success/terminal-failure handoff and close-during-build cleanup.
-
-Prompts 4–5 are complete: authenticated transactional ingress, paginated PR discovery,
-workspace screens and owner controls. Real source/build/runtime/router/reporting
-adapters remain the later execution phase.
+generation-zero finalization, real River wake-up processing and PR uniqueness,
+future handoff deadlines, success/terminal-failure handoff and close-during-build
+cleanup. Real source/build/runtime/router/reporting adapters are the next step
+([13-roadmap.md](13-roadmap.md)).

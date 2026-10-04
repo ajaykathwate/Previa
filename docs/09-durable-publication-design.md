@@ -1,24 +1,24 @@
-# Design: Durable, generation-fenced publication
+# 09 · Design: durable, generation-fenced publication
 
 This document records the architecture decision for safely publishing preview
 environment changes when PostgreSQL, River, Docker, the routing layer, and GitHub
 can fail independently. It covers only that consistency problem. Product
 requirements remain in [README.md](../README.md), feature implementation details
 remain in [DESIGN.md](../DESIGN.md), and the current generation implementation and
-tests remain in [GENERATION_ORDERING.md](GENERATION_ORDERING.md).
+tests are in [10-generation-ordering.md](10-generation-ordering.md).
 
 ## Decision
 
-Build authorization follows the accepted
-[Manual/Automatic policy](BUILD_POLICY_AND_USER_FLOW.md). Policy/current intent
-persistence and coordination scheduling are implemented behind tested interfaces;
-production runtime dispatch remains unconnected. PR observation is distinct from authorized work: Manual waits for an owner
+Build authorization follows the
+[Manual/Automatic policy](07-build-policy-and-intents.md). Policy, current intent
+and scheduling are implemented behind tested interfaces; production runtime
+dispatch remains unconnected. PR observation is distinct from authorized work: Manual waits for an owner
 request; Automatic persists a five-minute trailing deadline. The publication
 protocol below applies only to authorized builds. Generation fencing remains
 independent of scheduling mode; close/merge still requests immediate teardown.
-[BUILD_INTENTS.md](BUILD_INTENTS.md) adds an independent request revision for
-same-generation Retry/Rebuild. Prompt 3 now carries that identity into operation
-keys/payloads, finalization, reporting and cleanup. See [BUILD_SCHEDULING.md](BUILD_SCHEDULING.md).
+Build intent adds an independent request revision for same-generation
+Retry/Rebuild ([07](07-build-policy-and-intents.md)); scheduling carries it into
+operation keys/payloads, finalization, reporting and cleanup ([08](08-build-scheduling.md)).
 All version/fencing/idempotency references below apply to the ordered tuple
 `(generation, revision)`: generation dominates; revision distinguishes deliberate
 requests for the same observed commit. Generation-only examples below describe
@@ -118,7 +118,7 @@ Docker produced a container. Persist the candidate's generation, SHA,
 container/image identity, and lifecycle state before asking the router to use it.
 
 The foundation uses these environment states: `queued` means a PR exists but has
-no active candidate; `publishing` m eans a healthy candidate is pending route
+no active candidate; `publishing` means a healthy candidate is pending route
 activation; `running` means the candidate's activation operation committed; `failed`
 means the current build attempt failed while prior active and pending artifacts
 remain protected;
@@ -177,7 +177,7 @@ transaction so neither can commit alone.
 
 The build worker fetches and builds the exact requested SHA without a PR-row lock.
 It creates a candidate container that is not yet publicly routed, waits for health
-checks, and tags/lables all resources with stable ownership data: PR ID, generation,
+checks, and tags/labels all resources with stable ownership data: PR ID, generation,
 SHA, and operation/build ID. Tags must be generation-specific; a later build must
 not overwrite an image another generation still uses.
 
@@ -422,8 +422,8 @@ traffic path; an ordinary asynchronous config push is not enough.
 ## Related code and documents
 
 - Current implementation and its SQL/test evidence: `internal/environments/`,
-  `internal/webhooks/`, and [GENERATION_ORDERING.md](GENERATION_ORDERING.md).
+  `internal/webhooks/`, and [10-generation-ordering.md](10-generation-ordering.md).
 - Product workflow and original queue/rebuild/teardown requirements:
   [DESIGN.md Sections 7, 13, 14, and 15](../DESIGN.md).
 - Process/configuration, build timeouts, and local database setup:
-  [Development setup](DEVELOPMENT_SETUP.md).
+  [02-development-setup.md](02-development-setup.md).

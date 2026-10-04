@@ -8,9 +8,11 @@ defaults to **Manual**: its owner requests a build for a specific PR. Owners can
 enable **Automatic**, which builds the latest commit after a five-minute quiet
 period. Previews are torn down when the PR closes or merges.
 
-Manual/Automatic scheduling is the accepted target design, not yet implemented.
-See [build policy and recommended UI flow](docs/BUILD_POLICY_AND_USER_FLOW.md)
-for the implementation boundaries and remaining decisions.
+Manual/Automatic policy, durable build intent and scheduling are implemented;
+building and serving previews is not connected yet. See
+[build policy and build intent](docs/07-build-policy-and-intents.md) and the
+[roadmap](docs/13-roadmap.md). Start with the [documentation index](docs/README.md)
+for a guided reading order.
 
 This document is written for the builder (me), not an end user — every step
 explains what happens internally at that stage, not just what the user sees.
@@ -123,7 +125,7 @@ authorize publishing an unchecked container; runtime readiness remains a later
 integration requirement.
 
 Standalone fetching/validation is implemented; real builds are not connected.
-See [repository configuration](docs/REPO_CONFIGURATION.md) for strict validation,
+See [repository configuration](docs/06-repository-configuration.md) for strict validation,
 safe error categories, fixtures and effective config hashing. Build mode remains
 platform-owned and cannot be set through this YAML.
 
@@ -228,7 +230,7 @@ and navigation works without JavaScript.
 PR discovery and latest/requested/deployed commit views are implemented. Builds
 and Environments show actual saved state. Build execution, live logs, preview
 routing and teardown controls remain unavailable until their adapters are connected.
-See [APP_USER_FLOW.md](docs/APP_USER_FLOW.md) for the current browser workflow.
+See [03-user-guide.md](docs/03-user-guide.md) for the current browser workflow.
 
 - **Builds** describes current/latest execution work and its commit/logs, not a
   permanent historical build archive (see 4.5).
@@ -479,8 +481,8 @@ production dispatch and UI wiring remain unbuilt. Repeated Build requests coales
 failure or Rebuild after success creates a new revision without bumping PR
 generation. Switching to Manual cancels unstarted Automatic intent; running work
 may finish if still current. No historical builds archive is introduced. See
-[BUILD_INTENTS.md](docs/BUILD_INTENTS.md) for request semantics and
-[BUILD_SCHEDULING.md](docs/BUILD_SCHEDULING.md) for atomic admission, wake-up
+[07-build-policy-and-intents.md](docs/07-build-policy-and-intents.md) for request semantics and
+[08-build-scheduling.md](docs/08-build-scheduling.md) for atomic admission, wake-up
 uniqueness, revision fencing and remaining production integration.
 
 A unique constraint on (repo_id, number) for `pull_requests` and on `subdomain` for `environments` prevents duplicate environments when webhooks arrive twice.
