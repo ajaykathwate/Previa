@@ -37,14 +37,16 @@ func readFrame(t *testing.T, r *bufio.Reader) map[string]string {
 
 func TestStreamSendsReadyChangesAndEndsWithHub(t *testing.T) {
 	hub := NewHub()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sub := hub.Subscribe("repository:1", RequestCursor(r))
 		defer sub.Close()
 		if err := Stream(w, r, sub, StreamOptions{Retry: time.Second, Heartbeat: 50 * time.Millisecond, MaxDuration: time.Minute}); err != nil {
 			t.Errorf("stream: %v", err)
 		}
 	}))
-	server.Config.WriteTimeout = 100 * time.Millisecond // Stream must lift this deadline.
+	// Configure before serving: Stream must lift this deadline.
+	server.Config.WriteTimeout = 100 * time.Millisecond
+	server.Start()
 	defer server.Close()
 
 	res, err := http.Get(server.URL)
