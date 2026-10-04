@@ -338,7 +338,7 @@ test('PR search and pagination work without JavaScript', async () => {
 
 
 
-test('Automatic confirms before enabling saves in place and sync polling respects modal focus',async()=>{
+test('Automatic confirms before enabling saves in place and live updates respect modal focus',async()=>{
  await login();await page.goto(`${origin}/repositories`);
  await page.locator('[data-repo-link="1"]').click();await readyPanel('1');
  await page.evaluate(()=>window.originalDocument=document);
@@ -544,4 +544,23 @@ test('theme toggle switches and persists the colour theme',async()=>{
  assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),'dark');
  assert.equal(await toggle.getAttribute('aria-label'),'Switch to light theme');
  for(const width of [320,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
+});
+
+test('live updates push changes across tabs without polling',async()=>{
+ await login();await page.goto(`${origin}/repositories/1`);await readyPanel('1');
+ await page.waitForFunction(()=>document.documentElement.dataset.liveState==='live');
+ assert(await page.locator('.live-indicator').isVisible());
+ let refreshes=0;
+ page.on('request',request=>{if(request.method()==='GET'&&new URL(request.url()).pathname==='/repositories/1') refreshes++;});
+ await page.waitForTimeout(4000);
+ assert.equal(refreshes,0,'an idle repository page must not poll');
+ const other=await context.newPage();
+ try {
+  await other.goto(`${origin}/repositories/1`);
+  await other.getByRole('button',{name:'Sync Pull Requests',exact:true}).click();
+  await page.locator('.sync-state').filter({hasText:'Syncing'}).waitFor();
+  await page.waitForFunction(()=>!document.querySelector('.pr-summary').textContent.includes('Syncing'));
+  assert(refreshes>0,'pushed changes refetch the panel');
+  assert(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).isEnabled());
+ } finally {await other.close();}
 });

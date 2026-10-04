@@ -20,7 +20,7 @@ Last updated: 2026-10-04
 
 ## Run and configuration
 - make build/test/lint generate assets/templates/sqlc and run build/tests/vet/lint.
-- PostgreSQL 17 via Compose; make migrate-up applies Goose 10 and River 007.
+- PostgreSQL 17 via Compose; make migrate-up applies Goose 11 and River 007.
   Connection credentials use environment, never migration CLI arguments.
 - make run-server/run-worker autoload .env; exported overrides win. make dev
   reloads the server via Air; restart the worker after worker changes.
@@ -48,10 +48,11 @@ Last updated: 2026-10-04
 - Repositories: responsive cards (<=3 columns, 1 on phones) in a 1240px column.
   Cards open /repositories/<id>; PRs open /repositories/<id>/pull-requests/<number>.
 - PR list alone has Sync Pull Requests + soft-background Enable Automatic Builds.
-  Manual is off; enabling needs confirmation, disabling saves directly. Sync polls every 3s, pausing for
+  Manual is off; enabling needs confirmation, disabling saves directly. Sync progress is pushed live, deferring for
   focused PR search/open modal. Desktop filters one row; short/mobile pages scroll.
 - PR detail: saved SHA/link/fork/access, Open/Checking/Conflicts/Closed/Merged.
-  Active PR detail and Open/All lists poll saved status every 3s with focus/modal guards.
+  No polling: migration 11 triggers -> NOTIFY -> realtime hub -> SSE /repositories/<id>/events
+  (owner-checked, resumable cursors); see docs/REALTIME_UPDATES.md.
   Build disabled; direct POST gives conflict/checking reason, never authorizes work.
 - Builds shows actual current/latest intents, no archive. Environments shows actual
   deployment state; no fabricated URL/health/logs. Empty records stay empty.
@@ -92,8 +93,7 @@ Last updated: 2026-10-04
   Conflict/checking gates cover manual, dispatch, runtime admission and publication.
 
 ## Verification
-- 2026-10-04 UI redesign: make build, make lint (0 issues) and go test ./... pass
-  (DB-backed tests skip without TEST_DATABASE_URL). Browser suite 22/22 passes with
-  UI_BROWSER_EXECUTABLE=/snap/bin/chromium (Playwright's bundled Chromium is not
-  installed). Merged to main (09e9e40).
-- Prior Phase 3 DB/race/migration/webhook checks: docs/PHASE3_REPORT.md.
+- 2026-10-04 SSE live updates: make build, make lint (0 issues), go test ./...
+  with TEST_DATABASE_URL (isolated schemas) and -race on realtime/pullrequests/app pass;
+  trigger->LISTEN->hub integration and migration 11 up/down verified. Browser 23/23 with
+  UI_BROWSER_EXECUTABLE=/snap/bin/chromium. Dev DB not yet migrated to 11 (run make migrate-up).

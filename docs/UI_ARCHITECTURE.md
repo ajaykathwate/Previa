@@ -36,8 +36,8 @@ packages until actual reuse calls for one. Use aliases such as `authpages` and
 breadcrumbs preserve directory and PR filters. Earlier query-selection URLs
 redirect after ownership checks through a small consumer-defined navigator.
 HTMX uses `repository-results` for directory search/pagination,
-`pull-request-results` for PR search/pagination, and `repository-detail` for sync
-polling and policy saves. Only the requested fragment is rendered. Every query
+`pull-request-results` for PR search/pagination, and `repository-detail` for live
+updates, sync and policy saves. Only the requested fragment is rendered. Every query
 rechecks installation ownership; `Vary` separates full/partial representations.
 Navigation values are whitelisted and mutations never accept arbitrary return
 URLs. Last synced remains at the top of repository/PR pages. Sync Pull Requests
@@ -81,8 +81,9 @@ It progressively enhances native account menus with outside-click
 and Escape dismissal and the existing queue form with inline pending/success/error
 feedback. Workspace request events preserve filters across independent swaps,
 share a replacement request slot for selections/PR filters/policy/refresh, and
-retain content on errors. Polls use the same slot with drop behavior; they pause
-while PR search is focused or policy is open. Dialog bindings are initialized after
+retain content on errors. Live refreshes (see [REALTIME_UPDATES.md](REALTIME_UPDATES.md))
+use the same slot with drop behavior; while PR search is focused or policy is open
+they are deferred and run once the user leaves the field or closes the modal. Dialog bindings are initialized after
 HTMX loads as well as on first load. A `js-enabled` root class scopes fallback CSS
 so fragment parsing cannot expand the workspace with hidden noscript content.
 An expired HTMX session returns `HX-Redirect` to sign-in for full-document navigation.

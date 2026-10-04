@@ -220,7 +220,9 @@ narrow screens. The PR list page shows **Sync Pull Requests** and an **Enable
 Automatic Builds** switch with a subtle background. These controls are absent
 from individual PR detail pages. The switch is off in Manual mode; enabling
 requires an owner-controlled, CSRF-protected confirmation modal. Search, sync
-progress and policy saves update in place through HTMX. Page URLs are shareable
+progress and policy saves update in place through HTMX, and committed changes
+(sync progress, webhook and mergeability updates) are pushed to open repository
+pages over Server-Sent Events rather than polled. Page URLs are shareable
 and navigation works without JavaScript.
 
 PR discovery and latest/requested/deployed commit views are implemented. Builds

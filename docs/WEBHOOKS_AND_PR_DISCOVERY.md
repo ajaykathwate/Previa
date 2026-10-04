@@ -163,9 +163,10 @@ transaction. Installation/repository revision and PR generation/SHA fences rejec
 stale checks. Resolving an event-driven check resumes policy coordination; checks
 originating from initial discovery do not authorize automatic builds. An existing
 event-authorized Automatic request is preserved if an overlapping sync check
-resolves first. Open/all lists and active PR details poll saved dashboard data
-every three seconds, pausing for focused filters/open confirmation modals;
-polling never queries GitHub.
+resolves first. Committed PR, sync and mergeability changes notify open
+repository pages through PostgreSQL triggers and Server-Sent Events
+([REALTIME_UPDATES.md](REALTIME_UPDATES.md)); the browser refetches saved data and
+never queries GitHub.
 
 Manual intent requests, scheduled dispatch and runtime admission all gate on the
 saved status, with runtime admission under the same locks as generation checking.

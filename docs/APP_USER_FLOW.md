@@ -55,8 +55,9 @@ For installation/configuration commands, use [DEVELOPMENT_SETUP.md](DEVELOPMENT_
    repository page with its PRs, sync state and build policy.
 2. Click **Sync Pull Requests** for initial discovery or to refresh known state.
    This queues metadata discovery; it does not start builds.
-3. Keep the configured worker running. Queued/syncing progress updates automatically
-   every three seconds on that page. Last synced shows the latest successful
+3. Keep the configured worker running. Queued/syncing progress appears on the page
+   as soon as the worker commits it (a green **Live** dot shows the page is receiving
+   updates); webhook and mergeability changes arrive the same way. Last synced shows the latest successful
    completion beneath the clickable owner/repository title. Each API page continues durably
    until the list finishes. If refresh fails, existing records remain visible;
    check App permissions/worker configuration and retry.

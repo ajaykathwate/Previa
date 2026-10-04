@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,8 @@ import (
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/dashboard"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/realtime"
+	pr "github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/web"
 	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
@@ -41,6 +44,27 @@ func TestBrowserRegression(t *testing.T) {
 	sessions := auth.NewSessionManager(store, false, logger)
 	handler := auth.NewHandler(config.ServerConfig{AppBaseURL: origin, SessionSecret: strings.Repeat("fixture-only-", 4)}, sessions, fixtureUsers{}, fixtureProvider{origin: origin}, logger)
 	router.Handle("/static/*", web.StaticHandler())
+	// Live updates use the real hub and SSE stream. Fixture sync progress advances
+	// on a server-side timeline and publishes each step, like the database triggers.
+	hub := realtime.NewHub()
+	var syncMu sync.Mutex
+	syncing := map[int64]int{}
+	startSync := func(id int64) {
+		syncMu.Lock()
+		syncing[id] = 2
+		syncMu.Unlock()
+		hub.Publish(pr.RepositoryTopic(id), "pr_syncs")
+		go func() {
+			for left := 2; left > 0; {
+				time.Sleep(700 * time.Millisecond)
+				syncMu.Lock()
+				syncing[id]--
+				left = syncing[id]
+				syncMu.Unlock()
+				hub.Publish(pr.RepositoryTopic(id), "pr_syncs")
+			}
+		}()
+	}
 	router.Group(func(r chi.Router) {
 		r.Use(sessions.LoadAndSave, handler.LoadUser, handler.CSRF)
 		handler.Mount(r)
@@ -60,10 +84,11 @@ func TestBrowserRegression(t *testing.T) {
 			if p.State == "" {
 				p.State = "open"
 			}
-			if ticks := sessions.GetInt(r.Context(), "fixture-sync"); ticks > 0 {
+			syncMu.Lock()
+			if syncing[repoID] > 0 {
 				p.SyncState = "queued"
-				sessions.Put(r.Context(), "fixture-sync", ticks-1)
 			}
+			syncMu.Unlock()
 			if n, err := strconv.ParseInt(r.URL.Query().Get("pr_page"), 10, 64); err == nil {
 				p.Number = min(max(n, 1), 3)
 			}
@@ -95,8 +120,9 @@ func TestBrowserRegression(t *testing.T) {
 				id, _ := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
 				if strings.HasSuffix(r.URL.Path, "/policy") {
 					sessions.Put(r.Context(), "fixture-mode", r.Form.Get("mode"))
+					hub.Publish(pr.RepositoryTopic(id), "repos")
 				} else {
-					sessions.Put(r.Context(), "fixture-sync", 2)
+					startSync(id)
 				}
 				query, _ := url.ParseQuery(r.Form.Get("workspace_query"))
 				location := repositorypages.WorkspaceURL(id, query)
@@ -119,7 +145,9 @@ func TestBrowserRegression(t *testing.T) {
 					q.Del("pr")
 				}
 				r.URL.RawQuery = q.Encode()
+				cursor := hub.Cursor()
 				p := panel(r, id)
+				p.LiveURL = prpages.RepoURL(id) + "/events?since=" + url.QueryEscape(cursor.String())
 				if r.Header.Get("HX-Request") == "true" {
 					if r.Header.Get("HX-Target") == "pull-request-results" {
 						templ.Handler(prpages.Results(p)).ServeHTTP(w, r)
@@ -133,6 +161,12 @@ func TestBrowserRegression(t *testing.T) {
 				templ.Handler(prpages.Index("design-review", handler.CSRFToken(r.Context()), p)).ServeHTTP(w, r)
 			})
 		}
+		r.With(auth.RequireUser).Get("/repositories/{repoID}/events", func(w http.ResponseWriter, r *http.Request) {
+			id, _ := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+			sub := hub.Subscribe(pr.RepositoryTopic(id), realtime.RequestCursor(r))
+			defer sub.Close()
+			_ = realtime.Stream(w, r, sub, realtime.StreamOptions{Retry: 500 * time.Millisecond, Heartbeat: 10 * time.Second, MaxDuration: time.Minute})
+		})
 		// Test-only paged repository views. Database pagination is verified separately.
 		r.With(auth.RequireUser).Get("/repositories", func(w http.ResponseWriter, r *http.Request) {
 			number, _ := strconv.ParseInt(r.URL.Query().Get("page"), 10, 64)
@@ -182,6 +216,7 @@ func TestBrowserRegression(t *testing.T) {
 	})
 	server.Start()
 	t.Cleanup(server.Close)
+	t.Cleanup(hub.Close) // Runs first, ending open event streams so Close returns.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	command := exec.CommandContext(ctx, "node", "--test", "ui.test.cjs")

@@ -420,7 +420,7 @@ observed release checks in Prompt 12, including isolation, recovery and restore.
 > Finish PR detail, Builds, Environments and Overview with real queued/current
 > work, latest/requested/deployed SHA, current log links, health, stable preview
 > URL, expiry and failure reasons. Add owner-only CSRF-protected teardown with a
-> confirmation modal. Preserve list/search/focus/modal polling guards and no-JS
+> confirmation modal. Preserve list/search/focus/modal live-update guards and no-JS
 > flows. Current Builds is not a historical archive; show old serving preview
 > separately while a newer request builds or fails.
 >

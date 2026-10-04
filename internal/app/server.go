@@ -19,12 +19,14 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/githubapp"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
+	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/webhooks"
 	"github.com/ajaykathwatee/previa/web"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
 	"github.com/alexedwards/scs/pgxstore"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 )
 
 // RunServer loads configuration, checks the database, and serves HTTP until canceled.
@@ -74,7 +76,14 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	prs := pullrequests.NewHandler(pullrequests.NewRepository(pool), syncService, policy, authHandler, logger, cfg.GitHubAppID > 0)
+	// One LISTEN session per process feeds committed-change events to live pages.
+	hub := realtime.NewHub()
+	listenCtx, stopListening := context.WithCancel(ctx)
+	defer stopListening()
+	go realtime.Listen(listenCtx, func(ctx context.Context) (*pgx.Conn, error) {
+		return pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
+	}, hub, logger)
+	prs := pullrequests.NewHandler(pullrequests.NewRepository(pool), syncService, policy, authHandler, logger, cfg.GitHubAppID > 0).WithLiveUpdates(hub)
 	installationHandler.WithNavigator(prs)
 	router.Group(func(r chi.Router) {
 		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
@@ -93,6 +102,9 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		IdleTimeout:       60 * time.Second,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
+	// Event streams outlive WriteTimeout by design; closing the hub ends them so
+	// graceful shutdown does not wait for browsers to disconnect.
+	server.RegisterOnShutdown(hub.Close)
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		return fmt.Errorf("listen for HTTP: %w", err)

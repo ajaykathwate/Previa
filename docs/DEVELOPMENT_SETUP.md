@@ -253,12 +253,25 @@ Goose migration 4), `installations`/`repos` extended by migration 5,
 scheduling/publication revision fields from migration 7, PR workspace/receipt/sync
 state from migration 8, lifetime environment uniqueness from migration 9, nullable
 PR mergeability and build status from migration 10, and River's `river_*` tables.
-Current versions are Goose 10 and River 007.
+Migration 11 adds no tables: it installs `previa_*` trigger functions that raise
+`NOTIFY previa_events` after commits, which drive live dashboard updates.
+Current versions are Goose 11 and River 007.
 Re-running `make migrate-up` is safe; it applies only pending migrations.
 Migration 10 gives existing PR rows `build_status=checking` until a fresh GitHub
 observation resolves their status. Use Sync Pull Requests with a configured worker
 to refresh active PRs; historical closed/merged records are retained. Restart the
 server and worker after updating code and applying migrations.
+
+To confirm live updates are wired after migration 11 (optional):
+
+```sh
+docker compose -f deploy/docker-compose.yml exec -T postgres psql -U previa -d previa -c "SELECT tgname FROM pg_trigger WHERE tgname LIKE '%_realtime'"
+```
+
+**Expected:** six rows (`repos_realtime`, `pull_requests_realtime`,
+`pr_syncs_realtime`, `build_intents_realtime`, `environments_realtime`,
+`installations_realtime`). Without migration 11 the dashboard still works, but
+repository pages update only on navigation or your own actions.
 
 The migration Make targets load `.env` automatically, falling back to `.env.example`
 if it is absent. An already exported `DATABASE_URL` takes precedence over either file.
@@ -368,7 +381,7 @@ workspace sidebar. Each navigation item opens its own page:
   share the same compact size. Sync and policy controls do not appear on PR details.
 - **Sync and policy**: Verified connection/repository addition automatically queues
   initial open-only discovery. Sync Pull Requests queues another open-only sync; a configured worker
-  updates its compact progress every three seconds. Enable Automatic Builds is off
+  pushes compact progress to the open page as it commits (live updates). Enable Automatic Builds is off
   for Manual and has a background with clear on/off states.
   Enabling requires an accessible confirmation modal; Cancel/Escape leaves it off.
   Turning it off saves Manual directly. Failed partial requests preserve current
@@ -548,10 +561,16 @@ Builds appear only on the PR list page, not on individual PR details. Enable
 Automatic only after its confirmation; Cancel/Escape must leave it off. Sync Pull
 Requests updates Last synced and compact progress in place. Run `make run-worker`
 separately to process sync requests. `make run-server` and `make run-worker` load
-`.env` automatically. Phase 3 requires `make migrate-up` (Goose 10); no new
-configuration is required. Restart both processes after applying it. Open/all PR
-lists and active PR details poll saved status every three seconds, so a resolving
-push updates the dashboard without manual sync; this polling does not call GitHub.
+`.env` automatically. Live updates require `make migrate-up` (Goose 11); no new
+configuration is required. Restart both processes after applying it. Repository
+and PR pages hold one Server-Sent Events stream (`/repositories/<id>/events`);
+committed changes from the server or worker (sync progress, webhook updates,
+mergeability results, policy) refetch the open page within a moment. An idle page
+sends no requests, and nothing here calls GitHub. A green **Live** dot beside Last
+synced shows the stream is connected. Reverse proxies in front of Previa must not
+buffer `text/event-stream` responses (Previa sends `X-Accel-Buffering: no`) and
+should allow idle streams for at least 30 seconds; Previa sends a heartbeat every
+25 seconds and ends each stream after five minutes so the browser reconnects.
 
 Run `make build`, `make test`, `make lint`, then `make test-browser` after
 `make browser-install`. Database integration checks require explicitly exported
@@ -560,7 +579,7 @@ load `.env`. The browser fixture needs no GitHub credentials or database. Expect
 build/tests pass, vet/lint report no issues, and browser checks verify full-page
 navigation, small card collections and hidden single-page pagination, compact
 breadcrumbs, PR-list-only controls, filter preservation, history, failed
-searches, Automatic confirmation/retry, polling, responsive layout, accessibility
+searches, Automatic confirmation/retry, live updates, responsive layout, accessibility
 and no-JavaScript navigation/forms. Set `UI_BROWSER_SCREENSHOTS=1` for screenshots
 in `web/tests/browser/artifacts/` (ignored by Git).
 

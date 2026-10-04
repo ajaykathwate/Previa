@@ -289,6 +289,29 @@
   animation: spin .8s linear infinite;
 }
 
+/* Live connection state, set on <html> by ui.js only when a stream exists. */
+.live-indicator { display: none; align-items: center; gap: 7px; color: var(--text-muted); font-size: 12px; font-weight: 550; }
+.live-indicator > span:not(.live-dot) { display: none; }
+:root[data-live-state="live"] .live-indicator,
+:root[data-live-state="reconnecting"] .live-indicator,
+:root[data-live-state="offline"] .live-indicator { display: inline-flex; }
+:root[data-live-state="live"] .live-label-live,
+:root[data-live-state="reconnecting"] .live-label-reconnecting,
+:root[data-live-state="offline"] .live-label-offline { display: inline; }
+.live-dot { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--neutral-dot); }
+:root[data-live-state="live"] .live-dot { background: var(--ok-dot); }
+:root[data-live-state="live"] .live-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 1.5px solid var(--ok-dot);
+  border-radius: 50%;
+  opacity: 0;
+  animation: pulse-ring 2.4s var(--ease-out) infinite;
+}
+:root[data-live-state="reconnecting"] .live-dot { background: var(--warn-dot); }
+:root[data-live-state="reconnecting"] .live-indicator { color: var(--warn-ink); }
+
 .pr-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .pr-header-actions form { margin: 0; }
 .pr-header-actions button { height: 38px; }

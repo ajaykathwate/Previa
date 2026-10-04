@@ -12,6 +12,12 @@ templ Index(username, csrf string, p Page) {
 			<section id="repository-detail" class="repository-page" aria-label="Repository details" hx-sync="this:replace" hx-request='{"timeout":10000}'>
 				@Panel(p, csrf)
 			</section>
+			if p.LiveURL != "" {
+				// Server-sent change signals refetch the panel through the ordinary
+				// GET handler; ui.js keeps the stream and defers refreshes while
+				// filters are focused or a confirmation is open.
+				<div hidden data-live-events={ p.LiveURL } data-live-refresh hx-get={ p.CurrentURL() } hx-trigger="live-update from:body" hx-target="#repository-detail" hx-sync="#repository-detail:drop"></div>
+			}
 		</div>
 	}
 }
@@ -71,15 +77,11 @@ templ Panel(p Page, csrf string) {
 						<span class="sync-state tone-neutral">Sync not configured</span>
 					}
 					if p.SyncState=="queued" || p.SyncState=="syncing" {
-						<span class="sync-state tone-info is-syncing" hx-get={ p.CurrentURL() } hx-trigger="every 3s" hx-target="#repository-detail" hx-sync="#repository-detail:drop">Syncing</span>
-					} else if p.LiveStatus() {
-						<span class="sr-only" hx-get={ p.CurrentURL() } hx-trigger="every 3s" hx-target="#repository-detail" hx-sync="#repository-detail:drop">Refresh PR status</span>
-						if p.SyncState=="failed" {
-							<span class="sync-state sync-failed tone-danger" title={ p.SyncMessage }>Sync failed</span>
-						}
+						<span class="sync-state tone-info is-syncing">Syncing</span>
 					} else if p.SyncState=="failed" {
 						<span class="sync-state sync-failed tone-danger" title={ p.SyncMessage }>Sync failed</span>
 					}
+					<span class="live-indicator" aria-hidden="true"><span class="live-dot"></span><span class="live-label-live">Live</span><span class="live-label-reconnecting">Reconnecting</span><span class="live-label-offline">Live updates paused · reload to resume</span></span>
 				</p>
 			</div>
 			if p.SelectedPR==nil {

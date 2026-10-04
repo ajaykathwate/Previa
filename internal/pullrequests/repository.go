@@ -53,6 +53,14 @@ func (r *Repository) Page(ctx context.Context, userID, repoID int64, f Filter) (
 	})
 	return
 }
+
+// Owns reports ErrUnavailable unless userID owns the repository's installation.
+func (r *Repository) Owns(ctx context.Context, userID, repoID int64) error {
+	if _, err := dbgen.New(r.pool).OwnedRepository(ctx, dbgen.OwnedRepositoryParams{ID: repoID, OwnerUserID: owner(userID)}); err != nil {
+		return scopeError(err)
+	}
+	return nil
+}
 func (r *Repository) Detail(ctx context.Context, userID, repoID int64, number int32) (dbgen.OwnedPRRow, error) {
 	row, err := dbgen.New(r.pool).OwnedPR(ctx, dbgen.OwnedPRParams{ID: repoID, OwnerUserID: owner(userID), Number: number})
 	if err != nil {

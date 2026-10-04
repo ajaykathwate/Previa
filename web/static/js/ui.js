@@ -322,6 +322,65 @@
     });
   }
 
+  // Live updates: the server streams change signals (no data) for the page's
+  // repository; each signal refetches through the ordinary GET handler. A
+  // refresh that arrives while the user is filtering or confirming is deferred.
+  let livePending = false;
+  const liveRefresh = () => {
+    livePending = false;
+    if (document.querySelector('[data-live-refresh]')) window.htmx?.trigger(document.body, 'live-update');
+  };
+  const liveBlocked = () => Boolean(document.querySelector('#build-policy[open]') ||
+    document.activeElement?.closest('#pull-request-filters'));
+
+  function initLiveUpdates() {
+    const config = document.querySelector('[data-live-events]');
+    if (!config || !('EventSource' in window)) return;
+    const base = new URL(config.dataset.liveEvents, window.location.href);
+    let source = null;
+    let lastID = '';
+    let failures = 0;
+    let retry = 0;
+    const setState = (state) => { document.documentElement.dataset.liveState = state; };
+    const request = () => { if (liveBlocked()) livePending = true; else liveRefresh(); };
+    const connect = () => {
+      clearTimeout(retry);
+      const url = new URL(base);
+      if (lastID) url.searchParams.set('since', lastID);
+      source = new EventSource(url);
+      const remember = (event) => { if (event.lastEventId) lastID = event.lastEventId; };
+      source.addEventListener('ready', (event) => { remember(event); failures = 0; setState('live'); });
+      for (const name of ['change', 'resync']) {
+        source.addEventListener(name, (event) => { remember(event); failures = 0; setState('live'); request(); });
+      }
+      source.addEventListener('error', () => {
+        if (source?.readyState !== EventSource.CLOSED) { setState('reconnecting'); return; } // Browser retries with Last-Event-ID.
+        source = null;
+        failures++;
+        if (failures > 5) { setState('offline'); return; }
+        setState('reconnecting');
+        retry = setTimeout(connect, Math.min(30000, 1000 * 2 ** failures));
+      });
+    };
+    const disconnect = () => { clearTimeout(retry); source?.close(); source = null; };
+    // Hidden tabs release their connection; returning resumes from the last id.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { disconnect(); setState('paused'); } else if (!source) { failures = 0; connect(); }
+    });
+    window.addEventListener('pagehide', disconnect);
+    window.addEventListener('pageshow', (event) => { if (event.persisted && !source && !document.hidden) connect(); });
+    // Deferred refreshes run once the user finishes filtering or confirming.
+    document.addEventListener('close', (event) => {
+      if (event.target.id === 'build-policy' && livePending) setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
+    }, true);
+    document.addEventListener('focusout', (event) => {
+      const form = event.target.closest?.('#pull-request-filters');
+      if (!form || form.contains(event.relatedTarget) || !livePending) return;
+      setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
+    });
+    if (!document.hidden) connect(); else setState('paused');
+  }
+
   function initRepositorySearch() {
     if (!document.querySelector('#repository-filters, #repository-detail')) return;
     const requests = new Map();
@@ -341,8 +400,8 @@
         parameters.q = ''; parameters.access = 'all'; parameters.page = '1';
       }
       if (verb === 'get') {
-        // A poll follows current filters, rather than the heading's older snapshot.
-        if (elt.getAttribute('hx-trigger')?.includes('every ')) {
+        // A live refresh follows current filters and path, not its render-time URL.
+        if (elt.hasAttribute('data-live-refresh')) {
           const current = new URLSearchParams(window.location.search);
           queryKeys.forEach(key => {
             requestURL.searchParams.delete(key);
@@ -366,11 +425,12 @@
     document.addEventListener('htmx:beforeRequest', event => {
       const {target, xhr, elt} = event.detail;
       if (!targets.has(target?.id)) return;
-      const polling = elt.getAttribute('hx-trigger')?.includes('every ');
-      if (polling && (document.querySelector('#build-policy[open]') || document.activeElement?.closest('#pull-request-filters'))) {
+      const live = elt.hasAttribute('data-live-refresh');
+      if (live && liveBlocked()) {
+        livePending = true;
         event.preventDefault(); return;
       }
-      requests.set(target.id, {xhr, userAction: !polling});
+      requests.set(target.id, {xhr, userAction: !live});
       target.setAttribute('aria-busy', 'true');
       const feedback = feedbackFor(target);
       if (feedback) {delete feedback.dataset.error; feedback.textContent = 'Updating…';}
@@ -388,6 +448,7 @@
       const {target} = event.detail;
       if (!targets.has(target?.id)) return;
       target.removeAttribute('aria-busy');
+      if (target.id === 'repository-detail') livePending = false; // The panel is now current.
       if (target.id === 'repository-detail' && requests.get(target.id)?.userAction) {
         target.querySelector('[data-detail-heading]')?.focus({preventScroll:true});
       } else if (requests.get(target.id)?.userAction) {
@@ -420,4 +481,5 @@
   initQueueForms();
   initCommandPalette();
   initRepositorySearch();
+  initLiveUpdates();
 })();

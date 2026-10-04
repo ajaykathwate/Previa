@@ -8,10 +8,12 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	pr "github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/alexedwards/scs/v2/memstore"
 	"github.com/go-chi/chi/v5"
@@ -48,7 +50,8 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	syncService := pr.NewSyncService(f.pool, f.producer, nil)
-	h := pr.NewHandler(pr.NewRepository(f.pool), syncService, policy, authHandler, f.log, true)
+	hub := realtime.NewHub()
+	h := pr.NewHandler(pr.NewRepository(f.pool), syncService, policy, authHandler, f.log, true).WithLiveUpdates(hub)
 	router := chi.NewRouter()
 	router.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
 	authHandler.Mount(router)
@@ -169,8 +172,37 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 		t.Fatal("PR detail included list-only controls", detail.Code)
 	}
 	w = request("POST", base+"/refresh", "csrf_token="+token, "repository-detail")
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "every 3s") || strings.Contains(w.Body.String(), "<!doctype") {
-		t.Fatal("inline refresh response", w.Code)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "Syncing") || strings.Contains(w.Body.String(), "every ") || strings.Contains(w.Body.String(), "<!doctype") {
+		t.Fatal("inline refresh response must show progress without polling", w.Code)
+	}
+	// Live updates: the page links its stream with a resume cursor, the owner
+	// receives change signals, and other repositories are not observable.
+	page := request("GET", workspace, "")
+	if !strings.Contains(page.Body.String(), `data-live-events="`+base+`/events?since=`) || strings.Contains(page.Body.String(), "every ") {
+		t.Fatal("repository page must subscribe to events instead of polling")
+	}
+	stream := func(path string, publish bool) *httptest.ResponseRecorder {
+		streamCtx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
+		defer cancel()
+		r := httptest.NewRequest("GET", path, nil).WithContext(streamCtx)
+		for _, c := range cookies {
+			r.AddCookie(c)
+		}
+		if publish {
+			go func() {
+				time.Sleep(100 * time.Millisecond)
+				hub.Publish(pr.RepositoryTopic(f.repoID), "pull_requests")
+			}()
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, r)
+		return w
+	}
+	if w := stream(base+"/events", true); w.Code != 200 || !strings.Contains(w.Body.String(), "event: ready") || !strings.Contains(w.Body.String(), "event: change") {
+		t.Fatal("owner event stream", w.Code, w.Body.String())
+	}
+	if w := stream("/repositories/999/events", false); w.Code != 404 {
+		t.Fatal("event stream for unowned repository", w.Code)
 	}
 	if w := request("GET", base+"/pull-requests/7", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Not requested") {
 		t.Fatal("PR detail", w.Code)

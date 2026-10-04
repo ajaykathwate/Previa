@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
+	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
 	environmentpages "github.com/ajaykathwatee/previa/web/pages/environments"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
@@ -30,6 +32,12 @@ type Policy interface {
 type Refresher interface {
 	Request(context.Context, int64, int64) error
 }
+
+// LiveEvents is the realtime hub surface the workspace needs for live pages.
+type LiveEvents interface {
+	Cursor() realtime.Cursor
+	Subscribe(topic string, since realtime.Cursor) *realtime.Subscription
+}
 type Handler struct {
 	repo    *Repository
 	sync    Refresher
@@ -37,16 +45,29 @@ type Handler struct {
 	users   UserSession
 	logger  *slog.Logger
 	enabled bool
+	live    LiveEvents
 }
 
 func NewHandler(repo *Repository, sync Refresher, policy Policy, users UserSession, logger *slog.Logger, enabled bool) *Handler {
-	return &Handler{repo, sync, policy, users, logger, enabled}
+	return &Handler{repo: repo, sync: sync, policy: policy, users: users, logger: logger, enabled: enabled}
 }
+
+// WithLiveUpdates enables the repository event stream. Without it, pages stay
+// fully functional and refresh on navigation or explicit actions.
+func (h *Handler) WithLiveUpdates(live LiveEvents) *Handler {
+	h.live = live
+	return h
+}
+
+// RepositoryTopic names the realtime topic raised by the repository triggers
+// in db/migrations/0011_realtime_events.sql.
+func RepositoryTopic(repoID int64) string { return "repository:" + strconv.FormatInt(repoID, 10) }
 func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handler) {
 	r.Group(func(r chi.Router) {
 		r.Use(requireUser)
 		r.Get("/repositories/{repoID}", h.repository)
 		r.Get("/repositories/{repoID}/pull-requests/{number}", h.detail)
+		r.Get("/repositories/{repoID}/events", h.events)
 		r.Post("/repositories/{repoID}/refresh", h.refresh)
 		r.Post("/repositories/{repoID}/policy", h.setPolicy)
 		r.Post("/repositories/{repoID}/pull-requests/{number}/build", h.build)
@@ -130,7 +151,16 @@ func (h *Handler) servePage(w http.ResponseWriter, r *http.Request, detail bool)
 	} else {
 		params.Del("pr")
 	}
+	// Read the cursor before the page state, so any later commit produces an
+	// event the browser's stream will replay from this position.
+	var cursor realtime.Cursor
+	if h.live != nil {
+		cursor = h.live.Cursor()
+	}
 	page, err := h.page(r.Context(), user, id, params)
+	if h.live != nil {
+		page.LiveURL = pages.RepoURL(id) + "/events?since=" + url.QueryEscape(cursor.String())
+	}
 	if errors.Is(err, installations.ErrWorkspaceInput) {
 		http.Error(w, "Invalid pull request filters.", http.StatusBadRequest)
 		return
@@ -161,6 +191,29 @@ func (h *Handler) servePage(w http.ResponseWriter, r *http.Request, detail bool)
 	username, _ := h.users.Username(r.Context())
 	templ.Handler(pages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
 }
+
+// events streams invalidation signals for one owned repository. Browsers react
+// by refetching through the ordinary page handlers; no data travels here.
+func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
+	if h.live == nil {
+		http.NotFound(w, r)
+		return
+	}
+	user, id, err := h.identity(r)
+	if err == nil {
+		err = h.repo.Owns(r.Context(), user, id)
+	}
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	sub := h.live.Subscribe(RepositoryTopic(id), realtime.RequestCursor(r))
+	defer sub.Close()
+	if err := realtime.Stream(w, r, sub, realtime.DefaultStreamOptions); err != nil && r.Context().Err() == nil {
+		h.logger.WarnContext(r.Context(), "repository event stream ended", "error", err)
+	}
+}
+
 func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	user, id, err := h.identity(r)
 	if err != nil {

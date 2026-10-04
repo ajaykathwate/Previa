@@ -528,7 +528,7 @@ Medium.
 
 ### Technical implementation
 1. During builds and container startup, each output line is appended to the log table with a sequence number per environment.
-2. The logs page loads existing lines, then opens an SSE stream that pushes new lines as they arrive (the server polls or listens for new rows, or uses Postgres notifications).
+2. The logs page loads existing lines, then opens an SSE stream that pushes new lines as they arrive. Use `internal/platform/realtime`: the hub wakes the stream on a log notification and `realtime.SSE` frames lines whose ids are log sequence numbers.
 3. A reconnecting client resumes from the last sequence number it received, so nothing is duplicated or lost.
 4. The workspace has separate Overview, Repositories, Builds and Environments pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 records), search and Available/Unavailable/All access tabs (Available by default). Once the environment feature is connected, Environments shows status, URL, commit SHA, age, and a manual "tear down now" action. Developer tools has its own local diagnostic page.
 5. Dashboard actions check both authentication and ownership: a user can only see and act on environments in installations they own.
@@ -553,8 +553,12 @@ without reloading the page. Sync and the Enable Automatic Builds switch appear
 only on the repository's PR list page. Individual PR details retain read-only
 sync information. Automatic is off for Manual; enabling requires an
 accessible confirmation modal, while turning it off directly saves Manual.
-Active syncs poll every three seconds without interrupting user requests, focused
-search or an open policy modal. Current build/logs and deployed
+Committed changes stream to open repository/PR pages as Server-Sent Events
+(PostgreSQL triggers -> NOTIFY -> one LISTEN session per server -> in-process hub
+-> per-repository stream). Events are invalidation signals with resumable cursors;
+pages refetch through ordinary authorized GETs, defer while search is focused or a
+policy modal is open, and send nothing while idle. See docs/REALTIME_UPDATES.md;
+build-log streaming reuses the same SSE writer with its own sequence replay. Current build/logs and deployed
 preview controls remain dependent on the execution adapters. Builds is
 a cross-repository view of current/latest work; Environments is a deployment view,
 not another name for Builds. Do not add historical build storage implicitly.
@@ -847,6 +851,7 @@ preview/
 │       ├── config/                 # env var loading + validation
 │       ├── database/               # pgx pool, transaction helper, migrations runner
 │       ├── queue/                  # River client setup
+│       ├── realtime/               # LISTEN/NOTIFY hub + Server-Sent Events streams
 │       ├── githubapp/              # App JWT, installation-token cache, API client
 │       ├── dockerx/                # Docker client construction
 │       ├── httpx/                  # middleware, error responses, HTMX helpers
