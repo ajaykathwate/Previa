@@ -120,11 +120,44 @@ slug or App client secret. Omit both worker App settings to run only ping jobs.
 Register **Setup URL** `http://localhost:8080/installations/callback` and **Callback
 URL** `http://localhost:8080/installations/authorize/callback`. Leave automatic OAuth
 on installation unchecked; Previa explicitly starts it after the setup redirect.
-For webhook delivery, generate a random value with `openssl rand -hex 32`, set
-server-only `GITHUB_WEBHOOK_SECRET`, and paste the same value in the App's Webhook
-secret field. Follow [local webhook setup](WEBHOOKS_AND_PR_DISCOVERY.md#enable-github-deliveries-locally)
-for the HTTPS URL/event selection. Omit the secret to keep the endpoint disabled
-with HTTP 503. Restart affected processes after changing `.env`.
+### Create and configure the webhook secret
+
+You create `GITHUB_WEBHOOK_SECRET` yourself. GitHub uses the matching value to sign
+deliveries; it is separate from the OAuth/App client secrets and the App PEM key.
+Generate a new random value locally:
+
+```sh
+openssl rand -hex 32
+```
+
+Copy the resulting 64 hexadecimal characters into the server's local `.env`:
+
+```dotenv
+GITHUB_WEBHOOK_SECRET=<paste-the-generated-value>
+```
+
+Replace the placeholder; keep the value out of Git and shared logs. In GitHub,
+open **Settings → Developer settings → GitHub Apps → your App → General** (or
+the owning organization's GitHub App settings). Enable **Webhook → Active**,
+paste the **same value** into **Webhook secret**, and save. Set **Webhook URL**
+to `https://<your-public-host>/webhooks/github`; a local server needs the public
+HTTPS forwarding URL described in
+[local webhook setup](WEBHOOKS_AND_PR_DISCOVERY.md#enable-github-deliveries-locally).
+Configure the event subscriptions from that guide. These are GitHub App settings;
+adding a repository Actions secret does not configure webhook signing.
+
+Restart the server with `make run-server`: it automatically loads `.env`, with
+already-exported variables taking precedence. The worker does not need this
+secret. Direct `go run ./cmd/server` requires the manual exports documented below.
+Run `make test-webhook` against the running server. Expected: the signed ping is
+accepted with HTTP 204; this checks local signing/receiver configuration, not
+GitHub's ability to reach the public URL. Check the App's recent deliveries for
+a successful real delivery. An omitted secret returns HTTP 503; a mismatched
+signature returns HTTP 401. If you have lost an existing secret, generate a new
+one and update both GitHub and Previa together.
+
+GitHub documents [secret generation and delivery validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
+and [GitHub App webhook settings](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/using-webhooks-with-github-apps).
 
 After migrations and server startup, open **Repositories** (`/repositories`) and click **Install on a repo**
 (or **Manage connections** after linking).
@@ -247,6 +280,13 @@ for River. The River adapter reads `DATABASE_URL` directly; Goose reads
 If you already loaded `.env` in this terminal, skip the export block.
 
 ## 5. Build and check the project
+
+The remaining implementation sequence is in
+[FEATURE_IMPLEMENTATION_PROMPTS.md](FEATURE_IMPLEMENTATION_PROMPTS.md): 12 tasks
+cover source, secrets/logs, builds/runtime, HTTPS publication, cleanup/reporting,
+recovery, execution/UI wiring, hardening and deployment acceptance. Runtime
+execution is currently disabled. That plan's final release checks must be
+observed before treating the application as ready for public production use.
 
 ```sh
 make generate

@@ -1,361 +1,552 @@
-# Next feature implementation prompts
+# Remaining MVP implementation prompts
 
-## Where the project stands
+Prepared on 2026-10-04. These **12 sequential prompts** replace the completed
+control-plane prompt set. Run one prompt per task, together with the shared
+instructions below. This document plans implementation; it does not implement
+these features or certify the current application for production.
 
-Prepared on 2026-10-03 against the current repository. Verify this summary against
-`HANDOFF.md`, Git status and the relevant code before executing any prompt.
+## Verified starting point
 
-- Implemented: PostgreSQL/migrations, split process config, HTTP server, sessions,
-  GitHub OAuth, verified App installation linking and cached installation tokens.
-- Prompt 1 completed: standalone commit-specific repo config fetch/parse/validation,
-  effective resource limits and hashing; see [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md).
-- Prompt 2 completed: owner-scoped repository mode and durable current intent,
-  idempotent Build, explicit Retry/Rebuild and atomic cancellation; see [BUILD_INTENTS.md](BUILD_INTENTS.md).
-- Prompt 3 completed: durable quiet-period wake-ups, manual coordination, intent-aware
-  admission/handoff/recovery and revision-fenced publication; see [BUILD_SCHEDULING.md](BUILD_SCHEDULING.md).
-- Implemented UI: home, Overview, ownership-scoped repository search/access tabs
-  and ten-row pagination, shared layout/theme, logout modal and diagnostic tools.
-- Implemented behind tested interfaces: generation-fenced build/teardown,
-  durable publication operations, cleanup and reconciliation contracts.
-- Prompts 4–5 completed: signed transactional webhook ingress, source-ordering fences,
-  durable paginated PR discovery, repository/PR pages, owner policy controls and real
-  current activity views. See [WEBHOOKS_AND_PR_DISCOVERY.md](WEBHOOKS_AND_PR_DISCOVERY.md).
-- Production workers execute ping and App-configured PR discovery. Real preview builds
-  and Docker/router/GitHub publication adapters remain the next execution phase.
-- Browser walkthrough: [APP_USER_FLOW.md](APP_USER_FLOW.md).
-- Implemented as standalone domain APIs: Manual default and owner-enabled Automatic.
-  Five-minute scheduling is tested behind interfaces; production runtime integration
-  remains unbuilt. Comments/reviews do not trigger builds.
-- `ProcessPR` and `finishJob` now consult durable authorized intent. Production
-  dispatch fails closed until capable execution/publication adapters are configured.
+- Implemented: PostgreSQL/Goose, River, OAuth/SCS/CSRF, verified GitHub App linking,
+  installation-token authentication, standalone exact-commit configuration
+  validation, Manual/Automatic intent and five-minute scheduling contracts.
+- Implemented: signed/deduplicated webhook ingress, bounded open-only PR discovery,
+  tracked close/merge retention, mergeability polling and build refusal for
+  Checking/Conflicts. Phase 3 is implemented; see [PHASE3_REPORT.md](PHASE3_REPORT.md).
+- Implemented: repository/PR pages, owner policy controls and current Builds/
+  Environments views. The approved presentation and no-JavaScript flows exist.
+- Existing environment code provides tested admission, generation/revision fences,
+  candidate/active artifacts, outbox, cleanup and reconciliation contracts.
+  Extend those contracts rather than create a second orchestration system.
+- Production worker wiring currently registers ping and App-configured discovery/
+  mergeability jobs. Source, BuildKit, Docker runtime, routing, reporting, secret
+  management, log streaming and periodic housekeeping need real adapters.
+  The manual Build endpoint returns unavailable; it authorizes no execution.
+- Live hosted GitHub PR/mergeability proof remains pending. Local fixtures and a
+  real local Git conflict are evidence, but do not prove hosted webhook delivery.
 
-## Retained control-plane implementation sequence
+Verify this baseline against current code and [HANDOFF.md](../HANDOFF.md) at the
+start of each task. Do not rerun old phases or purge retained PR records.
 
-Phase 1 audit: Prompts 1–5 were checked sequentially against code and tests.
-Prompt 3 needed lifetime environment uniqueness and admitted-build log clearing;
-those gaps are fixed. See [PHASE1_AUDIT.md](PHASE1_AUDIT.md). The user-requested
-UI (Phase 2) is implemented. The user subsequently chose dedicated repository and
-PR pages with breadcrumbs instead of a split workspace. Open-only PR tracking
-(Phase 3) still awaits separate confirmation and has not started.
+## Shared instructions for every prompt
 
-Build the **configuration, policy and PR control plane** in the five steps below.
-This closes the scheduling correctness gap before adding expensive execution.
-These are sequential, copy-ready implementation prompts, not instructions to
-execute all five at once. Each numbered prompt is one task with its own stop point.
+Read AGENTS.md, HANDOFF.md and Git status first. Read the task-relevant sections of
+[README.md](../README.md) and [DESIGN.md](../DESIGN.md). Use DESIGN Section 20's
+feature packages and existing stack; its feature layout takes precedence over
+README's older illustrative tree. Keep backend files flat within each feature,
+presentation in web/, and construction in internal/app. Use small consumer-owned
+interfaces; do not create global handler/store layers or speculative frameworks.
 
-| Order | Deliverable | Depends on |
+Preserve [BUILD_INTENTS.md](BUILD_INTENTS.md),
+[BUILD_SCHEDULING.md](BUILD_SCHEDULING.md),
+[GENERATION_ORDERING.md](GENERATION_ORDERING.md) and
+[DESIGN_DURABLE_PUBLICATION.md](DESIGN_DURABLE_PUBLICATION.md). Every executable
+request and external artifact/operation carries PR identity, exact SHA and the
+ordered (generation, revision) fence. Same-SHA Retry/Rebuild changes revision.
+Observation/discovery/reconciliation alone never authorizes a Manual build.
+Automatic retains its five-minute trailing deadline; enabling it does not
+bulk-build existing PRs. Close, merge, revocation and teardown defeat stale work.
+
+Keep external IO outside short PostgreSQL transactions and row locks. Recheck
+ownership, access, lifecycle, freshness, mergeability and authorized intent at the
+relevant boundaries. Design for duplicate delivery, expired leases, cancellation,
+ambiguous external success and process crashes. Persist cleanup/outbox intent;
+never substitute a no-op adapter or claim missing-resource cleanup succeeded
+without checking it. Credentials stay out of job payloads, URLs, logs and errors.
+
+Preserve the warm paper/terracotta/forest palette, system-sans/Georgia type,
+accessible modal confirmations, CSRF, scoped queries, useful links, bounded lists,
+focus-preserving HTMX and ordinary GET/form fallbacks. Show actual work and
+deployed state separately. One lifetime environment/current intent per PR;
+current-build logs only, with no permanent build history or invented metrics.
+
+Implement only the numbered task. Introduce migrations/configuration only when
+needed. Extend .env.example, config loaders, Makefile/Air as appropriate and update
+docs/DEVELOPMENT_SETUP.md in the same task with commands and expected results.
+Distinguish Make targets' automatic .env loading from direct commands' manual
+exports. Document required server versus worker secrets and restart behavior.
+
+Run gofmt/goimports as appropriate, make build, make test and make lint
+(including go build ./..., go vet ./... and pinned golangci-lint run).
+Run meaningful targeted tests, PostgreSQL integration tests for persistence, and
+browser tests for changed UI. Include real adapter integration tests when adding
+an adapter, with explicit prerequisites and isolated, cleaned fixtures. Report
+skips/unavailable dependencies and packages without tests honestly.
+
+Stop at each prompt's acceptance boundary. Summarize changes, commands/results,
+remaining blockers and any README/DESIGN conflict before changing architecture.
+Update HANDOFF.md under 100 lines. Preserve unrelated work; do not commit, push,
+publish or deploy unless that task/session authorizes it. External GitHub writes
+for live proofs require an explicitly authorized disposable repository.
+
+## Sequence and execution gates
+
+| Prompt | Deliverable | Prerequisites |
 | --- | --- | --- |
-| 1 — complete | Standalone repo config fetch/parse/validation | Existing App authentication |
-| 2 — complete | Repository policy and durable authorized request model | Accepted build policy |
-| 3 — complete | Debounce, manual request coordination and intent-aware handoff | Prompt 2 |
-| 4 — complete | Authenticated, durable GitHub webhook ingress | Prompt 3 |
-| 5 — complete | Existing-PR discovery, repository/PR pages and owner controls | Prompts 1–4 |
+| 1 | Fresh upstream verification and safe exact-SHA source | Existing App/config/PR contracts |
+| 2 | Encrypted repository secrets and enforced fork policy | 1 |
+| 3 | Bounded, redacted current-build logs and SSE | 2 |
+| 4 | Isolated BuildKit image builder | 1–3 |
+| 5 | Hardened Docker candidates and readiness | 1–4 |
+| 6 | Stable HTTPS routes and fenced blue/green publication | 5, existing outbox |
+| 7 | Durable teardown, revocation and resource cleanup | 5–6 |
+| 8 | GitHub living comment and exact-SHA checks | 3, 6–7 |
+| 9 | Recovery, expiry, reconciliation and capacity | 4–8 |
+| 10 | Real worker orchestration and completed dashboard actions | 1–9 |
+| 11 | Observability and production hardening | 10 |
+| 12 | Deployment packaging, CI and release acceptance | 1–11 |
 
-No prompt in this phase implements Docker builds, creates a real preview URL or
-registers fake production build workers. Production admission/dispatch must fail
-closed until real execution dependencies exist. Record observation and policy safely;
-do not accept a browser build action and misleadingly claim it can execute.
+Prompts 1–9 can exercise adapters using isolated test harnesses, but must keep
+normal preview dispatch disabled. Prompt 10 connects the complete pipeline in a
+controlled local/staging configuration. Public production rollout requires the
+observed release checks in Prompt 12, including isolation, recovery and restore.
 
-## Instructions applying to every prompt
+## Prompt 1 — Fresh PR verification and safe exact-SHA source fetching
 
-Read `AGENTS.md`, `HANDOFF.md` and Git status first. Follow README/DESIGN and the
-approved decision docs. Read the named sections and needed interfaces, rather than
-rescanning the repository. Preserve unrelated/uncommitted changes; do not commit
-or push unless asked.
+> Implement the source-preparation boundary for the remaining MVP. Read DESIGN
+> Sections 5, 7, 8 and 13, docs/REPO_CONFIGURATION.md, and the existing PR
+> observation/admission and GitHub App clients. Keep normal build execution off.
+>
+> Add bounded installation-authenticated verification of a tracked PR's current
+> lifecycle, head SHA, fork identity and mergeability before manual authorization
+> and before executing eligible work. Define the narrow interface now; connect it
+> to the real action/worker in Prompt 10. Capture installation/repository revisions
+> before IO and reconcile under existing lock order afterward. If upstream is
+> unavailable, unresolved, conflicting, closed or inaccessible, fail closed.
+> A verification observation is not a new Manual authorization; preserve the
+> distinction between event-authorized Automatic work and discovery.
+>
+> Implement internal/source archive fetching at the requested SHA, using the base
+> repository's supported PR source/ref behavior for forks. Never silently fetch a
+> branch tip, substitute a different commit or require permission to a private fork
+> the App cannot read. Verify the chosen source identity. Apply HTTP timeouts,
+> bounded redirects, compressed/uncompressed byte caps, file counts and cancellation.
+> Do not forward installation credentials to arbitrary redirect hosts.
+>
+> Extract into a fresh worker-owned directory. Reject traversal, absolute paths,
+> unsafe links, device/FIFO entries and archive expansion abuse; prevent writing
+> through a symlink. Parse .previewrc.yaml from that same exact source using the
+> existing validator/defaults/clamping/hash. Bound Dockerfile/context paths to the
+> extracted tree. Remove directories on failure/cancellation; make leftovers
+> discoverable after a crash for later housekeeping.
+>
+> Test malicious archives, missing/invalid config, inaccessible/fork source, exact
+> SHA selection and source/access changes during IO. Stop with a real fetch/prepare
+> adapter and safe fixtures; provide an opt-in real-source command and record what
+> it actually verified. Do not add image builds or enable the Build button.
 
-Before code changes, briefly confirm the prompt fits the current architecture and
-explain the package, schema, process and UI changes it will make. Do not silently
-decide consequential unresolved behavior: identify the choice and obtain the
-user's answer before dependent implementation. Continue independent work where safe.
-Executing a prompt authorizes its stated scope; drafting this file does not authorize
-feature implementation or resolve the decisions listed below.
+## Prompt 2 — Repository secrets and fork trust enforcement
 
-Keep backend features flat under `internal/<feature>` and construction in
-`internal/app`; presentation belongs under `web/pages`, `web/layouts` and
-`web/components`. Preserve existing palette, fonts, focus style, sticky navigation,
-table scrolling and progressive HTMX patterns. Use small consumer-defined
-interfaces, context deadlines and safe errors; do not add speculative frameworks.
+> Implement DESIGN Section 16 in internal/secrets, using existing env_secrets and
+> owner-scoped repository queries. Add only required schema changes. Runtime
+> integration remains an interface until Prompt 5; normal execution stays off.
+>
+> Use standard-library AES-GCM with random nonces, authenticated repo/key identity,
+> explicit key versions and validated process key configuration. Owners can create,
+> replace and delete secrets through CSRF-protected forms; deletion uses an
+> accessible modal. Show key names only after saving. Never return plaintext or
+> ciphertext through pages, jobs, metrics or routine errors.
+>
+> Define collision precedence between non-secret YAML env and stored secrets.
+> Supply values only in worker memory immediately before container creation.
+> Repo secrets are runtime-only for MVP; never send them as Docker build args,
+> build context or image layers. Add rotation support using key versions and a
+> documented safe re-encryption process; retain old keys until migration completes.
+>
+> Enforce the existing rule that fork PRs receive no secrets, regardless of mode,
+> retries or later approval. Treat missing/ambiguous source identity as untrusted.
+> Do not silently introduce optional maintainer approval as an MVP requirement.
+> If optional approval is implemented, it is bound to the exact SHA and cannot
+> override withholding secrets from forks.
+>
+> Add streaming-safe redaction for known injected values and platform credentials,
+> including values split across write boundaries, before storage or streaming.
+> Define bounds and limitations; do not claim redaction prevents untrusted code
+> from encoding/exfiltrating a credential it legitimately receives.
+>
+> Test cross-owner access, CSRF, encrypt/decrypt tamper cases, missing keys, rotation,
+> collision rules, fork withholding and redaction boundaries. Stop with secret
+> management and tested worker/redaction contracts. Document preview-only
+> credential guidance and server/worker key provisioning without real secrets.
 
-Keep observed PR generation, authorized build intent and actually deployed SHA
-distinct. Preserve atomic generation checks, external calls outside DB transactions,
-durable operation recovery and ownership-safe cleanup. Keep one environment per
-PR once work is requested, current-build logs only, and no historical builds table.
+## Prompt 3 — Current-build log storage and resumable live logs
 
-For each implementation, run generation when needed, Go build/tests/vet/lint and
-relevant PostgreSQL integration tests. Run browser regressions for UI changes.
-Use isolated schemas/fixtures; do not reset application data. Report unavailable
-checks honestly. Do not claim real GitHub success from mock tests.
+> Implement DESIGN Section 17 in internal/buildlogs and web/pages/builds, using
+> the current-build-only storage policy. Reuse the existing admitted-build log
+> clearing transaction; rejected jobs must retain their previous logs.
+>
+> Bind each writer to environment, generation and revision so a late old writer
+> cannot append to the new attempt's logs. Allocate monotonic sequence IDs safely,
+> with bounded batches, line lengths, bytes per build and age retention. Apply
+> Prompt 2 redaction before persistence, SSE or diagnostic output; represent
+> truncation and storage failures explicitly rather than silently discarding them.
+>
+> Add owner-scoped initial log reads and SSE with authenticated ownership checks,
+> Last-Event-ID resume, bounded replay, heartbeat, cancellation and reconnect.
+> Clearing current logs needs an attempt identity/reset signal so an old cursor
+> cannot skip a replacement build. Fence late writes during clear/rebuild races.
+> Cap concurrent streams and avoid holding a DB transaction/pool slot per viewer.
+>
+> Add a useful current log page/link, safe HTML escaping, accessible live updates
+> and an ordinary reload/paginated fallback without JavaScript. Preserve theme and
+> navigation. Show “no build requested”, “queued”, “stream disconnected”, “logs
+> truncated” and terminal state accurately. Build/runtime adapters will supply
+> real output later; do not populate sample logs as application activity.
+>
+> Test ownership, reconnect/reset, same-SHA revision changes, late writers,
+> truncation, redaction, script-looking output and slow/disconnected clients.
+> Run affected browser checks. Stop with a bounded log sink and functioning
+> authenticated SSE UI, ready for the real builder.
 
-Update relevant README/DESIGN sections only where the implemented contract changes,
-plus development setup/config documentation, code navigation, TEMP and HANDOFF
-(under 100 lines). Never put tokens, private keys or secrets in docs/test output.
-End with actual verification, local testing steps and the exact scope still unbuilt.
+## Prompt 4 — Isolated BuildKit image builds
 
-## Prompt 1 — Standalone repository configuration
+> Implement DESIGN Section 9 in internal/builds with shared client construction
+> in internal/platform/dockerx only where needed. Consume Prompt 1's prepared
+> exact-SHA source and Prompt 3's bounded log sink. Normal dispatch remains off.
+>
+> Use BuildKit through the accepted Go client or Docker BuildKit-backed API.
+> Produce uniquely owned images identified by environment/PR, SHA, generation
+> and revision. Retries must discover/reuse or safely remove partial results.
+> Scope cache per repository and prevent cross-repo cache contamination.
+>
+> Make build isolation concrete: untrusted Dockerfile steps cannot reach the
+> control plane, Postgres, host services, metadata endpoints or other previews,
+> cannot mount the host Docker socket or obtain App/platform credentials, and have
+> enforced CPU/memory/process/disk budgets. A timeout alone is not resource
+> isolation. Use a constrained builder whose network allows only the documented
+> external dependencies needed for builds; test internal destination denial.
+> Docker network attachment alone is insufficient evidence of isolation.
+>
+> Enforce build timeout/cancellation, bounded output, disk low-water admission
+> and resulting image-size limits. Do not pass repo secrets to build args/context;
+> runtime-only secrets are the MVP boundary. Do not implement a build-time secret
+> UI. Never persist a source download token in an image/cache/log.
+>
+> Persist safe failures and cleanup references through existing contracts, leaving
+> an existing active preview untouched. Always close response streams and clean
+> source workspaces; later housekeeping must identify leftovers after crashes.
+>
+> Test real successful/cached builds, malformed Dockerfile, timeout/cancellation,
+> excessive output/image size, unique revision identity and isolation probes on
+> a disposable builder. Keep unit tests deterministic and integration opt-in.
+> Stop with a usable image builder and documented builder prerequisites, capacity
+> limits and cleanup; do not start public containers.
 
-Completed as a standalone feature. Retained below as its implementation contract;
-the contract remains standalone. Confirmed defaults/schema are documented
-in [REPO_CONFIGURATION.md](REPO_CONFIGURATION.md); do not ask to approve them again.
+## Prompt 5 — Hardened Docker candidates and readiness
 
-> Read DESIGN.md Section 5 in full, README.md Section 2.3's `.previewrc.yaml`
-> example, and the existing `internal/platform/githubapp` authentication boundary.
-> Implement `internal/repoconfig` as a standalone feature. No webhook, job, UI or
-> environment wiring in this task.
+> Implement DESIGN Section 10 and README Section 4.6 in internal/runtime.
+> Compose source, builder and secrets behind the existing environments.Runtime
+> contract; keep lifecycle transactions in internal/environments. A successful
+> Build returns a healthy candidate with no public route.
 >
-> Use the approved contract: omitted Dockerfile → `Dockerfile`, port → 3000,
-> env → empty, `health_check_path` → no HTTP endpoint, and `resource_tier` → standard.
-> The config file itself remains required. Named tiers only: small = 0.5 vCPU /
-> 512 MiB, standard = 1 vCPU / 1 GiB, large = 2 vCPU / 2 GiB. Default platform
-> ceilings are 2 vCPU / 2 GiB; lower ceilings clamp with notices. Do not introduce
-> numeric resource fields or an assumed `/health` endpoint.
+> Use the official Docker client, context-aware calls and immutable ownership
+> labels on containers and images. Apply clamped resource tiers, CPU/memory/PID
+> limits, capability dropping, no-new-privileges and bounded writable tmp space.
+> Prefer non-root and read-only rootfs; any compatibility exception must be
+> operator-controlled and explicit, never an arbitrary PR-provided privilege.
+> Do not mount host paths/socket, allow privileged mode or publish host ports.
 >
-> Implement a typed config matching the agreed YAML: Dockerfile path, application
-> port, non-secret env entries, optional health path and resource declaration.
-> Preserve the existing `env: [NAME=value]` shape unless a change is agreed.
-> Reject unknown keys, duplicate/ambiguous keys and invalid types. Validate port
-> range, environment names and Dockerfile paths, rejecting traversal and absolute
-> paths. Lexical path checks do not replace later source extraction/symlink safety;
-> document that remaining boundary instead of claiming all filesystem risks solved.
+> Implement and verify host/network rules so previews cannot reach host services,
+> server/worker, Postgres, metadata or other previews, including IPv6 and DNS
+> resolution to private destinations. Give the router a deliberate path to each
+> preview without letting that path become access to the control plane.
+> Protect platform processes from aggregate resource exhaustion. gVisor is
+> optional under the accepted design; clearly describe the actual isolation level.
 >
-> Fetch `.previewrc.yaml` at an exact commit SHA with an installation-authenticated
-> GitHub client through a small consumer interface. Reuse existing token caching;
-> do not introduce another JWT/token implementation. Bound response size/time.
-> Distinguish missing file from access denial, rate limit and transient API failure.
+> Inject authorized repo secrets only at runtime after an access/fork recheck.
+> Validate readiness through configured HTTP health path or TCP listening fallback,
+> with startup deadline, bounded probes and no arbitrary external probe URLs.
+> On failure capture bounded redacted diagnostics and durably clean candidates.
+> Detect unexpected exits/crash loops; expose observed health to later recovery/UI.
 >
-> Apply agreed defaults and clamp requested resources to agreed platform maxima,
-> returning effective values and any useful clamp notice. Reject malformed or
-> nonsensical resources. Return structured, field-specific errors safe for future
-> PR comments; omit sensitive env values and provider credentials.
-> Produce a deterministic hash of the effective config; do not persist it yet.
->
-> Use the DESIGN libraries, pin compatible versions and explain any necessary
-> deviation first. Add YAML fixtures covering valid/minimal config, missing file,
-> unknown keys, duplicate keys, path traversal/absolute path, invalid port/env name,
-> malformed resources and over-ceiling clamping. Test exact-SHA fetching, bounded
-> input, safe API error classification and stable effective-config hashing.
->
-> Stop after this standalone feature. Show fixture cases, test results, confirmed
-> defaults and maximum resource values. Update config-format docs to the agreed
-> contract; no GitHub comment posting or build execution.
+> Implement inventory and idempotent removal by stable IDs and verified ownership.
+> Test real healthy/unhealthy apps, limits, non-root/read-only behavior, fork
+> withholding, cancellation and network-denial attempts. Test crash discovery
+> of partial resources. Stop with an isolated healthy unrouted candidate; no
+> Traefik announcement or normal worker dispatch yet.
 
-## Prompt 2 — Repository policy and durable build intent
+## Prompt 6 — Stable HTTPS routing and fenced blue/green publication
 
-Completed as standalone persistence/domain APIs. Retained as the implementation
-contract; approved choices and verification are in [BUILD_INTENTS.md](BUILD_INTENTS.md).
-Prompt 3 subsequently connected request revision across the execution boundaries;
-the integration is now implemented.
+> Implement DESIGN Sections 11 and 13 and the route boundary in
+> docs/DESIGN_DURABLE_PUBLICATION.md. Read existing operation leases, candidate/
+> active artifacts and finalization SQL before adding internal/routing adapters.
+> Preserve Traefik v3; do not replace the router or add a second orchestrator.
+>
+> Resolve the documented tension explicitly: Docker labels/watch events do not
+> supply compare-and-set for (generation, revision), and labels are not freely
+> mutable after container creation. Checking DB then writing labels/config is
+> insufficient to prove stale publication rejection. Design the smallest durable,
+> ordered route controller permitted by the approved publication decision.
+> Flag any required provider/architecture change against DESIGN Section 11 before
+> implementing it, and update the design consistently. State convergence limits
+> honestly; do not promise strict per-request freshness from an unfenced provider.
+>
+> Allocate globally unique DNS-safe stable hostnames per lifetime environment,
+> using immutable repository identity to avoid name collisions/renames. Persist
+> accepted route versions including removals so late activations cannot resurrect
+> a removed route. Write routes only for healthy accepted candidates, recover
+> controller state after restart, and confirm route convergence before retiring
+> previous artifacts. Do external IO outside DB locks.
+>
+> Configure wildcard DNS and HTTPS using Traefik DNS-01, with staging certificate
+> tests before real issuance, protected DNS credentials and persistent restrictive
+> ACME storage. Separate dashboard and untrusted preview origins/cookies; unknown/
+> expired hosts get the specified safe fallback. Expose no public admin API.
+> Reconcile Docker socket access with README's worker-only rule; flag any required
+> restricted discovery mechanism rather than mounting the raw socket everywhere.
+>
+> Test real HTTPS routing, stable URLs, successful/failed swaps with the old
+> healthy preview retained, delayed stale activate/remove, same-generation
+> Rebuild, close during publication and controller/proxy restart recovery.
+> Stop with real route adapters and demonstrated fences. Keep normal dispatch off.
 
-> Read `docs/BUILD_POLICY_AND_USER_FLOW.md` in full and DESIGN.md Sections 7 and 13.
-> Inspect current PR/event queries, environment job arguments and publication
-> generation guards. Implement only the persistence/domain foundation for
-> repository policy and authorized work; no live webhook, browser controls or
-> production build workers yet.
->
-> Use the approved choices: repeated Build requests coalesce, including completed
-> results. Explicit Retry after failure or Rebuild after success uses a fresh key
-> and expected revision to create the next revision. Switching to Manual cancels
-> unstarted automatic work; running authorized work may finish under current
-> generation/request guards. Do not overload observed generation to fake a webhook
-> whenever a user clicks Build.
->
-> Add additive Goose migrations and sqlc queries for owner-controlled repository
-> mode (`manual` by default, including existing repositories) and the minimum durable
-> request state required by the agreed design: PR identity, requested generation/SHA,
-> request source/revision, eligibility deadline and lifecycle information. Store only
-> current coordination state, not a historical builds archive. Define indexes,
-> constraints and transaction/lock ordering; preserve existing data and policies
-> through repository relinking/upserts.
->
-> Separate observed PR state from authorized work. Observing an open PR in Manual
-> creates no build intent and no environment merely for listing. Closed/merged state
-> invalidates build intent and permits teardown in either mode. Enabling Automatic
-> applies to subsequent events, not all existing PRs. Switching to Manual cancels
-> unstarted automatic intent without removing an existing preview.
->
-> Expose small ownership-scoped service/repository methods for policy and requests.
-> Make concurrency and idempotency guarantees explicit. Keep the existing deployed
-> fields, pending publication state and result generation fence intact. Determine
-> whether repeated same-generation requests need an additional request fence across
-> publication/reporting/cleanup; do not assume PR generation alone distinguishes
-> separate attempts for the same commit.
->
-> Test migration defaults, mode validation, inaccessible/foreign repository rejection,
-> policy preservation on relink, duplicate request behavior, rollback and concurrent
-> request/mode changes. Include the agreed same-SHA retry fence behavior.
->
-> Stop with tested persistence/domain APIs. Do not leave half-wired code calling the
-> old enqueue path under new policy assumptions. Explain the schema, atomicity and
-> what Prompt 3 must change before this policy can control scheduling.
+## Prompt 7 — Durable teardown and ownership-safe cleanup
 
-## Prompt 3 — Durable scheduling and intent-aware worker handoff
+> Implement DESIGN Section 14 and lifecycle cleanup using real runtime/routing
+> adapters from Prompts 5–6. Reuse existing teardown/outbox/resource-reference
+> contracts; do not add a competing teardown queue/state machine.
+>
+> Close/merge, installation suspension/deletion and repository removal must revoke
+> publication and durably remove routes, active/candidate containers, exclusively
+> owned image tags and temporary resources. Preserve repo-level secrets unless
+> their documented lifecycle requires removal; clear any environment-scoped
+> copies. Retain tracked PR and lifetime environment identity for later reopen.
+>
+> Use bounded graceful stop followed by force removal. Not-found is success only
+> for the verified resource. Inspect IDs and labels, protect active/pending/
+> operation-referenced artifacts, and never run global Docker prune. Remove images
+> only after all references are safe. Do not confuse external cleanup completion
+> with a DB state change to torn_down; keep pending/failure work visible.
+>
+> Resume after any crash or partial failure, even after GitHub App access is
+> revoked: local teardown must not require a fresh GitHub token. Reopening/newer
+> revisions must not let an old teardown remove the replacement. User-requested
+> teardown will use this service in Prompt 10 and must not automatically recreate
+> a preview from the same consumed Automatic event.
+>
+> Test duplicate teardown, route outage, container/image already gone, revocation,
+> close while building/publishing, old teardown after reopen and crash after each
+> side effect. Run real Docker/Traefik cleanup tests and assert no owned leftovers
+> while unrelated containers/images survive. Stop with durable verified cleanup;
+> register normal workers only in Prompt 10.
 
-Completed behind tested coordination/execution interfaces. Retained as the contract;
-[BUILD_SCHEDULING.md](BUILD_SCHEDULING.md) records schema, atomicity, tests and
-production boundaries. Do not enable runtime dispatch with no-op adapters.
+## Prompt 8 — GitHub living comment and exact-SHA check runs
 
-> Continue from Prompt 2. Read DESIGN.md Sections 6, 7 and 13, and the build-policy,
-> generation-ordering and durable-publication docs. Implement coordination using
-> parsed events/direct tests; do not add HTTP webhook ingress or Docker adapters.
+> Implement DESIGN Section 12 in internal/reporting through existing durable
+> report operations, installation clients and independent retry budgets.
+> Report queued, building, ready, failed, expired and removed states from persisted
+> truth. Ready requires accepted routing/deployment, not merely an image/container.
 >
-> Adapt `webhooks.Service.ProcessPR` for opened, reopened, synchronize and closed/
-> merged state. Record each successfully processed relevant event's generation
-> exactly once. Manual tracks state without automatic builds. Automatic persists a
-> trailing five-minute deadline; newer relevant head changes replace/reset pending
-> intent. Comments/reviews do nothing. Close/merge invalidates pending builds and
-> records immediate teardown intent, without debounce.
+> Maintain one living comment per tracked PR using stored ID and a stable marker.
+> Recover from a deleted comment and from “create succeeded, DB save failed”
+> by bounded discovery of the existing App-owned marked comment before creating
+> another. Use exact-SHA check runs with stable external identity; a same-SHA
+> Retry/Rebuild must reflect the current revision without duplicate reports.
 >
-> Implement explicit per-PR manual request coordination against current state. It
-> bypasses the quiet period, coalesces matching automatic work and follows Prompt 2's
-> duplicate/retry semantics. Recheck owner access, installation status and PR state.
-> Persist intent and River wake-up atomically. Use durable delayed wake-ups, not
-> process-local timers or sleeping workers; stale wake-ups exit cleanly. Use an
-> injectable clock so timing tests do not sleep five minutes.
+> Preserve current/deployed SHA distinction, latest failure and an older healthy
+> URL when appropriate. Link only to functioning owner-authenticated log pages
+> and actually published previews. Withheld fork secrets and Checking/Conflicts
+> give useful, safe feedback. Do not invent an exact queue position if unavailable.
 >
-> Change broker admission, `finishJob`, terminal-error handoff and applicable retry/
-> recovery paths to consult authorized eligible intent. New observed generation
-> alone must not create a successor. Respect future deadlines even when an older
-> job finishes sooner; keep one active build/teardown per PR and do not lose close
-> intent to uniqueness conflicts. Check request cancellation/access again at worker
-> start. Preserve atomic generation/request fencing, durable cleanup and publication.
+> Serialize/reconcile reporting updates so a delayed response from an old version
+> cannot remain the final current status. GitHub APIs do not provide DB-style CAS;
+> document transient limits and implement latest-state repair. Honor rate-limit/
+> retry-after, permission changes, bounded pagination and safe error categories.
+> A reporting outage never rolls back a healthy deployment.
 >
-> Carry intent revision through immutable build arguments, result/finalization
-> SQL predicates, durable operation keys/payloads, reporting and cleanup ownership.
-> A retry of the same SHA/generation must fence every obsolete attempt, including
-> already-created publication operations. Resolve bootstrap generation-zero
-> compatibility explicitly: stored intents accept zero, but legacy job/operation
-> validation requires positive generation. Do not fabricate lifecycle events.
->
-> Review River scheduled-job uniqueness carefully: repeated deadline resets must
-> neither lose the latest wake-up nor monopolize the build/teardown PR uniqueness
-> slot for the entire debounce window. Explain the chosen job-key and handoff scheme.
-> Add only job kinds needed for this coordinator, with sensible per-kind timeout
-> and maintenance registration. Keep scheduling distinct from real execution.
->
-> Define a fail-closed production dispatch boundary while runtime/publication
-> dependencies are absent. Never insert executable production build/teardown jobs
-> with no registered capable worker or complete them using no-op adapters. Prove
-> dispatch with test adapters; preserve live ping and worker startup without OAuth.
->
-> Test Manual opened/synchronize no-build; Automatic deadline reset; old wake-up
-> rejection; manual override; duplicate request; switch to Manual before start;
-> terminal failure/success handoff; restart/due-work recovery; access revocation;
-> and build in flight → PR closes → late result cannot publish. Add rollback and
-> concurrent event/request/deadline tests, including both relevant lock orders.
->
-> Stop with working coordination tests. Explain atomic eligibility/claim SQL and
-> successor logic. Clearly distinguish tested adapters from production capability.
+> Test duplicate jobs, stale success/failure, deleted comments, ambiguous create,
+> same-SHA retries, rate limits and revoked permissions. Supply an opt-in proof
+> for an authorized disposable GitHub PR, including resulting comment/check IDs
+> and cleanup steps; fixtures alone are not a hosted proof. Stop with reporting
+> adapters and required GitHub App permission documentation.
 
-## Prompt 4 — Authenticated and durable GitHub webhook ingress (completed)
+## Prompt 9 — Recovery, expiry, reconciliation and capacity controls
 
-> Continue from Prompt 3. Read DESIGN.md Section 6 in full, Section 4's lifecycle
-> contract, and existing installation/event handler interfaces. Implement the
-> `POST /webhooks/github` HTTP adapter with feature-owned handlers/routes and thin
-> app wiring. No image builds, router integration or PR comment publishing.
+> Implement DESIGN Section 15 in internal/housekeeping, extending existing
+> environments.Reconciler and scheduling recovery. Read protected-resource
+> references and admission/handoff SQL first. Keep normal dispatch off.
 >
-> Validate a size-bounded raw body using GitHub's signature verification facilities
-> before parsing. Require the expected signature algorithm and reject missing/
-> invalid signatures. Use server-only `GITHUB_WEBHOOK_SECRET`; document generation,
-> GitHub settings and local delivery testing without exposing secret values.
-> Preserve the existing optional App configuration startup behavior deliberately;
-> workers must not acquire OAuth/session dependencies. Fail closed when webhook
-> authentication is unconfigured rather than accepting unsigned deliveries.
+> Add bounded River periodic/startup jobs to recover due intents, lost operation
+> wake-ups, expired leases, interrupted candidates, stuck builds/teardowns and
+> route drift. Inventory real Docker/BuildKit/router resources by platform labels,
+> compare with active/pending/operation references and apply grace periods.
+> Respect current Manual/Automatic authorization and deadlines; recovery must not
+> turn a newer observed SHA or an expired preview into an unauthorized build.
 >
-> Implement durable delivery-ID deduplication and correct transaction/retry behavior.
-> Duplicate successful deliveries must not increment generation or schedule again.
-> A crash/error must not mark unprocessed work permanently successful. If direct
-> transaction composition is unsafe, durably accept into an inbox and process via
-> River; explain the chosen minimal design before adding schema. Return success
-> only after durable acceptance, with no source/config fetching or builds inline.
+> Reconcile tracked PR lifecycle/access with bounded installation-authenticated
+> GETs, fenced against concurrent webhook changes. Open-only discovery remains
+> open-only; omission never means closed and historical PRs are not backfilled.
+> Respect GitHub rate limits and unavailable installations.
 >
-> Route pull_request opened/reopened/synchronize/closed through Prompt 3. Map merged
-> state correctly. Dispatch installation and installation_repositories payloads to
-> existing parsed lifecycle functions, preserving revision/access/ownership fences.
-> Acknowledge unsupported valid event types without side effects. Lifecycle cleanup
-> remains durable pending work if the real cleanup adapter is absent; do not report
-> nonexistent container teardown as completed.
+> Implement configurable expiry with accurate expires_at and user feedback.
+> Expiry/manual teardown suppresses recreation until an explicit new Manual
+> request or later relevant Automatic event. Define how rebuild affects expiry.
+> Prune expired current logs, owned source directories, obsolete images and
+> repository-scoped build cache within budgets, without deleting live references.
 >
-> Handle stale/out-of-order deliveries explicitly: processing generation measures
-> local acceptance order, not GitHub event chronology. Propose a source-state ordering
-> or reconciliation policy for approval; do not silently let an older event revert
-> a close or a newer head SHA. Do not run external state fetches under PR locks.
-> Carry fork metadata so later execution enforces DESIGN's fork/secrets policy;
-> do not expose secrets or invent a new trust policy here.
+> Enforce global build concurrency, per-repo preview limits and host CPU/memory/
+> disk headroom with atomic reservations across retries and crash recovery.
+> Count old active plus candidate resources during blue/green swaps. Release
+> reservations only after verified cleanup; stale ones reconcile rather than leak.
+> Keep cleanup responsive when build capacity is full.
 >
-> Test signed fixture bodies, body limit, invalid JSON/signature, unsupported events,
-> duplicate/concurrent delivery, transaction rollback/retry, closed versus stale
-> synchronize, installation revocation and Manual no-build behavior through HTTP.
-> Log safe delivery/event/PR identities, not full payloads, tokens or secrets.
->
-> Stop after ingress and durable processing. Give exact local signed-fixture commands
-> and real GitHub webhook setup/testing steps. A public HTTPS forwarding tool is
-> optional developer tooling, not a new deployed component. Do not claim real
-> delivery verification unless actually observed.
+> Add dry-run inventory/prune diagnostics, bounded batches and safe operational
+> failure visibility. Test restart at every lifecycle boundary, lost jobs,
+> exhausted retries, orphan grace periods, expiry without rebuild loops, missed
+> close, capacity races and disk pressure using real resources. Stop with tested
+> startup/periodic maintenance services, ready for Prompt 10's production wiring.
 
-## Prompt 5 — Existing PR discovery and repository/PR workspace (completed)
+## Prompt 10 — Connect real workers and complete MVP dashboard actions
 
-> Continue from Prompts 1–4. Read the UI recommendations in
-> `docs/BUILD_POLICY_AND_USER_FLOW.md`, DESIGN.md Section 17, the current presentation
-> architecture and installation ownership queries. Implement repository/PR browsing
-> and owner controls using the existing Templ/HTMX/Tailwind architecture.
+> Connect Prompts 1–9 in internal/app and the existing feature handlers. Read
+> DESIGN Sections 7, 13 and 17 and docs/APP_USER_FLOW.md. This task makes a complete
+> pipeline work locally/staging; it does not authorize public production rollout.
 >
-> First confirm the proposed detail routes and initial-sync execution model. Build
-> the smallest feature-owned PR boundary fitting Section 20; do not relocate working
-> HTTP handlers globally or import backend feature types into page packages.
-> Identify schema additions for PR title, author, branch, URL and source ordering.
-> Use GitHub numeric repository identity rather than mutable names as ownership keys.
+> Compose the real environments.Runtime and operation executor for routing,
+> reporting and cleanup. Register build/teardown/wake/operation/housekeeping
+> workers only when their real dependencies are configured and validated. Keep
+> server/worker config split: a worker needs no human OAuth/session credentials.
+> Make per-kind queues, concurrency, cancellation, lease/rescue timeouts and
+> graceful draining match actual work. Missing execution capability remains an
+> explicit unavailable state, never a job silently handled by a no-op.
 >
-> Add bounded, paginated discovery of existing PRs through installation-authenticated
-> GitHub API calls, plus explicit refresh. If using River for initial sync, add only
-> the App ID/private key settings genuinely needed by that worker, with no OAuth
-> requirement. Narrow the current GitHub App constructor's config dependency where
-> needed. Give sync jobs their own timeout/concurrency and honor rate-limit retries.
-> Do not fetch every PR inside page rendering or perform GitHub calls under DB locks.
+> Replace the unavailable manual Build endpoint with upstream freshness checking,
+> ownership/access/mergeability gates and durable idempotent intent/wake insertion.
+> Connect Automatic event/deadline scheduling end to end. Add explicit Retry after
+> failure and Rebuild after success using expected revision. Connecting a repo,
+> syncing or enabling Automatic must not bulk-build. Repeat eligibility at worker
+> admission and before candidate publication; keep external calls outside locks.
 >
-> Synchronization is observational and does not bulk-authorize builds, even when a
-> repo is Automatic. Fence stale API snapshots against newer webhook updates and
-> installation changes; do not infer closure from a partial page or failed fetch.
-> Show discovery progress/last refresh honestly. A bounded first page is not “all
-> PRs synced”; continue via durable pagination if needed. Later periodic full
-> reconciliation remains its own phase.
+> Finish PR detail, Builds, Environments and Overview with real queued/current
+> work, latest/requested/deployed SHA, current log links, health, stable preview
+> URL, expiry and failure reasons. Add owner-only CSRF-protected teardown with a
+> confirmation modal. Preserve list/search/focus/modal polling guards and no-JS
+> flows. Current Builds is not a historical archive; show old serving preview
+> separately while a newer request builds or fails.
 >
-> Add repository detail with searchable, state-filtered PRs (ten per page), and PR
-> detail with latest SHA, current request/build state and deployed SHA/preview URL.
-> Reuse the table's internal scrolling, live search, ordinary GET fallbacks and
-> selected navigation. Keep empty, unavailable, syncing and failed states distinct.
-> New unbuilt PRs show Not requested and do not need an environment row.
->
-> Add owner-only Manual/Automatic controls using Prompt 3 and CSRF-protected POSTs.
-> Show the Automatic quiet-period deadline accurately. Add the per-PR manual build
-> control/service boundary, but disable execution clearly while real runtime
-> capability is absent; never claim a build has started or queue unsupported jobs.
-> Before later enabling execution, verify the PR's current upstream state without
-> holding DB locks, and fence that observation against concurrent updates so a
-> delayed webhook cannot make the action silently build an obsolete commit.
->
-> Populate Builds only with actual current/latest authorized work available from
-> the new model; no permanent attempt history. Populate Environments only with real
-> deployment state already supported; do not manufacture runtime health/URLs/logs.
-> Current log streaming, live health and manual runtime teardown stay unbuilt if
-> their adapters are absent. All links should lead to useful scoped pages or
-> explicitly unavailable actions, not fake completed functionality.
->
-> Test ownership on every query/action, unavailable installations, PR discovery and
-> source races, pagination/search, CSRF, duplicate action handling and policy state.
-> Run browser regressions for navigation, responsive tables, no-JS forms, modal
-> confirmations and preserved theme/focus behavior. No infinite scroll or fake data.
->
-> Stop after the PR control-plane UI. Provide click-by-click local checks and list
-> what remains before Build can execute a real preview.
+> Prove real source → config → image → healthy candidate → route → GitHub status
+> → logs → teardown on isolated fixtures. Test Manual push waits, Automatic bursts
+> coalesce, mode switch, duplicate click, same-SHA retry, failed rebuild retains old
+> preview, fork withholding, mergeability and access changes, close mid-build,
+> restart recovery and cross-owner rejection. Run DB and browser regressions.
+> Stop with an operational local/staging MVP and an explicit capability/config
+> matrix. Record every remaining live proof required before public rollout.
 
-## After these five prompts
+## Prompt 11 — Observability and production security hardening
 
-The next execution phase is still required: exact-SHA source fetching and safe
-extraction (Section 8), Docker image building (9), isolated container runtime and
-health checks (10), generation-fenced routing/TLS (11), and GitHub feedback (12).
-Complete the needed secret/fork handling (16), logs (17) and production recovery/
-expiry wiring (15) as those integrations are enabled. Do not enable public preview
-execution merely because a manual button and webhook endpoint exist.
+> Implement DESIGN Section 18 and harden the connected MVP using the accepted
+> slog/Prometheus/Grafana stack. Optional tracing remains outside this task.
+>
+> Add safe correlated logs for delivery, repo/PR/environment, job, SHA and request
+> version. Add bounded-cardinality metrics for webhook outcomes, queue wait/depth,
+> build duration/outcome, active previews, readiness failures, pending/failed
+> operations, cleanup backlog, reconciler repairs, disk/capacity and GitHub rate
+> limits. Do not put arbitrary PR IDs, URLs or secrets in metric labels.
+> Provide Grafana dashboards and concrete alert rules for actionable failures.
+>
+> Separate cheap liveness from dependency readiness and expose real worker
+> heartbeat/capability. Protect metrics/admin/diagnostic endpoints from public
+> access; keep test ping tools deliberately scoped. Bound request/header/body/
+> OAuth/network timeouts, pagination, SSE connections and shutdown drain.
+> Add ingress abuse controls that preserve webhook retry/dedup behavior.
+>
+> Verify production HTTPS/Secure-cookie/origin/CSRF behavior, trusted proxy
+> handling and forwarded-host validation. Dashboard sessions must never be sent
+> to untrusted preview origins. Check secret/key/ACME file permissions, encrypted
+> storage, process/container privileges, build/runtime network denial, internal
+> listener exposure and disk-pressure admission against the actual deployed path.
+> Do not weaken isolation to get a sample app running.
+>
+> Add dependency/Go vulnerability checks and a practical incident runbook:
+> execution kill switch that leaves cleanup working, retry/reconcile pending
+> operations, certificate/GitHub outage, disk exhaustion and key rotation.
+> Test readiness under outages, bounded metric labels, cancellation/resource
+> leaks and security regression cases. Stop with observable, hardened staging;
+> clearly report unresolved release blockers rather than claiming readiness.
 
-Break that execution phase into another reviewed prompt set when the control plane
-is verified. Preserve the durable-publication decision; this plan does not replace
-its route fencing, retry, cleanup or crash-recovery requirements.
+## Prompt 12 — Production packaging, CI, restore and release acceptance
+
+> Deliver the deployment path for the completed single-host MVP. Read README's
+> accepted single VPS/Docker Compose stack, DESIGN Sections 10–11/15/18,
+> docs/DEVELOPMENT_SETUP.md and current deploy files. Prepare deployable artifacts
+> and validate them on disposable local/staging infrastructure. Publishing or
+> deploying to a real account requires authorization for that target.
+>
+> Add reproducible multi-stage server/worker images with generated Templ/CSS,
+> minimal non-root runtime where compatible, pinned supported dependencies,
+> health checks, restart policy, persistent Postgres/ACME/needed controller state,
+> graceful stop budgets and CPU/memory/disk reservations. Provide production
+> Compose separately from the existing local Postgres-only setup.
+> Wire BuildKit, Docker isolation and Traefik exactly as validated earlier.
+> The server/previews get no Docker socket; any restricted router discovery
+> mechanism must match the documented accepted decision.
+>
+> Document fresh-host prerequisites, firewall and network rules, dashboard and
+> wildcard-preview DNS, DNS-01 provider credentials, GitHub OAuth/App URLs and
+> permissions, matching webhook secret, encryption keys, migrations and startup
+> order. Keep secrets out of images/Git/CLI arguments; validate complete production
+> config before accepting builds. Use staged ACME testing before live issuance.
+> Provide the documented MVP host setup script allowed by README Section 4.9;
+> Terraform is optional. Keep current config names consistent with the loaders,
+> explaining differences from README's illustrative environment variable list.
+>
+> Provide repeatable upgrade and rollback procedures, explicit migration
+> compatibility boundaries and backups of Postgres, encryption key versions and
+> essential TLS/controller state. Test restore into a fresh disposable database/
+> host and reconcile with actual Docker state before reopening admission.
+> Record restore time and data-loss window; a backup script alone is insufficient.
+> Schedule nightly pg_dump to protected object storage as required by README
+> Section 4.9, with retention and failure alerts; never expose keys or dump contents.
+>
+> Use GitHub Actions and GoReleaser for versioned releases per README Section 4.9.
+> Add CI for generation consistency, build/tests/vet/lint, migrated Postgres
+> integration, browser regressions and image build/scan. Keep untrusted fork CI
+> away from deployment credentials and privileged production Docker.
+> Add a repeatable real-adapter end-to-end suite with cleanup and failure injection.
+>
+> Execute the release checklist below where prerequisites and authorization
+> exist. Write docs/PRODUCTION_DEPLOYMENT.md and docs/MVP_RELEASE_REPORT.md with
+> exact commands, environment/version evidence, passed/failed/skipped checks and
+> outstanding inputs. Update setup/handoff links. Missing domain, DNS token,
+> disposable GitHub repo/write authorization or VPS access stays a specific
+> pending gate; do not fabricate successful verification or silently deploy.
+> Stop with reviewable deployable artifacts and an evidence-based readiness
+> verdict. Production-ready is conditional on all mandatory checks actually passing.
+
+## Release acceptance checklist
+
+The final report must give evidence for every item, using isolated resources and
+an authorized disposable GitHub repository for external writes:
+
+- Fresh setup and clean migration/startup work from documented commands; server
+  and worker signal real readiness/capability and fail closed on incomplete config.
+- Real hosted OAuth/App installation and signed GitHub delivery work. Initial
+  discovery contains only open PRs; a tracked close/merge retains row identity.
+  Real conflicting and unresolved PRs cannot execute in either mode.
+- Manual builds the freshly verified exact SHA; later pushes alone do not build.
+  Automatic bursts deploy the latest eligible SHA after five quiet minutes.
+  Retry/Rebuild revisions fence old work and duplicate submissions coalesce.
+- A real Dockerfile-only app builds, becomes healthy, serves a stable valid HTTPS
+  preview, streams redacted current logs and has one living comment/valid check.
+  Secrets work for trusted source and are absent for forks.
+- Successful rebuild swaps without an avoidable serving gap; failed rebuild keeps
+  the old healthy deployment. Delayed stale route/report/cleanup operations and
+  worker crashes cannot leave the final state on an obsolete version.
+- Close/merge, owner teardown, expiry and access revocation remove routes/resources
+  durably; reopen follows policy. No automatic recreation loop or owned orphan
+  remains after recovery; unrelated Docker resources survive.
+- Runtime/build probes cannot reach host/control-plane/Postgres/metadata/other
+  previews. Limits and concurrent capacity races cannot exhaust the host.
+  Preview origins cannot receive dashboard cookies or platform credentials.
+- Browser checks cover owner isolation, CSRF, modals, keyboard/mobile navigation,
+  logs reconnect/reset, useful empty/failure states and no-JavaScript workflows.
+- GitHub/proxy/DB outages, disk pressure and abrupt worker restarts recover without
+  losing authorized intent or cleanup. Operators can see and act on failures.
+- Production images/Compose/CI validate; wildcard TLS is verified; backup/restore
+  and an upgrade/rollback rehearsal pass on fresh disposable infrastructure.
+
+MVP exclusions remain unchanged: no multi-service Compose apps, buildpacks,
+granular team roles, custom per-repository domains, horizontal workers or permanent
+build-history archive. This plan introduces no implemented architecture/theme
+change; routing/socket tensions must be resolved against the approved decisions
+and documented during their implementation.

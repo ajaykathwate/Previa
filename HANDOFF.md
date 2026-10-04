@@ -3,8 +3,10 @@ Last updated: 2026-10-04
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
-- Phase 3 implemented: docs/PHASE3_REPORT.md records open-only tracking, mergeability,
-  test evidence and the pending live GitHub proof. Stop at this phase.
+- Phase 3 committed as 88e077d: docs/PHASE3_REPORT.md records open-only tracking,
+  mergeability, test evidence and the pending live GitHub proof.
+- docs/FEATURE_IMPLEMENTATION_PROMPTS.md replaces completed prompts with 12 remaining
+  MVP tasks, source through deployment acceptance. These tasks are not yet executed.
 - docs/DEVELOPMENT_SETUP.md, .env.example, Makefile, deploy/docker-compose.yml:
   setup/config; TEMP.md records remaining integration work.
 - Intent/publication contracts: docs/BUILD_INTENTS.md, BUILD_SCHEDULING.md,
@@ -85,14 +87,12 @@ Last updated: 2026-10-04
   Conflict/checking gates cover manual, dispatch, runtime admission and publication.
 
 ## Verification
-- Build/tests/vet/lint and final PR/environment/webhook race checks pass.
-  PostgreSQL full suite and signed open-only/null/conflict checks pass. Local Git
-  conflict/push proves both modes refuse then admit runtime. River continuation,
-  dedup/rollback/source-access races, ownership, policy and CSRF remain covered.
-- All 20 browser checks pass, including modal/focus guards, navigation, responsive
-  and no-JS flows. Temporary Chromium/libs used; command is in PHASE3_REPORT.md.
-- Phase 3 disposable DB/env cleaned; rollout build/tests/vet/lint checked.
-- Server/worker DB startup and signed local webhook ping previously verified.
+- 2026-10-04 commit/planning task: make build/test/lint passed with TEST_DATABASE_URL
+  against configured Postgres; vet/lint 0 issues. Sandbox networking/cache restrictions
+  required an approved rerun. Docs have no dedicated tests; browser/live checks not rerun.
+- Prior Phase 3: DB/race checks and all 20 browser cases passed; details and the
+  temporary Chromium command are in PHASE3_REPORT.md. Disposable DB/env cleaned.
+- Prior server/worker DB startup and signed local webhook ping verified.
 - Application DB migrated through 10 (pending 9/10 applied); Goose 10/River 007,
   PR columns and rollback-protected constraint tests verified. Restart server/worker.
   Live GitHub PR proof pending chosen disposable repo/authenticated write access;
