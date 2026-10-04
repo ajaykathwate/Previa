@@ -200,9 +200,18 @@ workflow. Owners need repository mode controls and a way to select a PR and requ
 its latest commit. GitHub comments/checks remain the review-facing feedback channel.
 
 Current pages are Overview, Repositories, Builds, Environments and Developer Tools.
-Repositories shows a compact repository card grid: two columns on desktop and
-one on mobile, sized to the collection rather than the viewport. Cards show the
-repository name, owner and access state; search and access filters stay compact.
+The workspace uses a "signal" theme (graphite neutrals, a lime accent, light and
+dark modes that follow the OS with a manual toggle, system sans plus monospace for
+commits and branches). A grouped sidebar collapses to an icon rail on medium screens
+and a drawer on phones; unbuilt areas appear as labelled, non-link "Coming next"
+items. Ctrl/⌘ K opens a command palette over the same links. Same-origin page
+changes use cross-document view transitions, and workspace links are prefetched
+on hover where the browser supports speculation rules.
+Overview shows real installation/repository/access counts, a setup checklist
+derived from those counts and a pipeline view marking which stages are connected.
+Repositories shows a responsive repository card grid (up to three columns, one on
+phones) inside a 1240px content column. Cards show the repository name, owner and
+access state; search and access filters share a sticky toolbar.
 Pagination appears only when more than one page is needed.
 Selecting a source opens its dedicated repository page; selecting a PR opens its
 dedicated detail page. Clickable owner/repository/PR breadcrumbs and Back links

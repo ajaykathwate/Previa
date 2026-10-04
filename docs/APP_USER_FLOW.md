@@ -40,11 +40,11 @@ For installation/configuration commands, use [DEVELOPMENT_SETUP.md](DEVELOPMENT_
 4. The repository list defaults to **Available**. **Unavailable** retains previously
    linked repositories whose access was removed/suspended; **All** includes both.
 5. Use name search; results update after a short typing pause. Clearing search shows
-   all matching records in the selected tab. Repositories appear as compact cards,
-   two columns on desktop and one on mobile. Each card shows its name, owner and
-   access badge; clicking anywhere on it opens the PR list. Pages contain up to ten
-   records; pagination appears only for multiple pages. Small collections size to
-   their content, and larger collections scroll in the main content area.
+   all matching records in the selected tab. Repositories appear as cards, up to
+   three columns on wide screens and one on phones. Each card shows its name, owner
+   and access badge; clicking anywhere on it opens the PR list. Pages contain up to
+   ten records; pagination appears only for multiple pages. The search toolbar stays
+   pinned while the main content area scrolls.
 6. **Manage connections** opens the Previa GitHub App installation flow for your
    account. Use it to connect another installation or update selected repositories,
    then complete verification again. Keeping this action after linking is intentional.
@@ -109,6 +109,18 @@ exact-SHA source/config preparation, Docker build/runtime, fork/secrets enforcem
 fenced routing/publication and cleanup adapters. Direct POSTs also reject the action;
 no unsupported build is submitted. A future enabled action must first verify current
 upstream state and atomically fence that observation against concurrent events.
+
+## Moving around the workspace
+
+- The sidebar groups **Workspace** (Overview, Repositories), **Delivery** (Builds,
+  Environments) and **System** (Developer tools). **Coming next** items are labels,
+  not links. Medium screens show an icon rail; phones use the menu button.
+- Press **Ctrl K** (**⌘K** on macOS) or click the header search to open the command
+  palette. Type to filter pages, repository filters and account actions; use the
+  arrow keys and Enter, or Esc to close. **Log out…** still opens the confirmation.
+- The sun/moon button switches between light and dark. The choice is stored in
+  this browser only; without a choice Previa follows the operating system.
+- Builds and Environments include a two-option switch for moving between them.
 
 ## Other workspace screens
 

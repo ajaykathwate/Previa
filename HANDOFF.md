@@ -13,8 +13,10 @@ Last updated: 2026-10-04
   GENERATION_ORDERING.md and DESIGN_DURABLE_PUBLICATION.md.
 - Backend features stay flat under internal/<feature>; construction in internal/app.
   Presentation stays in web/, with view models and no backend imports.
-- Preserve the approved palette, fonts, quiet input focus, modal confirmations,
-  server-rendered navigation, bounded tables, live search and ordinary GET fallback.
+- Preserve the "signal" theme (theme.css light/dark tokens, system sans + mono),
+  quiet input focus, modal confirmations, server-rendered navigation, live search
+  and ordinary GET fallback. Palette/theme toggle/view transitions/prefetch are
+  presentation-only layers in web/static/js/ui.js and web/styles/motion.css.
 
 ## Run and configuration
 - make build/test/lint generate assets/templates/sqlc and run build/tests/vet/lint.
@@ -39,8 +41,11 @@ Last updated: 2026-10-04
 - OAuth/users, signed state, SCS sessions (24h/30m idle), rotation, CSRF/logout modal.
 - Home, protected Overview, Repositories, PR detail, current Builds/Environments,
   Developer Tools ping and /protected. Installation-owner scoping on queries/actions.
-- Repositories uses compact cards at /repositories: two desktop columns, one mobile;
-  1000px content width, natural height, count and pagination only for multiple pages.
+- 2026-10-04 UI redesign (branch feat/ui-redesign): grouped sidebar -> icon rail (<1180px) ->
+  drawer (<900px); header search opens Ctrl/⌘K command palette; theme toggle;
+  Overview pipeline/checklist from real counts; sticky toolbars; PR rows become
+  labelled cards on phones; PR detail lifecycle + labelled "Soon" placeholders.
+- Repositories: responsive cards (<=3 columns, 1 on phones) in a 1240px column.
   Cards open /repositories/<id>; PRs open /repositories/<id>/pull-requests/<number>.
 - PR list alone has Sync Pull Requests + soft-background Enable Automatic Builds.
   Manual is off; enabling needs confirmation, disabling saves directly. Sync polls every 3s, pausing for
@@ -87,13 +92,8 @@ Last updated: 2026-10-04
   Conflict/checking gates cover manual, dispatch, runtime admission and publication.
 
 ## Verification
-- 2026-10-04 commit/planning task: make build/test/lint passed with TEST_DATABASE_URL
-  against configured Postgres; vet/lint 0 issues. Sandbox networking/cache restrictions
-  required an approved rerun. Docs have no dedicated tests; browser/live checks not rerun.
-- Prior Phase 3: DB/race checks and all 20 browser cases passed; details and the
-  temporary Chromium command are in PHASE3_REPORT.md. Disposable DB/env cleaned.
-- Prior server/worker DB startup and signed local webhook ping verified.
-- Application DB migrated through 10 (pending 9/10 applied); Goose 10/River 007,
-  PR columns and rollback-protected constraint tests verified. Restart server/worker.
-  Live GitHub PR proof pending chosen disposable repo/authenticated write access;
-  CLI unauthenticated; .env webhook secret unset. App key accessible. Execution disabled.
+- 2026-10-04 UI redesign: make build, make lint (0 issues) and go test ./... pass
+  (DB-backed tests skip without TEST_DATABASE_URL). Browser suite 22/22 passes with
+  UI_BROWSER_EXECUTABLE=/snap/bin/chromium (Playwright's bundled Chromium is not
+  installed). Committed on branch feat/ui-redesign (not pushed or merged).
+- Prior Phase 3 DB/race/migration/webhook checks: docs/PHASE3_REPORT.md.

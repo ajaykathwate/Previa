@@ -29,8 +29,9 @@ unbuilt feature, stub it behind a minimal interface rather than building it.
   names, exported only what needs to be exported).
 
 ## UI consistency
-- Preserve the approved warm paper, terracotta, and forest palette and the existing
-  system-sans/Georgia typography throughout the application. Use shared theme
+- Preserve the approved "signal" theme: graphite neutrals, lime signal accent,
+  semantic status tones, light/dark palettes in `web/styles/theme.css`, and
+  system-sans UI with monospace for commits/branches/labels. Use shared theme
   tokens and presentation patterns; ask before changing the visual theme.
 - Confirmation prompts must open as accessible modals over the current screen,
   not navigate to a separate confirmation page. Keep mutations CSRF-protected.

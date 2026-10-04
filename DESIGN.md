@@ -540,13 +540,15 @@ an explicit per-PR build action. Repositories lists sources at `/repositories`;
 `/repositories/{id}/pull-requests/{number}` is a dedicated PR detail page. Selection
 uses ordinary navigation, with clickable breadcrumbs and Back links preserving
 filters. Earlier query-based workspace bookmarks redirect after ownership checks.
-Repositories uses a content-sized, capped card grid (two desktop columns, one on
-mobile), with name/owner/access metadata, compact search/access filters, a result
-count and pagination only across multiple pages. Breadcrumb labels and separators
-share a compact 17px size. Directory and PR filters use independent query keys.
-Search and filters share a
-desktop row; narrow screens stack them. Short screens scroll within the current
-page's results. HTMX updates search results, Sync Pull Requests and policy saves
+Repositories uses a content-sized, responsive card grid (up to three columns,
+one on phones) with name/owner/access metadata, a sticky search/access toolbar, a
+result count and pagination only across multiple pages. Breadcrumb labels and
+separators share one size. Directory and PR filters use independent query keys.
+Search and filters share a desktop row; narrow screens stack them. The workspace
+shell keeps the sidebar and header fixed and scrolls one content region. PR tables
+become labelled cards on phones. Presentation-only enhancements (theme toggle,
+Ctrl/⌘ K command palette, view transitions and hover prefetch of workspace links)
+layer over ordinary links and never replace server-rendered navigation. HTMX updates search results, Sync Pull Requests and policy saves
 without reloading the page. Sync and the Enable Automatic Builds switch appear
 only on the repository's PR list page. Individual PR details retain read-only
 sync information. Automatic is off for Manual; enabling requires an
