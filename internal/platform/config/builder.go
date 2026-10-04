@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kelseyhightower/envconfig"
 )
@@ -13,15 +15,17 @@ import (
 // DefaultBuildKitImage is the pinned rootless BuildKit daemon used for builds.
 const DefaultBuildKitImage = "moby/buildkit:v0.33.1-rootless@sha256:f8a833b2de9d68e27f0815e4a737abdfaf8a2e4c615650557df11025101557b4"
 
-// ExecutionConfig is what the worker needs to build images.
+// ExecutionConfig is what the worker needs to build and run previews.
 type ExecutionConfig struct {
-	// EgressImage runs the proxy that is the only route out of build
-	// networks (and, with the runtime, preview networks).
+	// EgressImage runs the proxy that is the only route out of build and
+	// preview networks.
 	EgressImage string `envconfig:"EGRESS_IMAGE" default:"previa-egress:dev"`
 	BuilderConfig
+	PreviewConfig
 }
 
-// LoadExecution reads only the build settings, for tools and opt-in checks.
+// LoadExecution reads only the build and preview settings, for tools and
+// opt-in checks.
 func LoadExecution() (ExecutionConfig, error) {
 	var cfg ExecutionConfig
 	if err := envconfig.Process("", &cfg); err != nil {
@@ -37,7 +41,10 @@ func (c *ExecutionConfig) check() error {
 	if strings.TrimSpace(c.EgressImage) == "" {
 		return errors.New("EGRESS_IMAGE must not be empty")
 	}
-	return c.BuilderConfig.check()
+	if err := c.BuilderConfig.check(); err != nil {
+		return err
+	}
+	return c.PreviewConfig.check()
 }
 
 // BuilderConfig bounds isolated image builds. Only the worker builds images.
@@ -68,6 +75,44 @@ func (c *BuilderConfig) check() error {
 		return errors.New("BUILD_MAX_IMAGE_SIZE must be at least 16MiB and at most BUILD_DISK_BUDGET")
 	case c.BuildMinFreeDisk < 0:
 		return errors.New("BUILD_MIN_FREE_DISK must not be negative")
+	}
+	return nil
+}
+
+// PreviewConfig hardens and bounds preview containers. The two compatibility
+// switches are server-wide operator decisions; repositories cannot set them.
+type PreviewConfig struct {
+	PreviewAllowRoot      bool          `envconfig:"PREVIEW_ALLOW_ROOT" default:"false"`
+	PreviewWritableRootfs bool          `envconfig:"PREVIEW_WRITABLE_ROOTFS" default:"false"`
+	PreviewTmpfsSize      ByteSize      `envconfig:"PREVIEW_TMPFS_SIZE" default:"256MiB"`
+	PreviewPIDs           int64         `envconfig:"PREVIEW_PIDS" default:"512"`
+	PreviewStartupTimeout time.Duration `envconfig:"PREVIEW_STARTUP_TIMEOUT" default:"120s"`
+	// Zero budgets derive from the Docker host: 60% of its memory and 75% of
+	// its CPUs may be used by previews together.
+	PreviewMemoryBudget     ByteSize `envconfig:"PREVIEW_MEMORY_BUDGET"`
+	PreviewCPUBudget        float64  `envconfig:"PREVIEW_CPU_BUDGET"`
+	PreviewMaxPerRepository int      `envconfig:"PREVIEW_MAX_PER_REPOSITORY" default:"10"`
+	// PreviewOCIRuntime selects an installed Docker runtime such as runsc
+	// (gVisor); empty uses Docker's default.
+	PreviewOCIRuntime string `envconfig:"PREVIEW_OCI_RUNTIME"`
+}
+
+var runtimeName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+func (c *PreviewConfig) check() error {
+	switch {
+	case c.PreviewTmpfsSize < 16<<20 || c.PreviewTmpfsSize > 4<<30:
+		return errors.New("PREVIEW_TMPFS_SIZE must be between 16MiB and 4GiB")
+	case c.PreviewPIDs < 64 || c.PreviewPIDs > 65536:
+		return errors.New("PREVIEW_PIDS must be between 64 and 65536")
+	case c.PreviewStartupTimeout < 5*time.Second || c.PreviewStartupTimeout > 30*time.Minute:
+		return errors.New("PREVIEW_STARTUP_TIMEOUT must be between 5s and 30m")
+	case c.PreviewMemoryBudget < 0 || math.IsNaN(c.PreviewCPUBudget) || c.PreviewCPUBudget < 0:
+		return errors.New("PREVIEW_MEMORY_BUDGET and PREVIEW_CPU_BUDGET must not be negative")
+	case c.PreviewMaxPerRepository < 1 || c.PreviewMaxPerRepository > 1000:
+		return errors.New("PREVIEW_MAX_PER_REPOSITORY must be between 1 and 1000")
+	case c.PreviewOCIRuntime != "" && !runtimeName.MatchString(c.PreviewOCIRuntime):
+		return errors.New("PREVIEW_OCI_RUNTIME must be a Docker runtime name such as runsc")
 	}
 	return nil
 }

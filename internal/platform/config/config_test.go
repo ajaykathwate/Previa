@@ -253,22 +253,30 @@ func TestSecretsKeyringConfigurationByProcess(t *testing.T) {
 
 func TestExecutionSettingsDefaultsAndOverrides(t *testing.T) {
 	validEnvironment(t)
-	executionKeys := []string{"EGRESS_IMAGE", "BUILDKIT_IMAGE", "BUILD_CPUS", "BUILD_MEMORY", "BUILD_PIDS", "BUILD_DISK_BUDGET", "BUILD_MAX_IMAGE_SIZE", "BUILD_MIN_FREE_DISK"}
+	executionKeys := []string{"EGRESS_IMAGE", "BUILDKIT_IMAGE", "BUILD_CPUS", "BUILD_MEMORY", "BUILD_PIDS", "BUILD_DISK_BUDGET", "BUILD_MAX_IMAGE_SIZE", "BUILD_MIN_FREE_DISK",
+		"PREVIEW_ALLOW_ROOT", "PREVIEW_WRITABLE_ROOTFS", "PREVIEW_TMPFS_SIZE", "PREVIEW_PIDS", "PREVIEW_STARTUP_TIMEOUT", "PREVIEW_MEMORY_BUDGET", "PREVIEW_CPU_BUDGET", "PREVIEW_MAX_PER_REPOSITORY", "PREVIEW_OCI_RUNTIME"}
 	unsetEnvironment(t, executionKeys...)
 	cfg, err := LoadWorker()
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := cfg.BuilderConfig
+	b, p := cfg.BuilderConfig, cfg.PreviewConfig
 	if cfg.EgressImage != "previa-egress:dev" || b.BuildKitImage != DefaultBuildKitImage || b.BuildCPUs != 2 ||
 		b.BuildMemory != 4<<30 || b.BuildPIDs != 2048 || b.BuildDiskBudget != 20<<30 || b.BuildMaxImageSize != 4<<30 || b.BuildMinFreeDisk != 15<<30 {
 		t.Fatalf("builder defaults: %+v", b)
 	}
+	if p.PreviewAllowRoot || p.PreviewWritableRootfs || p.PreviewTmpfsSize != 256<<20 || p.PreviewPIDs != 512 || p.PreviewStartupTimeout != 2*time.Minute ||
+		p.PreviewMemoryBudget != 0 || p.PreviewCPUBudget != 0 || p.PreviewMaxPerRepository != 10 || p.PreviewOCIRuntime != "" {
+		t.Fatalf("preview defaults: %+v", p)
+	}
 	t.Setenv("BUILD_MEMORY", "512MiB")
 	t.Setenv("BUILD_CPUS", "0.5")
 	t.Setenv("BUILD_MAX_IMAGE_SIZE", "1073741824")
+	t.Setenv("PREVIEW_ALLOW_ROOT", "true")
+	t.Setenv("PREVIEW_MEMORY_BUDGET", "6GiB")
+	t.Setenv("PREVIEW_OCI_RUNTIME", "runsc")
 	e, err := LoadExecution()
-	if err != nil || e.BuildMemory != 512<<20 || e.BuildCPUs != 0.5 || e.BuildMaxImageSize != 1<<30 {
+	if err != nil || e.BuildMemory != 512<<20 || e.BuildCPUs != 0.5 || e.BuildMaxImageSize != 1<<30 || !e.PreviewAllowRoot || e.PreviewMemoryBudget != 6<<30 || e.PreviewOCIRuntime != "runsc" {
 		t.Fatalf("overrides: %+v %v", e, err)
 	}
 	if got := ByteSize(512 << 20).String(); got != "512MiB" {
@@ -277,6 +285,8 @@ func TestExecutionSettingsDefaultsAndOverrides(t *testing.T) {
 	for key, value := range map[string]string{
 		"BUILD_MEMORY": "4GB", "BUILD_CPUS": "0", "BUILD_PIDS": "10", "BUILD_DISK_BUDGET": "100MiB",
 		"BUILD_MAX_IMAGE_SIZE": "64GiB", "BUILD_MIN_FREE_DISK": "-1GiB", "EGRESS_IMAGE": " ",
+		"PREVIEW_TMPFS_SIZE": "1MiB", "PREVIEW_PIDS": "8", "PREVIEW_STARTUP_TIMEOUT": "1s", "PREVIEW_MEMORY_BUDGET": "-1GiB",
+		"PREVIEW_CPU_BUDGET": "-2", "PREVIEW_MAX_PER_REPOSITORY": "0", "PREVIEW_OCI_RUNTIME": "../runsc", "PREVIEW_ALLOW_ROOT": "maybe",
 	} {
 		t.Run(key, func(t *testing.T) {
 			validEnvironment(t)

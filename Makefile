@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source secrets-reencrypt egress-image test-builder lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source secrets-reencrypt egress-image test-builder test-runtime lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -95,6 +95,11 @@ egress-image:
 # caching and cleanup. Needs Docker and internet access for base images.
 test-builder: egress-image
 	@$(load_run_env) TEST_BUILDER=1 $(GO) test -count=1 -v -timeout 30m -run '^TestRealBuilder' ./internal/builds
+
+# Opt-in real previews on the local Docker Engine: hardening, readiness, crash
+# handling, secrets withholding, network denial, capacity and cleanup.
+test-runtime: egress-image
+	@$(load_run_env) TEST_RUNTIME=1 $(GO) test -count=1 -v -timeout 30m -run '^TestRealRuntime' ./internal/runtime
 
 lint: assets generate
 	$(GO) vet ./...
