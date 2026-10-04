@@ -8,19 +8,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
+	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
-	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 )
 
 const (
-	egressContainerName = "previa-build-egress"
-	egressNetworkName   = "previa-build-egress" // the proxy's only route outward
-	builderStateDir     = "/home/user/.local/share/buildkit"
-	readyTimeout        = 30 * time.Second
-	cleanupTimeout      = 30 * time.Second
+	builderStateDir = "/home/user/.local/share/buildkit"
+	readyTimeout    = 30 * time.Second
+	cleanupTimeout  = 30 * time.Second
 	// staleBuilder bounds how long a cached builder may hold its cache when the
 	// build time limit is unknown: longer than any build may run.
 	staleBuilder = 25 * time.Hour
@@ -29,8 +28,9 @@ const (
 // sandbox is one build's BuildKit container and private network.
 type sandbox struct {
 	docker      *client.Client
+	egress      *egress.Gateway
 	networkID   string
-	egressID    string
+	attached    bool
 	containerID string
 	proxyURL    string
 	cached      bool
@@ -39,7 +39,7 @@ type sandbox struct {
 // openSandbox creates the private network, connects the egress proxy to it and
 // starts a ready builder. On failure everything created is removed.
 func (b *Builder) openSandbox(ctx context.Context, job Job) (s *sandbox, err error) {
-	s = &sandbox{docker: b.docker}
+	s = &sandbox{docker: b.docker, egress: b.egress}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, s.close(ctx))
@@ -48,28 +48,17 @@ func (b *Builder) openSandbox(ctx context.Context, job Job) (s *sandbox, err err
 	if err := b.ensureBuildKitImage(ctx); err != nil {
 		return s, err
 	}
-	if s.egressID, err = b.ensureEgress(ctx); err != nil {
-		return s, err
-	}
 	created, err := b.docker.NetworkCreate(ctx, job.attemptName("previa-build", b.now()), client.NetworkCreateOptions{
-		Driver: "bridge", Internal: true, Labels: job.identity(KindNetwork),
+		Driver: "bridge", Internal: true, Labels: job.identity(dockerx.KindBuildNetwork),
 	})
 	if err != nil {
 		return s, fmt.Errorf("create build network: %w", err)
 	}
 	s.networkID = created.ID
-	if _, err := b.docker.NetworkConnect(ctx, s.networkID, client.NetworkConnectOptions{Container: s.egressID, EndpointConfig: &network.EndpointSettings{}}); err != nil {
-		return s, fmt.Errorf("connect egress proxy: %w", err)
+	if s.proxyURL, err = s.egress.Attach(ctx, s.networkID); err != nil {
+		return s, fmt.Errorf("attach egress proxy: %w", err)
 	}
-	inspected, err := b.docker.NetworkInspect(ctx, s.networkID, client.NetworkInspectOptions{})
-	if err != nil {
-		return s, fmt.Errorf("inspect build network: %w", err)
-	}
-	endpoint, ok := inspected.Network.Containers[s.egressID]
-	if !ok || !endpoint.IPv4Address.IsValid() {
-		return s, errors.New("egress proxy has no address on the build network")
-	}
-	s.proxyURL = "http://" + endpoint.IPv4Address.Addr().String() + ":" + EgressPort
+	s.attached = true
 	if s.containerID, s.cached, err = b.createBuilder(ctx, job, s); err != nil {
 		return s, err
 	}
@@ -99,75 +88,6 @@ func (b *Builder) ensureBuildKitImage(ctx context.Context) error {
 	return nil
 }
 
-// ensureEgress returns the running egress proxy, creating it when missing.
-func (b *Builder) ensureEgress(ctx context.Context) (string, error) {
-	for attempt := 0; attempt < 2; attempt++ {
-		inspected, err := b.docker.ContainerInspect(ctx, egressContainerName, client.ContainerInspectOptions{})
-		if err == nil {
-			if inspected.Container.State == nil || !inspected.Container.State.Running {
-				if _, err := b.docker.ContainerStart(ctx, inspected.Container.ID, client.ContainerStartOptions{}); err != nil {
-					return "", fmt.Errorf("start egress proxy: %w", err)
-				}
-			}
-			return inspected.Container.ID, nil
-		}
-		if !cerrdefs.IsNotFound(err) {
-			return "", fmt.Errorf("inspect egress proxy: %w", err)
-		}
-		if _, err := b.docker.ImageInspect(ctx, b.cfg.EgressImage); err != nil {
-			return "", fmt.Errorf("egress proxy image %s is not available (run make build-egress-image): %w", b.cfg.EgressImage, err)
-		}
-		if err := b.ensureEgressNetwork(ctx); err != nil {
-			return "", err
-		}
-		pids := int64(512)
-		created, err := b.docker.ContainerCreate(ctx, client.ContainerCreateOptions{
-			Name: egressContainerName,
-			Config: &container.Config{
-				Image:  b.cfg.EgressImage,
-				User:   "65532:65532",
-				Labels: map[string]string{LabelManaged: "true", LabelKind: KindEgress},
-			},
-			HostConfig: &container.HostConfig{
-				NetworkMode:    container.NetworkMode(egressNetworkName),
-				RestartPolicy:  container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
-				ReadonlyRootfs: true,
-				CapDrop:        []string{"ALL"},
-				SecurityOpt:    []string{"no-new-privileges"},
-				Resources:      container.Resources{Memory: 256 << 20, MemorySwap: 256 << 20, NanoCPUs: 1e9, PidsLimit: &pids},
-			},
-		})
-		if cerrdefs.IsConflict(err) {
-			continue // Another build created it first.
-		}
-		if err != nil {
-			return "", fmt.Errorf("create egress proxy: %w", err)
-		}
-		if _, err := b.docker.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
-			return "", fmt.Errorf("start egress proxy: %w", err)
-		}
-		return created.ID, nil
-	}
-	return "", errors.New("egress proxy could not be created")
-}
-
-func (b *Builder) ensureEgressNetwork(ctx context.Context) error {
-	_, err := b.docker.NetworkInspect(ctx, egressNetworkName, client.NetworkInspectOptions{})
-	if err == nil {
-		return nil
-	}
-	if !cerrdefs.IsNotFound(err) {
-		return fmt.Errorf("inspect egress network: %w", err)
-	}
-	_, err = b.docker.NetworkCreate(ctx, egressNetworkName, client.NetworkCreateOptions{
-		Driver: "bridge", Labels: map[string]string{LabelManaged: "true", LabelKind: KindEgress},
-	})
-	if err != nil && !cerrdefs.IsConflict(err) {
-		return fmt.Errorf("create egress network: %w", err)
-	}
-	return nil
-}
-
 // createBuilder creates the builder container. It takes the job's cache scope
 // when free; the scope's builder name is the lock, so a concurrent build of the
 // same source builds without cache instead of waiting.
@@ -175,7 +95,7 @@ func (b *Builder) createBuilder(ctx context.Context, job Job, s *sandbox) (strin
 	scope := job.cacheScope()
 	volume := cacheVolumeName(scope)
 	if _, err := b.docker.VolumeCreate(ctx, client.VolumeCreateOptions{Name: volume, Labels: map[string]string{
-		LabelManaged: "true", LabelKind: KindCache, LabelBaseRepo: itoa(job.BaseRepoID), LabelHeadRepo: itoa(job.HeadRepoID),
+		dockerx.LabelManaged: "true", dockerx.LabelKind: dockerx.KindBuildCache, dockerx.LabelBaseRepo: itoa(job.BaseRepoID), dockerx.LabelHeadRepo: itoa(job.HeadRepoID),
 	}}); err != nil {
 		return "", false, fmt.Errorf("create build cache volume: %w", err)
 	}
@@ -196,8 +116,8 @@ func (b *Builder) createBuilder(ctx context.Context, job Job, s *sandbox) (strin
 }
 
 func (b *Builder) createBuilderContainer(ctx context.Context, job Job, s *sandbox, name, volume string) (string, error) {
-	labels := job.identity(KindBuilder)
-	labels[LabelStarted] = b.now().UTC().Format(time.RFC3339)
+	labels := job.identity(dockerx.KindBuilder)
+	labels[dockerx.LabelStarted] = b.now().UTC().Format(time.RFC3339)
 	pids := b.cfg.PIDs
 	created, err := b.docker.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,
@@ -255,7 +175,7 @@ func (b *Builder) removeStaleBuilder(ctx context.Context, name string) (bool, er
 	c := inspected.Container
 	var started time.Time
 	if c.Config != nil {
-		started, _ = time.Parse(time.RFC3339, c.Config.Labels[LabelStarted])
+		started, _ = time.Parse(time.RFC3339, c.Config.Labels[dockerx.LabelStarted])
 	}
 	running := c.State != nil && c.State.Running
 	if running && !started.IsZero() && b.now().Sub(started) < b.staleAfter() {
@@ -271,7 +191,7 @@ func (s *sandbox) waitReady(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, readyTimeout)
 	defer cancel()
 	for {
-		if _, code, err := execOutput(ctx, s.docker, s.containerID, "buildctl", "debug", "workers"); err == nil && code == 0 {
+		if _, code, err := dockerx.Exec(ctx, s.docker, s.containerID, "buildctl", "debug", "workers"); err == nil && code == 0 {
 			return nil
 		}
 		select {
@@ -285,7 +205,7 @@ func (s *sandbox) waitReady(ctx context.Context) error {
 // freeDisk reports the bytes available to the builder's state, which lives on
 // the Docker host's storage.
 func (s *sandbox) freeDisk(ctx context.Context) (int64, error) {
-	out, code, err := execOutput(ctx, s.docker, s.containerID, "df", "-Pk", builderStateDir)
+	out, code, err := dockerx.Exec(ctx, s.docker, s.containerID, "df", "-Pk", builderStateDir)
 	if err != nil || code != 0 {
 		return 0, fmt.Errorf("measure free disk: %w", errors.Join(err, fmt.Errorf("exit code %d", code)))
 	}
@@ -321,9 +241,9 @@ func (s *sandbox) close(ctx context.Context) error {
 		}
 	}
 	if s.networkID != "" {
-		if s.egressID != "" {
-			if _, err := s.docker.NetworkDisconnect(ctx, s.networkID, client.NetworkDisconnectOptions{Container: s.egressID, Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
-				errs = append(errs, fmt.Errorf("disconnect egress proxy: %w", err))
+		if s.attached {
+			if err := s.egress.Detach(ctx, s.networkID); err != nil {
+				errs = append(errs, err)
 			}
 		}
 		if _, err := s.docker.NetworkRemove(ctx, s.networkID, client.NetworkRemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {

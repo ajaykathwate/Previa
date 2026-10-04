@@ -1,4 +1,4 @@
-package builds
+package egress
 
 import (
 	"bufio"
@@ -14,19 +14,19 @@ import (
 	"time"
 )
 
-// EgressPort is where the egress proxy listens inside the build networks.
-const EgressPort = "3128"
+// Port is where the egress proxy listens on build and preview networks.
+const Port = "3128"
 
 const (
-	egressDialTimeout   = 10 * time.Second
-	egressIdleTimeout   = 2 * time.Minute
-	egressMaxDuration   = time.Hour
-	egressMaxConns      = 512
-	egressHeaderTimeout = time.Minute
+	dialTimeout   = 10 * time.Second
+	idleTimeout   = 2 * time.Minute
+	maxDuration   = time.Hour
+	maxConns      = 512
+	headerTimeout = time.Minute
 )
 
 var (
-	errDeniedPort    = errors.New("destination port is not allowed; builds may reach ports 80 and 443 only")
+	errDeniedPort    = errors.New("destination port is not allowed; only ports 80 and 443 are reachable")
 	errDeniedAddress = errors.New("destination resolves to a private, loopback, link-local or reserved address")
 	errUnresolvable  = errors.New("destination could not be resolved")
 	errBadTarget     = errors.New("destination host is invalid")
@@ -50,7 +50,7 @@ var nonPublic = func() []netip.Prefix {
 
 var globalUnicastV6 = netip.MustParsePrefix("2000::/3")
 
-// PublicAddress reports whether a build may connect to a: a global unicast
+// PublicAddress reports whether a build or preview may connect to a: a global unicast
 // address outside private, loopback, link-local, shared, documentation,
 // translation and other special-purpose ranges. Cloud metadata endpoints and
 // every container network fall outside it.
@@ -78,12 +78,12 @@ type dialer interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }
 
-// EgressProxy is the only route out of a build network: an HTTP forward proxy
-// for CONNECT tunnels and plain http:// requests. It resolves names itself,
-// refuses a destination if any of its addresses is not public, and connects only
-// to the address it checked, so DNS rebinding cannot redirect a build to an
-// internal service. It never sees or forwards Previa credentials.
-type EgressProxy struct {
+// Proxy is the only route out of build and preview networks: an HTTP forward
+// proxy for CONNECT tunnels and plain http:// requests. It resolves names
+// itself, refuses a destination if any of its addresses is not public, and
+// connects only to the address it checked, so DNS rebinding cannot redirect a
+// build or preview to an internal service. It never sees Previa credentials.
+type Proxy struct {
 	resolver  resolver
 	dialer    dialer
 	logger    *slog.Logger
@@ -91,13 +91,13 @@ type EgressProxy struct {
 	slots     chan struct{}
 }
 
-// NewEgressProxy returns a proxy that uses the system resolver.
-func NewEgressProxy(logger *slog.Logger) *EgressProxy {
-	return newEgressProxy(net.DefaultResolver, &net.Dialer{Timeout: egressDialTimeout}, logger)
+// NewProxy returns a proxy that uses the system resolver.
+func NewProxy(logger *slog.Logger) *Proxy {
+	return newProxy(net.DefaultResolver, &net.Dialer{Timeout: dialTimeout}, logger)
 }
 
-func newEgressProxy(r resolver, d dialer, logger *slog.Logger) *EgressProxy {
-	p := &EgressProxy{resolver: r, dialer: d, logger: logger, slots: make(chan struct{}, egressMaxConns)}
+func newProxy(r resolver, d dialer, logger *slog.Logger) *Proxy {
+	p := &Proxy{resolver: r, dialer: d, logger: logger, slots: make(chan struct{}, maxConns)}
 	p.transport = &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -107,7 +107,7 @@ func newEgressProxy(r resolver, d dialer, logger *slog.Logger) *EgressProxy {
 			}
 			return p.dialer.DialContext(ctx, network, target)
 		},
-		ResponseHeaderTimeout: egressHeaderTimeout,
+		ResponseHeaderTimeout: headerTimeout,
 		IdleConnTimeout:       90 * time.Second,
 		MaxIdleConns:          64,
 		DisableCompression:    true,
@@ -118,7 +118,7 @@ func newEgressProxy(r resolver, d dialer, logger *slog.Logger) *EgressProxy {
 type vettedTarget struct{}
 
 // ServeHTTP handles one proxy request.
-func (p *EgressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	select {
 	case p.slots <- struct{}{}:
 		defer func() { <-p.slots }()
@@ -138,7 +138,7 @@ func (p *EgressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // vet resolves hostport and returns the single address to dial.
-func (p *EgressProxy) vet(ctx context.Context, hostport, defaultPort string) (string, error) {
+func (p *Proxy) vet(ctx context.Context, hostport, defaultPort string) (string, error) {
 	host, port, err := net.SplitHostPort(hostport)
 	if err != nil {
 		host, port = hostport, defaultPort
@@ -154,7 +154,7 @@ func (p *EgressProxy) vet(ctx context.Context, hostport, defaultPort string) (st
 		if host == "" || len(host) > 253 || strings.ContainsAny(host, "/\\@ ") {
 			return "", errBadTarget
 		}
-		lookupCtx, cancel := context.WithTimeout(ctx, egressDialTimeout)
+		lookupCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 		addrs, err = p.resolver.LookupNetIP(lookupCtx, "ip", host)
 		cancel()
 		if err != nil || len(addrs) == 0 {
@@ -169,18 +169,18 @@ func (p *EgressProxy) vet(ctx context.Context, hostport, defaultPort string) (st
 	return net.JoinHostPort(addrs[0].Unmap().String(), port), nil
 }
 
-func (p *EgressProxy) deny(w http.ResponseWriter, r *http.Request, host string, err error) {
-	p.logger.WarnContext(r.Context(), "build egress denied", "host", host, "reason", err.Error())
-	http.Error(w, "Previa build egress denied: "+err.Error(), http.StatusForbidden)
+func (p *Proxy) deny(w http.ResponseWriter, r *http.Request, host string, err error) {
+	p.logger.WarnContext(r.Context(), "egress denied", "host", host, "reason", err.Error())
+	http.Error(w, "Previa egress denied: "+err.Error(), http.StatusForbidden)
 }
 
-func (p *EgressProxy) tunnel(w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request) {
 	target, err := p.vet(r.Context(), r.Host, "443")
 	if err != nil {
 		p.deny(w, r, r.Host, err)
 		return
 	}
-	dialCtx, cancel := context.WithTimeout(r.Context(), egressDialTimeout)
+	dialCtx, cancel := context.WithTimeout(r.Context(), dialTimeout)
 	upstream, err := p.dialer.DialContext(dialCtx, "tcp", target)
 	cancel()
 	if err != nil {
@@ -209,7 +209,7 @@ func (p *EgressProxy) tunnel(w http.ResponseWriter, r *http.Request) {
 // splice copies both directions until either side ends, an idle timeout
 // passes or the tunnel reaches its maximum duration.
 func splice(client net.Conn, clientBuffer *bufio.Reader, upstream net.Conn) {
-	end := time.Now().Add(egressMaxDuration)
+	end := time.Now().Add(maxDuration)
 	var once sync.Once
 	closeBoth := func() {
 		once.Do(func() {
@@ -240,7 +240,7 @@ type idleReader struct {
 }
 
 func (i *idleReader) Read(b []byte) (int, error) {
-	deadline := time.Now().Add(egressIdleTimeout)
+	deadline := time.Now().Add(idleTimeout)
 	if deadline.After(i.end) {
 		deadline = i.end
 	}
@@ -264,13 +264,13 @@ func stripHopHeaders(h http.Header) {
 	}
 }
 
-func (p *EgressProxy) forward(w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 	target, err := p.vet(r.Context(), r.URL.Host, "80")
 	if err != nil {
 		p.deny(w, r, r.URL.Host, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), vettedTarget{}, target), egressMaxDuration)
+	ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), vettedTarget{}, target), maxDuration)
 	defer cancel()
 	out := r.Clone(ctx)
 	out.RequestURI = ""

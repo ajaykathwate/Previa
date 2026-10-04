@@ -4,36 +4,18 @@ import (
 	"fmt"
 	"strconv"
 	"time"
-)
 
-// Labels identify everything a build creates, so retries can find earlier
-// results and housekeeping can find leftovers after a crash.
-const (
-	LabelManaged    = "io.previa.managed" // always "true"
-	LabelKind       = "io.previa.kind"
-	LabelPR         = "io.previa.pull-request-id"
-	LabelGeneration = "io.previa.generation"
-	LabelRevision   = "io.previa.revision"
-	LabelSHA        = "io.previa.head-sha"
-	LabelBaseRepo   = "io.previa.base-repository-id"
-	LabelHeadRepo   = "io.previa.head-repository-id"
-	LabelStarted    = "io.previa.started-at"
-
-	KindImage   = "image"
-	KindBuilder = "builder"
-	KindNetwork = "build-network"
-	KindCache   = "build-cache"
-	KindEgress  = "build-egress"
+	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 )
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
-// identity labels an artifact of one build attempt.
+// identity labels an artifact of one build attempt (see dockerx labels).
 func (j Job) identity(kind string) map[string]string {
 	return map[string]string{
-		LabelManaged: "true", LabelKind: kind,
-		LabelPR: itoa(j.PullRequestID), LabelGeneration: itoa(j.Generation), LabelRevision: itoa(j.Revision),
-		LabelSHA: j.HeadSHA, LabelBaseRepo: itoa(j.BaseRepoID), LabelHeadRepo: itoa(j.HeadRepoID),
+		dockerx.LabelManaged: "true", dockerx.LabelKind: kind,
+		dockerx.LabelPR: itoa(j.PullRequestID), dockerx.LabelGeneration: itoa(j.Generation), dockerx.LabelRevision: itoa(j.Revision),
+		dockerx.LabelSHA: j.HeadSHA, dockerx.LabelBaseRepo: itoa(j.BaseRepoID), dockerx.LabelHeadRepo: itoa(j.HeadRepoID),
 	}
 }
 

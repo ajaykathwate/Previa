@@ -251,35 +251,36 @@ func TestSecretsKeyringConfigurationByProcess(t *testing.T) {
 	}
 }
 
-func TestBuilderLimitsDefaultsAndOverrides(t *testing.T) {
+func TestExecutionSettingsDefaultsAndOverrides(t *testing.T) {
 	validEnvironment(t)
-	builderKeys := []string{"BUILDKIT_IMAGE", "BUILD_EGRESS_IMAGE", "BUILD_CPUS", "BUILD_MEMORY", "BUILD_PIDS", "BUILD_DISK_BUDGET", "BUILD_MAX_IMAGE_SIZE", "BUILD_MIN_FREE_DISK"}
-	unsetEnvironment(t, builderKeys...)
+	executionKeys := []string{"EGRESS_IMAGE", "BUILDKIT_IMAGE", "BUILD_CPUS", "BUILD_MEMORY", "BUILD_PIDS", "BUILD_DISK_BUDGET", "BUILD_MAX_IMAGE_SIZE", "BUILD_MIN_FREE_DISK"}
+	unsetEnvironment(t, executionKeys...)
 	cfg, err := LoadWorker()
 	if err != nil {
 		t.Fatal(err)
 	}
 	b := cfg.BuilderConfig
-	if b.BuildKitImage != DefaultBuildKitImage || b.BuildEgressImage != "previa-build-egress:dev" || b.BuildCPUs != 2 ||
+	if cfg.EgressImage != "previa-egress:dev" || b.BuildKitImage != DefaultBuildKitImage || b.BuildCPUs != 2 ||
 		b.BuildMemory != 4<<30 || b.BuildPIDs != 2048 || b.BuildDiskBudget != 20<<30 || b.BuildMaxImageSize != 4<<30 || b.BuildMinFreeDisk != 15<<30 {
-		t.Fatalf("defaults: %+v", b)
+		t.Fatalf("builder defaults: %+v", b)
 	}
 	t.Setenv("BUILD_MEMORY", "512MiB")
 	t.Setenv("BUILD_CPUS", "0.5")
 	t.Setenv("BUILD_MAX_IMAGE_SIZE", "1073741824")
-	if b, err := LoadBuilder(); err != nil || b.BuildMemory != 512<<20 || b.BuildCPUs != 0.5 || b.BuildMaxImageSize != 1<<30 {
-		t.Fatalf("overrides: %+v %v", b, err)
+	e, err := LoadExecution()
+	if err != nil || e.BuildMemory != 512<<20 || e.BuildCPUs != 0.5 || e.BuildMaxImageSize != 1<<30 {
+		t.Fatalf("overrides: %+v %v", e, err)
 	}
 	if got := ByteSize(512 << 20).String(); got != "512MiB" {
 		t.Fatalf("String: %q", got)
 	}
 	for key, value := range map[string]string{
 		"BUILD_MEMORY": "4GB", "BUILD_CPUS": "0", "BUILD_PIDS": "10", "BUILD_DISK_BUDGET": "100MiB",
-		"BUILD_MAX_IMAGE_SIZE": "64GiB", "BUILD_MIN_FREE_DISK": "-1GiB", "BUILD_EGRESS_IMAGE": " ",
+		"BUILD_MAX_IMAGE_SIZE": "64GiB", "BUILD_MIN_FREE_DISK": "-1GiB", "EGRESS_IMAGE": " ",
 	} {
 		t.Run(key, func(t *testing.T) {
 			validEnvironment(t)
-			unsetEnvironment(t, builderKeys...)
+			unsetEnvironment(t, executionKeys...)
 			t.Setenv(key, value)
 			if _, err := LoadWorker(); err == nil {
 				t.Fatalf("%s=%q accepted", key, value)

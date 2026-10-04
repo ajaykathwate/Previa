@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
+	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	buildkit "github.com/moby/buildkit/client"
 	"github.com/moby/moby/client"
 	"github.com/tonistiigi/fsutil"
@@ -20,7 +22,6 @@ import (
 // Config bounds builds. Values come from config.BuilderConfig.
 type Config struct {
 	BuildKitImage string
-	EgressImage   string
 	CPUs          float64
 	Memory        int64
 	PIDs          int64
@@ -35,7 +36,7 @@ type Config struct {
 // ConfigFrom adapts the worker's builder settings.
 func ConfigFrom(c config.BuilderConfig, maxDuration time.Duration) Config {
 	return Config{
-		BuildKitImage: c.BuildKitImage, EgressImage: c.BuildEgressImage, CPUs: c.BuildCPUs,
+		BuildKitImage: c.BuildKitImage, CPUs: c.BuildCPUs,
 		Memory: int64(c.BuildMemory), PIDs: c.BuildPIDs, DiskBudget: int64(c.BuildDiskBudget),
 		MaxImageSize: int64(c.BuildMaxImageSize), MinFreeDisk: int64(c.BuildMinFreeDisk), MaxDuration: maxDuration,
 	}
@@ -46,19 +47,20 @@ func ConfigFrom(c config.BuilderConfig, maxDuration time.Duration) Config {
 // the image and never receives repository secrets or Previa credentials.
 type Builder struct {
 	docker *client.Client
+	egress *egress.Gateway
 	cfg    Config
 	logger *slog.Logger
 	now    func() time.Time
 }
 
-func NewBuilder(docker *client.Client, cfg Config, logger *slog.Logger) (*Builder, error) {
-	if docker == nil || logger == nil {
-		return nil, errors.New("builder requires a Docker client and logger")
+func NewBuilder(docker *client.Client, gateway *egress.Gateway, cfg Config, logger *slog.Logger) (*Builder, error) {
+	if docker == nil || gateway == nil || logger == nil {
+		return nil, errors.New("builder requires a Docker client, egress gateway and logger")
 	}
-	if cfg.BuildKitImage == "" || cfg.EgressImage == "" || cfg.CPUs <= 0 || cfg.Memory <= 0 || cfg.PIDs <= 0 || cfg.DiskBudget <= 0 || cfg.MaxImageSize <= 0 || cfg.MinFreeDisk < 0 {
+	if cfg.BuildKitImage == "" || cfg.CPUs <= 0 || cfg.Memory <= 0 || cfg.PIDs <= 0 || cfg.DiskBudget <= 0 || cfg.MaxImageSize <= 0 || cfg.MinFreeDisk < 0 {
 		return nil, errors.New("builder limits are incomplete")
 	}
-	return &Builder{docker: docker, cfg: cfg, logger: logger, now: time.Now}, nil
+	return &Builder{docker: docker, egress: gateway, cfg: cfg, logger: logger, now: time.Now}, nil
 }
 
 // Job is one admitted build attempt.
@@ -171,7 +173,7 @@ func (b *Builder) solve(ctx context.Context, cancel context.CancelCauseFunc, bk 
 	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
 		attrs["build-arg:"+name] = sb.proxyURL
 	}
-	for key, value := range job.identity(KindImage) {
+	for key, value := range job.identity(dockerx.KindImage) {
 		attrs["label:"+key] = value
 	}
 	loader := newImageLoader(ctx, b.docker, b.cfg.MaxImageSize)
@@ -235,7 +237,7 @@ func (b *Builder) watchDisk(ctx context.Context, cancel context.CancelCauseFunc,
 func (b *Builder) removePartialImage(ctx context.Context, job Job) {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
-	if err := b.Remove(cleanupCtx, Artifact{Kind: KindImage, ID: job.ImageRef()}); err != nil {
+	if err := b.Remove(cleanupCtx, Artifact{Kind: dockerx.KindImage, ID: job.ImageRef()}); err != nil {
 		b.logger.WarnContext(ctx, "remove partial build image failed", "pr_id", job.PullRequestID, "error", err)
 	}
 }

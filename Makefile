@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source secrets-reencrypt build-egress-image test-builder lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source secrets-reencrypt egress-image test-builder lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -81,18 +81,19 @@ test-source:
 secrets-reencrypt:
 	@$(load_run_env) $(GO) run ./cmd/secrets-reencrypt
 
-# Image of the proxy that is the only route out of build networks: a static
-# binary for the Docker host's architecture in an otherwise empty image.
-build-egress-image:
+# Image of the egress proxy and readiness prober, the only route out of build
+# and preview networks: a static binary for the Docker host's architecture in
+# an otherwise empty image.
+egress-image:
 	@$(load_run_env) previa_dir=$$(mktemp -d); trap 'rm -rf "$$previa_dir"' EXIT; \
 	CGO_ENABLED=0 GOOS=linux GOARCH=$$(docker version --format '{{.Server.Arch}}') \
-		$(GO) build -trimpath -ldflags='-s -w' -o "$$previa_dir/build-egress" ./cmd/build-egress; \
-	cp deploy/build-egress/Dockerfile "$$previa_dir/"; \
-	docker build --quiet -t "$${BUILD_EGRESS_IMAGE:-previa-build-egress:dev}" "$$previa_dir"
+		$(GO) build -trimpath -ldflags='-s -w' -o "$$previa_dir/previa-egress" ./cmd/egress; \
+	cp deploy/egress/Dockerfile "$$previa_dir/"; \
+	docker build --quiet -t "$${EGRESS_IMAGE:-previa-egress:dev}" "$$previa_dir"
 
 # Opt-in real builds on the local Docker Engine: isolation probes, limits,
 # caching and cleanup. Needs Docker and internet access for base images.
-test-builder: build-egress-image
+test-builder: egress-image
 	@$(load_run_env) TEST_BUILDER=1 $(GO) test -count=1 -v -timeout 30m -run '^TestRealBuilder' ./internal/builds
 
 lint: assets generate

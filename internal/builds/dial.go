@@ -1,16 +1,14 @@
 package builds
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
 )
@@ -37,13 +35,13 @@ func dialBuilder(ctx context.Context, docker *client.Client, containerID string)
 type execConn struct {
 	hijacked client.HijackedResponse
 	stdout   *io.PipeReader
-	stderr   *boundedBuffer
+	stderr   *dockerx.BoundedBuffer
 	once     sync.Once
 }
 
 func newExecConn(h client.HijackedResponse) *execConn {
 	reader, writer := io.Pipe()
-	c := &execConn{hijacked: h, stdout: reader, stderr: &boundedBuffer{limit: 4096}}
+	c := &execConn{hijacked: h, stdout: reader, stderr: &dockerx.BoundedBuffer{Limit: 4096}}
 	go func() {
 		_, err := stdcopy.StdCopy(writer, c.stderr, h.Reader)
 		if err == nil {
@@ -69,58 +67,3 @@ func (c *execConn) RemoteAddr() net.Addr               { return c.hijacked.Conn.
 func (c *execConn) SetDeadline(t time.Time) error      { return c.hijacked.Conn.SetDeadline(t) }
 func (c *execConn) SetReadDeadline(t time.Time) error  { return c.hijacked.Conn.SetReadDeadline(t) }
 func (c *execConn) SetWriteDeadline(t time.Time) error { return c.hijacked.Conn.SetWriteDeadline(t) }
-
-// boundedBuffer keeps the first limit bytes written to it.
-type boundedBuffer struct {
-	mu    sync.Mutex
-	buf   bytes.Buffer
-	limit int
-}
-
-func (b *boundedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if room := b.limit - b.buf.Len(); room > 0 {
-		b.buf.Write(p[:min(len(p), room)])
-	}
-	return len(p), nil
-}
-
-func (b *boundedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-// execOutput runs cmd in a container and returns its bounded stdout and exit code.
-func execOutput(ctx context.Context, docker *client.Client, containerID string, cmd ...string) (string, int, error) {
-	created, err := docker.ExecCreate(ctx, containerID, client.ExecCreateOptions{AttachStdout: true, AttachStderr: true, Cmd: cmd})
-	if err != nil {
-		return "", 0, fmt.Errorf("create exec: %w", err)
-	}
-	attached, err := docker.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
-	if err != nil {
-		return "", 0, fmt.Errorf("attach exec: %w", err)
-	}
-	defer attached.Close()
-	stdout := &boundedBuffer{limit: 64 << 10}
-	stderr := &boundedBuffer{limit: 4096}
-	copied := make(chan error, 1)
-	go func() {
-		_, err := stdcopy.StdCopy(stdout, stderr, attached.Reader)
-		copied <- err
-	}()
-	select {
-	case err := <-copied:
-		if err != nil && !errors.Is(err, io.EOF) {
-			return "", 0, fmt.Errorf("read exec output: %w", err)
-		}
-	case <-ctx.Done():
-		return "", 0, ctx.Err()
-	}
-	inspected, err := docker.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
-	if err != nil {
-		return "", 0, fmt.Errorf("inspect exec: %w", err)
-	}
-	return strings.TrimSpace(stdout.String()), inspected.ExitCode, nil
-}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 )
 
 const testCommit = "0123456789abcdef0123456789abcdef01234567"
@@ -56,8 +57,8 @@ func TestImageIdentityAndCacheScopes(t *testing.T) {
 	if retry.ImageRef() == j.ImageRef() {
 		t.Fatal("revisions must not share an image")
 	}
-	labels := j.identity(KindImage)
-	if labels[LabelPR] != "7" || labels[LabelGeneration] != "3" || labels[LabelRevision] != "2" || labels[LabelSHA] != testCommit || labels[LabelKind] != KindImage {
+	labels := j.identity(dockerx.KindImage)
+	if labels[dockerx.LabelPR] != "7" || labels[dockerx.LabelGeneration] != "3" || labels[dockerx.LabelRevision] != "2" || labels[dockerx.LabelSHA] != testCommit || labels[dockerx.LabelKind] != dockerx.KindImage {
 		t.Fatalf("labels %v", labels)
 	}
 	fork := j
@@ -147,12 +148,12 @@ func TestFailureClassificationAndMessages(t *testing.T) {
 }
 
 func TestBuilderConfiguration(t *testing.T) {
-	c := ConfigFrom(config.BuilderConfig{BuildKitImage: "bk", BuildEgressImage: "eg", BuildCPUs: 2, BuildMemory: 4 << 30, BuildPIDs: 2048,
+	c := ConfigFrom(config.BuilderConfig{BuildKitImage: "bk", BuildCPUs: 2, BuildMemory: 4 << 30, BuildPIDs: 2048,
 		BuildDiskBudget: 20 << 30, BuildMaxImageSize: 4 << 30, BuildMinFreeDisk: 15 << 30}, 12*time.Minute)
-	if c.Memory != 4<<30 || c.MinFreeDisk != 15<<30 || c.MaxDuration != 12*time.Minute || c.EgressImage != "eg" {
+	if c.Memory != 4<<30 || c.MinFreeDisk != 15<<30 || c.MaxDuration != 12*time.Minute || c.BuildKitImage != "bk" {
 		t.Fatalf("config %+v", c)
 	}
-	if _, err := NewBuilder(nil, c, nil); err == nil {
+	if _, err := NewBuilder(nil, nil, c, nil); err == nil {
 		t.Fatal("a builder needs Docker")
 	}
 	b := &Builder{cfg: c}

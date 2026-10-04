@@ -1,4 +1,4 @@
-package builds
+package egress
 
 import (
 	"bufio"
@@ -99,7 +99,7 @@ func TestEgressProxyReachesOnlyVettedPublicDestinations(t *testing.T) {
 		"93.184.216.34:80":  strings.TrimPrefix(backend.URL, "http://"),
 		"93.184.216.34:443": echoServer(t),
 	}}
-	proxy := newEgressProxy(fakeResolver{
+	proxy := newProxy(fakeResolver{
 		"public.example":   {"93.184.216.34"},
 		"internal.example": {"10.0.0.5"},
 		"mixed.example":    {"93.184.216.34", "10.0.0.1"}, // rebinding-style mixed answer
@@ -135,7 +135,7 @@ func TestEgressProxyReachesOnlyVettedPublicDestinations(t *testing.T) {
 		}
 		body, _ := io.ReadAll(res.Body)
 		_ = res.Body.Close()
-		if res.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "Previa build egress denied") {
+		if res.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "Previa egress denied") {
 			t.Fatalf("%s: %d %q", target, res.StatusCode, body)
 		}
 	}

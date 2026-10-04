@@ -15,13 +15,14 @@ import (
 
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
+	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
 
 // These tests build real images on the local Docker Engine. They need Docker,
-// the egress image (make build-egress-image) and internet access for alpine.
+// the egress image (make egress-image) and internet access for alpine.
 // Run them with make test-builder.
 
 // memorySink records build output like the log store would receive it.
@@ -64,16 +65,20 @@ func newRealFixture(t *testing.T, tweak func(*Config)) *realFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = docker.Close() })
-	settings, err := config.LoadBuilder()
+	settings, err := config.LoadExecution()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := ConfigFrom(settings, 10*time.Minute)
+	gateway, err := egress.NewGateway(docker, settings.EgressImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := ConfigFrom(settings.BuilderConfig, 10*time.Minute)
 	cfg.MinFreeDisk = 1 << 30
 	if tweak != nil {
 		tweak(&cfg)
 	}
-	b, err := NewBuilder(docker, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	b, err := NewBuilder(docker, gateway, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +121,7 @@ func (f *realFixture) cleanup(t *testing.T) {
 			}
 		}
 	}
-	volumes, err := f.docker.VolumeList(ctx, client.VolumeListOptions{Filters: client.Filters{}.Add("label", LabelBaseRepo+"="+itoa(f.base))})
+	volumes, err := f.docker.VolumeList(ctx, client.VolumeListOptions{Filters: client.Filters{}.Add("label", dockerx.LabelBaseRepo+"="+itoa(f.base))})
 	if err == nil {
 		for _, v := range volumes.Items {
 			if _, err := f.docker.VolumeRemove(ctx, v.Name, client.VolumeRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
@@ -134,7 +139,7 @@ func (f *realFixture) assertNoSandboxes(t *testing.T, pr int64) {
 		t.Fatal(err)
 	}
 	for _, a := range artifacts {
-		if a.Kind != KindImage {
+		if a.Kind != dockerx.KindImage {
 			t.Fatalf("build left a %s behind: %s", a.Kind, a.ID)
 		}
 	}
@@ -164,7 +169,7 @@ func TestRealBuilderBuildsCachesReusesAndLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inspected.Config.Labels[LabelPR] != itoa(first.PullRequestID) || inspected.Config.Labels[LabelRevision] != "1" || inspected.Config.Labels[LabelSHA] != first.HeadSHA {
+	if inspected.Config.Labels[dockerx.LabelPR] != itoa(first.PullRequestID) || inspected.Config.Labels[dockerx.LabelRevision] != "1" || inspected.Config.Labels[dockerx.LabelSHA] != first.HeadSHA {
 		t.Fatalf("image labels: %v", inspected.Config.Labels)
 	}
 	for _, env := range inspected.Config.Env {

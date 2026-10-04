@@ -13,10 +13,36 @@ import (
 // DefaultBuildKitImage is the pinned rootless BuildKit daemon used for builds.
 const DefaultBuildKitImage = "moby/buildkit:v0.33.1-rootless@sha256:f8a833b2de9d68e27f0815e4a737abdfaf8a2e4c615650557df11025101557b4"
 
+// ExecutionConfig is what the worker needs to build images.
+type ExecutionConfig struct {
+	// EgressImage runs the proxy that is the only route out of build
+	// networks (and, with the runtime, preview networks).
+	EgressImage string `envconfig:"EGRESS_IMAGE" default:"previa-egress:dev"`
+	BuilderConfig
+}
+
+// LoadExecution reads only the build settings, for tools and opt-in checks.
+func LoadExecution() (ExecutionConfig, error) {
+	var cfg ExecutionConfig
+	if err := envconfig.Process("", &cfg); err != nil {
+		return ExecutionConfig{}, fmt.Errorf("load execution configuration: %w", err)
+	}
+	if err := cfg.check(); err != nil {
+		return ExecutionConfig{}, fmt.Errorf("validate execution configuration: %w", err)
+	}
+	return cfg, nil
+}
+
+func (c *ExecutionConfig) check() error {
+	if strings.TrimSpace(c.EgressImage) == "" {
+		return errors.New("EGRESS_IMAGE must not be empty")
+	}
+	return c.BuilderConfig.check()
+}
+
 // BuilderConfig bounds isolated image builds. Only the worker builds images.
 type BuilderConfig struct {
 	BuildKitImage     string   `envconfig:"BUILDKIT_IMAGE"`
-	BuildEgressImage  string   `envconfig:"BUILD_EGRESS_IMAGE" default:"previa-build-egress:dev"`
 	BuildCPUs         float64  `envconfig:"BUILD_CPUS" default:"2"`
 	BuildMemory       ByteSize `envconfig:"BUILD_MEMORY" default:"4GiB"`
 	BuildPIDs         int64    `envconfig:"BUILD_PIDS" default:"2048"`
@@ -25,25 +51,11 @@ type BuilderConfig struct {
 	BuildMinFreeDisk  ByteSize `envconfig:"BUILD_MIN_FREE_DISK" default:"15GiB"`
 }
 
-// LoadBuilder reads only the builder settings, for tools and opt-in checks.
-func LoadBuilder() (BuilderConfig, error) {
-	var cfg BuilderConfig
-	if err := envconfig.Process("", &cfg); err != nil {
-		return BuilderConfig{}, fmt.Errorf("load builder configuration: %w", err)
-	}
-	if err := cfg.check(); err != nil {
-		return BuilderConfig{}, fmt.Errorf("validate builder configuration: %w", err)
-	}
-	return cfg, nil
-}
-
 func (c *BuilderConfig) check() error {
 	if strings.TrimSpace(c.BuildKitImage) == "" {
 		c.BuildKitImage = DefaultBuildKitImage
 	}
 	switch {
-	case strings.TrimSpace(c.BuildKitImage) == "" || strings.TrimSpace(c.BuildEgressImage) == "":
-		return errors.New("BUILDKIT_IMAGE and BUILD_EGRESS_IMAGE must not be empty")
 	case math.IsNaN(c.BuildCPUs) || c.BuildCPUs < 0.25 || c.BuildCPUs > 64:
 		return errors.New("BUILD_CPUS must be between 0.25 and 64")
 	case c.BuildMemory < 256<<20:

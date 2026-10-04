@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 )
@@ -113,8 +114,8 @@ func (b *Builder) reusable(ctx context.Context, job Job) (Image, bool) {
 		return Image{}, false
 	}
 	labels := inspected.Config.Labels
-	if labels[LabelManaged] != "true" || labels[LabelPR] != itoa(job.PullRequestID) || labels[LabelGeneration] != itoa(job.Generation) ||
-		labels[LabelRevision] != itoa(job.Revision) || labels[LabelSHA] != job.HeadSHA || inspected.Size > b.cfg.MaxImageSize {
+	if labels[dockerx.LabelManaged] != "true" || labels[dockerx.LabelPR] != itoa(job.PullRequestID) || labels[dockerx.LabelGeneration] != itoa(job.Generation) ||
+		labels[dockerx.LabelRevision] != itoa(job.Revision) || labels[dockerx.LabelSHA] != job.HeadSHA || inspected.Size > b.cfg.MaxImageSize {
 		return Image{}, false
 	}
 	return Image{Ref: job.ImageRef(), ID: inspected.ID, Size: inspected.Size, Reused: true}, true
@@ -122,7 +123,7 @@ func (b *Builder) reusable(ctx context.Context, job Job) (Image, bool) {
 
 // Artifact is something a build left in Docker, found by its labels.
 type Artifact struct {
-	Kind                 string // KindImage, KindBuilder or KindNetwork
+	Kind                 string // dockerx.KindImage, KindBuilder or KindBuildNetwork
 	ID                   string
 	Generation, Revision int64
 }
@@ -131,35 +132,35 @@ type Artifact struct {
 // including leftovers of crashed builds. Shared cache volumes are per source
 // repository, not per PR, and are pruned by housekeeping.
 func (b *Builder) Resources(ctx context.Context, pullRequestID int64) ([]Artifact, error) {
-	filter := client.Filters{}.Add("label", LabelManaged+"=true", LabelPR+"="+itoa(pullRequestID))
+	filter := client.Filters{}.Add("label", dockerx.LabelManaged+"=true", dockerx.LabelPR+"="+itoa(pullRequestID))
 	var found []Artifact
 	images, err := b.docker.ImageList(ctx, client.ImageListOptions{Filters: filter})
 	if err != nil {
 		return nil, fmt.Errorf("list build images: %w", err)
 	}
 	for _, i := range images.Items {
-		found = append(found, artifact(KindImage, i.ID, i.Labels))
+		found = append(found, artifact(dockerx.KindImage, i.ID, i.Labels))
 	}
 	containers, err := b.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: filter})
 	if err != nil {
 		return nil, fmt.Errorf("list builders: %w", err)
 	}
 	for _, c := range containers.Items {
-		found = append(found, artifact(KindBuilder, c.ID, c.Labels))
+		found = append(found, artifact(dockerx.KindBuilder, c.ID, c.Labels))
 	}
 	networks, err := b.docker.NetworkList(ctx, client.NetworkListOptions{Filters: filter})
 	if err != nil {
 		return nil, fmt.Errorf("list build networks: %w", err)
 	}
 	for _, n := range networks.Items {
-		found = append(found, artifact(KindNetwork, n.ID, n.Labels))
+		found = append(found, artifact(dockerx.KindBuildNetwork, n.ID, n.Labels))
 	}
 	return found, nil
 }
 
 func artifact(kind, id string, labels map[string]string) Artifact {
-	generation, _ := strconv.ParseInt(labels[LabelGeneration], 10, 64)
-	revision, _ := strconv.ParseInt(labels[LabelRevision], 10, 64)
+	generation, _ := strconv.ParseInt(labels[dockerx.LabelGeneration], 10, 64)
+	revision, _ := strconv.ParseInt(labels[dockerx.LabelRevision], 10, 64)
 	return Artifact{Kind: kind, ID: id, Generation: generation, Revision: revision}
 }
 
@@ -167,13 +168,13 @@ func artifact(kind, id string, labels map[string]string) Artifact {
 func (b *Builder) Remove(ctx context.Context, a Artifact) error {
 	var err error
 	switch a.Kind {
-	case KindImage:
+	case dockerx.KindImage:
 		_, err = b.docker.ImageRemove(ctx, a.ID, client.ImageRemoveOptions{Force: true, PruneChildren: true})
-	case KindBuilder:
+	case dockerx.KindBuilder:
 		_, err = b.docker.ContainerRemove(ctx, a.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
-	case KindNetwork:
-		if _, err = b.docker.NetworkDisconnect(ctx, a.ID, client.NetworkDisconnectOptions{Container: egressContainerName, Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
-			return fmt.Errorf("disconnect egress proxy: %w", err)
+	case dockerx.KindBuildNetwork:
+		if err := b.egress.Detach(ctx, a.ID); err != nil {
+			return err
 		}
 		_, err = b.docker.NetworkRemove(ctx, a.ID, client.NetworkRemoveOptions{})
 	default:
