@@ -35,13 +35,18 @@ type Source interface {
 	Page(context.Context, int64, int64, int32) ([]Observation, int32, error)
 }
 type SyncService struct {
-	pool   *pgxpool.Pool
-	jobs   jobInserter
-	source Source
+	pool     *pgxpool.Pool
+	jobs     jobInserter
+	source   Source
+	observer Observer
 }
 
-func NewSyncService(pool *pgxpool.Pool, jobs jobInserter, source Source) *SyncService {
-	return &SyncService{pool, jobs, source}
+func NewSyncService(pool *pgxpool.Pool, jobs jobInserter, source Source, observers ...Observer) *SyncService {
+	s := &SyncService{pool: pool, jobs: jobs, source: source}
+	if len(observers) > 0 {
+		s.observer = observers[0]
+	}
+	return s
 }
 func (s *SyncService) Request(ctx context.Context, userID, repoID int64) error {
 	if userID <= 0 || repoID <= 0 {
@@ -123,8 +128,16 @@ func (s *SyncService) RunPage(ctx context.Context, args SyncArgs) error {
 		if after.install.ID != before.install.ID || after.install.Revision != before.install.Revision || after.repo.ObservationVersion != before.repo.ObservationVersion {
 			return ErrSnapshotChanged
 		}
+		stored := int32(0)
 		for _, o := range observations {
+			if o.State != "open" {
+				continue
+			}
 			if _, err := ObserveTx(ctx, tx, args.RepoID, o, false, nil); err != nil {
+				return err
+			}
+			stored++
+			if err := s.RefreshMergeabilityTx(ctx, tx, args.RepoID, o.Number); err != nil {
 				return err
 			}
 		}
@@ -134,7 +147,7 @@ func (s *SyncService) RunPage(ctx context.Context, args SyncArgs) error {
 			state = "complete"
 			storedNext = args.Page
 		}
-		if err := q.FinishSyncPage(ctx, dbgen.FinishSyncPageParams{RepoID: args.RepoID, Revision: args.Revision, NextPage: storedNext, Fetched: int32(len(observations)), State: state}); err != nil {
+		if err := q.FinishSyncPage(ctx, dbgen.FinishSyncPageParams{RepoID: args.RepoID, Revision: args.Revision, NextPage: storedNext, Fetched: stored, State: state}); err != nil {
 			return err
 		}
 		if next > 0 {

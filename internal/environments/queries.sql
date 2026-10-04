@@ -1,8 +1,8 @@
 -- name: LockRequest :one
-SELECT id, head_sha, state, generation, teardown_completed_generation FROM pull_requests WHERE id = $1 FOR UPDATE;
+SELECT id, head_sha, state, generation, teardown_completed_generation,build_status,needs_refresh FROM pull_requests WHERE id = $1 FOR UPDATE;
 
 -- name: ReadRequest :one
-SELECT id, head_sha, state, generation, teardown_completed_generation FROM pull_requests WHERE id = $1;
+SELECT id, head_sha, state, generation, teardown_completed_generation,build_status,needs_refresh FROM pull_requests WHERE id = $1;
 
 -- name: ReadEnvironment :one
 SELECT container_id, image_tag, head_sha, status, applied_generation,
@@ -29,7 +29,7 @@ WITH current_request AS MATERIALIZED (
     WHERE pr.id = sqlc.arg(pr_id) AND pr.generation = sqlc.arg(expected_generation)
       AND pr.head_sha = sqlc.arg(head_sha)
       AND ((pr.state IN ('closed','merged') AND sqlc.arg(expected_revision)::bigint = 0)
-        OR (pr.state = 'open' AND EXISTS (
+        OR (pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND EXISTS (
           SELECT 1 FROM build_intents b WHERE b.pull_request_id = pr.id
             AND b.generation = pr.generation AND b.head_sha = pr.head_sha
             AND b.revision = sqlc.arg(expected_revision)
@@ -163,7 +163,7 @@ WITH locked AS MATERIALIZED (
     JOIN pull_requests pr ON pr.id = e.pull_request_id
     WHERE e.pull_request_id = sqlc.arg(pr_id)
       AND pr.generation = sqlc.arg(expected_generation)
-      AND pr.state = 'open'
+      AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh
       AND EXISTS (SELECT 1 FROM build_intents b WHERE b.pull_request_id = pr.id
         AND b.generation = pr.generation AND b.revision = sqlc.arg(expected_revision)
         AND b.state IN ('running','succeeded') AND b.head_sha = pr.head_sha)

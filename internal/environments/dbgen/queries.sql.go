@@ -18,7 +18,7 @@ WITH locked AS MATERIALIZED (
     JOIN pull_requests pr ON pr.id = e.pull_request_id
     WHERE e.pull_request_id = $3
       AND pr.generation = $1
-      AND pr.state = 'open'
+      AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh
       AND EXISTS (SELECT 1 FROM build_intents b WHERE b.pull_request_id = pr.id
         AND b.generation = pr.generation AND b.revision = $2
         AND b.state IN ('running','succeeded') AND b.head_sha = pr.head_sha)
@@ -83,7 +83,7 @@ WITH current_request AS MATERIALIZED (
     WHERE pr.id = $7 AND pr.generation = $2
       AND pr.head_sha = $6
       AND ((pr.state IN ('closed','merged') AND $3::bigint = 0)
-        OR (pr.state = 'open' AND EXISTS (
+        OR (pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND EXISTS (
           SELECT 1 FROM build_intents b WHERE b.pull_request_id = pr.id
             AND b.generation = pr.generation AND b.head_sha = pr.head_sha
             AND b.revision = $3
@@ -523,7 +523,7 @@ func (q *Queries) LockCurrentOperationLease(ctx context.Context, arg LockCurrent
 }
 
 const lockRequest = `-- name: LockRequest :one
-SELECT id, head_sha, state, generation, teardown_completed_generation FROM pull_requests WHERE id = $1 FOR UPDATE
+SELECT id, head_sha, state, generation, teardown_completed_generation,build_status,needs_refresh FROM pull_requests WHERE id = $1 FOR UPDATE
 `
 
 type LockRequestRow struct {
@@ -532,6 +532,8 @@ type LockRequestRow struct {
 	State                       string
 	Generation                  int64
 	TeardownCompletedGeneration int64
+	BuildStatus                 string
+	NeedsRefresh                bool
 }
 
 func (q *Queries) LockRequest(ctx context.Context, id int64) (LockRequestRow, error) {
@@ -543,6 +545,8 @@ func (q *Queries) LockRequest(ctx context.Context, id int64) (LockRequestRow, er
 		&i.State,
 		&i.Generation,
 		&i.TeardownCompletedGeneration,
+		&i.BuildStatus,
+		&i.NeedsRefresh,
 	)
 	return i, err
 }
@@ -677,7 +681,7 @@ func (q *Queries) ReadEnvironment(ctx context.Context, pullRequestID int64) (Rea
 }
 
 const readRequest = `-- name: ReadRequest :one
-SELECT id, head_sha, state, generation, teardown_completed_generation FROM pull_requests WHERE id = $1
+SELECT id, head_sha, state, generation, teardown_completed_generation,build_status,needs_refresh FROM pull_requests WHERE id = $1
 `
 
 type ReadRequestRow struct {
@@ -686,6 +690,8 @@ type ReadRequestRow struct {
 	State                       string
 	Generation                  int64
 	TeardownCompletedGeneration int64
+	BuildStatus                 string
+	NeedsRefresh                bool
 }
 
 func (q *Queries) ReadRequest(ctx context.Context, id int64) (ReadRequestRow, error) {
@@ -697,6 +703,8 @@ func (q *Queries) ReadRequest(ctx context.Context, id int64) (ReadRequestRow, er
 		&i.State,
 		&i.Generation,
 		&i.TeardownCompletedGeneration,
+		&i.BuildStatus,
+		&i.NeedsRefresh,
 	)
 	return i, err
 }

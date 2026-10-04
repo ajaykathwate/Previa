@@ -14,7 +14,7 @@ WHERE id = sqlc.arg(repo_id) AND installation_id = sqlc.arg(installation_id) AND
 FOR UPDATE;
 
 -- name: LockIntentPR :one
-SELECT id, repo_id, generation, head_sha, state FROM pull_requests
+SELECT id, repo_id, generation, head_sha, state,build_status,needs_refresh FROM pull_requests
 WHERE id = sqlc.arg(pr_id) AND repo_id = sqlc.arg(repo_id) FOR UPDATE;
 
 -- name: LockBuildIntent :one

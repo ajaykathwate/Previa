@@ -7,8 +7,10 @@ import (
 
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
+	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/webhooks/dbgen"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -17,6 +19,8 @@ type PREvent struct {
 	Number          int32
 	HeadSHA, Action string
 	Merged          bool
+	Mergeable       *bool
+	MergeableState  string
 }
 type eventEnqueuer interface {
 	ObserveTx(context.Context, pgx.Tx, environments.Request) (environments.Request, error)
@@ -60,7 +64,14 @@ func (s *Service) ProcessPR(ctx context.Context, event PREvent) (request environ
 		if _, err := q.LockEventRepository(ctx, dbgen.LockEventRepositoryParams{ID: event.RepoID, InstallationID: scope}); err != nil {
 			return fmt.Errorf("lock event repository: %w", err)
 		}
-		pr, err := q.RecordPREvent(ctx, dbgen.RecordPREventParams{RepoID: event.RepoID, Number: event.Number, HeadSha: event.HeadSHA, State: state})
+		mergeable := pgtype.Bool{}
+		if event.Mergeable != nil {
+			mergeable = pgtype.Bool{Bool: *event.Mergeable, Valid: true}
+		}
+		pr, err := q.RecordPREvent(ctx, dbgen.RecordPREventParams{RepoID: event.RepoID, Number: event.Number, HeadSha: event.HeadSHA, State: state, Mergeable: mergeable, MergeableState: event.MergeableState, BuildStatus: pullrequests.MergeabilityStatus(event.Mergeable, event.MergeableState)})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
 		if err != nil {
 			return fmt.Errorf("record PR event: %w", err)
 		}

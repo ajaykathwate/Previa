@@ -86,6 +86,9 @@ func (r *IntentRepository) requestIntentTx(ctx context.Context, tx pgx.Tx, comma
 	if scope.pr.State != "open" {
 		return IntentOutcome{}, ErrPRClosed
 	}
+	if err := BuildBlockReason(scope.pr.BuildStatus, scope.pr.NeedsRefresh); err != nil {
+		return IntentOutcome{}, err
+	}
 	current, err := readLockedIntent(ctx, q, command.PullRequestID)
 	if err != nil {
 		return IntentOutcome{}, err

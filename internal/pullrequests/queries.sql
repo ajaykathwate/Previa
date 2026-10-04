@@ -10,12 +10,12 @@ WHERE r.github_repo_id=$1 AND i.github_installation_id=$2;
 -- name: LockPR :one
 SELECT * FROM pull_requests WHERE repo_id=$1 AND number=$2 FOR UPDATE;
 -- name: SaveObservation :one
-INSERT INTO pull_requests (repo_id,number,head_sha,state,generation,title,author,head_branch,html_url,head_repo_id,is_fork,source_updated_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+INSERT INTO pull_requests (repo_id,number,head_sha,state,generation,title,author,head_branch,html_url,head_repo_id,is_fork,source_updated_at,mergeable,mergeable_state,build_status)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 ON CONFLICT (repo_id,number) DO UPDATE SET head_sha=EXCLUDED.head_sha,state=EXCLUDED.state,
  generation=EXCLUDED.generation,title=EXCLUDED.title,author=EXCLUDED.author,
  head_branch=EXCLUDED.head_branch,html_url=EXCLUDED.html_url,head_repo_id=EXCLUDED.head_repo_id,
- is_fork=EXCLUDED.is_fork,source_updated_at=EXCLUDED.source_updated_at,needs_refresh=false
+ is_fork=EXCLUDED.is_fork,source_updated_at=EXCLUDED.source_updated_at,needs_refresh=false,mergeable=EXCLUDED.mergeable,mergeable_state=EXCLUDED.mergeable_state,build_status=EXCLUDED.build_status
 RETURNING id;
 -- name: RequireRefresh :exec
 UPDATE pull_requests SET needs_refresh=true,generation=generation+1 WHERE id=$1;
@@ -81,3 +81,13 @@ LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
 WHERE i.owner_user_id=$1 AND ($2::bigint=0 OR r.id=$2)
 AND (($3::boolean AND e.id IS NOT NULL) OR (NOT $3::boolean AND b.pull_request_id IS NOT NULL))
 ORDER BY p.id DESC LIMIT 10 OFFSET $4;
+
+-- name: InitialDiscoveryRepositories :many
+SELECT r.id FROM repos r JOIN installations i ON i.id=r.installation_id
+WHERE i.github_installation_id=$1 AND i.owner_user_id IS NOT NULL AND i.status='active'
+ AND r.accessible AND NOT EXISTS(SELECT 1 FROM pr_syncs s WHERE s.repo_id=r.id)
+ORDER BY r.id FOR UPDATE OF r;
+
+-- name: HasAutomaticIntent :one
+SELECT EXISTS(SELECT 1 FROM build_intents WHERE pull_request_id=$1 AND generation=$2
+ AND source='automatic' AND state IN ('pending','queued','running'));

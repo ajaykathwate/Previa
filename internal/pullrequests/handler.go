@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/a-h/templ"
+	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
 	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
 	environmentpages "github.com/ajaykathwatee/previa/web/pages/environments"
@@ -221,6 +222,12 @@ func (h *Handler) build(w http.ResponseWriter, r *http.Request) {
 	if !row.Available.Bool {
 		h.fail(w, r, ErrUnavailable)
 		return
+	}
+	if row.State == "open" {
+		if err := environments.BuildBlockReason(row.BuildStatus, row.NeedsRefresh); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 	}
 	// Fail closed. Enabling this boundary requires a fresh upstream observation,
 	// fenced admission, source/config validation and real execution/publication adapters.

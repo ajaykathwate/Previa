@@ -30,11 +30,16 @@ func TestGitHubDiscoveryUsesNumericIdentityAndBoundedAuthenticatedPages(t *testi
 			}
 		case "/repos/transferred/renamed/pulls":
 			q := r.URL.Query()
-			if q.Get("page") != "2" || q.Get("per_page") != "100" || q.Get("state") != "all" || q.Get("sort") != "created" || q.Get("direction") != "asc" {
+			if q.Get("page") != "2" || q.Get("per_page") != "100" || q.Get("state") != "open" || q.Get("sort") != "created" || q.Get("direction") != "asc" {
 				t.Error("unbounded or incorrect query")
 			}
 			w.Header().Set("Link", `<http://example.test/pulls?page=3>; rel="next"`)
-			_, err := w.Write([]byte(`[{"number":42,"title":"Real metadata","state":"closed","merged_at":"2026-10-03T10:00:00Z","updated_at":"2026-10-03T10:00:00Z","head":{"sha":"abcdef","ref":"topic","repo":{"id":101}},"user":{"login":"author"}}]`))
+			_, err := w.Write([]byte(`[{"number":42,"title":"Real metadata","state":"open","mergeable":true,"mergeable_state":"clean","updated_at":"2026-10-03T10:00:00Z","head":{"sha":"abcdef","ref":"topic","repo":{"id":101}},"user":{"login":"author"}}]`))
+			if err != nil {
+				t.Error(err)
+			}
+		case "/repos/transferred/renamed/pulls/42":
+			_, err := w.Write([]byte(`{"number":42,"state":"open","mergeable":false,"mergeable_state":"dirty","updated_at":"2026-10-03T10:00:00Z","head":{"sha":"abcdef","repo":{"id":101}}}`))
 			if err != nil {
 				t.Error(err)
 			}
@@ -59,7 +64,11 @@ func TestGitHubDiscoveryUsesNumericIdentityAndBoundedAuthenticatedPages(t *testi
 	if err != nil || len(rows) != 1 || next != 3 || calls != 2 {
 		t.Fatalf("API pagination: %+v next=%d calls=%d %v", rows, next, calls, err)
 	}
-	if rows[0].State != "merged" || !rows[0].Fork || rows[0].HeadRepoID != 101 || rows[0].Author != "author" {
+	resolved, err := source.Get(t.Context(), 99, 100, 42)
+	if err != nil || resolved.BuildStatus != "conflicts" || resolved.Mergeable == nil || *resolved.Mergeable || calls != 4 {
+		t.Fatal("targeted mergeability GET lost signal", resolved, err)
+	}
+	if rows[0].State != "open" || rows[0].BuildStatus != "open" || !rows[0].Fork || rows[0].HeadRepoID != 101 || rows[0].Author != "author" {
 		t.Fatal("metadata/fork/merge mapping", rows[0])
 	}
 }
@@ -81,3 +90,24 @@ func TestDiscoveryRateLimitsAndSafeErrors(t *testing.T) {
 }
 
 var _ Source = (*GitHubSource)(nil)
+
+func TestMergeabilityMappingNeverAssumesNullIsClean(t *testing.T) {
+	yes, no := true, false
+	for _, tc := range []struct {
+		name        string
+		mergeable   *bool
+		state, want string
+	}{
+		{"null", nil, "", "checking"}, {"unknown", nil, "unknown", "checking"},
+		{"blocked pending", nil, "blocked", "checking"}, {"unstable pending", nil, "unstable", "checking"},
+		{"dirty", nil, "dirty", "conflicts"}, {"false", &no, "blocked", "conflicts"},
+		{"true", &yes, "blocked", "open"}, {"clean", nil, "clean", "open"},
+		{"contradictory dirty", &yes, "dirty", "conflicts"}, {"contradictory false", &no, "clean", "conflicts"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := MergeabilityStatus(tc.mergeable, tc.state); got != tc.want {
+				t.Fatalf("got %s want %s", got, tc.want)
+			}
+		})
+	}
+}

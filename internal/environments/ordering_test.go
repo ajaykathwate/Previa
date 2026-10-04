@@ -67,7 +67,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, name := range []string{"0001_init.sql", "0003_pr_generation.sql", "0004_durable_operations.sql", "0005_installation_linking.sql", "0006_build_intents.sql", "0007_intent_dispatch.sql", "0009_environment_identity.sql"} {
+	for _, name := range []string{"0001_init.sql", "0003_pr_generation.sql", "0004_durable_operations.sql", "0005_installation_linking.sql", "0006_build_intents.sql", "0007_intent_dispatch.sql", "0008_pr_workspace.sql", "0009_environment_identity.sql", "0010_pr_mergeability.sql"} {
 		data, err := os.ReadFile("../../db/migrations/" + name)
 		if err != nil {
 			t.Fatal(err)
@@ -125,7 +125,7 @@ func newFixture(t *testing.T) *fixture {
 
 func (f *fixture) event(t *testing.T, action, sha string) env.Request {
 	t.Helper()
-	r, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{RepoID: f.repoID, Number: 1, HeadSHA: sha, Action: action})
+	r, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{MergeableState: "clean", RepoID: f.repoID, Number: 1, HeadSHA: sha, Action: action})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,7 +678,7 @@ func TestEventEnqueueFailureRollsBackGeneration(t *testing.T) {
 	f := newFixture(t)
 	a := f.event(t, "opened", "sha-A")
 	s := webhooks.NewService(f.pool, failingEnqueuer{})
-	if _, err := s.ProcessPR(t.Context(), webhooks.PREvent{RepoID: f.repoID, Number: 1, HeadSHA: "sha-B", Action: "synchronize"}); err == nil {
+	if _, err := s.ProcessPR(t.Context(), webhooks.PREvent{MergeableState: "clean", RepoID: f.repoID, Number: 1, HeadSHA: "sha-B", Action: "synchronize"}); err == nil {
 		t.Fatal("enqueue failure accepted")
 	}
 	snapshot, err := f.repo.Snapshot(t.Context(), a.PullRequestID)
@@ -762,7 +762,7 @@ func TestExternalPublicationDoesNotHoldGenerationLock(t *testing.T) {
 	}
 	eventDone := make(chan error, 1)
 	go func() {
-		_, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{RepoID: f.repoID, Number: 1, HeadSHA: "sha-B", Action: "synchronize"})
+		_, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{MergeableState: "clean", RepoID: f.repoID, Number: 1, HeadSHA: "sha-B", Action: "synchronize"})
 		eventDone <- err
 	}()
 	select {
@@ -916,7 +916,7 @@ func TestConcurrentEventsIncrementExactlyOnce(t *testing.T) {
 	done := make(chan error, updates)
 	for i := range updates {
 		go func() {
-			_, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{RepoID: f.repoID, Number: 1, HeadSHA: fmt.Sprintf("sha-%d", i), Action: "synchronize"})
+			_, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{MergeableState: "clean", RepoID: f.repoID, Number: 1, HeadSHA: fmt.Sprintf("sha-%d", i), Action: "synchronize"})
 			done <- err
 		}()
 	}

@@ -14,15 +14,26 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type metadataScheduler interface {
+	installations.InitialDiscoverer
+	pullrequests.MergeabilityRefresher
+}
+
 type DeliveryService struct {
 	pool          *pgxpool.Pool
 	observer      pullrequests.Observer
 	installations *installations.Repository
 	invalidate    func(int64)
+	refresher     pullrequests.MergeabilityRefresher
 }
 
-func NewDeliveryService(pool *pgxpool.Pool, observer pullrequests.Observer, invalidate func(int64)) *DeliveryService {
-	return &DeliveryService{pool, observer, installations.NewRepository(pool), invalidate}
+func NewDeliveryService(pool *pgxpool.Pool, observer pullrequests.Observer, invalidate func(int64), syncs ...metadataScheduler) *DeliveryService {
+	s := &DeliveryService{pool: pool, observer: observer, installations: installations.NewRepository(pool), invalidate: invalidate}
+	if len(syncs) > 0 {
+		s.refresher = syncs[0]
+		s.installations = installations.NewRepository(pool, syncs[0])
+	}
+	return s
 }
 func (s *DeliveryService) Process(ctx context.Context, id, kind, hash string, event any) error {
 	var installationID int64
@@ -61,7 +72,7 @@ func (s *DeliveryService) Process(ctx context.Context, id, kind, hash string, ev
 			if e.GetAction() == "closed" && o.State == "open" || e.GetAction() != "closed" && o.State != "open" {
 				return ErrInvalidEvent
 			}
-			return pullrequests.ProcessWebhookTx(ctx, tx, e.GetRepo().GetID(), e.GetInstallation().GetID(), o, s.observer)
+			return pullrequests.ProcessWebhookTx(ctx, tx, e.GetRepo().GetID(), e.GetInstallation().GetID(), o, s.observer, s.refresher)
 		case *github.InstallationEvent:
 			if e.GetAction() == "" {
 				return ErrInvalidEvent

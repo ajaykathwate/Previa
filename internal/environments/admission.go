@@ -26,6 +26,11 @@ func (r *Repository) claimBuild(ctx context.Context, request Request, now time.T
 		if e != nil {
 			return e
 		}
+		if scope.pr.Generation == request.Generation && scope.pr.HeadSha == request.HeadSHA && scope.pr.State == "open" {
+			if e := BuildBlockReason(scope.pr.BuildStatus, scope.pr.NeedsRefresh); e != nil {
+				return e
+			}
+		}
 		affected, e := q.ClaimBuildIntent(ctx, dbgen.ClaimBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, HeadSha: request.HeadSHA, BuildMode: scope.mode, NowAt: pgtype.Timestamptz{Time: now, Valid: true}})
 		if e != nil {
 			return fmt.Errorf("claim authorized build intent: %w", e)
@@ -52,6 +57,9 @@ func currentOperationRequest(ctx context.Context, q *dbgen.Queries, request Requ
 		return false, fmt.Errorf("read operation PR: %w", err)
 	}
 	if pr.Generation != request.Generation || pr.State != request.State || pr.HeadSha != request.HeadSHA {
+		return false, nil
+	}
+	if request.State == "open" && BuildBlockReason(pr.BuildStatus, pr.NeedsRefresh) != nil {
 		return false, nil
 	}
 	if request.State != "open" {

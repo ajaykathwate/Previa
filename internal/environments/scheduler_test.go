@@ -75,7 +75,7 @@ func newScheduleFixture(t *testing.T) *scheduleFixture {
 }
 func (f *scheduleFixture) observe(t *testing.T, action, sha string) env.Request {
 	t.Helper()
-	r, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{RepoID: f.repoID, Number: 1, Action: action, HeadSHA: sha})
+	r, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{MergeableState: "clean", RepoID: f.repoID, Number: 1, Action: action, HeadSHA: sha})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestSchedulingManualObservationAndClosedTeardown(t *testing.T) {
 	if err := f.pool.QueryRow(t.Context(), "SELECT count(*) FROM environments").Scan(&environments); err != nil || environments != 0 {
 		t.Fatalf("observation provisioned: %d %v", environments, err)
 	}
-	if _, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{RepoID: f.repoID, Number: 1, Action: "edited", HeadSHA: "ignored"}); err == nil {
+	if _, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{MergeableState: "clean", RepoID: f.repoID, Number: 1, Action: "edited", HeadSHA: "ignored"}); err == nil {
 		t.Fatal("unsupported event accepted")
 	}
 	c := f.observe(t, "closed", "sha-B")
@@ -273,7 +273,7 @@ func TestSchedulingManualWakeRollbackAndConcurrentObservation(t *testing.T) {
 	for i := range updates {
 		go func() {
 			<-start
-			_, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{RepoID: f.repoID, Number: 1, Action: "synchronize", HeadSHA: fmt.Sprintf("sha-%d", i)})
+			_, err := f.events.ProcessPR(t.Context(), webhooks.PREvent{MergeableState: "clean", RepoID: f.repoID, Number: 1, Action: "synchronize", HeadSHA: fmt.Sprintf("sha-%d", i)})
 			done <- err
 		}()
 	}
@@ -366,7 +366,7 @@ func TestSchedulingSameGenerationRebuildFencesOperationsAndCleanup(t *testing.T)
 func TestSchedulingGenerationZeroPublication(t *testing.T) {
 	f := newScheduleFixture(t)
 	var id int64
-	if err := f.pool.QueryRow(t.Context(), "INSERT INTO pull_requests(repo_id,number,head_sha) VALUES($1,1,'bootstrap-sha') RETURNING id", f.repoID).Scan(&id); err != nil {
+	if err := f.pool.QueryRow(t.Context(), "INSERT INTO pull_requests(repo_id,number,head_sha,build_status) VALUES($1,1,'bootstrap-sha','open') RETURNING id", f.repoID).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	r := env.NewRequest(id, 0, "bootstrap-sha", "open")

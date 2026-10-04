@@ -7,6 +7,8 @@ package dbgen
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const findEventRepository = `-- name: FindEventRepository :one
@@ -48,20 +50,24 @@ func (q *Queries) LockEventRepository(ctx context.Context, arg LockEventReposito
 }
 
 const recordPREvent = `-- name: RecordPREvent :one
-INSERT INTO pull_requests (repo_id, number, head_sha, state, generation)
-VALUES ($1, $2, $3, $4, 1)
+INSERT INTO pull_requests (repo_id, number, head_sha, state, generation,mergeable,mergeable_state,build_status)
+SELECT $1::bigint, $2::integer, $3::text, $4::text, 1,$5::boolean,$6::text,$7::text
+WHERE $4::text='open' OR EXISTS(SELECT 1 FROM pull_requests WHERE repo_id=$1 AND number=$2)
 ON CONFLICT (repo_id, number) DO UPDATE
 SET head_sha = EXCLUDED.head_sha,
     state = EXCLUDED.state,
-    generation = pull_requests.generation + 1
+    generation = pull_requests.generation + 1,mergeable=EXCLUDED.mergeable,mergeable_state=EXCLUDED.mergeable_state,build_status=EXCLUDED.build_status
 RETURNING id, head_sha, state, generation
 `
 
 type RecordPREventParams struct {
-	RepoID  int64
-	Number  int32
-	HeadSha string
-	State   string
+	RepoID         int64
+	Number         int32
+	HeadSha        string
+	State          string
+	Mergeable      pgtype.Bool
+	MergeableState string
+	BuildStatus    string
 }
 
 type RecordPREventRow struct {
@@ -77,6 +83,9 @@ func (q *Queries) RecordPREvent(ctx context.Context, arg RecordPREventParams) (R
 		arg.Number,
 		arg.HeadSha,
 		arg.State,
+		arg.Mergeable,
+		arg.MergeableState,
+		arg.BuildStatus,
 	)
 	var i RecordPREventRow
 	err := row.Scan(

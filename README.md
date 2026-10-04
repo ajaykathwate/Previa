@@ -433,10 +433,32 @@ Keeping `Runtime` as an interface in `/internal/runtime` is what lets you swap D
 - `users` — id, github_id, username, created_at
 - `installations` — id, github_installation_id, owner_user_id
 - `repos` — id, installation_id, full_name, default_config_hash, build_mode (owner-controlled; Manual by default)
-- `pull_requests` — id, repo_id, number, head_sha, state, github_comment_id
+- `pull_requests` — id, repo_id, number, head_sha, state (open / closed / merged),
+  mergeable (nullable boolean), mergeable_state, build_status (open / checking / conflicts), github_comment_id
 - `environments` — id, pull_request_id, container_id, image_tag, subdomain, status (building / running / failed / torn_down), created_at, last_active_at, expires_at
 - `build_logs` — id, environment_id, sequence, line, created_at
 - `env_secrets` — id, repo_id, key, encrypted_value
+
+**PR tracking scope:** connecting a repository automatically queues discovery of
+only its currently open PRs. Initial discovery and every later sync use
+`GET /repos/{owner}/{repo}/pulls?state=open&sort=created&direction=asc&per_page=100&page=N`.
+Closed/merged history is never backfilled. A PR becomes known while open through
+this discovery or a subsequent open/reopen/synchronize event. Closing or merging
+an already tracked PR updates its existing row in place; an unknown closed/merged
+PR creates no row. Tracked closed/merged records are retained. Missing PRs in an
+open-only list are never inferred to be closed; webhooks update their lifecycle.
+
+**Mergeability:** GitHub's nullable `mergeable` and `mergeable_state` are saved
+alongside lifecycle state. Open PRs display `Checking` until a resolved `true` or
+`clean` observation, `Conflicts` for `false` or `dirty`, and `Open` when buildable.
+Conflicting signals favor `Conflicts`. Initial open/synchronize/reopen events
+with unresolved status queue bounded background GET checks for that tracked PR;
+exhausted checks remain `Checking` until another event or sync. Each push replaces
+the old mergeability observation. Both manual authorization and scheduled dispatch
+check the saved status; the generation/admission lock repeats the check immediately
+before runtime execution. Conflicts and checking refuse builds with contributor
+feedback in the PR dashboard. Production execution remains disabled until its
+runtime/publication adapters are implemented.
 
 `build_intents` now stores one current authorized request per PR: revision, captured
 generation/SHA, source, action, idempotency key, state and eligibility deadline.

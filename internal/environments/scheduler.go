@@ -159,6 +159,9 @@ func (b *Broker) dispatchLockedTx(ctx context.Context, tx pgx.Tx, scope intentSc
 		if i == nil || i.Generation != r.Generation || i.HeadSHA != r.HeadSHA || (i.State != IntentPending && i.State != IntentQueued && i.State != IntentRunning) || (i.Source == "automatic" && scope.mode != "automatic" && i.State != IntentRunning) {
 			return 0, nil
 		}
+		if err := BuildBlockReason(scope.pr.BuildStatus, scope.pr.NeedsRefresh); err != nil {
+			return 0, err
+		}
 		if b.now().Before(i.AvailableAt) {
 			return 0, nil
 		}

@@ -15,7 +15,7 @@ const claimBuildIntent = `-- name: ClaimBuildIntent :execrows
 UPDATE build_intents b SET state = 'running', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp()
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = $1
-    AND pr.state = 'open' AND pr.generation = $2 AND pr.head_sha = $3
+    AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = $2 AND pr.head_sha = $3
     AND b.generation = pr.generation AND b.head_sha = pr.head_sha AND b.revision = $4
     AND b.state IN ('pending','queued','running') AND b.available_at <= $5
     AND (b.source = 'manual' OR $6::text = 'automatic' OR b.state = 'running')
@@ -89,7 +89,7 @@ const finishBuildIntent = `-- name: FinishBuildIntent :execrows
 UPDATE build_intents b SET state = $1, completed_at = clock_timestamp(), updated_at = clock_timestamp()
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = $2
-    AND pr.state = 'open' AND pr.generation = $3
+    AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = $3
     AND b.generation = pr.generation AND b.revision = $4
     AND b.state IN ('queued','running')
 `

@@ -13,7 +13,7 @@ WHERE pull_request_id = $1 AND revision = $2 AND state = 'pending';
 UPDATE build_intents b SET state = 'running', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp()
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
-    AND pr.state = 'open' AND pr.generation = sqlc.arg(generation) AND pr.head_sha = sqlc.arg(head_sha)
+    AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation) AND pr.head_sha = sqlc.arg(head_sha)
     AND b.generation = pr.generation AND b.head_sha = pr.head_sha AND b.revision = sqlc.arg(revision)
     AND b.state IN ('pending','queued','running') AND b.available_at <= sqlc.arg(now_at)
     AND (b.source = 'manual' OR sqlc.arg(build_mode)::text = 'automatic' OR b.state = 'running');
@@ -26,7 +26,7 @@ WHERE l.environment_id = e.id AND e.pull_request_id = $1;
 UPDATE build_intents b SET state = sqlc.arg(next_state), completed_at = clock_timestamp(), updated_at = clock_timestamp()
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
-    AND pr.state = 'open' AND pr.generation = sqlc.arg(generation)
+    AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation)
     AND b.generation = pr.generation AND b.revision = sqlc.arg(revision)
     AND b.state IN ('queued','running');
 

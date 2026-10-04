@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/githubapp"
@@ -39,10 +40,11 @@ func RunWorker(ctx context.Context, logger *slog.Logger) error {
 		}
 		source = pullrequests.NewGitHubSource(appClient)
 	}
-	syncService := pullrequests.NewSyncService(pool, producer, source)
+	syncService := pullrequests.NewSyncService(pool, producer, source, environments.NewBroker(pool, producer))
 	client, err := queue.NewWorker(pool, cfg, logger, func(workers *river.Workers, queues map[string]river.QueueConfig) {
 		if source != nil {
 			river.AddWorker(workers, &pullrequests.SyncWorker{Service: syncService})
+			river.AddWorker(workers, &pullrequests.MergeabilityWorker{Service: syncService})
 			queues[pullrequests.SyncQueue] = river.QueueConfig{MaxWorkers: 2}
 		}
 	})

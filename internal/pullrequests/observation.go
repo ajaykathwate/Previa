@@ -23,6 +23,8 @@ type Observation struct {
 	HeadRepoID                             int64
 	Fork                                   bool
 	UpdatedAt                              time.Time
+	Mergeable                              *bool
+	MergeableState, BuildStatus            string
 }
 
 func FromGitHub(p *github.PullRequest, baseRepoID int64) (Observation, error) {
@@ -37,7 +39,7 @@ func FromGitHub(p *github.PullRequest, baseRepoID int64) (Observation, error) {
 		return Observation{}, errors.New("invalid pull request state")
 	}
 	headID := p.GetHead().GetRepo().GetID()
-	return Observation{Number: int32(p.GetNumber()), SHA: p.GetHead().GetSHA(), State: state, Title: p.GetTitle(), Author: p.GetUser().GetLogin(), Branch: p.GetHead().GetRef(), URL: p.GetHTMLURL(), HeadRepoID: headID, Fork: headID == 0 || headID != baseRepoID, UpdatedAt: p.GetUpdatedAt().Time}, nil
+	return Observation{Number: int32(p.GetNumber()), SHA: p.GetHead().GetSHA(), State: state, Title: p.GetTitle(), Author: p.GetUser().GetLogin(), Branch: p.GetHead().GetRef(), URL: p.GetHTMLURL(), Mergeable: p.Mergeable, MergeableState: p.GetMergeableState(), BuildStatus: MergeabilityStatus(p.Mergeable, p.GetMergeableState()), HeadRepoID: headID, Fork: headID == 0 || headID != baseRepoID, UpdatedAt: p.GetUpdatedAt().Time}, nil
 }
 
 type Observer interface {
@@ -84,6 +86,10 @@ func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webh
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("lock observed PR: %w", err)
 	}
+	if !exists && o.State != "open" {
+		return false, nil // A close can only finish a PR we tracked while open.
+	}
+	o.BuildStatus = MergeabilityStatus(o.Mergeable, o.MergeableState)
 	// Rows created before source timestamps existed need an authoritative baseline
 	// before a conflicting open observation can replace their known state.
 	if exists && !old.SourceUpdatedAt.Valid && webhook &&
@@ -109,11 +115,11 @@ func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webh
 		}
 	}
 	generation := old.Generation
-	changed := !exists || old.HeadSha != o.SHA || old.State != o.State
+	changed := !exists || old.HeadSha != o.SHA || old.State != o.State || old.BuildStatus != o.BuildStatus || old.NeedsRefresh
 	if webhook || (exists && changed) {
 		generation++
 	}
-	id, err := q.SaveObservation(ctx, dbgen.SaveObservationParams{RepoID: repoID, Number: o.Number, HeadSha: o.SHA, State: o.State, Generation: generation, Title: o.Title, Author: o.Author, HeadBranch: o.Branch, HtmlUrl: o.URL, HeadRepoID: pgtype.Int8{Int64: o.HeadRepoID, Valid: o.HeadRepoID > 0}, IsFork: o.Fork, SourceUpdatedAt: pgtype.Timestamptz{Time: o.UpdatedAt, Valid: true}})
+	id, err := q.SaveObservation(ctx, dbgen.SaveObservationParams{RepoID: repoID, Number: o.Number, HeadSha: o.SHA, State: o.State, Generation: generation, Title: o.Title, Author: o.Author, HeadBranch: o.Branch, HtmlUrl: o.URL, HeadRepoID: pgtype.Int8{Int64: o.HeadRepoID, Valid: o.HeadRepoID > 0}, IsFork: o.Fork, SourceUpdatedAt: pgtype.Timestamptz{Time: o.UpdatedAt, Valid: true}, Mergeable: nullableBool(o.Mergeable), MergeableState: o.MergeableState, BuildStatus: o.BuildStatus})
 	if err != nil {
 		return false, fmt.Errorf("save PR observation: %w", err)
 	}
@@ -133,7 +139,7 @@ func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webh
 
 // ProcessWebhookTx resolves immutable GitHub repository identity under the same
 // locks as policy changes, lifecycle updates and scheduling.
-func ProcessWebhookTx(ctx context.Context, tx pgx.Tx, githubRepoID, installationID int64, o Observation, observer Observer) error {
+func ProcessWebhookTx(ctx context.Context, tx pgx.Tx, githubRepoID, installationID int64, o Observation, observer Observer, refreshers ...MergeabilityRefresher) error {
 	q := dbgen.New(tx)
 	repoID, err := q.FindGitHubRepository(ctx, dbgen.FindGitHubRepositoryParams{GithubRepoID: pgtype.Int8{Int64: githubRepoID, Valid: true}, GithubInstallationID: installationID})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -156,6 +162,39 @@ func ProcessWebhookTx(ctx context.Context, tx pgx.Tx, githubRepoID, installation
 	if err := q.BumpObservation(ctx, repoID); err != nil {
 		return err
 	}
-	_, err = ObserveTx(ctx, tx, repoID, o, true, observer)
+	applied, err := ObserveTx(ctx, tx, repoID, o, true, observer)
+	if err == nil && applied && o.State == "open" && o.BuildStatus == "checking" {
+		for _, refresher := range refreshers {
+			if refresher == nil {
+				continue
+			}
+			if err := refresher.RefreshMergeabilityTx(ctx, tx, repoID, o.Number, true); err != nil {
+				return err
+			}
+		}
+	}
 	return err
+}
+
+// MergeabilityStatus fails closed while GitHub computes its asynchronous result.
+func MergeabilityStatus(mergeable *bool, state string) string {
+	if state == "dirty" || mergeable != nil && !*mergeable {
+		return "conflicts"
+	}
+	if mergeable != nil && *mergeable || state == "clean" {
+		return "open"
+	}
+	return "checking"
+}
+func nullableBool(value *bool) pgtype.Bool {
+	if value == nil {
+		return pgtype.Bool{}
+	}
+	return pgtype.Bool{Bool: *value, Valid: true}
+}
+func DisplayStatus(state, buildStatus string) string {
+	if state != "open" {
+		return state
+	}
+	return buildStatus
 }

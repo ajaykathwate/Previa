@@ -49,6 +49,8 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	}
 	pings := queue.NewService(pool, producer)
 
+	coordinator := environments.NewBroker(pool, producer)
+	syncService := pullrequests.NewSyncService(pool, producer, nil, coordinator)
 	var invalidate func(int64)
 	service := installations.NewService(installations.NewRepository(pool), nil, nil, nil)
 	if cfg.GitHubAppID != 0 {
@@ -57,7 +59,7 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 			return fmt.Errorf("initialize GitHub App: %w", err)
 		}
 		invalidate = appClient.Invalidate
-		service = installations.NewService(installations.NewRepository(pool), appClient, installations.NewGitHubAuthorization(cfg), nil)
+		service = installations.NewService(installations.NewRepository(pool, syncService), appClient, installations.NewGitHubAuthorization(cfg), nil)
 	}
 	installationHandler := installations.NewHandler(service, authHandler, sessions, cfg.GitHubAppSlug, logger)
 	summaryReader := func(ctx context.Context, userID int64) (dashboardpages.Summary, error) {
@@ -66,14 +68,13 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	}
 	router := httpx.NewRouter(logger)
 	router.Handle("/static/*", web.StaticHandler())
-	coordinator := environments.NewBroker(pool, producer)
-	deliveries := webhooks.NewDeliveryService(pool, coordinator, invalidate)
+	deliveries := webhooks.NewDeliveryService(pool, coordinator, invalidate, syncService)
 	router.Post("/webhooks/github", webhooks.NewHandler(cfg.GitHubWebhookSecret, deliveries, logger).ServeHTTP)
 	policy, err := installations.NewBuildPolicyService(installations.NewRepository(pool))
 	if err != nil {
 		return err
 	}
-	prs := pullrequests.NewHandler(pullrequests.NewRepository(pool), pullrequests.NewSyncService(pool, producer, nil), policy, authHandler, logger, cfg.GitHubAppID > 0)
+	prs := pullrequests.NewHandler(pullrequests.NewRepository(pool), syncService, policy, authHandler, logger, cfg.GitHubAppID > 0)
 	installationHandler.WithNavigator(prs)
 	router.Group(func(r chi.Router) {
 		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)

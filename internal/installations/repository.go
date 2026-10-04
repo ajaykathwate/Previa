@@ -16,9 +16,21 @@ type database interface {
 	Begin(context.Context) (pgx.Tx, error)
 	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
 }
-type Repository struct{ db database }
+type InitialDiscoverer interface {
+	DiscoverInstallationTx(context.Context, pgx.Tx, int64) error
+}
+type Repository struct {
+	db        database
+	discovery InitialDiscoverer
+}
 
-func NewRepository(db database) *Repository { return &Repository{db: db} }
+func NewRepository(db database, discoverers ...InitialDiscoverer) *Repository {
+	r := &Repository{db: db}
+	if len(discoverers) > 0 {
+		r.discovery = discoverers[0]
+	}
+	return r
+}
 func (r *Repository) Prepare(ctx context.Context, id int64) (int64, error) {
 	q := dbgen.New(r.db)
 	revision, err := q.GetInstallationRevision(ctx, id)
@@ -30,7 +42,7 @@ func (r *Repository) Prepare(ctx context.Context, id int64) (int64, error) {
 	}
 	return revision, nil
 }
-func (r *Repository) transaction(ctx context.Context, operation func(*dbgen.Queries) error) (err error) {
+func (r *Repository) transaction(ctx context.Context, operation func(pgx.Tx, *dbgen.Queries) error) (err error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin installation transaction: %w", err)
@@ -42,7 +54,7 @@ func (r *Repository) transaction(ctx context.Context, operation func(*dbgen.Quer
 			err = errors.Join(err, fmt.Errorf("rollback installation transaction: %w", rollbackErr))
 		}
 	}()
-	if err := operation(dbgen.New(tx)); err != nil {
+	if err := operation(tx, dbgen.New(tx)); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -51,7 +63,7 @@ func (r *Repository) transaction(ctx context.Context, operation func(*dbgen.Quer
 	return nil
 }
 func (r *Repository) Link(ctx context.Context, id, userID, revision int64, account string, repos []RepositoryInfo) error {
-	return r.transaction(ctx, func(q *dbgen.Queries) error {
+	return r.transaction(ctx, func(tx pgx.Tx, q *dbgen.Queries) error {
 		if err := q.EnsureInstallation(ctx, id); err != nil {
 			return fmt.Errorf("ensure verified installation: %w", err)
 		}
@@ -71,7 +83,10 @@ func (r *Repository) Link(ctx context.Context, id, userID, revision int64, accou
 		if err := q.MarkRepositoriesUnavailable(ctx, row.ID); err != nil {
 			return fmt.Errorf("reset installation repository access: %w", err)
 		}
-		return upsertRepositories(ctx, q, row.ID, repos, false)
+		if err := upsertRepositories(ctx, q, row.ID, repos, false); err != nil {
+			return err
+		}
+		return r.discover(ctx, tx, id)
 	})
 }
 func upsertRepositories(ctx context.Context, q *dbgen.Queries, id int64, repos []RepositoryInfo, deferConflicts bool) error {
@@ -113,12 +128,20 @@ func upsertRepositories(ctx context.Context, q *dbgen.Queries, id int64, repos [
 	return nil
 }
 func (r *Repository) ApplyEvent(ctx context.Context, id int64, status, account string, added, removed []RepositoryInfo, replace bool) error {
-	return r.transaction(ctx, func(q *dbgen.Queries) error { return applyEvent(ctx, q, id, status, account, added, removed, replace) })
+	return r.transaction(ctx, func(tx pgx.Tx, q *dbgen.Queries) error {
+		if err := applyEvent(ctx, q, id, status, account, added, removed, replace); err != nil {
+			return err
+		}
+		return r.discover(ctx, tx, id)
+	})
 }
 
 // ApplyEventTx composes lifecycle mutation with the authenticated delivery receipt.
 func (r *Repository) ApplyEventTx(ctx context.Context, tx pgx.Tx, change LifecycleChange) error {
-	return applyEvent(ctx, dbgen.New(tx), change.ID, change.Status, change.Account, change.Added, change.Removed, change.Replace)
+	if err := applyEvent(ctx, dbgen.New(tx), change.ID, change.Status, change.Account, change.Added, change.Removed, change.Replace); err != nil {
+		return err
+	}
+	return r.discover(ctx, tx, change.ID)
 }
 func applyEvent(ctx context.Context, q *dbgen.Queries, id int64, status, account string, added, removed []RepositoryInfo, replace bool) error {
 	if err := q.EnsureInstallation(ctx, id); err != nil {
@@ -173,4 +196,11 @@ func (r *Repository) List(ctx context.Context, userID int64) ([]InstallationInfo
 		}
 	}
 	return result, nil
+}
+
+func (r *Repository) discover(ctx context.Context, tx pgx.Tx, id int64) error {
+	if r.discovery == nil {
+		return nil
+	}
+	return r.discovery.DiscoverInstallationTx(ctx, tx, id)
 }

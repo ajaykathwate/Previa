@@ -111,7 +111,7 @@ func setup(t *testing.T) *fixture {
 	return f
 }
 func payload(action, sha, state, at string) string {
-	return fmt.Sprintf(`{"action":%q,"installation":{"id":99},"repository":{"id":100},"pull_request":{"number":7,"title":"Improve preview","state":%q,"updated_at":%q,"user":{"login":"contributor"},"html_url":"https://github.com/owner/repo/pull/7","head":{"sha":%q,"ref":"feature","repo":{"id":101}}}}`, action, state, at, sha)
+	return fmt.Sprintf(`{"action":%q,"installation":{"id":99},"repository":{"id":100},"pull_request":{"number":7,"title":"Improve preview","state":%q,"mergeable":true,"mergeable_state":"clean","updated_at":%q,"user":{"login":"contributor"},"html_url":"https://github.com/owner/repo/pull/7","head":{"sha":%q,"ref":"feature","repo":{"id":101}}}}`, action, state, at, sha)
 }
 func send(h http.Handler, id, kind, body string) int {
 	req := httptest.NewRequest("POST", "/webhooks/github", strings.NewReader(body))
@@ -237,7 +237,7 @@ func (f sourceFunc) Page(ctx context.Context, i, r int64, p int32) ([]pr.Observa
 	return f(ctx, i, r, p)
 }
 func observation(n int32) pr.Observation {
-	return pr.Observation{Number: n, SHA: fmt.Sprintf("sha-%d", n), State: "open", Title: fmt.Sprintf("Change %d", n), Author: "owner", Branch: "branch", HeadRepoID: 100, UpdatedAt: time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)}
+	return pr.Observation{Number: n, SHA: fmt.Sprintf("sha-%d", n), State: "open", MergeableState: "clean", BuildStatus: "open", Title: fmt.Sprintf("Change %d", n), Author: "owner", Branch: "branch", HeadRepoID: 100, UpdatedAt: time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)}
 }
 func TestDiscoveryPaginationCoalescingAndOwnership(t *testing.T) {
 	f := setup(t)

@@ -178,6 +178,23 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 	if f.count(t, "SELECT count(*) FROM build_intents") != 0 {
 		t.Fatal("disabled build submitted intent")
 	}
+	for _, status := range []string{"conflicts", "checking"} {
+		if _, err := f.pool.Exec(ctx, "UPDATE pull_requests SET build_status=$1", status); err != nil {
+			t.Fatal(err)
+		}
+		w := request("POST", base+"/pull-requests/7/build", "csrf_token="+token)
+		reason := "resolve merge conflicts"
+		if status == "checking" {
+			reason = "checking mergeability"
+		}
+		if w.Code != 409 || !strings.Contains(w.Body.String(), reason) {
+			t.Fatal("build refusal not surfaced", status, w.Code, w.Body.String())
+		}
+		detail := request("GET", base+"/pull-requests/7", "")
+		if detail.Code != 200 || !strings.Contains(detail.Body.String(), reason) || !strings.Contains(detail.Body.String(), pr.DisplayStatus("open", status)) && !strings.Contains(detail.Body.String(), strings.ToUpper(status[:1])+status[1:]) {
+			t.Fatal("dashboard mergeability feedback", status, detail.Body.String())
+		}
+	}
 	if _, err := f.pool.Exec(ctx, "UPDATE installations SET status='suspended'"); err != nil {
 		t.Fatal(err)
 	}

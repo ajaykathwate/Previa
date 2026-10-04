@@ -11,7 +11,7 @@ The browser walkthrough is in [APP_USER_FLOW.md](APP_USER_FLOW.md).
 | Webhook durability | Compose the receipt, lifecycle/PR update and scheduling intent in one short PostgreSQL transaction. Existing lifecycle parsing is shared and persistence now accepts a transaction. No external calls occur in this boundary. | A durable inbox plus River processor would add processing states and another queue. Use it if later ingress work cannot remain short and transactional. |
 | PR ownership boundary | Flat `internal/pullrequests`; templates/view models in `web/pages/pullrequests`. Existing installation handlers keep connection/list ownership; dashboard keeps Overview/session/tools. | Global HTTP/delivery folders would relocate working features without a concrete benefit. |
 | Routes | `/repositories/{repoID}` and `/repositories/{repoID}/pull-requests/{number}`, using local IDs scoped to installation ownership. Upstream resolution uses immutable numeric GitHub repository IDs. | Repository names in route ownership keys are mutable and can change after transfers/renames. |
-| Discovery execution | Explicit initial discovery and later refresh through a CSRF-protected Refresh button. River fetches at most 100 PRs per job and durably schedules the next page. | Automatic discovery of every installation repository would fan out API work, including unused repositories. Synchronous page rendering would block navigation and repeatedly spend API quota. |
+| Discovery execution | Automatic open-only discovery on verified connection/repository addition; later open-only sync through the CSRF-protected Sync Pull Requests button. River fetches at most 100 PRs per job and durably schedules the next page. | Synchronous page rendering would block navigation and repeatedly spend API quota. |
 | Event chronology | GitHub PR `updated_at` orders source snapshots; a separate local generation fences work. Equal-time conflicting heads require refresh; closed/merged wins an equal-time open observation. | Local delivery order alone can regress state. Timestamp-only last-writer-wins guesses within GitHub's timestamp resolution. |
 | Installation ordering | Deletion is terminal. Lifecycle timestamps fence activation; per-repository access observations retain removal tombstones, with removal winning timestamp ties. Fresh verified linking can restore ambiguous access. | Installation timestamps are not a reliable per-repository selection sequence; treating one timestamp as an exact sequence could reopen revoked access. |
 | Discovery race fence | Capture installation revision and repository observation version before API IO. Lock installation → repo → sync record → PRs and recheck before writes. Retry the page when either changed. | Holding database locks across GitHub calls blocks events; comparing only PR timestamps misses concurrent access/relink changes. |
@@ -40,7 +40,7 @@ The browser walkthrough is in [APP_USER_FLOW.md](APP_USER_FLOW.md).
 - Supported PR actions: opened, reopened, synchronize, closed; merged close records
   `merged`. Comments/reviews neither authorize builds nor reset quiet periods.
 - Unlinked/inaccessible repositories are acknowledged without exposing or creating
-  another user's PR state. Existing PRs can later be discovered through refresh.
+  another user's PR state. Currently open PRs can later be discovered through sync.
 - Installation revocation sets durable `cleanup_pending`. No absent runtime adapter
   is reported as successful teardown. A later cleanup reconciler must examine
   current access/resource ownership before clearing this marker.
@@ -58,8 +58,9 @@ The browser walkthrough is in [APP_USER_FLOW.md](APP_USER_FLOW.md).
 - Discovery is observational: first sightings may have generation zero. A changed
   existing head/state advances generation and supersedes active obsolete intent;
   it never creates automatic build intent, even in Automatic mode.
-- Discovery records a closed PR as durable teardown state; it does not claim that
-  external resources have been removed. The later execution/recovery phase handles it.
+- Discovery never lists or stores historical closed/merged PRs. A closed webhook
+  only updates an existing tracked row; an unknown closure creates no row. A
+  targeted mergeability GET may close an already tracked PR without adding history.
 - Pre-migration PR rows with no source timestamp require authoritative discovery
   before a conflicting open observation can replace their known state; closure
   still invalidates work conservatively.
@@ -70,11 +71,13 @@ The browser walkthrough is in [APP_USER_FLOW.md](APP_USER_FLOW.md).
 
 ## Discovery durability and visible status
 
-- First click starts discovery; additional clicks while queued/syncing coalesce.
+- Verified linking/addition atomically queues initial open-only discovery once for
+  accessible owned repositories. Later clicks sync only open PRs; additional
+  clicks while queued/syncing coalesce.
 - Each page's observations, progress and next River job commit together. A crash
   replay cannot double-count an already completed page or lose continuation.
 - The GitHub client resolves repository metadata by numeric ID before using its
-  current owner/name for the PR API. Pages use `state=all`, `sort=created`, ascending,
+  current owner/name for the PR API. Pages use `state=open`, `sort=created`, ascending,
   with 100 records maximum. Browser pages remain ten records each.
 - `pr_syncs` stores run revision, next page, fetched count, queued/syncing/complete/
   failed status and last successful refresh. Failed refreshes preserve existing data
@@ -142,3 +145,33 @@ go test -count=1 -race ./internal/pullrequests ./internal/webhooks
  Tests create/drop isolated schemas and include real River
 continuation, concurrent deduplication, transaction rollback/retry, stale/ambiguous
 PR ordering, revocation, ownership, CSRF and observational sync without builds.
+
+## Phase 3 mergeability
+
+Migration 10 stores nullable `mergeable`, the raw `mergeable_state`, and derived
+`build_status`. Lifecycle remains open/closed/merged; open PRs display Checking,
+Conflicts or Open in the dashboard. Dirty/false takes precedence over clean/true;
+null without clean remains Checking. Every opened/reopened/synchronize observation
+replaces the saved signal, including resetting to Checking on a new push.
+
+Unresolved observations enqueue `pr_mergeability` jobs on the existing discovery
+queue. After two seconds the worker GETs only the tracked PR by number. Ordinary
+unresolved checks retry after two seconds, at most eight attempts; rate limits
+respect GitHub's retry-after/reset. Exhaustion leaves Checking visible and builds
+blocked; another event or open-only sync can retry. No API IO runs inside a DB
+transaction. Installation/repository revision and PR generation/SHA fences reject
+stale checks. Resolving an event-driven check resumes policy coordination; checks
+originating from initial discovery do not authorize automatic builds. An existing
+event-authorized Automatic request is preserved if an overlapping sync check
+resolves first. Open/all lists and active PR details poll saved dashboard data
+every three seconds, pausing for focused filters/open confirmation modals;
+polling never queries GitHub.
+
+Manual intent requests, scheduled dispatch and runtime admission all gate on the
+saved status, with runtime admission under the same locks as generation checking.
+Conflict feedback says “Build refused: resolve merge conflicts and push a new
+commit first.” Checking requests ask contributors to wait or sync again. The
+existing dashboard carries these reasons and direct Build POSTs return 409.
+Production runtime and GitHub publication remain unbuilt; no live comments or
+Docker builds are claimed. See [PHASE3_REPORT.md](PHASE3_REPORT.md) for test evidence
+and the remaining live GitHub verification.

@@ -49,12 +49,15 @@ func (s *GitHubSource) Page(ctx context.Context, installationID, repoID int64, p
 	if repo.GetID() != repoID {
 		return nil, 0, errors.New("GitHub repository identity changed")
 	}
-	prs, response, err := client.PullRequests.List(ctx, repo.GetOwner().GetLogin(), repo.GetName(), &github.PullRequestListOptions{State: "all", Sort: "created", Direction: "asc", ListOptions: github.ListOptions{Page: int(page), PerPage: 100}})
+	prs, response, err := client.PullRequests.List(ctx, repo.GetOwner().GetLogin(), repo.GetName(), &github.PullRequestListOptions{State: "open", Sort: "created", Direction: "asc", ListOptions: github.ListOptions{Page: int(page), PerPage: 100}})
 	if err != nil {
 		return nil, 0, sourceError(err)
 	}
 	result := make([]Observation, 0, len(prs))
 	for _, pr := range prs {
+		if pr.GetState() != "open" || pr.GetMerged() || pr.MergedAt != nil {
+			continue
+		}
 		o, err := FromGitHub(pr, repoID)
 		if err != nil {
 			return nil, 0, fmt.Errorf("read discovered PR: %w", err)
@@ -65,4 +68,27 @@ func (s *GitHubSource) Page(ctx context.Context, installationID, repoID int64, p
 		return nil, 0, errors.New("GitHub pagination exceeds supported range")
 	}
 	return result, int32(response.NextPage), nil
+}
+
+// Get fetches only a PR already tracked locally, never historical discovery.
+func (s *GitHubSource) Get(ctx context.Context, installationID, repoID int64, number int32) (Observation, error) {
+	client, err := s.app.InstallationClient(installationID)
+	if err != nil {
+		return Observation{}, sourceError(err)
+	}
+	repo, _, err := client.Repositories.GetByID(ctx, repoID)
+	if err != nil {
+		return Observation{}, sourceError(err)
+	}
+	if repo.GetID() != repoID {
+		return Observation{}, errors.New("GitHub repository identity changed")
+	}
+	pr, _, err := client.PullRequests.Get(ctx, repo.GetOwner().GetLogin(), repo.GetName(), int(number))
+	if err != nil {
+		return Observation{}, sourceError(err)
+	}
+	if pr.GetNumber() != int(number) {
+		return Observation{}, errors.New("GitHub PR identity changed")
+	}
+	return FromGitHub(pr, repoID)
 }

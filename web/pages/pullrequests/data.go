@@ -65,6 +65,10 @@ func (p Page) Query() string {
 
 func Label(value string) string {
 	switch value {
+	case "conflicts":
+		return "Conflicts"
+	case "checking":
+		return "Checking"
 	case "open":
 		return "Open"
 	case "closed":
@@ -187,4 +191,15 @@ func (p Page) PolicyAction(modal bool) string {
 		return "Turn off automatic"
 	}
 	return "Enable automatic"
+}
+
+// LiveStatus keeps event-driven mergeability transitions visible without a click.
+func (p Page) LiveStatus() bool {
+	if !p.Available || !p.DiscoveryEnabled {
+		return false
+	}
+	if p.SelectedPR != nil {
+		return p.SelectedPR.State == "open" || p.SelectedPR.State == "checking" || p.SelectedPR.State == "conflicts"
+	}
+	return p.State == "open" || p.State == "all"
 }

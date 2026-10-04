@@ -130,6 +130,9 @@ type PullRequest struct {
 	IsFork                      bool
 	SourceUpdatedAt             pgtype.Timestamptz
 	NeedsRefresh                bool
+	Mergeable                   pgtype.Bool
+	MergeableState              string
+	BuildStatus                 string
 }
 
 type Repo struct {

@@ -125,7 +125,7 @@ func (q *Queries) LockIntentInstallation(ctx context.Context, arg LockIntentInst
 }
 
 const lockIntentPR = `-- name: LockIntentPR :one
-SELECT id, repo_id, generation, head_sha, state FROM pull_requests
+SELECT id, repo_id, generation, head_sha, state,build_status,needs_refresh FROM pull_requests
 WHERE id = $1 AND repo_id = $2 FOR UPDATE
 `
 
@@ -135,11 +135,13 @@ type LockIntentPRParams struct {
 }
 
 type LockIntentPRRow struct {
-	ID         int64
-	RepoID     int64
-	Generation int64
-	HeadSha    string
-	State      string
+	ID           int64
+	RepoID       int64
+	Generation   int64
+	HeadSha      string
+	State        string
+	BuildStatus  string
+	NeedsRefresh bool
 }
 
 func (q *Queries) LockIntentPR(ctx context.Context, arg LockIntentPRParams) (LockIntentPRRow, error) {
@@ -151,6 +153,8 @@ func (q *Queries) LockIntentPR(ctx context.Context, arg LockIntentPRParams) (Loc
 		&i.Generation,
 		&i.HeadSha,
 		&i.State,
+		&i.BuildStatus,
+		&i.NeedsRefresh,
 	)
 	return i, err
 }

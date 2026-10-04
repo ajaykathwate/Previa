@@ -54,7 +54,12 @@ Medium. The tables are simple, but correctness under duplicate and out-of-order 
 3. Enforce uniqueness at the database level: one pull request row per (repo, PR number), one lifetime environment row per pull request (reused after teardown/reopen), and globally unique subdomains. Migration 9 enforces lifetime identity rather than only uniqueness among active environments.
 4. Store timestamps for creation, last activity and expiry so the housekeeping job can work purely from the database.
 5. Store external identifiers: Docker container ID and image tag, GitHub comment ID, head commit SHA, so any later job can locate and act on the right resources.
-6. All multi-step state changes (for example "mark building and enqueue job") happen inside a single transaction.
+6. PR discovery is open-only at connection and every later sync; closing/merging
+   only updates records observed while open. Store nullable GitHub mergeability
+   plus derived `open`/`checking`/`conflicts` build status separately from lifecycle.
+   Unresolved events poll briefly outside locks; all builds fail closed under the
+   generation/admission lock. See README Section 4.5 for the Phase 3 scope.
+7. All multi-step state changes (for example "mark building and enqueue job") happen inside a single transaction.
 
 ### Design decisions and edge cases
 - **Postgres for everything in the MVP** reduces moving parts; the queue, sessions and logs can move out later.

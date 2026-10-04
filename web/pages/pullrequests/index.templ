@@ -54,7 +54,12 @@ templ Panel(p Page, csrf string) {
 					}
 					if p.SyncState=="queued" || p.SyncState=="syncing" {
 						<span class="sync-state" hx-get={ p.CurrentURL() } hx-trigger="every 3s" hx-target="#repository-detail" hx-sync="#repository-detail:drop">Syncing</span>
-					} else if p.SyncState=="failed" {
+					} else if p.LiveStatus() {
+                        <span class="sr-only" hx-get={ p.CurrentURL() } hx-trigger="every 3s" hx-target="#repository-detail" hx-sync="#repository-detail:drop">Refresh PR status</span>
+                        if p.SyncState=="failed" {
+                          <span class="sync-state sync-failed" title={ p.SyncMessage }>Sync failed</span>
+                        }
+                    } else if p.SyncState=="failed" {
 						<span class="sync-state sync-failed" title={ p.SyncMessage }>Sync failed</span>
 					}
 				</p>
@@ -208,7 +213,12 @@ templ PRDetail(p Page, pr PR) {
 				}
 			</p>
 		</header>
-		if pr.NeedsRefresh {
+		if pr.State=="conflicts" {
+ <p class="connection-notice">Build refused: resolve merge conflicts and push a new commit first.</p>
+ } else if pr.State=="checking" {
+ <p class="connection-notice">Build paused: GitHub is checking mergeability. Wait for the check or sync pull requests again.</p>
+ }
+ if pr.NeedsRefresh {
 			<p class="connection-notice">Conflicting upstream observations need a fresh GitHub snapshot. Refresh this repository before requesting work.</p>
 		}
 		<div class="pr-detail-grid">

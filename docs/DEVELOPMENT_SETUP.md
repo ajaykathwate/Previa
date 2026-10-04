@@ -218,9 +218,14 @@ The table list shows application tables (including `environment_operations` afte
 Goose migration 4), `installations`/`repos` extended by migration 5,
 `build_intents` and repository build mode from migration 6, `goose_db_version`,
 scheduling/publication revision fields from migration 7, PR workspace/receipt/sync
-state from migration 8, lifetime environment uniqueness from migration 9 and River's
-`river_*` tables. Current versions are Goose 9 and River 007.
+state from migration 8, lifetime environment uniqueness from migration 9, nullable
+PR mergeability and build status from migration 10, and River's `river_*` tables.
+Current versions are Goose 10 and River 007.
 Re-running `make migrate-up` is safe; it applies only pending migrations.
+Migration 10 gives existing PR rows `build_status=checking` until a fresh GitHub
+observation resolves their status. Use Sync Pull Requests with a configured worker
+to refresh active PRs; historical closed/merged records are retained. Restart the
+server and worker after updating code and applying migrations.
 
 The migration Make targets load `.env` automatically, falling back to `.env.example`
 if it is absent. An already exported `DATABASE_URL` takes precedence over either file.
@@ -321,7 +326,8 @@ workspace sidebar. Each navigation item opens its own page:
   Breadcrumbs and Back to pull requests preserve PR filters; Repositories returns
   to the directory with its previous search/access/page. Breadcrumb labels and slashes
   share the same compact size. Sync and policy controls do not appear on PR details.
-- **Sync and policy**: Sync Pull Requests queues discovery; a configured worker
+- **Sync and policy**: Verified connection/repository addition automatically queues
+  initial open-only discovery. Sync Pull Requests queues another open-only sync; a configured worker
   updates its compact progress every three seconds. Enable Automatic Builds is off
   for Manual and has a background with clear on/off states.
   Enabling requires an accessible confirmation modal; Cancel/Escape leaves it off.
@@ -353,7 +359,8 @@ make run-worker
 The server inserts jobs; the separate worker processes them. Keep both running
 against the same database. `MAX_CONCURRENT_BUILDS` sets concurrency per worker
 process for ping; App-configured discovery has a separate queue with two workers
-and a 45-second per-page timeout. Stop the worker with `Ctrl+C`; it drains active work before exiting.
+and a 45-second per-page/check timeout. The same queue runs bounded delayed
+mergeability checks for tracked PRs with unresolved GitHub status. Stop the worker with `Ctrl+C`; it drains active work before exiting.
 
 For live reload, stop the server and run:
 
@@ -501,7 +508,10 @@ Builds appear only on the PR list page, not on individual PR details. Enable
 Automatic only after its confirmation; Cancel/Escape must leave it off. Sync Pull
 Requests updates Last synced and compact progress in place. Run `make run-worker`
 separately to process sync requests. `make run-server` and `make run-worker` load
-`.env` automatically; this UI change requires no new configuration or migrations.
+`.env` automatically. Phase 3 requires `make migrate-up` (Goose 10); no new
+configuration is required. Restart both processes after applying it. Open/all PR
+lists and active PR details poll saved status every three seconds, so a resolving
+push updates the dashboard without manual sync; this polling does not call GitHub.
 
 Run `make build`, `make test`, `make lint`, then `make test-browser` after
 `make browser-install`. Database integration checks require explicitly exported
@@ -513,3 +523,32 @@ breadcrumbs, PR-list-only controls, filter preservation, history, failed
 searches, Automatic confirmation/retry, polling, responsive layout, accessibility
 and no-JavaScript navigation/forms. Set `UI_BROWSER_SCREENSHOTS=1` for screenshots
 in `web/tests/browser/artifacts/` (ignored by Git).
+
+## Verify Phase 3 PR tracking and mergeability
+
+Run `make migrate-up`, `make build`, `make lint`, and `make test`. Make run targets
+load `.env` automatically; tests require explicit exports. After exporting a
+migrated disposable test database as `TEST_DATABASE_URL`, run:
+
+```sh
+go test -count=1 -v -run 'TestConnectionStoresOnlyTwoOpenPRs|TestNullMergeability|TestRealGitConflict|TestMergeabilityMapping|TestWorkspaceHTTP' ./internal/pullrequests ./internal/environments
+go test -count=1 -race ./internal/pullrequests ./internal/environments ./internal/webhooks
+```
+
+Expected: mixed provider fixture with two open, one closed and one merged PR
+stores exactly two rows; later sync and unknown close/merge deliveries add no
+history; tracked merge retains its row ID. Null status remains Checking and polls;
+a stale poll cannot overwrite a newer commit. A real local Git merge conflict
+blocks manual requests, scheduled dispatch and runtime admission with a clear
+reason; pushing the resolving merge commit to a local remote and simulating its
+GitHub synchronize payload restores Open and admits the test runtime. HTTP checks
+verify the dashboard and CSRF-protected refusal. GitHub API payloads and runtime
+are test adapters, so this is not live GitHub PR or Docker verification.
+
+For the requested live GitHub proof, use a disposable accessible repository with
+two open PRs and historical closed/merged PRs. Connect it with server/worker running
+and confirm only the two open rows. Create conflicting base/head changes, wait for
+GitHub to resolve mergeability, check Conflicts and the build-refusal reason, then
+push a resolution and verify Checking transitions to Open. This requires a chosen
+repository and authenticated write access. Build execution remains disabled in
+production pending the separately scoped runtime/publication integration.

@@ -83,6 +83,11 @@ func newIntentFixture(t *testing.T) *intentFixture {
 	// Existing repositories must acquire the Manual default, without data loss.
 	applyIntentMigration(t, pool, "0006_build_intents.sql")
 	applyIntentMigration(t, pool, "0007_intent_dispatch.sql")
+	applyIntentMigration(t, pool, "0008_pr_workspace.sql")
+	applyIntentMigration(t, pool, "0010_pr_mergeability.sql")
+	if _, err := pool.Exec(ctx, "UPDATE pull_requests SET mergeable=true, mergeable_state='clean', build_status='open'"); err != nil {
+		t.Fatal(err)
+	}
 	f.repo = env.NewIntentRepository(pool)
 	f.service, err = env.NewIntentService(f.repo)
 	if err != nil {

@@ -32,6 +32,11 @@ func (r *IntentRepository) AdvanceIntent(ctx context.Context, command IntentTran
 			current.Generation != scope.pr.Generation || current.HeadSHA != scope.pr.HeadSha || scope.pr.State != "open" {
 			return ErrIntentConflict
 		}
+		if command.Next == IntentRunning {
+			if err := BuildBlockReason(scope.pr.BuildStatus, scope.pr.NeedsRefresh); err != nil {
+				return err
+			}
+		}
 		if current.State == command.Next {
 			result = *current
 			return nil // Same fenced transition is idempotent; it does not repeat effects.

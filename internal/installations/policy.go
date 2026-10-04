@@ -79,7 +79,7 @@ func (r *Repository) SetBuildMode(ctx context.Context, userID, repoID int64, mod
 	if mode != ManualBuilds && mode != AutomaticBuilds {
 		return result, ErrInvalidBuildMode
 	}
-	err = r.transaction(ctx, func(q *dbgen.Queries) error {
+	err = r.transaction(ctx, func(_ pgx.Tx, q *dbgen.Queries) error {
 		installationID, err := q.FindPolicyInstallation(ctx, repoID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrPolicyUnavailable

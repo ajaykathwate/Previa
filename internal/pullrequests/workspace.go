@@ -55,7 +55,7 @@ func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Val
 		Search: f.Search, State: f.State, WorkspaceQuery: params.Encode()}
 	for _, row := range data.Rows {
 		page.Rows = append(page.Rows, pages.PR{Number: row.Number, Title: row.Title, Author: row.Author,
-			Branch: row.HeadBranch, SHA: row.HeadSha, State: row.State, Build: row.BuildState,
+			Branch: row.HeadBranch, SHA: row.HeadSha, State: DisplayStatus(row.State, row.BuildStatus), Build: row.BuildState,
 			Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh})
 	}
 	if number > 0 {
@@ -64,7 +64,7 @@ func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Val
 			return pages.Page{}, panelError(err)
 		}
 		page.SelectedPR = &pages.PR{Number: row.Number, Title: row.Title, Author: row.Author,
-			Branch: row.HeadBranch, SHA: row.HeadSha, State: row.State, Build: row.BuildState,
+			Branch: row.HeadBranch, SHA: row.HeadSha, State: DisplayStatus(row.State, row.BuildStatus), Build: row.BuildState,
 			URL: row.HtmlUrl, RequestedSHA: row.RequestedSha, DeployedSHA: row.DeployedSha,
 			Environment: row.EnvironmentStatus, Available: row.Available.Bool,
 			Deadline: timestamp(row.AvailableAt), Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh}
