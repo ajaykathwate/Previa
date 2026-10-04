@@ -40,6 +40,8 @@ type EnvSecret struct {
 	Key            string
 	EncryptedValue []byte
 	CreatedAt      pgtype.Timestamptz
+	KeyVersion     int32
+	UpdatedAt      pgtype.Timestamptz
 }
 
 type Environment struct {

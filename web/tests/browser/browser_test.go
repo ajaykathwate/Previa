@@ -2,6 +2,7 @@ package browser_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +23,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	pr "github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/web"
 	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
@@ -75,6 +78,16 @@ func TestBrowserRegression(t *testing.T) {
 			})
 		}
 		dashboard.MountPing(r, fixturePings{}, auth.RequireUser, logger)
+		// Real secrets handler, keyring and CSRF over an in-memory store.
+		fixtureKeys, err := secrets.ParseKeyring("1:"+base64.StdEncoding.EncodeToString(make([]byte, 32)), "1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		secretService, err := secrets.NewService(&fixtureSecrets{names: map[int64]map[string]time.Time{}}, fixtureKeys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		secrets.NewHandler(secretService, handler, logger).Mount(r, auth.RequireUser)
 		// Real workspace templates; database ownership is verified in pullrequests.
 		panel := func(r *http.Request, repoID int64) prpages.Page {
 			p := prpages.Page{RepoID: repoID, Name: "fixture-owner/repository-" + strconv.FormatInt(repoID, 10), Mode: sessions.GetString(r.Context(), "fixture-mode"), Available: repoID%2 == 1, DiscoveryEnabled: true, SyncState: "complete", Fetched: 25, LastRefresh: "2026-10-04T10:00:00Z", Number: 1, Pages: 3, Total: 25, State: r.URL.Query().Get("pr_state"), Search: r.URL.Query().Get("pr_q"), WorkspaceQuery: r.URL.RawQuery}
@@ -247,6 +260,62 @@ func (fixtureProvider) Authenticate(_ context.Context, code string) (auth.Identi
 		return auth.Identity{}, errors.New("unexpected fixture authorization code")
 	}
 	return auth.Identity{ID: 42, Username: "design-review"}, nil
+}
+
+// fixtureSecrets keeps names only; sealed values are discarded after encryption.
+type fixtureSecrets struct {
+	mu    sync.Mutex
+	names map[int64]map[string]time.Time
+}
+
+func (f *fixtureSecrets) Repository(_ context.Context, _ int64, repoID int64) (secrets.RepositoryView, error) {
+	if repoID <= 0 || repoID > 150 {
+		return secrets.RepositoryView{}, secrets.ErrUnavailable
+	}
+	return secrets.RepositoryView{ID: repoID, FullName: "fixture-owner/repository-" + strconv.FormatInt(repoID, 10), Available: repoID%2 == 1}, nil
+}
+
+func (f *fixtureSecrets) List(ctx context.Context, user, repoID int64) ([]secrets.Summary, error) {
+	if _, err := f.Repository(ctx, user, repoID); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []secrets.Summary
+	for name, at := range f.names[repoID] {
+		out = append(out, secrets.Summary{Name: name, UpdatedAt: at})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *fixtureSecrets) Put(ctx context.Context, user, repoID int64, name string, sealed []byte, _ int32) (bool, error) {
+	repo, err := f.Repository(ctx, user, repoID)
+	if err != nil || !repo.Available {
+		return false, secrets.ErrUnavailable
+	}
+	if len(sealed) == 0 {
+		return false, errors.New("fixture expected ciphertext")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.names[repoID] == nil {
+		f.names[repoID] = map[string]time.Time{}
+	}
+	_, exists := f.names[repoID][name]
+	f.names[repoID][name] = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	return !exists, nil
+}
+
+func (f *fixtureSecrets) Delete(ctx context.Context, user, repoID int64, name string) (bool, error) {
+	if _, err := f.Repository(ctx, user, repoID); err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, exists := f.names[repoID][name]
+	delete(f.names[repoID], name)
+	return exists, nil
 }
 
 type fixturePings struct{}

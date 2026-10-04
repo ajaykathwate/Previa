@@ -17,9 +17,54 @@ type SharedConfig struct {
 	DatabaseURL string `envconfig:"DATABASE_URL" required:"true"`
 }
 
+// SecretsConfig is the repository-secret keyring: versioned AES-256 keys and the
+// version used for new values. Key material is a secret; never log it. The
+// secrets feature parses and validates the keys themselves.
+type SecretsConfig struct {
+	SecretsEncryptionKeys   string `envconfig:"SECRETS_ENCRYPTION_KEYS"`
+	SecretsActiveKeyVersion string `envconfig:"SECRETS_ACTIVE_KEY_VERSION"`
+}
+
+// SecretsConfigured reports whether a keyring was provided.
+func (c SecretsConfig) SecretsConfigured() bool {
+	return strings.TrimSpace(c.SecretsEncryptionKeys) != "" || strings.TrimSpace(c.SecretsActiveKeyVersion) != ""
+}
+
+func (c SecretsConfig) validate() error {
+	if (strings.TrimSpace(c.SecretsEncryptionKeys) == "") != (strings.TrimSpace(c.SecretsActiveKeyVersion) == "") {
+		return errors.New("SECRETS_ENCRYPTION_KEYS and SECRETS_ACTIVE_KEY_VERSION must be configured together")
+	}
+	return nil
+}
+
+// SecretsMaintenanceConfig is used by the re-encryption command.
+type SecretsMaintenanceConfig struct {
+	SharedConfig
+	SecretsConfig
+}
+
+// LoadSecretsMaintenance requires the database and a complete keyring.
+func LoadSecretsMaintenance() (SecretsMaintenanceConfig, error) {
+	var cfg SecretsMaintenanceConfig
+	if err := envconfig.Process("", &cfg); err != nil {
+		return SecretsMaintenanceConfig{}, fmt.Errorf("load secrets maintenance configuration: %w", err)
+	}
+	if err := cfg.SharedConfig.validate(); err != nil {
+		return SecretsMaintenanceConfig{}, fmt.Errorf("validate secrets maintenance configuration: %w", err)
+	}
+	if !cfg.SecretsConfigured() {
+		return SecretsMaintenanceConfig{}, errors.New("SECRETS_ENCRYPTION_KEYS and SECRETS_ACTIVE_KEY_VERSION are required for re-encryption")
+	}
+	if err := cfg.SecretsConfig.validate(); err != nil {
+		return SecretsMaintenanceConfig{}, err
+	}
+	return cfg, nil
+}
+
 // ServerConfig contains only settings used by the HTTP server.
 type ServerConfig struct {
 	SharedConfig
+	SecretsConfig
 	AppBaseURL              string `envconfig:"APP_BASE_URL" default:"http://localhost:8080"`
 	HTTPAddr                string `envconfig:"HTTP_ADDR" default:"127.0.0.1:8080"`
 	GitHubOAuthClientID     string `envconfig:"GITHUB_OAUTH_CLIENT_ID" required:"true"`
@@ -131,6 +176,9 @@ func (c ServerConfig) validate() error {
 	}
 	if len(strings.TrimSpace(c.SessionSecret)) < 32 {
 		return errors.New("SESSION_SECRET must contain at least 32 characters")
+	}
+	if err := c.SecretsConfig.validate(); err != nil {
+		return err
 	}
 	if c.GitHubAppID != 0 || c.GitHubAppSlug != "" || c.GitHubAppPrivateKeyPath != "" || c.GitHubAppClientID != "" || c.GitHubAppClientSecret != "" {
 		if c.GitHubAppID <= 0 {

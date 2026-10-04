@@ -68,7 +68,11 @@ func TestMigrationConstraintsIntegration(t *testing.T) {
 		{"invalid expiry", "UPDATE environments SET expires_at = created_at WHERE id = $1", "23514", []any{envID}},
 		{"missing parent", "INSERT INTO build_logs (environment_id, sequence, line) VALUES (-1, 0, 'test')", "23503", nil},
 		{"duplicate log sequence", "INSERT INTO build_logs (environment_id, sequence, line) VALUES ($1, 0, 'first'), ($1, 0, 'duplicate')", "23505", []any{envID}},
-		{"duplicate secret", "INSERT INTO env_secrets (repo_id, key, encrypted_value) VALUES ($1, 'TOKEN', decode('0102', 'hex')), ($1, 'TOKEN', decode('0304', 'hex'))", "23505", []any{repoID}},
+		{"duplicate secret", "INSERT INTO env_secrets (repo_id, key, encrypted_value, key_version) VALUES ($1, 'TOKEN', decode(repeat('01', 29), 'hex'), 1), ($1, 'TOKEN', decode(repeat('02', 29), 'hex'), 1)", "23505", []any{repoID}},
+		{"secret name", "INSERT INTO env_secrets (repo_id, key, encrypted_value, key_version) VALUES ($1, 'bad-name', decode(repeat('01', 29), 'hex'), 1)", "23514", []any{repoID}},
+		{"secret too small", "INSERT INTO env_secrets (repo_id, key, encrypted_value, key_version) VALUES ($1, 'TOKEN', decode(repeat('01', 28), 'hex'), 1)", "23514", []any{repoID}},
+		{"secret key version", "INSERT INTO env_secrets (repo_id, key, encrypted_value, key_version) VALUES ($1, 'TOKEN', decode(repeat('01', 29), 'hex'), 0)", "23514", []any{repoID}},
+		{"missing key version", "INSERT INTO env_secrets (repo_id, key, encrypted_value) VALUES ($1, 'TOKEN', decode(repeat('01', 29), 'hex'))", "23502", []any{repoID}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := tx.Exec(ctx, "SAVEPOINT constraint_test"); err != nil {

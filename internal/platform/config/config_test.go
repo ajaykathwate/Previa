@@ -219,3 +219,34 @@ func TestGitHubAppConfigurationByProcess(t *testing.T) {
 		t.Fatal("worker required HTTP App settings")
 	}
 }
+
+func TestSecretsKeyringConfigurationByProcess(t *testing.T) {
+	validEnvironment(t)
+	unsetEnvironment(t, "SECRETS_ENCRYPTION_KEYS", "SECRETS_ACTIVE_KEY_VERSION")
+	cfg, err := LoadServer()
+	if err != nil || cfg.SecretsConfigured() {
+		t.Fatalf("secrets are optional for the server: %v", err)
+	}
+	t.Setenv("SECRETS_ENCRYPTION_KEYS", "1:bm90LWEtcmVhbC1rZXk=")
+	if _, err := LoadServer(); err == nil || strings.Contains(err.Error(), "bm90") {
+		t.Fatalf("a keyring without an active version must fail without echoing keys: %v", err)
+	}
+	t.Setenv("SECRETS_ACTIVE_KEY_VERSION", "1")
+	if cfg, err := LoadServer(); err != nil || !cfg.SecretsConfigured() {
+		t.Fatalf("complete keyring: %v", err)
+	}
+	// The worker does not decrypt until runtime integration; it ignores the keyring.
+	t.Setenv("SECRETS_ACTIVE_KEY_VERSION", "")
+	if _, err := LoadWorker(); err != nil {
+		t.Fatalf("worker must not validate the server keyring yet: %v", err)
+	}
+	unsetEnvironment(t, "SECRETS_ENCRYPTION_KEYS", "SECRETS_ACTIVE_KEY_VERSION")
+	if _, err := LoadSecretsMaintenance(); err == nil {
+		t.Fatal("re-encryption requires a keyring")
+	}
+	t.Setenv("SECRETS_ENCRYPTION_KEYS", "1:bm90LWEtcmVhbC1rZXk=")
+	t.Setenv("SECRETS_ACTIVE_KEY_VERSION", "1")
+	if _, err := LoadSecretsMaintenance(); err != nil {
+		t.Fatal(err)
+	}
+}

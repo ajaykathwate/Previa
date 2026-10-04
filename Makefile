@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source secrets-reencrypt lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -76,6 +76,10 @@ test-source:
 		echo 'Set TEST_GITHUB_INSTALLATION_ID, TEST_GITHUB_REPO_ID and TEST_GITHUB_PR_NUMBER to real numeric GitHub values' >&2; exit 1; \
 	fi; \
 	$(GO) test -count=1 -v -run '^TestRealSourcePrepare$$' ./internal/source
+
+# Moves repository secrets onto SECRETS_ACTIVE_KEY_VERSION; prints counts only.
+secrets-reencrypt:
+	@$(load_run_env) $(GO) run ./cmd/secrets-reencrypt
 
 lint: assets generate
 	$(GO) vet ./...

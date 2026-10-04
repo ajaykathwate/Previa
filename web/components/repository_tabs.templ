@@ -1,0 +1,28 @@
+package components
+
+import "strconv"
+
+// RepositoryTabs switches between a repository's sections. Both are full pages,
+// so the switch works without JavaScript; view transitions keep it smooth.
+templ RepositoryTabs(repoID int64, active string) {
+	<nav class="segmented repo-tabs" aria-label="Repository sections">
+		<a
+			href={ templ.SafeURL("/repositories/" + strconv.FormatInt(repoID, 10)) }
+			if active == "pull-requests" {
+				aria-current="page"
+			}
+		>
+			@PullRequestIcon()
+			<span>Pull requests</span>
+		</a>
+		<a
+			href={ templ.SafeURL("/repositories/" + strconv.FormatInt(repoID, 10) + "/secrets") }
+			if active == "secrets" {
+				aria-current="page"
+			}
+		>
+			@KeyIcon()
+			<span>Secrets</span>
+		</a>
+	</nav>
+}

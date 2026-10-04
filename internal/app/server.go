@@ -21,6 +21,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/webhooks"
 	"github.com/ajaykathwatee/previa/web"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
@@ -85,12 +86,25 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	}, hub, logger)
 	prs := pullrequests.NewHandler(pullrequests.NewRepository(pool), syncService, policy, authHandler, logger, cfg.GitHubAppID > 0).WithLiveUpdates(hub)
 	installationHandler.WithNavigator(prs)
+	var keyring *secrets.Keyring
+	if cfg.SecretsConfigured() {
+		keyring, err = secrets.ParseKeyring(cfg.SecretsEncryptionKeys, cfg.SecretsActiveKeyVersion)
+		if err != nil {
+			return fmt.Errorf("configure repository secrets: %w", err)
+		}
+	}
+	secretService, err := secrets.NewService(secrets.NewRepository(pool), keyring)
+	if err != nil {
+		return err
+	}
+	secretHandler := secrets.NewHandler(secretService, authHandler, logger)
 	router.Group(func(r chi.Router) {
 		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
 		authHandler.Mount(r)
 		dashboard.MountWithSummary(r, authHandler, auth.RequireUser, summaryReader, authHandler.UserIDs)
 		installationHandler.Mount(r, auth.RequireUser)
 		prs.Mount(r, auth.RequireUser)
+		secretHandler.Mount(r, auth.RequireUser)
 		dashboard.MountPing(r, pings, auth.RequireUser, logger)
 	})
 	server := &http.Server{

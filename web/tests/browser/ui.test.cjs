@@ -564,3 +564,37 @@ test('live updates push changes across tabs without polling',async()=>{
   assert(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).isEnabled());
  } finally {await other.close();}
 });
+
+test('repository secrets tab saves names only and confirms deletion in a modal',async()=>{
+ await login();await page.goto(`${origin}/repositories/1`);await readyPanel('1');
+ await page.locator('.repo-tabs').getByRole('link',{name:'Secrets',exact:true}).click();
+ await page.waitForURL(`${origin}/repositories/1/secrets`);
+ assert.match(await page.locator('.pr-breadcrumb').innerText(),/repository-1/);
+ assert.equal(await page.locator('.repo-tabs a[aria-current=page]').innerText(),'Secrets');
+ await page.locator('#secret-name').fill('API_KEY');
+ await page.locator('#secret-value').fill('sk_test_never_shown_123');
+ await page.getByRole('button',{name:'Save secret',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('saved')==='API_KEY');
+ assert.match(await page.locator('.secrets-table').innerText(),/API_KEY/);
+ assert(!(await page.content()).includes('sk_test_never_shown_123'),'the value must never be rendered');
+ await page.getByRole('link',{name:'Replace API_KEY',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('replace')==='API_KEY');
+ assert(await page.locator('#secret-name').evaluate(e=>e.readOnly));
+ assert.equal(await page.locator('#secret-value').inputValue(),'');
+ await page.locator('#secret-value').fill('replacement-value-456');
+ await page.getByRole('button',{name:'Replace secret',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('saved')==='API_KEY');
+ const remove=page.getByRole('button',{name:'Delete API_KEY',exact:true});
+ await remove.click();await page.waitForFunction(()=>document.querySelector('#delete-secret-0').matches(':modal'));
+ assert.equal(await page.evaluate(()=>document.activeElement.textContent.trim()),'Cancel');
+ await page.keyboard.press('Escape');
+ assert.equal(await page.locator('#delete-secret-0').evaluate(e=>e.open),false);
+ assert.equal(await page.locator('.secrets-table tbody tr').count(),1);
+ await remove.click();await page.waitForFunction(()=>document.querySelector('#delete-secret-0').matches(':modal'));
+ await page.locator('#delete-secret-0').getByRole('button',{name:'Delete secret',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('deleted')==='API_KEY');
+ await page.getByText('No secrets yet').waitFor();
+ for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
+ await page.locator('.repo-tabs').getByRole('link',{name:'Pull requests',exact:true}).click();
+ await page.waitForURL(`${origin}/repositories/1`);
+});

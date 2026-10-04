@@ -572,3 +572,58 @@
   .repository-pagination { justify-content: center; text-align: center; }
   .pr-detail-heading .back-link { order: 0; width: 100%; }
 }
+
+/* Repository sections and secrets */
+.repo-tabs { align-self: flex-start; margin: 0 0 16px; }
+.secrets-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.secrets-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+.secrets-panel-header h2, .secrets-form h2 { margin: 0; font-size: 16px; font-weight: 640; letter-spacing: -.01em; }
+.secrets-list { overflow: clip; }
+.secrets-list .repository-empty { border: 0; border-radius: 0; background: transparent; }
+.secrets-table td { vertical-align: middle; }
+.secret-name code { color: var(--ink); font-family: var(--font-code); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.secret-updated { color: var(--text-muted); font-size: 12.5px; white-space: nowrap; }
+.secret-actions { text-align: right; white-space: nowrap; }
+.secret-actions .text-link + .text-link { margin-left: 14px; }
+.secrets-table .text-link { font-size: 13px; }
+.danger-link { padding: 0; border: 0; background: none; color: var(--danger-ink); cursor: pointer; }
+.danger-link:hover { color: var(--danger-ink); text-decoration: underline; }
+.secrets-form { display: grid; gap: 14px; padding: 18px; }
+.secrets-form-help { margin: -6px 0 0; color: var(--text-muted); font-size: 13px; line-height: 1.55; }
+.secret-form { display: grid; gap: 14px; }
+.secret-input {
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 13px;
+  transition: border-color .15s;
+}
+.secret-input[readonly] { background: var(--surface-muted); color: var(--text-muted); }
+.secret-input:disabled { opacity: .55; cursor: not-allowed; }
+.secret-value { min-height: 96px; resize: vertical; line-height: 1.5; }
+.secret-input[aria-invalid="true"] { border-color: var(--danger-ink); }
+.field-error { margin: 0; color: var(--danger-ink); font-size: 12.5px; }
+.secret-form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; }
+.secret-form-actions button svg { width: 16px; height: 16px; }
+.secrets-guidance { margin-top: 18px; }
+.secrets-guidance ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.secrets-guidance code { font-size: 12px; }
+
+@media (max-width: 960px) {
+  .secrets-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .repo-tabs { width: 100%; }
+  .repo-tabs a { flex: 1; }
+  .secrets-table td.secret-actions { grid-column: 1 / -1; text-align: left; }
+}
