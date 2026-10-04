@@ -97,7 +97,7 @@ repository's PR list, never on PR details.
   in either mode.
 
 **Build latest commit is disabled.** It needs exact-SHA source fetching, image
-builds, isolated containers, routing and cleanup first ([16-roadmap.md](16-roadmap.md)).
+builds, isolated containers, routing and cleanup first ([17-roadmap.md](17-roadmap.md)).
 Direct POSTs are refused too: HTTP 409 with the reason for Checking, Conflicts or
 Refresh required PRs, otherwise HTTP 503 "not available yet". No intent is created.
 

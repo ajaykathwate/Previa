@@ -61,7 +61,11 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | `SECRETS_ACTIVE_KEY_VERSION` | server (worker from Prompt 5) | The version new values use, e.g. `1`. | Selects the key for new values. |
 | `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS` | worker | Optional; defaults `2`, `4GiB`, `2048`. | Per-build limits for the isolated builder ([09](09-image-builds.md)). |
 | `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK` | worker | Optional; defaults `20GiB`, `4GiB`, `15GiB`. | Disk and image bounds; sizes take `KiB`, `MiB`, `GiB` or `TiB`. |
-| `BUILDKIT_IMAGE`, `BUILD_EGRESS_IMAGE` | worker | Optional; defaults to the pinned rootless BuildKit image and `previa-build-egress:dev`. | Builder and egress proxy images. |
+| `BUILDKIT_IMAGE`, `EGRESS_IMAGE` | worker | Optional; defaults to the pinned rootless BuildKit image and `previa-egress:dev`. | Builder image; egress proxy and prober image for builds and previews. |
+| `PREVIEW_ALLOW_ROOT`, `PREVIEW_WRITABLE_ROOTFS` | worker | Optional; default `false`. | Server-wide opt-outs from running previews as UID 65532 with a read-only root ([10](10-preview-runtime.md)). |
+| `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT` | worker | Optional; defaults `256MiB`, `512`, `120s`. | Preview `/tmp` size, process limit and readiness deadline. |
+| `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY` | worker | Optional; empty budgets use 60% of Docker memory and 75% of its CPUs; `10`. | What all previews may use together, and per repository. |
+| `PREVIEW_OCI_RUNTIME` | worker | Optional, e.g. `runsc` where gVisor is installed. | Docker runtime for previews. |
 
 - Sign-in needs real OAuth values; placeholders start the server but cannot log in.
 - The five server App settings are all-or-nothing. Omit them all to run with
@@ -80,7 +84,7 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | Command | Loads `.env`? |
 | --- | --- |
 | `make run-server`, `make run-worker`, `make dev` | Yes; already-exported variables take precedence. Restart Air after editing `.env`. |
-| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `secrets-reencrypt`, `build-egress-image`, `test-builder` | Yes; falls back to `.env.example` for migrations if `.env` is absent. |
+| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime` | Yes; falls back to `.env.example` for migrations if `.env` is absent. |
 | Direct `go run`, manual Goose commands | No; run `set -a; . ./.env; set +a` once per terminal. |
 | `make build`, `make lint`, `make generate` | No configuration needed. |
 | `make test` | Database tests need an explicitly exported `TEST_DATABASE_URL`. |
@@ -186,20 +190,38 @@ Needs Docker and internet access (Docker pulls the pinned BuildKit image; builds
 pull `alpine` through the egress proxy). No database or GitHub access is used.
 
 ```sh
-make build-egress-image   # expect an image ID; creates previa-build-egress:dev
+make egress-image         # expect an image ID; creates previa-egress:dev
 make test-builder         # about 4 minutes
 ```
 
 **Expected:** every `TestRealBuilder…` test passes: real and cached builds,
 isolation probes (logged as `probe: … blocked`, with only `proxied-public REACHED`),
 memory, disk, image-size, timeout and cancellation limits, fork cache separation and
-cleanup. Afterwards only the long-lived `previa-build-egress` container and network
+cleanup. Afterwards only the long-lived `previa-egress` container and network
 remain. To remove them and any build caches:
 
 ```sh
-docker rm -f previa-build-egress && docker network rm previa-build-egress
+docker rm -f previa-egress && docker network rm previa-egress
 docker volume ls -q --filter label=io.previa.kind=build-cache | xargs -r docker volume rm
 ```
+
+### Real preview runtime check (optional)
+
+Same prerequisites as the builder check (it builds tiny `alpine` apps first). No
+database or GitHub access is used; secrets come from an in-memory store sealed with a
+throwaway key.
+
+```sh
+make test-runtime         # about 3 minutes
+```
+
+**Expected:** every `TestRealRuntime…` test passes: a hardened healthy candidate
+(UID 65532, read-only root, no capabilities, no IPv6, redacted secret), fork secret
+withholding, network probes logged as `probe: … blocked` except
+`proxied-public REACHED`, unhealthy/crashing/cancelled starts cleaned up, operator
+opt-outs, capacity refusals and refusal to remove objects Previa did not create.
+Preview networks (`previa-pr-<id>`) and images are removed by the tests; only
+`previa-egress` stays running.
 
 ### Browser regression checks (optional)
 
@@ -320,9 +342,9 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
 - **Stylesheet missing after a manual build:** run `make assets` before compiling;
   the server embeds assets at build time.
 - **Live indicator never turns green:** apply migrations 0011 and 0013, and make sure
-  any proxy in front of the server does not buffer `text/event-stream` ([14](14-realtime-updates.md)).
+  any proxy in front of the server does not buffer `text/event-stream` ([15](15-realtime-updates.md)).
 - **Builder errors:** `egress proxy image … is not available` means run
-  `make build-egress-image`. `builder did not become ready` usually means user
+  `make egress-image`. `builder did not become ready` usually means user
   namespaces are disabled or Docker is too old for rootless BuildKit. `disk_low`
   means less than `BUILD_MIN_FREE_DISK` is free on Docker's storage. Repeated pull
   failures for public images can be Docker Hub's anonymous rate limit ([09](09-image-builds.md)).

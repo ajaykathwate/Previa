@@ -21,11 +21,12 @@ per-feature design lives in [DESIGN.md](../DESIGN.md).
 | Exact-commit source fetch, safe extraction, `.previewrc.yaml` from the same tree | Implemented and tested, including a real GitHub check; not yet called by a build |
 | Repository secrets: encrypted storage, Secrets tab, key rotation, fork withholding, redaction | Working for owners; containers receive them once the runtime exists (Prompt 5) |
 | Current-build logs: bounded, redacted storage, live log page with resume/reset, retention | Working page and store; empty until builds execute |
-| Isolated image builds: rootless BuildKit per build, egress proxy, per-source caches, limits | Implemented and verified on real Docker (`make test-builder`); not yet called by the worker |
-| Container runtime, routing/TLS, PR comments, expiry | **Not built** (placeholder packages only) |
+| Isolated image builds: rootless BuildKit per build, egress proxy, per-source caches, limits | Implemented and verified on real Docker (`make test-builder`) |
+| Preview runtime: hardened unrouted candidates, secrets after recheck, readiness, capacity, cleanup | Implemented and verified on real Docker (`make test-runtime`); not yet called by the worker |
+| Routing/TLS, PR comments, expiry | **Not built** (placeholder packages only) |
 
 The **Build latest commit** action is deliberately disabled and its endpoint refuses
-work. Nothing deploys a preview yet. [16-roadmap.md](16-roadmap.md) lists the
+work. Nothing deploys a preview yet. [17-roadmap.md](17-roadmap.md) lists the
 remaining work in order.
 
 ## Architecture
@@ -50,9 +51,11 @@ flowchart LR
   mergeability checks. Each process loads only its own configuration.
 - **Server-rendered UI.** Go `templ` pages enhanced with local HTMX and one plain
   JavaScript file. No SPA, frontend build service or Node.js runtime.
-- **Docker for builds.** The image builder ([09](09-image-builds.md)) drives a Docker
-  Engine: one rootless BuildKit container per build on a private network whose only
-  exit is the `previa-build-egress` proxy container. The worker does not call it yet.
+- **Docker for builds and previews.** The image builder ([09](09-image-builds.md))
+  runs one rootless BuildKit container per build on a private network; the preview
+  runtime ([10](10-preview-runtime.md)) runs each PR's hardened preview on its own
+  internal network. The only exit from either is the shared `previa-egress` proxy
+  container. The worker does not call them yet.
 
 ## Code layout
 
@@ -61,7 +64,7 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 
 | Path | What it holds |
 | --- | --- |
-| `cmd/server`, `cmd/worker`, `cmd/river-migrate`, `cmd/secrets-reencrypt`, `cmd/build-egress` | Thin entry points (`river-migrate` and `secrets-reencrypt` are maintenance commands run through Make; `build-egress` runs in the egress proxy container). |
+| `cmd/server`, `cmd/worker`, `cmd/river-migrate`, `cmd/secrets-reencrypt`, `cmd/egress` | Thin entry points (`river-migrate` and `secrets-reencrypt` are maintenance commands run through Make; `egress` runs as `previa-egress`, the proxy and prober container). |
 | `internal/app` | Composition root: builds dependencies, starts and stops processes. |
 | `internal/auth` | GitHub OAuth login, user upsert, SCS sessions, CSRF, logout. |
 | `internal/installations` | Verified App linking, installation lifecycle, repository directory, build-mode policy. |
@@ -72,13 +75,14 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | `internal/source` | Exact-commit archive download through the base repository, identity check, hardened extraction, workspaces, config from the tree. |
 | `internal/secrets` | Encrypted repository secrets, Secrets tab, worker `ContainerEnv` contract, streaming redaction, re-encryption. |
 | `internal/buildlogs` | Current-attempt log streams: fenced bounded writer, owner page, live SSE, retention job. |
-| `internal/builds` | Isolated BuildKit image builder, egress proxy, size-capped export, labelled cleanup. |
+| `internal/builds` | Isolated BuildKit image builder, size-capped export, labelled cleanup. |
+| `internal/runtime` | Hardened preview candidates: recheck, secrets, readiness, capacity, inventory, owner-verified removal. |
 | `internal/dashboard` | Home, overview, session and developer-tools pages; queue ping. |
-| `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub, SSE, stream limiter), `dockerx` (Docker client). |
-| `internal/{runtime,routing,reporting,housekeeping}` | Placeholders for unbuilt features (`doc.go` only). |
+| `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub, SSE, stream limiter), `dockerx` (Docker client, shared labels), `egress` (the egress proxy, readiness probe and its container). |
+| `internal/{routing,reporting,housekeeping}` | Placeholders for unbuilt features (`doc.go` only). |
 | `web/` | `pages/<feature>`, `layouts`, `components`, `styles` (Tailwind), `static` (HTMX, compiled CSS, `ui.js`), browser tests. |
 | `db/migrations` | Goose migrations 0001–0013; sqlc generates typed queries into each feature's `dbgen/`. |
-| `deploy/build-egress` | Dockerfile for the egress proxy image (`make build-egress-image`). |
+| `deploy/egress` | Dockerfile for the egress proxy and prober image (`make egress-image`). |
 | `tools/go.mod` | Pinned dev tools: templ, sqlc, Goose, Air, golangci-lint. |
 
 ## Data model
@@ -118,6 +122,8 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | Current-attempt logs with an admission epoch | The useful log is the current one; an epoch fences stale writers and browser cursors even on same-revision retries. | No build history; a failed attempt's log disappears when the next one starts. |
 | A fresh rootless BuildKit container per build, behind an egress proxy | Limits cover every step, builds cannot touch each other, and nothing internal is reachable. | A few seconds of startup per build; builder needs relaxed outer seccomp/AppArmor (steps keep BuildKit's). |
 | Build caches per base and source repository | Forks cannot poison caches that trusted, secret-receiving builds reuse. | Fork PRs build with less cache. |
+| Previews strict by default: UID 65532, read-only root, no capabilities, own internal network, egress only via the proxy | The safest default for running PR code; exceptions are explicit and server-wide. | Some apps need the operator opt-outs; proxy-ignoring libraries cannot reach the internet. |
+| Host-derived preview budget | 60% of Docker memory and 75% of CPUs for previews keeps the platform responsive. | Previews may be refused (retryable) on a busy host. |
 | Package by feature, consumer-defined interfaces | Features evolve independently; no global handler/store layers. | Some small duplication across features. |
 
 ## Hard problems and how they are handled
@@ -128,12 +134,12 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
   ([05](05-webhooks-and-pr-discovery.md)).
 - **Stale work finishing late.** Every job captures the PR generation and request
   revision; result writes lock the PR row and refuse anything not current
-  ([13](13-generation-ordering.md)).
+  ([14](14-generation-ordering.md)).
 - **Same-commit retries.** Rebuilding an unchanged SHA advances the intent revision,
-  so old operations cannot collide with new ones ([10](10-build-policy-and-intents.md)).
+  so old operations cannot collide with new ones ([11](11-build-policy-and-intents.md)).
 - **No transactions across systems.** Desired state commits in PostgreSQL with a
   durable operation row; external calls run outside transactions and a reconciler
-  repairs partial failures ([12](12-durable-publication-design.md)).
+  repairs partial failures ([13](13-durable-publication-design.md)).
 - **Long locks versus slow IO.** GitHub/Docker calls never run while a row lock or
   transaction is open; revisions are captured before IO and rechecked after.
 - **Asynchronous mergeability.** Unknown results trigger a bounded, fenced recheck
@@ -150,11 +156,15 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 - **Untrusted Dockerfiles.** Every build runs in its own rootless, resource-limited
   BuildKit container with no route anywhere except a proxy that only reaches public
   addresses; probes from inside builds verify it ([09](09-image-builds.md)).
+- **Untrusted running code next to the platform.** Each preview is unprivileged and
+  bounded on its own internal network; it cannot reach Postgres, the server, the host,
+  metadata or other previews, which probes from a running preview verify. Secrets are
+  decided after a fresh recheck and never reach forks ([10](10-preview-runtime.md)).
 - **Revoked access.** Revocation records durable `cleanup_pending`; no absent
   adapter is ever reported as having cleaned up.
 - **Live UI without missed updates.** SSE streams carry resumable cursors; the page
   cursor is read before page state, so a commit in between is replayed
-  ([14](14-realtime-updates.md)).
+  ([15](15-realtime-updates.md)).
 
 ## Glossary
 
@@ -174,6 +184,7 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | Attempt / log epoch | One admitted execution of a request; its epoch changes on every admission, even a retry. |
 | Egress proxy | The only route out of build networks: ports 80/443 to public addresses. |
 | Cache scope | Base repository plus source repository; builds share a BuildKit cache only within one. |
+| Candidate | A healthy preview container that is not yet routed; publication decides whether it becomes active. |
 
 ## Read next
 

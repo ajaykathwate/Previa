@@ -1,4 +1,4 @@
-# 16 · Roadmap: remaining MVP work
+# 17 · Roadmap: remaining MVP work
 
 What is left before Previa can build and serve real previews, as **12 sequential
 tasks**. Each task is written as a self-contained prompt (for a developer or a coding
@@ -28,22 +28,27 @@ production; the release checklist at the end does.
 - **Prompt 4 done:** `internal/builds` (fresh rootless BuildKit builder per build on a
   private network, Go egress proxy, per-source-repository caches, enforced limits,
   size-capped export, labelled cleanup) verified with `make test-builder`
-  ([09](09-image-builds.md)). Not yet called by the worker; Prompt 5 runs its images.
+  ([09](09-image-builds.md)).
+- **Prompt 5 done:** `internal/runtime` (hardened unrouted candidates on per-PR
+  internal networks, egress only via the shared `previa-egress` proxy, secrets after
+  a fresh access/fork recheck, readiness from the proxy container, crash-loop
+  detection, host-derived capacity, owner-verified inventory and removal), verified
+  with `make test-runtime` ([10](10-preview-runtime.md)). Not yet called by the worker.
 - Implemented: signed/deduplicated webhook ingress, bounded open-only PR discovery,
   tracked close/merge retention, bounded mergeability checks and build refusal for
   Checking/Conflicts ([05](05-webhooks-and-pr-discovery.md)).
 - Implemented: live dashboard updates over SSE from PostgreSQL triggers through
-  `internal/platform/realtime` ([14](14-realtime-updates.md)); reuse it for live logs.
+  `internal/platform/realtime` ([15](15-realtime-updates.md)); reuse it for live logs.
 - Implemented: repository/PR pages, owner policy controls and current Builds/
   Environments views. The approved presentation and no-JavaScript flows exist.
 - Existing environment code provides tested admission, generation/revision fences,
   candidate/active artifacts, outbox, cleanup and reconciliation contracts.
   Extend those contracts rather than create a second orchestration system.
 - Production worker wiring currently registers ping, build-log retention and
-  App-configured discovery/mergeability jobs. Docker runtime, routing, reporting and
-  periodic housekeeping need real adapters; verification, source preparation, the
-  secrets provider, the log store and the image builder exist but are not wired into
-  execution yet.
+  App-configured discovery/mergeability jobs. Routing, reporting and periodic
+  housekeeping need real adapters; verification, source preparation, the secrets
+  provider, the log store, the image builder and the preview runtime exist but are not
+  wired into execution yet.
   The manual Build endpoint returns unavailable; it authorizes no execution.
 - Live hosted GitHub PR/mergeability proof remains pending. Local fixtures and a
   real local Git conflict are evidence, but do not prove hosted webhook delivery.
@@ -60,10 +65,10 @@ README's older illustrative tree. Keep backend files flat within each feature,
 presentation in web/, and construction in internal/app. Use small consumer-owned
 interfaces; do not create global handler/store layers or speculative frameworks.
 
-Preserve [10-build-policy-and-intents.md](10-build-policy-and-intents.md),
-[11-build-scheduling.md](11-build-scheduling.md),
-[12-durable-publication-design.md](12-durable-publication-design.md) and
-[13-generation-ordering.md](13-generation-ordering.md). Every executable
+Preserve [11-build-policy-and-intents.md](11-build-policy-and-intents.md),
+[12-build-scheduling.md](12-build-scheduling.md),
+[13-durable-publication-design.md](13-durable-publication-design.md) and
+[14-generation-ordering.md](14-generation-ordering.md). Every executable
 request and external artifact/operation carries PR identity, exact SHA and the
 ordered (generation, revision) fence. Same-SHA Retry/Rebuild changes revision.
 Observation/discovery/reconciliation alone never authorizes a Manual build.
@@ -77,7 +82,7 @@ ambiguous external success and process crashes. Persist cleanup/outbox intent;
 never substitute a no-op adapter or claim missing-resource cleanup succeeded
 without checking it. Credentials stay out of job payloads, URLs, logs and errors.
 
-Preserve the "signal" theme and UI patterns in [15-ui-architecture.md](15-ui-architecture.md),
+Preserve the "signal" theme and UI patterns in [16-ui-architecture.md](16-ui-architecture.md),
 accessible modal confirmations, CSRF, scoped queries, useful links, bounded lists,
 focus-preserving HTMX and ordinary GET/form fallbacks. Show actual work and
 deployed state separately. One lifetime environment/current intent per PR;
@@ -110,7 +115,7 @@ for live proofs require an explicitly authorized disposable repository.
 | 2 ✅ | Encrypted repository secrets and enforced fork policy | 1 |
 | 3 ✅ | Bounded, redacted current-build logs and SSE | 2 |
 | 4 ✅ | Isolated BuildKit image builder | 1–3 |
-| 5 | Hardened Docker candidates and readiness | 1–4 |
+| 5 ✅ | Hardened Docker candidates and readiness | 1–4 |
 | 6 | Stable HTTPS routes and fenced blue/green publication | 5, existing outbox |
 | 7 | Durable teardown, revocation and resource cleanup | 5–6 |
 | 8 | GitHub living comment and exact-SHA checks | 3, 6–7 |
@@ -293,7 +298,7 @@ observed release checks in Prompt 12, including isolation, recovery and restore.
 ## Prompt 6 — Stable HTTPS routing and fenced blue/green publication
 
 > Implement DESIGN Sections 11 and 13 and the route boundary in
-> docs/12-durable-publication-design.md. Read existing operation leases, candidate/
+> docs/13-durable-publication-design.md. Read existing operation leases, candidate/
 > active artifacts and finalization SQL before adding internal/routing adapters.
 > Preserve Traefik v3; do not replace the router or add a second orchestrator.
 >
@@ -530,7 +535,7 @@ observed release checks in Prompt 12, including isolation, recovery and restore.
 > Add a repeatable real-adapter end-to-end suite with cleanup and failure injection.
 >
 > Execute the release checklist below where prerequisites and authorization
-> exist. Write docs/17-production-deployment.md and a release report with
+> exist. Write docs/18-production-deployment.md and a release report with
 > exact commands, environment/version evidence, passed/failed/skipped checks and
 > outstanding inputs. Update setup/handoff links. Missing domain, DNS token,
 > disposable GitHub repo/write authorization or VPS access stays a specific

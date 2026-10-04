@@ -224,7 +224,7 @@ Medium. Small code, high consequence: authenticity, idempotency and ordering all
   [05-webhooks-and-pr-discovery.md](docs/05-webhooks-and-pr-discovery.md).
 - **Out-of-order delivery:** jobs carry the head SHA; a job whose SHA is no longer the latest for that PR is discarded on start (see feature 13).
 - **Fork PRs:** detect them from the payload and apply the fork policy from feature 10 and 16.
-- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. Real runtime integration remains unbuilt. See [10-build-policy-and-intents.md](docs/10-build-policy-and-intents.md); see [11-build-scheduling.md](docs/11-build-scheduling.md) for parsed-event coordination and production dispatch boundaries.
+- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. Real runtime integration remains unbuilt. See [11-build-policy-and-intents.md](docs/11-build-policy-and-intents.md); see [12-build-scheduling.md](docs/12-build-scheduling.md) for parsed-event coordination and production dispatch boundaries.
 
 ---
 
@@ -313,7 +313,7 @@ High. Build isolation, caching and resource control interact.
 - **Untrusted Dockerfiles:** a Dockerfile can run arbitrary commands at build time. The build runs with resource limits and no access to the control plane network.
 - **Cache poisoning risk:** cache is scoped per repo so one repo's builds cannot influence another's.
 - **Disk pressure:** builds are the main source of disk growth; pruning is handled by feature 15.
-- **Current implementation:** `internal/builds` runs every build in a fresh rootless BuildKit container (pinned `moby/buildkit:v0.33.1-rootless`) on its own internal Docker network whose only exit is `previa-build-egress`, a Go forward proxy that reaches ports 80/443 on public addresses only and dials exactly the address it checked. The builder drops every capability except `SETUID`/`SETGID`, has a read-only root, no Docker socket or host paths, and CPU/memory/PID cgroup limits; disk usage is polled against a budget, free disk is checked before starting and the exported image is size-capped. Images are tagged `previa/pr-<id>:g<gen>-r<rev>-<sha12>` with identity labels; retries reuse a finished image; failures leave no builder or network. **Deviation (owner-approved):** the cache is scoped per base repository *and source repository*, not per repository, so fork builds cannot poison caches reused by trusted builds. Build-time secret mounts are not offered (secrets are runtime-only for the MVP). The worker does not call the builder yet. See [09-image-builds.md](docs/09-image-builds.md).
+- **Current implementation:** `internal/builds` runs every build in a fresh rootless BuildKit container (pinned `moby/buildkit:v0.33.1-rootless`) on its own internal Docker network whose only exit is `previa-egress`, a Go forward proxy (shared with previews) that reaches ports 80/443 on public addresses only and dials exactly the address it checked. The builder drops every capability except `SETUID`/`SETGID`, has a read-only root, no Docker socket or host paths, and CPU/memory/PID cgroup limits; disk usage is polled against a budget, free disk is checked before starting and the exported image is size-capped. Images are tagged `previa/pr-<id>:g<gen>-r<rev>-<sha12>` with identity labels; retries reuse a finished image; failures leave no builder or network. **Deviation (owner-approved):** the cache is scoped per base repository *and source repository*, not per repository, so fork builds cannot poison caches reused by trusted builds. Build-time secret mounts are not offered (secrets are runtime-only for the MVP). The worker does not call the builder yet. See [09-image-builds.md](docs/09-image-builds.md).
 
 ---
 
@@ -345,6 +345,7 @@ High. This is the security-critical feature.
 - **Crash loops:** a container that keeps restarting is stopped after a small number of restarts and marked failed.
 - **Noisy neighbours:** limits keep one preview from starving others; a per-repo cap on concurrent previews bounds total load.
 - **gVisor** raises the isolation bar substantially and is a low-cost upgrade path if kernel-level escape risk matters.
+- **Current implementation:** `internal/runtime` implements `environments.Runtime`: it rechecks that the request is still current and accessible, builds through `internal/builds`, rechecks again, decides secrets (`secrets.Provider`; none for forks or unknown heads), and starts a candidate on the PR's own internal network `previa-pr-<id>`, shared only with the egress proxy (and the router from Prompt 6). Candidates run as UID 65532 when the image would run as root, with a read-only root and a bounded `/tmp` tmpfs (server-wide operator opt-outs only), no capabilities, `no-new-privileges`, IPv6 disabled, clamped tier CPU/memory, a PID limit, half CPU weight, a raised OOM score, capped logs and on-failure restarts (3, then a crash loop). Outbound traffic goes only through `previa-egress` (public addresses, ports 80/443). Readiness is probed from inside the egress container (HTTP 200-399 on `health_check_path`, else TCP), within `PREVIEW_STARTUP_TIMEOUT`. Admission keeps previews within 60% of Docker memory, 75% of CPUs and 10 per repository. Inventory and removal verify ownership labels. gVisor is optional via `PREVIEW_OCI_RUNTIME`. Maintainer approval for forks is not implemented (forks run without secrets). The worker does not dispatch it yet. See [10-preview-runtime.md](docs/10-preview-runtime.md).
 
 ---
 
@@ -426,11 +427,11 @@ High. Concurrency and zero-gap swapping.
 - **Latest wins:** intermediate commits may never deploy; only the newest matters.
 - **Orphan protection:** any container labeled for this PR but not referenced by the current record is removed by the reconciler.
 - **Manual freshness:** a new commit fences an older in-flight result but does not authorize its successor in Manual mode. An already deployed healthy preview stays available and the UI distinguishes its deployed SHA from the latest PR SHA.
-- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [10-build-policy-and-intents.md](docs/10-build-policy-and-intents.md). Scheduling propagates revision through jobs, results and publication; [11-build-scheduling.md](docs/11-build-scheduling.md) records exact SQL and integration limits.
+- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [11-build-policy-and-intents.md](docs/11-build-policy-and-intents.md). Scheduling propagates revision through jobs, results and publication; [12-build-scheduling.md](docs/12-build-scheduling.md) records exact SQL and integration limits.
 
 Implementation status and the proposed durable publication boundary are kept
-separate: see [the current generation-ordering implementation](docs/13-generation-ordering.md)
-and [the durable publication design](docs/12-durable-publication-design.md). The target
+separate: see [the current generation-ordering implementation](docs/14-generation-ordering.md)
+and [the durable publication design](docs/13-durable-publication-design.md). The target
 design moves external routing/reporting calls out of the transaction while retaining
 generation fencing and recovery across crashes.
 
@@ -560,7 +561,7 @@ Committed changes stream to open repository/PR pages as Server-Sent Events
 (PostgreSQL triggers -> NOTIFY -> one LISTEN session per server -> in-process hub
 -> per-repository stream). Events are invalidation signals with resumable cursors;
 pages refetch through ordinary authorized GETs, defer while search is focused or a
-policy modal is open, and send nothing while idle. See docs/14-realtime-updates.md;
+policy modal is open, and send nothing while idle. See docs/15-realtime-updates.md;
 build-log streaming reuses the same SSE writer with its own sequence replay. Current build/logs and deployed
 preview controls remain dependent on the execution adapters. Builds is
 a cross-repository view of current/latest work; Environments is a deployment view,
@@ -762,7 +763,7 @@ preview/
 │   ├── server/main.go              # thin: load config, call app.RunServer
 │   ├── worker/main.go              # thin: load config, call app.RunWorker
 │   ├── river-migrate/  secrets-reencrypt/   # maintenance commands run through Make
-│   └── build-egress/main.go        # the build egress proxy, in its own container
+│   └── egress/main.go              # previa-egress: proxy and prober, in its own container
 │
 ├── internal/
 │   ├── app/                        # composition root: builds and wires everything
@@ -819,14 +820,14 @@ preview/
 │   │   ├── builder.go              # Build: reuse, sandbox, solve, export, failure classes
 │   │   ├── sandbox.go  dial.go     # per-build rootless builder, network, cache lock, exec dial
 │   │   ├── image.go  labels.go     # size-capped export, inventory, removal, identity
-│   │   ├── egress.go               # the egress proxy (run by cmd/build-egress)
 │   │   ├── logsink.go              # sends build output to buildlogs
 │   │
 │   ├── runtime/                    # FEATURE: run containers (isolation lives here)
-│   │   ├── runtime.go              # Runtime interface (swap Docker for K8s later)
-│   │   ├── docker.go               # Docker implementation
-│   │   ├── hardening.go            # caps, limits, read-only fs, network policy
-│   │   ├── health.go               # wait-until-healthy
+│   │   ├── runtime.go              # environments.Runtime: recheck, build, secrets, start
+│   │   ├── target.go  queries.sql  # access, freshness and fork recheck
+│   │   ├── hardening.go            # user, read-only fs, caps, limits, network
+│   │   ├── capacity.go  health.go  # admission; wait-until-healthy, observed health
+│   │   ├── docker.go  inventory.go # preview network, output, owner-verified removal
 │   │
 │   ├── routing/                    # FEATURE: subdomains + Traefik labels
 │   │   ├── subdomain.go            # sanitize, allocate, uniqueness
@@ -868,7 +869,8 @@ preview/
 │       ├── queue/                  # River client setup
 │       ├── realtime/               # LISTEN/NOTIFY hub + Server-Sent Events streams
 │       ├── githubapp/              # App JWT, installation-token cache, API client
-│       ├── dockerx/                # Docker client construction
+│       ├── dockerx/                # Docker client construction, shared labels
+│       ├── egress/                 # egress proxy, readiness probe, its container
 │       ├── httpx/                  # middleware, error responses, HTMX helpers
 │       ├── logging/                # slog setup + secret redaction
 │       └── metrics/                # Prometheus registry + shared metrics
@@ -893,7 +895,7 @@ preview/
 │
 ├── deploy/
 │   ├── docker-compose.yml
-│   ├── build-egress/Dockerfile     # egress proxy image (make build-egress-image)
+│   ├── egress/Dockerfile           # previa-egress image (make egress-image)
 │   ├── traefik/                    # static + dynamic config
 │   └── setup.sh
 │
@@ -971,7 +973,7 @@ Shared palette/font tokens live in `web/styles/theme.css`; `site.css` composes
 base, home, workspace, confirmation and motion styles into the same compiled asset.
 Optional `web/tests/browser` regression tooling uses pinned Playwright v1.58.2 and
 Node.js 20+ only for development; the application has no Node.js runtime dependency.
-See `docs/15-ui-architecture.md` for the implemented presentation boundary.
+See `docs/16-ui-architecture.md` for the implemented presentation boundary.
 
 ### sqlc and migrations in a feature-based layout
 

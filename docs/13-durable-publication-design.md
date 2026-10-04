@@ -1,24 +1,24 @@
-# 12 · Design: durable, generation-fenced publication
+# 13 · Design: durable, generation-fenced publication
 
 This document records the architecture decision for safely publishing preview
 environment changes when PostgreSQL, River, Docker, the routing layer, and GitHub
 can fail independently. It covers only that consistency problem. Product
 requirements remain in [README.md](../README.md), feature implementation details
 remain in [DESIGN.md](../DESIGN.md), and the current generation implementation and
-tests are in [13-generation-ordering.md](13-generation-ordering.md).
+tests are in [14-generation-ordering.md](14-generation-ordering.md).
 
 ## Decision
 
 Build authorization follows the
-[Manual/Automatic policy](10-build-policy-and-intents.md). Policy, current intent
+[Manual/Automatic policy](11-build-policy-and-intents.md). Policy, current intent
 and scheduling are implemented behind tested interfaces; production runtime
 dispatch remains unconnected. PR observation is distinct from authorized work: Manual waits for an owner
 request; Automatic persists a five-minute trailing deadline. The publication
 protocol below applies only to authorized builds. Generation fencing remains
 independent of scheduling mode; close/merge still requests immediate teardown.
 Build intent adds an independent request revision for same-generation
-Retry/Rebuild ([10](10-build-policy-and-intents.md)); scheduling carries it into
-operation keys/payloads, finalization, reporting and cleanup ([11](11-build-scheduling.md)).
+Retry/Rebuild ([11](11-build-policy-and-intents.md)); scheduling carries it into
+operation keys/payloads, finalization, reporting and cleanup ([12](12-build-scheduling.md)).
 All version/fencing/idempotency references below apply to the ordered tuple
 `(generation, revision)`: generation dominates; revision distinguishes deliberate
 requests for the same observed commit. Generation-only examples below describe
@@ -422,7 +422,7 @@ traffic path; an ordinary asynchronous config push is not enough.
 ## Related code and documents
 
 - Current implementation and its SQL/test evidence: `internal/environments/`,
-  `internal/webhooks/`, and [13-generation-ordering.md](13-generation-ordering.md).
+  `internal/webhooks/`, and [14-generation-ordering.md](14-generation-ordering.md).
 - Product workflow and original queue/rebuild/teardown requirements:
   [DESIGN.md Sections 7, 13, 14, and 15](../DESIGN.md).
 - Process/configuration, build timeouts, and local database setup:

@@ -53,7 +53,7 @@ All three only *observe* state; none of them authorizes a build. The screens are
 - A unique receipt is transport acceptance; it is distinct from applying a fresh
   PR state. Older source observations are acknowledged and ignored.
 - Fresh applicable webhook observations advance PR generation once and compose
-  with the scheduling coordinator ([11](11-build-scheduling.md)). Duplicate
+  with the scheduling coordinator ([12](12-build-scheduling.md)). Duplicate
   receipts advance nothing.
 - Equal-time conflicting heads retain the existing head, mark `needs_refresh`,
   advance generation and supersede active intent, preventing guessed state from
@@ -182,7 +182,7 @@ replaces the saved signal, so a push resets the status to Checking.
   status, with runtime admission checking it under the same lock as the generation.
   The dashboard shows the reason; direct Build POSTs return 409.
 - Committed changes reach open pages through database triggers and Server-Sent
-  Events ([14](14-realtime-updates.md)); the browser refetches saved data and never
+  Events ([15](15-realtime-updates.md)); the browser refetches saved data and never
   calls GitHub.
 
 ## Verification status

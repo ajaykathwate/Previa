@@ -1,4 +1,4 @@
-# 15 · UI architecture
+# 16 · UI architecture
 
 How the dashboard is built: server-rendered pages, progressive enhancement, the
 visual system and the browser behaviours layered on top. Screen behaviour from a
@@ -91,7 +91,7 @@ Making full-page navigation feel instant, without giving up MPA semantics:
   on `HX-Request`/`HX-Target`. An expired session returns `HX-Redirect` to sign-in.
 - Requests to one target share a replacement slot so older responses are discarded.
   Failed requests keep current content and show retry feedback.
-- Live refreshes come from the event stream ([14](14-realtime-updates.md)). A hidden
+- Live refreshes come from the event stream ([15](15-realtime-updates.md)). A hidden
   `[data-live-refresh]` element refetches `#repository-detail` with the current
   URL's filters. While PR search is focused or the policy modal is open, a refresh
   is deferred, then run when the user leaves the field or closes the modal.
@@ -183,4 +183,4 @@ JavaScript), reduced motion and no-JavaScript flows. See [02](02-development-set
 | View transitions + prefetch, not `hx-boost` | Smooth navigation while keeping real document loads and no-JS behaviour. | Effects only in supporting browsers. |
 | Command palette as a layer over links | Faster navigation for keyboard users without a second navigation model. | Duplicate entry points to keep in sync. |
 | System fonts, no CDNs | Self-hosted, private, fast first paint. | Less typographic control. |
-| SSE invalidation, refetch via GET | No polling; authorization stays in ordinary handlers ([14](14-realtime-updates.md)). | One connection per open page. |
+| SSE invalidation, refetch via GET | No polling; authorization stays in ordinary handlers ([15](15-realtime-updates.md)). | One connection per open page. |

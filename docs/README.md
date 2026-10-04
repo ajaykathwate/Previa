@@ -14,13 +14,14 @@ run and use Previa, the rest explain how and why it works.
 | 07 | [Repository secrets](07-repository-secrets.md) | Encrypted values, key rotation, fork withholding, collision rule, redaction. |
 | 08 | [Build logs](08-build-logs.md) | Current-attempt logs, epochs, limits, redaction, live streaming and retention. |
 | 09 | [Image builds](09-image-builds.md) | Isolated BuildKit builders, the egress proxy, caches, limits and what was verified. |
-| 10 | [Build policy and build intent](10-build-policy-and-intents.md) | Manual vs Automatic, observed state vs authorized intent, idempotency. |
-| 11 | [Build scheduling](11-build-scheduling.md) | Deadlines, wake-ups, atomic admission, handoff, recovery. |
-| 12 | [Durable publication design](12-durable-publication-design.md) | The decision record for publishing safely across PostgreSQL, Docker, routing and GitHub. |
-| 13 | [Generation ordering](13-generation-ordering.md) | The SQL fences and races that make newer work always win. |
-| 14 | [Realtime updates](14-realtime-updates.md) | Live dashboard updates with triggers, LISTEN/NOTIFY and SSE. |
-| 15 | [UI architecture](15-ui-architecture.md) | Templ/HTMX structure, theme, navigation, progressive enhancement. |
-| 16 | [Roadmap](16-roadmap.md) | The remaining tasks to real previews, and the release checklist. |
+| 10 | [Preview runtime](10-preview-runtime.md) | Hardened, isolated preview containers: secrets, readiness, capacity, cleanup and what was verified. |
+| 11 | [Build policy and build intent](11-build-policy-and-intents.md) | Manual vs Automatic, observed state vs authorized intent, idempotency. |
+| 12 | [Build scheduling](12-build-scheduling.md) | Deadlines, wake-ups, atomic admission, handoff, recovery. |
+| 13 | [Durable publication design](13-durable-publication-design.md) | The decision record for publishing safely across PostgreSQL, Docker, routing and GitHub. |
+| 14 | [Generation ordering](14-generation-ordering.md) | The SQL fences and races that make newer work always win. |
+| 15 | [Realtime updates](15-realtime-updates.md) | Live dashboard updates with triggers, LISTEN/NOTIFY and SSE. |
+| 16 | [UI architecture](16-ui-architecture.md) | Templ/HTMX structure, theme, navigation, progressive enhancement. |
+| 17 | [Roadmap](17-roadmap.md) | The remaining tasks to real previews, and the release checklist. |
 
 Related files outside this folder:
 

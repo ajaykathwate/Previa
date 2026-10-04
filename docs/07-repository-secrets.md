@@ -3,9 +3,10 @@
 Owners give previews the configuration they need at runtime (API keys, database
 URLs) without putting it in the repository, without exposing it to fork authors and
 without leaking it into logs. This document covers how values are stored, who
-receives them, how keys rotate and what redaction can and cannot do. Containers
-start in the next phases ([16-roadmap.md](16-roadmap.md)); the worker contract
-below is what they will call.
+receives them, how keys rotate and what redaction can and cannot do. The preview
+runtime ([10](10-preview-runtime.md)) calls the worker contract below after a fresh
+access and fork recheck; the worker starts previews from Prompt 10
+([17-roadmap.md](17-roadmap.md)).
 
 ## Decisions
 

@@ -4,8 +4,10 @@ Each pull request has one log: the output of its **current** build attempt, kept
 in PostgreSQL, streamed live to its owner, and replaced when the next attempt is
 admitted. This document covers how attempts are told apart, what is stored and
 bounded, how the live page resumes without losing or repeating lines, and what
-happens when storage fails. The image builder ([09](09-image-builds.md)) and,
-later, container startup write into it; nothing writes sample output.
+happens when storage fails. The preview runtime ([10](10-preview-runtime.md)) writes
+build output from the image builder ([09](09-image-builds.md)) and then the app's
+startup output, the latter through a second writer whose redactor also knows the
+injected secrets. Nothing writes sample output.
 
 ## Decisions
 
@@ -16,7 +18,7 @@ later, container startup write into it; nothing writes sample output.
 | Limits (Balanced) | 5 MiB and 20,000 lines per attempt, 8 KiB per line, kept 14 days after the attempt finishes | Bounds database growth while keeping full logs for normal builds (owner decision). |
 | Redaction | Before anything is stored or streamed, using [07](07-repository-secrets.md)'s streaming redactor | A value must never reach the database, the page or the stream. |
 | Build impact | Writes never block a build; if storage falls behind, the excess is dropped, counted and marked | Logs are for diagnosis; they must not stall or fail the build they describe. |
-| Live updates | Server-Sent Events with the log's own cursor; the realtime hub only wakes the stream ([14](14-realtime-updates.md)) | Lossless resume and replacement detection need log positions, not hub positions. |
+| Live updates | Server-Sent Events with the log's own cursor; the realtime hub only wakes the stream ([15](15-realtime-updates.md)) | Lossless resume and replacement detection need log positions, not hub positions. |
 
 ## Storage and attempts
 

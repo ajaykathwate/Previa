@@ -1,9 +1,9 @@
-# 10 · Build policy and build intent
+# 11 · Build policy and build intent
 
 Who decides that a pull request gets built, and how that decision is stored so it
 survives crashes, retries and races. Scheduling the decision is
-[11-build-scheduling.md](11-build-scheduling.md); executing it safely is
-[12](12-durable-publication-design.md) and [13](13-generation-ordering.md).
+[12-build-scheduling.md](12-build-scheduling.md); executing it safely is
+[13](13-durable-publication-design.md) and [14](14-generation-ordering.md).
 
 ## The decision
 
@@ -29,7 +29,7 @@ survives crashes, retries and races. Scheduling the decision is
 Accepted trade-offs: Manual users must click to refresh a preview; continuous pushes
 keep postponing an Automatic build (Manual is the override, and there is no
 maximum-wait rule); debounce is not a spending cap, so TTLs and per-repository
-limits are still required ([16-roadmap.md](16-roadmap.md)).
+limits are still required ([17-roadmap.md](17-roadmap.md)).
 
 ## Observed state versus authorized intent
 
@@ -132,7 +132,7 @@ RETURNING b.*;
 
 Zero rows means superseded; it never grants authority to overwrite a newer request.
 The revision then travels through job arguments, result and finalization guards,
-operation keys, reporting and cleanup ([11](11-build-scheduling.md#same-generation-retries-and-publication-fencing)).
+operation keys, reporting and cleanup ([12](12-build-scheduling.md#same-generation-retries-and-publication-fencing)).
 
 ## Transaction rules
 
@@ -153,7 +153,7 @@ operation keys, reporting and cleanup ([11](11-build-scheduling.md#same-generati
 - `environments.IntentService`: Get, Request, Advance, ObserveTx over a small store
   interface, independent of runtime adapters; `IntentRepository` owns the locks and
   guarded SQL. Browser handlers must go through the scheduling coordinator
-  ([11](11-build-scheduling.md)), not the low-level `Request`.
+  ([12](12-build-scheduling.md)), not the low-level `Request`.
 - Migration `0006_build_intents.sql`; revision fencing extended in `0007`.
 
 ## Tests
