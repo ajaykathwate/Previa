@@ -41,7 +41,7 @@ Last updated: 2026-10-04
 - OAuth/users, signed state, SCS sessions (24h/30m idle), rotation, CSRF/logout modal.
 - Home, protected Overview, Repositories, PR detail, current Builds/Environments,
   Developer Tools ping and /protected. Installation-owner scoping on queries/actions.
-- 2026-10-04 UI redesign (branch feat/ui-redesign): grouped sidebar -> icon rail (<1180px) ->
+- 2026-10-04 UI redesign (merged to main): grouped sidebar -> icon rail (<1180px) ->
   drawer (<900px); header search opens Ctrl/⌘K command palette; theme toggle;
   Overview pipeline/checklist from real counts; sticky toolbars; PR rows become
   labelled cards on phones; PR detail lifecycle + labelled "Soon" placeholders.
@@ -95,5 +95,5 @@ Last updated: 2026-10-04
 - 2026-10-04 UI redesign: make build, make lint (0 issues) and go test ./... pass
   (DB-backed tests skip without TEST_DATABASE_URL). Browser suite 22/22 passes with
   UI_BROWSER_EXECUTABLE=/snap/bin/chromium (Playwright's bundled Chromium is not
-  installed). Committed on branch feat/ui-redesign (not pushed or merged).
+  installed). Merged to main (09e9e40).
 - Prior Phase 3 DB/race/migration/webhook checks: docs/PHASE3_REPORT.md.
