@@ -91,3 +91,5 @@ ORDER BY r.id FOR UPDATE OF r;
 -- name: HasAutomaticIntent :one
 SELECT EXISTS(SELECT 1 FROM build_intents WHERE pull_request_id=$1 AND generation=$2
  AND source='automatic' AND state IN ('pending','queued','running'));
+-- name: FindPRIdentity :one
+SELECT repo_id, number FROM pull_requests WHERE id=$1;

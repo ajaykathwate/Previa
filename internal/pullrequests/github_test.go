@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/google/go-github/v91/github"
 )
 
@@ -109,5 +110,69 @@ func TestMergeabilityMappingNeverAssumesNullIsClean(t *testing.T) {
 				t.Fatalf("got %s want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestInspectClassifiesUpstreamFailures(t *testing.T) {
+	status := http.StatusOK
+	rateLimited := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if rateLimited {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", "4102444800")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+			return
+		}
+		switch r.URL.Path {
+		case "/repositories/100":
+			_, _ = w.Write([]byte(`{"id":100,"name":"renamed","owner":{"login":"transferred"}}`))
+		case "/repos/transferred/renamed/pulls/7":
+			if status != http.StatusOK {
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"message":"fixture failure with secret-ish detail"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"number":7,"state":"open","mergeable":true,"mergeable_state":"clean","updated_at":"2026-10-03T10:00:00Z","head":{"sha":"abc123","repo":{"id":101}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	base := server.URL + "/"
+	client, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&base, &base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := NewGitHubSource(clientsFunc(func(int64) (*github.Client, error) { return client, nil }))
+
+	up, err := source.Inspect(t.Context(), 99, 100, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if up.Owner != "transferred" || up.Repository != "renamed" || up.SHA != "abc123" || !up.Fork || up.HeadRepoID != 101 || up.BuildStatus != "open" {
+		t.Fatalf("unexpected upstream: %+v", up)
+	}
+	for code, want := range map[int]error{
+		http.StatusNotFound:            environments.ErrUpstreamInaccessible,
+		http.StatusForbidden:           environments.ErrUpstreamInaccessible,
+		http.StatusInternalServerError: environments.ErrUpstreamUnavailable,
+		http.StatusBadGateway:          environments.ErrUpstreamUnavailable,
+	} {
+		status = code
+		_, err := source.Inspect(t.Context(), 99, 100, 7)
+		if !errors.Is(err, want) || strings.Contains(err.Error(), "secret-ish") {
+			t.Fatalf("HTTP %d: error %v; want %v without response detail", code, err, want)
+		}
+	}
+	status, rateLimited = http.StatusOK, true
+	_, err = source.Inspect(t.Context(), 99, 100, 7)
+	var retry *environments.UpstreamRetryAfter
+	if !errors.As(err, &retry) || retry.Delay <= 0 || !errors.Is(err, environments.ErrUpstreamUnavailable) {
+		t.Fatalf("rate limit: %v", err)
+	}
+	if _, err := source.Inspect(t.Context(), 0, 100, 7); !errors.Is(err, environments.ErrUpstreamInaccessible) {
+		t.Fatal("invalid identity must fail closed")
 	}
 }

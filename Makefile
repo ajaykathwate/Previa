@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -68,6 +68,14 @@ test-github-app:
 		echo 'Set TEST_GITHUB_INSTALLATION_ID and TEST_GITHUB_REPO_ID to real numeric GitHub IDs' >&2; exit 1; \
 	fi; \
 	$(GO) test -count=1 -v -run '^TestRealInstallationRepositoryAccess$$' ./internal/platform/githubapp
+
+# Opt-in real source check: verifies one PR's archive identity, extraction and
+# config. Reads App credentials from .env, never CLI flags; writes nothing to GitHub.
+test-source:
+	@$(load_run_env) if [ -z "$${TEST_GITHUB_INSTALLATION_ID:-}" ] || [ -z "$${TEST_GITHUB_REPO_ID:-}" ] || [ -z "$${TEST_GITHUB_PR_NUMBER:-}" ]; then \
+		echo 'Set TEST_GITHUB_INSTALLATION_ID, TEST_GITHUB_REPO_ID and TEST_GITHUB_PR_NUMBER to real numeric GitHub values' >&2; exit 1; \
+	fi; \
+	$(GO) test -count=1 -v -run '^TestRealSourcePrepare$$' ./internal/source
 
 lint: assets generate
 	$(GO) vet ./...

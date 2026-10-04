@@ -174,6 +174,22 @@ func (q *Queries) FindGitHubRepository(ctx context.Context, arg FindGitHubReposi
 	return id, err
 }
 
+const findPRIdentity = `-- name: FindPRIdentity :one
+SELECT repo_id, number FROM pull_requests WHERE id=$1
+`
+
+type FindPRIdentityRow struct {
+	RepoID int64
+	Number int32
+}
+
+func (q *Queries) FindPRIdentity(ctx context.Context, id int64) (FindPRIdentityRow, error) {
+	row := q.db.QueryRow(ctx, findPRIdentity, id)
+	var i FindPRIdentityRow
+	err := row.Scan(&i.RepoID, &i.Number)
+	return i, err
+}
+
 const findScope = `-- name: FindScope :one
 SELECT r.installation_id FROM repos r WHERE r.id=$1
 `
