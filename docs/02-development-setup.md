@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 11**, **River 007**. After pulling changes, run
+Current schema: **Goose 12**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker.
 
 ## 1. Prerequisites
@@ -57,19 +57,24 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | server, worker | From a GitHub **App** ([04](04-github-sign-in-and-app.md)). | App JWTs; the worker needs only these two for discovery. |
 | `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | server | Same GitHub App. | Installation page and verified linking. |
 | `GITHUB_WEBHOOK_SECRET` | server | `openssl rand -hex 32`, same value in the App settings. | Verifies webhook signatures ([05](05-webhooks-and-pr-discovery.md)). |
+| `SECRETS_ENCRYPTION_KEYS` | server (worker from Prompt 5) | `1:` + output of `openssl rand -base64 32`; comma-separate versions. | Encrypts repository secrets ([07](07-repository-secrets.md)). |
+| `SECRETS_ACTIVE_KEY_VERSION` | server (worker from Prompt 5) | The version new values use, e.g. `1`. | Selects the key for new values. |
 
 - Sign-in needs real OAuth values; placeholders start the server but cannot log in.
 - The five server App settings are all-or-nothing. Omit them all to run with
   repository linking visibly disabled. A partial set fails validation.
 - Without the two worker App settings, the worker processes only `ping`.
 - An unset webhook secret makes `/webhooks/github` return 503.
+- The two `SECRETS_*` values go together. Without them, the Secrets tab explains that
+  secrets are not configured; a malformed keyring stops the server with a message
+  that never shows key material. Restart the server after changing them.
 
 ### How configuration is loaded
 
 | Command | Loads `.env`? |
 | --- | --- |
 | `make run-server`, `make run-worker`, `make dev` | Yes; already-exported variables take precedence. Restart Air after editing `.env`. |
-| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app` | Yes; falls back to `.env.example` for migrations if `.env` is absent. |
+| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `secrets-reencrypt` | Yes; falls back to `.env.example` for migrations if `.env` is absent. |
 | Direct `go run`, manual Goose commands | No; run `set -a; . ./.env; set +a` once per terminal. |
 | `make build`, `make lint`, `make generate` | No configuration needed. |
 | `make test` | Database tests need an explicitly exported `TEST_DATABASE_URL`. |
@@ -107,6 +112,7 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0009 | One lifetime environment row per PR. |
 | 0010 | Nullable PR mergeability and derived `build_status` (existing rows start as Checking). |
 | 0011 | Realtime triggers that raise `NOTIFY previa_events` after commits. |
+| 0012 | Repository secrets: `key_version`, `updated_at`, name and ciphertext-size checks. |
 
 Optional check that live updates are wired:
 
@@ -137,15 +143,33 @@ TEST_DATABASE_URL="$DATABASE_URL" go test -count=1 ./...
 ```
 
 **Expected:** all packages pass, including pool, migration-constraint, webhook,
-discovery, scheduling, publication and realtime integration tests. Tests create
-isolated schemas and drop them afterwards; they never reset your data. External
-systems (GitHub, Docker) are fakes. Useful focused runs:
+discovery, scheduling, publication, secrets and realtime integration tests. Most
+tests create isolated schemas and drop them afterwards. The migration-constraint,
+auth repository and queue tests instead run in rolled-back transactions on your
+migrated schema, so they fail if it is behind the code (for example, the
+`key_version` NOT NULL error before migration 12). No test resets your data.
+External systems (GitHub, Docker) are fakes. Useful focused runs:
 
 ```sh
 go test -count=1 -race ./internal/environments ./internal/pullrequests ./internal/webhooks
 go test -count=1 -race ./internal/platform/realtime
-go test -count=1 ./internal/repoconfig      # no database or credentials needed
+go test -count=1 -race ./internal/source ./internal/repoconfig ./internal/secrets   # no credentials needed
 ```
+
+### Real-source check (optional)
+
+With App credentials in `.env`, prepare one real PR's head commit end to end
+(read-only: one PR read plus one archive download):
+
+```sh
+docker compose -f deploy/docker-compose.yml exec -T postgres psql -U previa -d previa -t -A -F' ' \
+  -c "SELECT i.github_installation_id, r.github_repo_id, p.number FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id WHERE p.state='open' AND r.accessible AND i.status='active' LIMIT 1"
+TEST_GITHUB_INSTALLATION_ID=<1st> TEST_GITHUB_REPO_ID=<2nd> TEST_GITHUB_PR_NUMBER=<3rd> make test-source
+```
+
+**Expected:** `PASS`, with log lines stating that the archive declared the head
+commit and extracted safely, then either the parsed config hash or a configuration
+outcome such as `missing_file` when the repository has no `.previewrc.yaml`.
 
 ### Browser regression checks (optional)
 
@@ -220,7 +244,17 @@ FROM environment_operations ORDER BY id DESC LIMIT 20;
   job is active returns `duplicate=true`; HTTP 202 proves insertion, the worker log
   `ping job processed` proves execution.
 
-## 8. Daily workflow and shutdown
+## 8. Rotate the secrets key
+
+1. Add a new version to `SECRETS_ENCRYPTION_KEYS` (keep the old one), set
+   `SECRETS_ACTIVE_KEY_VERSION` to it and restart the server (and later the worker).
+2. Run `make secrets-reencrypt`. **Expected:** `Secrets: re-encrypted N, skipped 0 …`
+   followed by `every value uses the active key; older key versions can be removed`.
+   It prints counts only and is safe to repeat while the server runs.
+3. Only then remove the old version and restart. If it reports values still on an
+   older version, run it again first. Details: [07](07-repository-secrets.md#keys-provisioning-and-rotation).
+
+## 9. Daily workflow and shutdown
 
 1. `docker compose -f deploy/docker-compose.yml up -d --wait postgres`
 2. After pulling: `make migrate-up` (and `make generate` if needed).
@@ -250,7 +284,7 @@ FROM environment_operations ORDER BY id DESC LIMIT 20;
 - **Stylesheet missing after a manual build:** run `make assets` before compiling;
   the server embeds assets at build time.
 - **Live indicator never turns green:** apply migration 0011, and make sure any
-  proxy in front of the server does not buffer `text/event-stream` ([11](11-realtime-updates.md)).
+  proxy in front of the server does not buffer `text/event-stream` ([12](12-realtime-updates.md)).
 - **Editor says templ components are undefined:** run `make generate && go build ./...`;
   generated `*_templ.go` files are ignored and must exist locally. If the build
   passes, restart the Go/templ language servers. `make watch-templates` regenerates

@@ -184,7 +184,7 @@ Low to Medium. Parsing is easy; useful validation and safe defaults take care.
 - **Approved contract:** the config file is required, but `{}` is valid when defaults match the app. Explicit invalid/null values do not become defaults. Omitting a health path does not require `/health`; runtime readiness still needs implementation.
 - **Safety:** 64 KiB config / 128 KiB API response envelope; 15-second overall fetch context plus existing HTTP timeouts. GitHub 404 is called missing-file only after the installation can verify the exact commit. Errors expose safe fields/codes/locations rather than YAML/env values or raw API bodies.
 - **Filesystem boundary:** validation is lexical; later source extraction/build adapters must reject unsafe symlinks and enforce actual repository containment.
-- **Current implementation:** standalone `internal/repoconfig` fetch/parse/effective-limit/hash APIs and fixtures are implemented. Config hash excludes requested tier metadata and uses resolved resources plus sorted unique env entries. No database persistence, webhook/job/UI wiring, health execution or GitHub comments are implemented here. See [06-repository-configuration.md](docs/06-repository-configuration.md).
+- **Current implementation:** standalone `internal/repoconfig` fetch/parse/effective-limit/hash APIs and fixtures are implemented. Config hash excludes requested tier metadata and uses resolved resources plus sorted unique env entries. No database persistence, webhook/job/UI wiring, health execution or GitHub comments are implemented here. See [06-source-and-configuration.md](docs/06-source-and-configuration.md).
 
 ---
 
@@ -224,7 +224,7 @@ Medium. Small code, high consequence: authenticity, idempotency and ordering all
   [05-webhooks-and-pr-discovery.md](docs/05-webhooks-and-pr-discovery.md).
 - **Out-of-order delivery:** jobs carry the head SHA; a job whose SHA is no longer the latest for that PR is discarded on start (see feature 13).
 - **Fork PRs:** detect them from the payload and apply the fork policy from feature 10 and 16.
-- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. Real runtime integration remains unbuilt. See [07-build-policy-and-intents.md](docs/07-build-policy-and-intents.md); see [08-build-scheduling.md](docs/08-build-scheduling.md) for parsed-event coordination and production dispatch boundaries.
+- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. Real runtime integration remains unbuilt. See [08-build-policy-and-intents.md](docs/08-build-policy-and-intents.md); see [09-build-scheduling.md](docs/09-build-scheduling.md) for parsed-event coordination and production dispatch boundaries.
 
 ---
 
@@ -286,6 +286,7 @@ Medium.
 - **Archive over clone** because previews never need history.
 - **The token must never be baked into anything** that persists: not in the build context, not in image layers, not in logs.
 - **Fork PRs:** the head commit lives in the fork; the archive is fetched by SHA from the base repo's PR ref, and secrets are withheld (feature 16).
+- **Current implementation:** `internal/source` resolves the base repository by numeric ID, requests the tarball for the full SHA, and downloads it from an allowlisted HTTPS host with a credential-free client (the installation token never follows a redirect). The archive's git global header must declare exactly that SHA. Extraction allows only directories, regular files and in-tree relative symlinks (created after all files, writes through `os.Root`), with byte, entry, path and time limits, into a `0700` workspace whose marker makes crash leftovers discoverable. `.previewrc.yaml` and the Dockerfile are read from that same tree. Immediately before authorization or execution, `pullrequests.SyncService.VerifyUpstream` re-reads the PR (lifecycle, head SHA, fork identity, mergeability) under revision fences and fails closed. Both are tested, including a real GitHub check (`make test-source`); the Build action/worker connect them in a later phase. See [06-source-and-configuration.md](docs/06-source-and-configuration.md).
 
 ---
 
@@ -424,11 +425,11 @@ High. Concurrency and zero-gap swapping.
 - **Latest wins:** intermediate commits may never deploy; only the newest matters.
 - **Orphan protection:** any container labeled for this PR but not referenced by the current record is removed by the reconciler.
 - **Manual freshness:** a new commit fences an older in-flight result but does not authorize its successor in Manual mode. An already deployed healthy preview stays available and the UI distinguishes its deployed SHA from the latest PR SHA.
-- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [07-build-policy-and-intents.md](docs/07-build-policy-and-intents.md). Scheduling propagates revision through jobs, results and publication; [08-build-scheduling.md](docs/08-build-scheduling.md) records exact SQL and integration limits.
+- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [08-build-policy-and-intents.md](docs/08-build-policy-and-intents.md). Scheduling propagates revision through jobs, results and publication; [09-build-scheduling.md](docs/09-build-scheduling.md) records exact SQL and integration limits.
 
 Implementation status and the proposed durable publication boundary are kept
-separate: see [the current generation-ordering implementation](docs/10-generation-ordering.md)
-and [the durable publication design](docs/09-durable-publication-design.md). The target
+separate: see [the current generation-ordering implementation](docs/11-generation-ordering.md)
+and [the durable publication design](docs/10-durable-publication-design.md). The target
 design moves external routing/reporting calls out of the transaction while retaining
 generation fencing and recovery across crashes.
 
@@ -512,6 +513,7 @@ High. Security-sensitive with subtle leakage paths.
 - **Not in the repo config file:** anything in the repo is visible to anyone with read access.
 - **Build-time vs run-time:** secrets are runtime by default; build-time use only through BuildKit secret mounts.
 - **Blast radius:** a preview-only credential (for example, a sandbox API key) should be recommended in docs; previews are not the place for production keys.
+- **Current implementation:** `internal/secrets` stores values as AES-256-GCM ciphertext with random nonces, authenticating repository, name and key version. Keys come from `SECRETS_ENCRYPTION_KEYS`/`SECRETS_ACTIVE_KEY_VERSION`; rotation uses an explicit, repeatable `make secrets-reencrypt` (not lazy re-encryption) and keeps old keys until it reports zero. Owners manage values on a repository Secrets tab (write-only, CSRF, modal deletion). At container creation the worker calls `Provider.ForContainer`: untrusted sources (forks, unknown heads) decrypt nothing; for trusted sources a stored secret overrides a same-named YAML entry. `Redactor` streams exact-value redaction across write boundaries; its limits are documented. Runtime injection arrives with the container runtime. See [07-repository-secrets.md](docs/07-repository-secrets.md).
 
 ---
 
@@ -557,7 +559,7 @@ Committed changes stream to open repository/PR pages as Server-Sent Events
 (PostgreSQL triggers -> NOTIFY -> one LISTEN session per server -> in-process hub
 -> per-repository stream). Events are invalidation signals with resumable cursors;
 pages refetch through ordinary authorized GETs, defer while search is focused or a
-policy modal is open, and send nothing while idle. See docs/11-realtime-updates.md;
+policy modal is open, and send nothing while idle. See docs/12-realtime-updates.md;
 build-log streaming reuses the same SSE writer with its own sequence replay. Current build/logs and deployed
 preview controls remain dependent on the execution adapters. Builds is
 a cross-repository view of current/latest work; Environments is a deployment view,
@@ -804,8 +806,10 @@ preview/
 │   │   ├── validate.go             # path traversal, port range, resource ceilings
 │   │
 │   ├── source/                     # FEATURE: fetch code at a commit SHA
-│   │   ├── fetcher.go              # download archive, safe extraction
-│   │   ├── extract.go              # zip-slip and size guards
+│   │   ├── github.go               # exact-SHA archive via base repo, credential-free download
+│   │   ├── extract.go              # identity check, traversal/link/size guards
+│   │   ├── workspace.go            # worker-owned dirs, crash-discoverable leftovers
+│   │   ├── source.go               # Preparer: extract + config/Dockerfile from the tree
 │   │
 │   ├── builds/                     # FEATURE: build images
 │   │   ├── builder.go              # BuildKit client, cache, timeouts
@@ -828,8 +832,10 @@ preview/
 │   │   ├── render.go               # comment text per status
 │   │
 │   ├── secrets/                    # FEATURE: encrypted env vars for previewed apps
-│   │   ├── handler.go  routes.go  service.go  repository.go
+│   │   ├── handler.go  service.go  repository.go
 │   │   ├── crypto.go               # AES-GCM, key versioning
+│   │   ├── runtime.go              # fork rule, YAML precedence, ContainerEnv
+│   │   ├── rotation.go             # re-encryption onto the active key
 │   │   ├── redact.go               # strip secret values from logs
 │   │   ├── queries.sql  dbgen/
 │   │
@@ -955,7 +961,7 @@ Shared palette/font tokens live in `web/styles/theme.css`; `site.css` composes
 base, home, workspace, confirmation and motion styles into the same compiled asset.
 Optional `web/tests/browser` regression tooling uses pinned Playwright v1.58.2 and
 Node.js 20+ only for development; the application has no Node.js runtime dependency.
-See `docs/12-ui-architecture.md` for the implemented presentation boundary.
+See `docs/13-ui-architecture.md` for the implemented presentation boundary.
 
 ### sqlc and migrations in a feature-based layout
 

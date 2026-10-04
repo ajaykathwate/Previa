@@ -3,94 +3,88 @@ Last updated: 2026-10-04
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
-- docs/README.md indexes 13 numbered docs in reading order (01 overview, 02 setup,
-  03 user guide ... 13 roadmap). Update the matching doc with every change.
-- docs/13-roadmap.md: 12 remaining MVP tasks (source -> release acceptance), not started.
-- Contracts to preserve: docs/07 policy/intents, 08 scheduling, 09 publication design,
-  10 generation ordering, 11 realtime. Live hosted GitHub proof pending (docs/05).
-- Backend features stay flat under internal/<feature>; construction in internal/app.
-  Presentation stays in web/, with view models and no backend imports.
-- Preserve the "signal" theme (theme.css light/dark tokens, system sans + mono),
-  quiet input focus, modal confirmations, server-rendered navigation, live search
-  and ordinary GET fallback. Palette/theme toggle/view transitions/prefetch are
-  presentation-only layers in web/static/js/ui.js and web/styles/motion.css.
+- docs/README.md indexes 14 numbered docs in reading order (01 overview, 02 setup,
+  03 user guide, 06 source/config, 07 secrets ... 14 roadmap). Update the matching
+  doc with every change.
+- docs/14-roadmap.md: Prompts 1-2 done; next is Prompt 3 (bounded,
+  redacted current-build logs + resumable SSE), then 4-12.
+- Contracts to preserve: docs/06 verification/source, 07 secrets, 08 intents,
+  09 scheduling, 10 publication, 11 ordering, 12 realtime. Live hosted GitHub
+  webhook/mergeability proof still pending (docs/05).
+- Backend features flat under internal/<feature>; construction in internal/app;
+  presentation in web/ with view models and no backend imports.
+- Preserve the "signal" theme, quiet input focus, modal confirmations,
+  server-rendered navigation, live search and ordinary GET/POST fallbacks.
 
 ## Run and configuration
-- make build/test/lint generate assets/templates/sqlc and run build/tests/vet/lint.
-- PostgreSQL 17 via Compose; make migrate-up applies Goose 11 and River 007.
-  Connection credentials use environment, never migration CLI arguments.
-- make run-server/run-worker autoload .env; exported overrides win. make dev
-  reloads the server via Air; restart the worker after worker changes.
-- SharedConfig: DATABASE_URL. Server: HTTP/OAuth/session, optional all-or-nothing
-  five-setting App group, independent server-only GITHUB_WEBHOOK_SECRET.
-- Worker: ping concurrency, BUILD_TIMEOUT (12m), optional App ID/private-key pair.
-  No OAuth/session secrets needed; without App pair discovery/checks stay queued.
-  PEM must have owner-only access.
-- Real GitHub setup: docs/04-github-sign-in-and-app.md; OAuth callback
-  http://localhost:8080/auth/github/callback; App setup /installations/callback,
-  App authorization callback /installations/authorize/callback.
-- make test-webhook loads env and signs a harmless ping; App webhooks need the
-  same secret and a public HTTPS receiver URL.
+- make build/test/lint generate assets/templates/sqlc; lint = go vet + golangci-lint.
+- PostgreSQL 17 via Compose; make migrate-up applies Goose 12 and River 007.
+  Migrate before DB tests: migration-constraint, auth and queue tests use the live
+  schema (rolled back); the rest create isolated schemas.
+- make run-server/run-worker/dev autoload .env; exported overrides win.
+- Server: DATABASE_URL, HTTP/OAuth/session, optional five-setting App group,
+  optional GITHUB_WEBHOOK_SECRET, optional SECRETS_ENCRYPTION_KEYS +
+  SECRETS_ACTIVE_KEY_VERSION (both or neither; malformed keyring stops startup).
+- Worker: ping concurrency, BUILD_TIMEOUT, optional App ID/key pair. It does not
+  read the secrets keyring yet; it will need the same keyring from Prompt 5.
+- make test-source (opt-in real archive check), make secrets-reencrypt (rotation),
+  make test-webhook, make test-github-app. All load .env; no credentials as args.
+- Browser tests here need UI_BROWSER_EXECUTABLE=/snap/bin/chromium (Playwright's
+  bundled Chromium is not installed).
 
-## Working features
-- Local HTMX 2.0.11, official Tailwind 4.1.18 and templUI 1.13.2; generated templ
-  files/CSS ignored, generated sqlc files committed. No frontend runtime service.
-- OAuth/users, signed state, SCS sessions (24h/30m idle), rotation, CSRF/logout modal.
-- Home, protected Overview, Repositories, PR detail, current Builds/Environments,
-  Developer Tools ping and /protected. Installation-owner scoping on queries/actions.
-- 2026-10-04 UI redesign (merged to main): grouped sidebar -> icon rail (<1180px) ->
-  drawer (<900px); header search opens Ctrl/⌘K command palette; theme toggle;
-  Overview pipeline/checklist from real counts; sticky toolbars; PR rows become
-  labelled cards on phones; PR detail lifecycle + labelled "Soon" placeholders.
-- Repositories: responsive cards (<=3 columns, 1 on phones) in a 1240px column.
-  Cards open /repositories/<id>; PRs open /repositories/<id>/pull-requests/<number>.
-- PR list alone has Sync Pull Requests + soft-background Enable Automatic Builds.
-  Manual is off; enabling needs confirmation, disabling saves directly. Sync progress is pushed live, deferring for
-  focused PR search/open modal. Desktop filters one row; short/mobile pages scroll.
-- PR detail: saved SHA/link/fork/access, Open/Checking/Conflicts/Closed/Merged.
-  No polling: migration 11 triggers -> NOTIFY -> realtime hub -> SSE /repositories/<id>/events
-  (owner-checked, resumable cursors); see docs/11-realtime-updates.md.
-  Build disabled; direct POST gives conflict/checking reason, never authorizes work.
-- Builds shows actual current/latest intents, no archive. Environments shows actual
-  deployment state; no fabricated URL/health/logs. Empty records stay empty.
+## Prompt 1: verification and source (done, not wired into execution)
+- environments.UpstreamVerifier + UpstreamSnapshot (consumer-owned) implemented by
+  pullrequests.SyncService.VerifyUpstream: capture install revision, repo
+  observation_version and PR generation; bounded GitHub read (GetByID + PR GET)
+  with no transaction; re-lock install->repo->PR; changed => ErrUpstreamChanged.
+  Observation committed even on refusal; closed/conflicts/checking/inaccessible/
+  unavailable fail closed (checking schedules a recheck). Never authorizes;
+  carries event-authorized Automatic intent across a recorded status change.
+- internal/source: base repo resolved by numeric ID, tarball for full lowercase SHA,
+  credential-free download from allowlisted https host (codeload.github.com, <=3
+  redirects), git global header must declare the SHA. Extraction: one top dir,
+  canonical local paths, dirs/files/in-tree relative symlinks only (links created
+  last, writes via os.Root), byte/entry/path/time caps. 0700 workspaces with a
+  marker written first; Workspaces.List/Remove find crash leftovers. Config and
+  Dockerfile read from the same tree via repoconfig.Parse and os.Root.
+- Real check 2026-10-04 (PR #5, same-repo): header declared the head SHA, extracted
+  safely, config outcome missing_file (repo has no .previewrc.yaml); cleaned up.
+- Prompt 10 must call VerifyUpstream before RequestBuild and before claimBuild,
+  compare snapshot.Matches(request), then source.Preparer.Prepare/Release.
 
-## Ingress/discovery consistency
-- POST /webhooks/github is outside browser session/CSRF; max 2 MiB, raw HMAC-SHA256
-  verification before parse. Unconfigured secret 503; invalid signature 401.
-- Atomic delivery-ID receipt + PR/lifecycle changes + coordinator intent/wake.
-  Concurrent duplicates apply once; failures roll back receipt and can retry.
-  No GitHub IO inside ingress/locks. Receipts store hash/identity, never full payload.
-- PR source_updated_at orders upstream snapshots separately from generation.
-  Stale observations ignored; conflicting equal-time heads invalidate work and
-  require refresh; closed/revoked state wins ties. Fork metadata retained.
-- Lifecycle uses shared parser and ApplyEventTx. Deletion terminal, repository
-  removal tombstones protect ties. Revocation sets durable cleanup_pending;
-  absent cleanup adapter is never reported successful. Verified link can restore access.
-- internal/pullrequests owns workspace and discovery. River pr_discovery queue:
-  two workers, 45s/page, <=100 API records/page, rate-limit snoozes, eight attempts.
-- Request/run revision coalesces clicks and fences old jobs. Capture installation
-  revision + repo observation_version before API; recheck under install→repo→sync→PR
-  locks before save. Page/progress/continuation commit together. No inferred closure
-  from omitted/partial pages, no automatic build authorization from discovery.
+## Prompt 2: repository secrets (done; runtime injection in Prompt 5)
+- Migration 12: env_secrets.key_version/updated_at, name and size checks.
+- AES-256-GCM, random nonce, AAD = repo ID + name + key version. Keyring env vars
+  above; rotation = add version, set active, restart, make secrets-reencrypt
+  (optimistic, repeatable, prints counts), remove old key only at zero.
+- /repositories/{id}/secrets tab (internal/secrets handler, web/pages/secrets):
+  owner-only, CSRF, write-only (names + update time), replace by name, delete via
+  modal, limit 100, PREVIA_ prefix reserved, revoked repos delete-only,
+  unconfigured server explains itself. RepositoryTabs on the PR list page.
+- Worker contract: secrets.Provider.ForContainer(repo, Source{Base,Head}, yamlEnv):
+  untrusted (fork/unknown head) decrypts nothing; trusted => secret overrides YAML
+  (user decision), notice by name; any decrypt failure fails closed. ContainerEnv:
+  Environ for container config only (never build args/context/layers), Wipe.
+- secrets.Redactor: exact values + per-line parts, split-safe streaming Writer,
+  chunking-independent output, min 4 bytes, max 512 patterns; limits documented.
+  Prompt 3 log sink must wrap output with ContainerEnv.Redactor(platform creds).
+- Not implemented by design: maintainer approval for forks; lazy re-encryption
+  (DESIGN 16 said lazily; explicit command chosen and documented).
 
-## Execution boundary and next work
-- Non-executable Broker persists Manual/Automatic observation coordination;
-  Automatic has a durable five-minute trailing deadline. Close supersedes work.
-- Build/teardown/wake/publication workers are still not registered in production.
-  Durable intent/wake-ups wait for real adapters; no fake runtime is supplied.
-- Result/outbox/finalization/reporting/cleanup guards carry generation and revision.
-  External publication uses bounded calls outside short transactions with leases,
-  relevance checks, adapter fencing/compensation and protected resource references.
-- Before enabling Build: fresh upstream verification, exact-SHA source/config,
-  Docker runtime, fork/secrets, routing, reporting, cleanup/recovery/expiry.
-- Discovery is state=open at connection and every sync; callbacks/additions seed once.
-- Unknown closures never insert; tracked closure/merge retains row ID. Legacy data retained.
-- Migration 10 stores nullable mergeable, mergeable_state and derived build_status.
-  Null checks use tracked-PR GETs with 2s/eight-attempt polling and revision/SHA fences.
-  Conflict/checking gates cover manual, dispatch, runtime admission and publication.
+## Earlier work still relevant
+- SSE live updates: migration 11 triggers -> NOTIFY -> realtime hub -> owner-checked
+  /repositories/<id>/events with resumable cursors; no polling (docs/12).
+- Webhooks: 2 MiB HMAC-verified ingress outside session/CSRF; atomic delivery receipt
+  + PR/lifecycle + intent; source-ordered snapshots; revocation sets cleanup_pending.
+- Discovery: open-only, River pr_discovery (2 workers, 45s, <=100/page), revision
+  fences; mergeability rechecks with generation/SHA fences; Build disabled (409/503).
+- Build/teardown/wake/publication workers remain unregistered; no fake runtime.
 
-## Verification
-- 2026-10-04 SSE live updates: make build, make lint (0 issues), go test ./...
-  with TEST_DATABASE_URL (isolated schemas) and -race on realtime/pullrequests/app pass;
-  trigger->LISTEN->hub integration and migration 11 up/down verified. Browser 23/23 with
-  UI_BROWSER_EXECUTABLE=/snap/bin/chromium. Dev DB not yet migrated to 11 (run make migrate-up).
+## Verification (2026-10-04, Prompts 1-2)
+- Each commit checked in a clean worktree: make build (no generated drift), make lint
+  0 issues, go test ./... with TEST_DATABASE_URL on the Goose 12 dev DB all pass.
+  -race on source, secrets, pullrequests, realtime, environments, config pass.
+  Migration 12 up/down verified in a throwaway schema.
+- Browser 24/24 including the Secrets tab scenario. Real source check passed.
+- Not run: hosted webhook delivery; worker/runtime use of verification, source and
+  secrets (later prompts).

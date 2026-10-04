@@ -1,4 +1,4 @@
-# 12 · UI architecture
+# 13 · UI architecture
 
 How the dashboard is built: server-rendered pages, progressive enhancement, the
 visual system and the browser behaviours layered on top. Screen behaviour from a
@@ -23,7 +23,7 @@ user's point of view is in [03-user-guide.md](03-user-guide.md).
 | `internal/<feature>` | Routes, handlers, authorization, queries, jobs. |
 | `web/pages/<feature>` | Full pages, HTMX fragments and page-owned view models. |
 | `web/layouts` | `Document` (HTML shell, theme boot script, assets), `Base` (public pages), `App` (authenticated shell). |
-| `web/components` | Brand, sidebar, header, command palette, confirmation dialog, icons, navigation keys; copied templUI primitives. |
+| `web/components` | Brand, sidebar, header, command palette, confirmation dialog, repository tabs, icons, navigation keys; copied templUI primitives. |
 | `web/styles` | Tailwind entry (`app.css`) and handwritten CSS modules. |
 | `web/static` | HTMX, compiled CSS, `ui.js`; embedded by `web/assets.go`. |
 
@@ -31,7 +31,8 @@ Dependencies point one way: feature handler → page package → layouts/compone
 Use import aliases (`authpages`, `dashboardpages`, `prpages`) where names collide.
 Ownership of routes: `internal/dashboard` (home, overview, session, tools),
 `internal/installations` (`/repositories`), `internal/pullrequests` (repository and
-PR pages, Builds, Environments, the event stream).
+PR pages, Builds, Environments, the event stream), `internal/secrets` (a
+repository's Secrets tab).
 
 ## Visual system: the "signal" theme
 
@@ -59,6 +60,10 @@ PR pages, Builds, Environments, the event stream).
   Environments), System (Developer tools), plus non-link "Coming next" items.
   `layouts.App` receives an explicit `components.NavItem`; titles never decide the
   active item.
+- **Repository tabs.** `components.RepositoryTabs` switches a repository between
+  **Pull requests** (`/repositories/{id}`) and **Secrets** (`/repositories/{id}/secrets`).
+  Both are full pages, so the switch works without JavaScript and view transitions
+  keep it smooth. PR detail pages do not show the tabs.
 - **Dedicated pages.** `/repositories`, `/repositories/{id}` and
   `/repositories/{id}/pull-requests/{number}` are separate, bookmarkable pages.
   Breadcrumbs and Back links preserve filters (`q`, `access`, `page` for the
@@ -85,7 +90,7 @@ Making full-page navigation feel instant, without giving up MPA semantics:
   on `HX-Request`/`HX-Target`. An expired session returns `HX-Redirect` to sign-in.
 - Requests to one target share a replacement slot so older responses are discarded.
   Failed requests keep current content and show retry feedback.
-- Live refreshes come from the event stream ([11](11-realtime-updates.md)). A hidden
+- Live refreshes come from the event stream ([12](12-realtime-updates.md)). A hidden
   `[data-live-refresh]` element refetches `#repository-detail` with the current
   URL's filters. While PR search is focused or the policy modal is open, a refresh
   is deferred, then run when the user leaves the field or closes the modal.
@@ -110,6 +115,15 @@ backdrop dismiss without a request, focus returns to the trigger. The caller
 supplies the CSRF-protected form. Logout and enabling Automatic builds use it.
 Native `commandfor`/`command` attributes open dialogs without JavaScript in
 supporting browsers.
+
+## Secrets tab
+
+Write-only by design: the page lists names and update times, a form adds or
+replaces a value, and each Delete opens its own confirmation dialog. Forms are
+ordinary CSRF-protected POSTs with post/redirect/get, so they work without
+JavaScript. A rejected submission re-renders the form with the error but never the
+submitted value; the value textarea is never prefilled. See
+[07](07-repository-secrets.md).
 
 ## Repository directory queries
 
@@ -139,7 +153,8 @@ redirect to the last valid page. The PR list follows the same 10-row pattern.
 real auth, session, CSRF and realtime stream code and fake GitHub/queue providers.
 It covers responsive layout and overflow, navigation and the drawer, modal focus and
 dismissal, logout, CSRF, live search, pagination, Automatic confirmation, live
-updates without polling, the command palette, theme persistence, reduced motion and
+updates without polling, the command palette, theme persistence, the repository
+Secrets tab (write-only saving, replacing, modal deletion), reduced motion and
 no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-optional).
 
 ## Decisions and trade-offs
@@ -151,4 +166,4 @@ no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-
 | View transitions + prefetch, not `hx-boost` | Smooth navigation while keeping real document loads and no-JS behaviour. | Effects only in supporting browsers. |
 | Command palette as a layer over links | Faster navigation for keyboard users without a second navigation model. | Duplicate entry points to keep in sync. |
 | System fonts, no CDNs | Self-hosted, private, fast first paint. | Less typographic control. |
-| SSE invalidation, refetch via GET | No polling; authorization stays in ordinary handlers ([11](11-realtime-updates.md)). | One connection per open page. |
+| SSE invalidation, refetch via GET | No polling; authorization stays in ordinary handlers ([12](12-realtime-updates.md)). | One connection per open page. |

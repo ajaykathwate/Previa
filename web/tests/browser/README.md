@@ -31,7 +31,9 @@ Repository/PR cases also verify dedicated-page navigation, filter-preserving
 breadcrumbs/history, aligned desktop controls, legacy bookmarks, failed searches,
 Automatic confirmation/cancel/retry and in-place sync on list/detail pages.
 Command palette keyboard access, filtering, navigation and logout hand-off, and
-the persisted light/dark theme toggle are also covered.
+the persisted light/dark theme toggle are also covered, as are live updates without
+polling and the repository Secrets tab (write-only saving, replacing and modal
+deletion over the real secrets handler, keyring and CSRF with an in-memory store).
 
 To capture ignored screenshots:
 

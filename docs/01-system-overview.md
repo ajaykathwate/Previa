@@ -17,11 +17,13 @@ per-feature design lives in [DESIGN.md](../DESIGN.md).
 | Manual/Automatic build policy, durable build intent, five-minute debounce | Working as persisted coordination; **no build executes** |
 | Repository/PR dashboard with live updates (SSE) | Working |
 | Build/teardown orchestration, durable publication outbox, reconciler | Implemented and tested behind interfaces; **not registered in production** |
-| `.previewrc.yaml` fetch and validation | Implemented as a standalone library; not yet called by a build |
-| Source fetch, image build, container runtime, routing/TLS, PR comments, secrets, live logs, expiry | **Not built** (placeholder packages only) |
+| Fresh upstream verification before authorization/execution | Implemented and tested; connected to the Build action and worker in Prompt 10 |
+| Exact-commit source fetch, safe extraction, `.previewrc.yaml` from the same tree | Implemented and tested, including a real GitHub check; not yet called by a build |
+| Repository secrets: encrypted storage, Secrets tab, key rotation, fork withholding, redaction | Working for owners; containers receive them once the runtime exists (Prompt 5) |
+| Image build, container runtime, routing/TLS, PR comments, live logs, expiry | **Not built** (placeholder packages only) |
 
 The **Build latest commit** action is deliberately disabled and its endpoint refuses
-work. Nothing deploys a preview yet. [13-roadmap.md](13-roadmap.md) lists the
+work. Nothing deploys a preview yet. [14-roadmap.md](14-roadmap.md) lists the
 remaining work in order.
 
 ## Architecture
@@ -54,17 +56,19 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 
 | Path | What it holds |
 | --- | --- |
-| `cmd/server`, `cmd/worker`, `cmd/river-migrate` | Thin entry points. |
+| `cmd/server`, `cmd/worker`, `cmd/river-migrate`, `cmd/secrets-reencrypt` | Thin entry points (the last two are maintenance commands run through Make). |
 | `internal/app` | Composition root: builds dependencies, starts and stops processes. |
 | `internal/auth` | GitHub OAuth login, user upsert, SCS sessions, CSRF, logout. |
 | `internal/installations` | Verified App linking, installation lifecycle, repository directory, build-mode policy. |
 | `internal/webhooks` | Signed ingress, delivery deduplication, lifecycle dispatch. |
 | `internal/pullrequests` | PR observations, discovery/sync, mergeability, repository/PR pages, event stream endpoint. |
 | `internal/environments` | Build intent, scheduling, admission, generation-fenced results, publication outbox, reconciler. |
-| `internal/repoconfig` | Exact-SHA `.previewrc.yaml` fetch, strict validation, resource tiers. |
+| `internal/repoconfig` | `.previewrc.yaml` strict validation, defaults, resource tiers, effective hash. |
+| `internal/source` | Exact-commit archive download through the base repository, identity check, hardened extraction, workspaces, config from the tree. |
+| `internal/secrets` | Encrypted repository secrets, Secrets tab, worker `ContainerEnv` contract, streaming redaction, re-encryption. |
 | `internal/dashboard` | Home, overview, session and developer-tools pages; queue ping. |
 | `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub + SSE). |
-| `internal/{source,builds,runtime,routing,reporting,secrets,buildlogs,housekeeping}` | Placeholders for unbuilt features (`doc.go` only). |
+| `internal/{builds,runtime,routing,reporting,buildlogs,housekeeping}` | Placeholders for unbuilt features (`doc.go` only). |
 | `web/` | `pages/<feature>`, `layouts`, `components`, `styles` (Tailwind), `static` (HTMX, compiled CSS, `ui.js`), browser tests. |
 | `db/migrations` | Goose migrations 0001–0011; sqlc generates typed queries into each feature's `dbgen/`. |
 | `tools/go.mod` | Pinned dev tools: templ, sqlc, Goose, Air, golangci-lint. |
@@ -80,7 +84,8 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | `pr_syncs` | Discovery run state per repository. |
 | `build_intents` | One current authorized build request per PR, with `revision`. |
 | `environments`, `environment_operations` | One lifetime preview per PR (active and pending artifacts) and the durable publication outbox. |
-| `build_logs`, `env_secrets` | Current-build logs (cleared on build admission; no writer yet) and preview secrets (unused until the secrets feature). |
+| `env_secrets` | Repository secrets: nonce ‖ AES-256-GCM ciphertext bound to repository, name and key version. |
+| `build_logs` | Current-build logs (cleared on build admission; no writer yet). |
 | `river_*` | River's own job tables, migrated separately. |
 
 ## Key decisions and trade-offs
@@ -96,6 +101,9 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | Transactional webhook ingestion (no inbox) | Receipt, state change and intent commit together; no external IO in ingress. | Ingress must stay short; an inbox is the upgrade path if it cannot. |
 | Open-only PR discovery | Avoids importing history and API fan-out. | Closed PRs appear only if Previa tracked them while open. |
 | Mergeability as a hint, gate re-checked at build time | GitHub computes it asynchronously and it changes when the base branch moves. | The UI can briefly show Checking. |
+| Fresh upstream verification before authorizing or executing | Saved state can be stale; failing closed is cheaper than building the wrong commit. | One extra GitHub read per build. |
+| Archive by exact SHA through the base repository, credential-free download | No fork access needed; the token never follows a redirect; the archive declares its commit. | Large repositories pay the full archive download each build. |
+| Repository secrets withheld from forks, secrets override YAML | Fork authors control the code; owner values must beat contributor-editable YAML. | Fork previews run without secrets. |
 | Outbox/saga for publication | PostgreSQL cannot commit atomically with Docker, Traefik and GitHub. | Eventual convergence; adapters must be idempotent and fenced. |
 | SSE invalidation instead of polling | Idle pages send nothing; changes arrive within moments; reuses Postgres. | One long-lived connection per open page; proxies must not buffer. |
 | Package by feature, consumer-defined interfaces | Features evolve independently; no global handler/store layers. | Some small duplication across features. |
@@ -108,21 +116,27 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
   ([05](05-webhooks-and-pr-discovery.md)).
 - **Stale work finishing late.** Every job captures the PR generation and request
   revision; result writes lock the PR row and refuse anything not current
-  ([10](10-generation-ordering.md)).
+  ([11](11-generation-ordering.md)).
 - **Same-commit retries.** Rebuilding an unchanged SHA advances the intent revision,
-  so old operations cannot collide with new ones ([07](07-build-policy-and-intents.md)).
+  so old operations cannot collide with new ones ([08](08-build-policy-and-intents.md)).
 - **No transactions across systems.** Desired state commits in PostgreSQL with a
   durable operation row; external calls run outside transactions and a reconciler
-  repairs partial failures ([09](09-durable-publication-design.md)).
+  repairs partial failures ([10](10-durable-publication-design.md)).
 - **Long locks versus slow IO.** GitHub/Docker calls never run while a row lock or
   transaction is open; revisions are captured before IO and rechecked after.
 - **Asynchronous mergeability.** Unknown results trigger a bounded, fenced recheck
   job; builds fail closed while Checking or Conflicts.
+- **Hostile source archives.** The PR author controls every byte: the archive must
+  declare the exact commit, paths are confined, links cannot be written through,
+  sizes and entry counts are capped ([06](06-source-and-configuration.md)).
+- **Secrets near untrusted code.** Values are encrypted at rest, decrypted only in
+  worker memory just before container start, never given to forks and redacted from
+  logs, with the limits of redaction stated plainly ([07](07-repository-secrets.md)).
 - **Revoked access.** Revocation records durable `cleanup_pending`; no absent
   adapter is ever reported as having cleaned up.
 - **Live UI without missed updates.** SSE streams carry resumable cursors; the page
   cursor is read before page state, so a commit in between is replayed
-  ([11](11-realtime-updates.md)).
+  ([12](12-realtime-updates.md)).
 
 ## Glossary
 
@@ -136,6 +150,9 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | Environment | The one lifetime preview record per PR, holding active and pending artifacts. |
 | Operation | A durable outbox row for an external side effect (route, report, cleanup). |
 | Topic / cursor | A realtime channel name such as `repository:42` and a resumable event position. |
+| Upstream snapshot | A PR as GitHub reported it moments ago, recorded under the usual fences. |
+| Workspace | A worker-owned directory holding one extracted commit and its marker file. |
+| Trusted source | A head repository that is provably the base repository; only these receive secrets. |
 
 ## Read next
 

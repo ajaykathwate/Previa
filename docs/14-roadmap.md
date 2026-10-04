@@ -1,4 +1,4 @@
-# 13 · Roadmap: remaining MVP work
+# 14 · Roadmap: remaining MVP work
 
 What is left before Previa can build and serve real previews, as **12 sequential
 tasks**. Each task is written as a self-contained prompt (for a developer or a coding
@@ -9,21 +9,32 @@ production; the release checklist at the end does.
 ## Verified starting point
 
 - Implemented: PostgreSQL/Goose, River, OAuth/SCS/CSRF, verified GitHub App linking,
-  installation-token authentication, standalone exact-commit configuration
-  validation, Manual/Automatic intent and five-minute scheduling contracts.
+  installation-token authentication, Manual/Automatic intent and five-minute
+  scheduling contracts.
+- **Prompt 1 done:** `pullrequests.SyncService.VerifyUpstream` (the
+  `environments.UpstreamVerifier` contract) and `internal/source` (exact-SHA archive
+  through the base repository, credential-free download, commit identity check,
+  hardened extraction, crash-discoverable workspaces, config from the same tree),
+  verified against real GitHub with `make test-source`
+  ([06](06-source-and-configuration.md)). Not yet called by the Build action/worker.
+- **Prompt 2 done:** `internal/secrets` (AES-256-GCM keyring with versions and
+  `make secrets-reencrypt`, owner Secrets tab, fork withholding, secret-over-YAML
+  precedence, `Provider.ForContainer` worker contract, streaming `Redactor`)
+  ([07](07-repository-secrets.md)). Containers consume it from Prompt 5.
 - Implemented: signed/deduplicated webhook ingress, bounded open-only PR discovery,
   tracked close/merge retention, bounded mergeability checks and build refusal for
   Checking/Conflicts ([05](05-webhooks-and-pr-discovery.md)).
 - Implemented: live dashboard updates over SSE from PostgreSQL triggers through
-  `internal/platform/realtime` ([11](11-realtime-updates.md)); reuse it for live logs.
+  `internal/platform/realtime` ([12](12-realtime-updates.md)); reuse it for live logs.
 - Implemented: repository/PR pages, owner policy controls and current Builds/
   Environments views. The approved presentation and no-JavaScript flows exist.
 - Existing environment code provides tested admission, generation/revision fences,
   candidate/active artifacts, outbox, cleanup and reconciliation contracts.
   Extend those contracts rather than create a second orchestration system.
 - Production worker wiring currently registers ping and App-configured discovery/
-  mergeability jobs. Source, BuildKit, Docker runtime, routing, reporting, secret
-  management, build-log storage and periodic housekeeping need real adapters.
+  mergeability jobs. BuildKit, Docker runtime, routing, reporting, build-log storage
+  and periodic housekeeping need real adapters; verification, source preparation and
+  the secrets provider exist but are not wired into execution yet.
   The manual Build endpoint returns unavailable; it authorizes no execution.
 - Live hosted GitHub PR/mergeability proof remains pending. Local fixtures and a
   real local Git conflict are evidence, but do not prove hosted webhook delivery.
@@ -40,10 +51,10 @@ README's older illustrative tree. Keep backend files flat within each feature,
 presentation in web/, and construction in internal/app. Use small consumer-owned
 interfaces; do not create global handler/store layers or speculative frameworks.
 
-Preserve [07-build-policy-and-intents.md](07-build-policy-and-intents.md),
-[08-build-scheduling.md](08-build-scheduling.md),
-[09-durable-publication-design.md](09-durable-publication-design.md) and
-[10-generation-ordering.md](10-generation-ordering.md). Every executable
+Preserve [08-build-policy-and-intents.md](08-build-policy-and-intents.md),
+[09-build-scheduling.md](09-build-scheduling.md),
+[10-durable-publication-design.md](10-durable-publication-design.md) and
+[11-generation-ordering.md](11-generation-ordering.md). Every executable
 request and external artifact/operation carries PR identity, exact SHA and the
 ordered (generation, revision) fence. Same-SHA Retry/Rebuild changes revision.
 Observation/discovery/reconciliation alone never authorizes a Manual build.
@@ -57,7 +68,7 @@ ambiguous external success and process crashes. Persist cleanup/outbox intent;
 never substitute a no-op adapter or claim missing-resource cleanup succeeded
 without checking it. Credentials stay out of job payloads, URLs, logs and errors.
 
-Preserve the "signal" theme and UI patterns in [12-ui-architecture.md](12-ui-architecture.md),
+Preserve the "signal" theme and UI patterns in [13-ui-architecture.md](13-ui-architecture.md),
 accessible modal confirmations, CSRF, scoped queries, useful links, bounded lists,
 focus-preserving HTMX and ordinary GET/form fallbacks. Show actual work and
 deployed state separately. One lifetime environment/current intent per PR;
@@ -86,8 +97,8 @@ for live proofs require an explicitly authorized disposable repository.
 
 | Prompt | Deliverable | Prerequisites |
 | --- | --- | --- |
-| 1 | Fresh upstream verification and safe exact-SHA source | Existing App/config/PR contracts |
-| 2 | Encrypted repository secrets and enforced fork policy | 1 |
+| 1 ✅ | Fresh upstream verification and safe exact-SHA source | Existing App/config/PR contracts |
+| 2 ✅ | Encrypted repository secrets and enforced fork policy | 1 |
 | 3 | Bounded, redacted current-build logs and SSE | 2 |
 | 4 | Isolated BuildKit image builder | 1–3 |
 | 5 | Hardened Docker candidates and readiness | 1–4 |
@@ -107,7 +118,7 @@ observed release checks in Prompt 12, including isolation, recovery and restore.
 ## Prompt 1 — Fresh PR verification and safe exact-SHA source fetching
 
 > Implement the source-preparation boundary for the remaining MVP. Read DESIGN
-> Sections 5, 7, 8 and 13, docs/06-repository-configuration.md, and the existing PR
+> Sections 5, 7, 8 and 13, docs/06-source-and-configuration.md, and the existing PR
 > observation/admission and GitHub App clients. Keep normal build execution off.
 >
 > Add bounded installation-authenticated verification of a tracked PR's current
@@ -273,7 +284,7 @@ observed release checks in Prompt 12, including isolation, recovery and restore.
 ## Prompt 6 — Stable HTTPS routing and fenced blue/green publication
 
 > Implement DESIGN Sections 11 and 13 and the route boundary in
-> docs/09-durable-publication-design.md. Read existing operation leases, candidate/
+> docs/10-durable-publication-design.md. Read existing operation leases, candidate/
 > active artifacts and finalization SQL before adding internal/routing adapters.
 > Preserve Traefik v3; do not replace the router or add a second orchestrator.
 >

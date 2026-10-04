@@ -12,12 +12,14 @@ is not available yet; the screens show real saved state only.
 - Sign-in needs OAuth values and `SESSION_SECRET`. Linking repositories needs the
   five GitHub App settings; discovery workers need App ID and private-key path;
   webhooks need `GITHUB_WEBHOOK_SECRET`. See [04](04-github-sign-in-and-app.md).
+- Repository secrets need `SECRETS_ENCRYPTION_KEYS` and `SECRETS_ACTIVE_KEY_VERSION`
+  on the server ([02](02-development-setup.md), [07](07-repository-secrets.md)).
 
 ## Moving around
 
 - The sidebar groups **Workspace** (Overview, Repositories), **Delivery** (Builds,
   Environments) and **System** (Developer tools). **Coming next** items (live logs,
-  secrets, preview URLs) are labels, not links.
+  preview URLs) are labels, not links.
 - Medium screens collapse the sidebar to icons; phones use the menu button.
 - **Ctrl K** (**⌘K** on macOS) or the header search opens the command palette. Type
   to filter pages, repository filters and account actions; arrow keys and Enter
@@ -94,9 +96,33 @@ repository's PR list, never on PR details.
   in either mode.
 
 **Build latest commit is disabled.** It needs exact-SHA source fetching, image
-builds, isolated containers, routing and cleanup first ([13-roadmap.md](13-roadmap.md)).
+builds, isolated containers, routing and cleanup first ([14-roadmap.md](14-roadmap.md)).
 Direct POSTs are refused too: HTTP 409 with the reason for Checking, Conflicts or
 Refresh required PRs, otherwise HTTP 503 "not available yet". No intent is created.
+
+## Manage repository secrets
+
+Each repository page has two tabs: **Pull requests** and **Secrets**. Secrets are
+environment variables your previews receive when their container starts.
+
+1. Open a repository, then **Secrets**.
+2. Enter a **Name** (letters, digits and underscores, such as `STRIPE_KEY`) and a
+   **Value**, then **Save secret**. The value is encrypted immediately; from then on
+   only the name and its update time are shown.
+3. **Replace** asks for a new value for that name; the current value is never shown.
+4. **Delete** asks for confirmation in a dialog; Cancel or Escape keeps the secret.
+
+Good to know:
+
+- Pull requests from **forks** never receive secrets, in either build mode.
+- A secret overrides a variable with the same name in `.previewrc.yaml`.
+- Use **preview-only credentials** (sandbox keys, test databases). Previews run pull
+  request code.
+- Values of 4 or more characters are redacted from logs; that cannot stop code that
+  receives a value from sending it elsewhere.
+- Up to 100 secrets per repository. If GitHub access to the repository was removed
+  you can delete secrets but not add or replace them. If the server has no
+  encryption keys, the tab says so and only lists existing names.
 
 ## Other screens
 

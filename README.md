@@ -10,8 +10,8 @@ period. Previews are torn down when the PR closes or merges.
 
 Manual/Automatic policy, durable build intent and scheduling are implemented;
 building and serving previews is not connected yet. See
-[build policy and build intent](docs/07-build-policy-and-intents.md) and the
-[roadmap](docs/13-roadmap.md). Start with the [documentation index](docs/README.md)
+[build policy and build intent](docs/08-build-policy-and-intents.md) and the
+[roadmap](docs/14-roadmap.md). Start with the [documentation index](docs/README.md)
 for a guided reading order.
 
 This document is written for the builder (me), not an end user — every step
@@ -125,7 +125,7 @@ authorize publishing an unchecked container; runtime readiness remains a later
 integration requirement.
 
 Standalone fetching/validation is implemented; real builds are not connected.
-See [repository configuration](docs/06-repository-configuration.md) for strict validation,
+See [repository configuration](docs/06-source-and-configuration.md) for strict validation,
 safe error categories, fixtures and effective config hashing. Build mode remains
 platform-owned and cannot be set through this YAML.
 
@@ -224,7 +224,9 @@ from individual PR detail pages. The switch is off in Manual mode; enabling
 requires an owner-controlled, CSRF-protected confirmation modal. Search, sync
 progress and policy saves update in place through HTMX, and committed changes
 (sync progress, webhook and mergeability updates) are pushed to open repository
-pages over Server-Sent Events rather than polled. Page URLs are shareable
+pages over Server-Sent Events rather than polled. Each repository also has a
+**Secrets** tab where its owner stores encrypted runtime values (write-only, never
+given to fork PRs). Page URLs are shareable
 and navigation works without JavaScript.
 
 PR discovery and latest/requested/deployed commit views are implemented. Builds
@@ -481,8 +483,8 @@ production dispatch and UI wiring remain unbuilt. Repeated Build requests coales
 failure or Rebuild after success creates a new revision without bumping PR
 generation. Switching to Manual cancels unstarted Automatic intent; running work
 may finish if still current. No historical builds archive is introduced. See
-[07-build-policy-and-intents.md](docs/07-build-policy-and-intents.md) for request semantics and
-[08-build-scheduling.md](docs/08-build-scheduling.md) for atomic admission, wake-up
+[08-build-policy-and-intents.md](docs/08-build-policy-and-intents.md) for request semantics and
+[09-build-scheduling.md](docs/09-build-scheduling.md) for atomic admission, wake-up
 uniqueness, revision fencing and remaining production integration.
 
 A unique constraint on (repo_id, number) for `pull_requests` and on `subdomain` for `environments` prevents duplicate environments when webhooks arrive twice.
@@ -513,11 +515,15 @@ This system runs other people's code on your machine, so isolation is a core req
 
 ### 4.8 Configuration (environment variables)
 
+The authoritative list of current settings, and which process needs each one, is
+in [docs/02-development-setup.md](docs/02-development-setup.md). This list also
+includes settings for features that are not built yet.
+
 - `DATABASE_URL`
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
 - `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`)
-- `SESSION_SECRET`, `SECRETS_ENCRYPTION_KEY`
+- `SESSION_SECRET`, `SECRETS_ENCRYPTION_KEYS`, `SECRETS_ACTIVE_KEY_VERSION` (versioned keyring for repository secrets)
 - `MAX_CONCURRENT_BUILDS`, `ENV_TTL_HOURS`
 - `DNS_PROVIDER_API_TOKEN` (for Traefik's wildcard cert challenge)
 
