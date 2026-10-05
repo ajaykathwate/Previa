@@ -111,3 +111,28 @@ func TestProviderFailsClosedOnUndecryptableValues(t *testing.T) {
 		t.Fatal("malformed YAML env must be rejected")
 	}
 }
+
+func TestProviderWithoutKeyringServesOnlyRepositoriesWithoutSecrets(t *testing.T) {
+	k := testKeyring(t)
+	stored := sealedFor(t, k, 7, map[string]string{"TOKEN": "value-one"})
+	provider, err := NewProvider(sealedFunc(func(_ context.Context, repoID int64) ([]SealedSecret, error) {
+		if repoID == 7 {
+			return stored, nil
+		}
+		return nil, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := provider.ForContainer(t.Context(), 8, Source{BaseRepoID: 100, HeadRepoID: 100}, []string{"MODE=preview"})
+	if err != nil || len(env.Environ()) != 1 {
+		t.Fatalf("a repository without secrets: %v %v", env, err)
+	}
+	if env, err := provider.ForContainer(t.Context(), 7, Source{BaseRepoID: 100, HeadRepoID: 100}, nil); !errors.Is(err, ErrSecretsUnavailable) || env != nil {
+		t.Fatalf("a repository with secrets must fail closed without a keyring: %v", err)
+	}
+	// Forks never needed the secrets, so they never needed the keyring either.
+	if _, err := provider.ForContainer(t.Context(), 7, Source{BaseRepoID: 100}, nil); err != nil {
+		t.Fatal(err)
+	}
+}

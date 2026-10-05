@@ -30,6 +30,7 @@ import (
 	"github.com/ajaykathwatee/previa/web"
 	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
+	"github.com/alexedwards/scs/v2"
 	"github.com/alexedwards/scs/v2/memstore"
 	"github.com/go-chi/chi/v5"
 	"strconv"
@@ -102,7 +103,19 @@ func TestBrowserRegression(t *testing.T) {
 		dashboard.Mount(r, handler, auth.RequireUser)
 		for _, path := range []string{"/builds", "/environments"} {
 			r.With(auth.RequireUser).Get(path, func(w http.ResponseWriter, r *http.Request) {
-				templ.Handler(prpages.ActivityIndex("design-review", handler.CSRFToken(r.Context()), prpages.Activity{Environments: r.URL.Path == "/environments", Number: 1, Pages: 1})).ServeHTTP(w, r)
+				activity := prpages.Activity{Environments: r.URL.Path == "/environments", Number: 1, Pages: 1}
+				if r.URL.Query().Get("fixture") == "rows" {
+					activity.Total = 2
+					activity.Rows = []prpages.ActivityRow{
+						{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Latest: "latest-commit", Requested: "latest-commit", Deployed: "older-commit", State: "running", Available: true,
+							PreviewURL: "https://pr-3-1-fixture.preview.example.com", ExpiresAt: "2026-10-07T10:00:00Z", OlderPreview: true, Teardown: true, Waiting: "Waiting for capacity"},
+						{RepoID: 1, Number: 4, Name: "fixture-owner/repository-1", Latest: "latest-commit", Requested: "latest-commit", State: "failed", Available: true, Failure: "The app did not become ready."},
+					}
+					if activity.Environments {
+						activity.Rows[0].Waiting = ""
+					}
+				}
+				templ.Handler(prpages.ActivityIndex("design-review", handler.CSRFToken(r.Context()), activity)).ServeHTTP(w, r)
 			})
 		}
 		dashboard.MountPing(r, fixturePings{}, auth.RequireUser, logger)
@@ -148,9 +161,47 @@ func TestBrowserRegression(t *testing.T) {
 			offset := (p.Number - 1) * 10
 			p.Rows = p.Rows[offset:min(offset+10, p.Total)]
 			if n, err := strconv.ParseInt(r.URL.Query().Get("pr"), 10, 32); err == nil && n > 0 {
-				p.SelectedPR = &prpages.PR{Number: int32(n), Available: p.Available, Title: "A careful change to preview " + strconv.Itoa(int(n)), SHA: "latest-commit", Build: "Not requested", State: "open", Environment: "Not deployed", URL: "https://github.com/fixture-owner/repository/pull/1"}
+				p.SelectedPR = fixturePR(r, sessions, int32(n), p.Available)
 			}
 			return p
+		}
+		// Build and teardown act like the real handler: an owner's request
+		// changes the PR's state and the panel re-renders in place.
+		for _, action := range []string{"build", "teardown"} {
+			r.With(auth.RequireUser).Post("/repositories/{repoID}/pull-requests/{number}/"+action, func(w http.ResponseWriter, r *http.Request) {
+				if err := r.ParseForm(); err != nil {
+					http.Error(w, "Invalid form", 400)
+					return
+				}
+				id, _ := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+				if id%2 == 0 {
+					http.NotFound(w, r)
+					return
+				}
+				key := "fixture-pr-" + chi.URLParam(r, "number")
+				if strings.HasSuffix(r.URL.Path, "/build") {
+					if r.Form.Get("request_key") == "" {
+						http.Error(w, "The pull request or its build changed meanwhile. Reload and try again.", http.StatusConflict)
+						return
+					}
+					sessions.Put(r.Context(), key, "queued")
+				} else {
+					sessions.Put(r.Context(), key, "removing")
+				}
+				if r.Form.Get("return") == "environments" {
+					http.Redirect(w, r, "/environments?page=1", http.StatusSeeOther)
+					return
+				}
+				query, _ := url.ParseQuery(r.Form.Get("workspace_query"))
+				location := repositorypages.WorkspaceURL(id, query)
+				if r.Header.Get("HX-Request") != "true" {
+					http.Redirect(w, r, location, http.StatusSeeOther)
+					return
+				}
+				r.URL.RawQuery = query.Encode()
+				w.Header().Set("HX-Push-Url", location)
+				templ.Handler(prpages.Panel(panel(r, id), handler.CSRFToken(r.Context()))).ServeHTTP(w, r)
+			})
 		}
 		for _, action := range []string{"policy", "refresh"} {
 			r.With(auth.RequireUser).Post("/repositories/{repoID}/"+action, func(w http.ResponseWriter, r *http.Request) {
@@ -422,4 +473,33 @@ func (f *fixtureLogs) LinesBefore(_ context.Context, _, epoch, before int64, lim
 	}
 	before = min(before, int64(len(f.lines)))
 	return append([]buildlogs.Line(nil), f.lines[max(int(before)-limit, 0):before]...), nil
+}
+
+// fixturePR is a PR detail in one of the states the real handler derives:
+// PR 3 serves an older preview, any other PR has nothing requested; an owner's
+// build or teardown (kept in the session) moves it on.
+func fixturePR(r *http.Request, sessions *scs.SessionManager, number int32, available bool) *prpages.PR {
+	pr := &prpages.PR{Number: number, Available: available, Title: "A careful change to preview " + strconv.Itoa(int(number)), SHA: "latest-commit",
+		Build: "Not requested", State: "open", Environment: "Not deployed", URL: "https://github.com/fixture-owner/repository/pull/1"}
+	if !available {
+		pr.Actions.Unavailable = "GitHub access to this repository is unavailable."
+		return pr
+	}
+	if number == 3 {
+		pr.Build, pr.RequestedSHA, pr.Environment, pr.DeployedSHA = "succeeded", "older-commit", "running", "older-commit"
+		pr.PreviewURL, pr.ExpiresAt, pr.OlderPreview = "https://pr-3-1-fixture.preview.example.com", "2026-10-07T10:00:00Z", true
+		pr.Actions = prpages.Actions{Build: true, Teardown: true, ExpectedRevision: 1, RequestKey: "fixture-request-key-0003"}
+	} else {
+		pr.Actions = prpages.Actions{Build: true, RequestKey: "fixture-request-key-" + strconv.Itoa(int(number))}
+	}
+	switch sessions.GetString(r.Context(), "fixture-pr-"+strconv.Itoa(int(number))) {
+	case "queued":
+		pr.Build, pr.RequestedSHA = "queued", "latest-commit"
+		pr.Actions = prpages.Actions{Teardown: true}
+	case "removing":
+		pr.Environment, pr.PreviewURL, pr.ExpiresAt, pr.OlderPreview = "tearing_down", "", "", false
+		pr.RemovedNote = "The owner tore this preview down. Build again to bring it back at the same address."
+		pr.Actions = prpages.Actions{}
+	}
+	return pr
 }

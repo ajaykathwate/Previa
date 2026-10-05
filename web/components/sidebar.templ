@@ -18,16 +18,6 @@ templ SidebarContent(active NavItem) {
 			@WorkspaceLink("/developer-tools", "Developer tools", TerminalIcon(), NavTools, active)
 		</div>
 	</nav>
-	<div class="nav-group nav-upcoming" aria-label="Coming next" role="group">
-		<p class="nav-group-label">Coming next</p>
-		<ul>
-			<li title="Preview URLs: coming soon">
-				<span class="nav-icon">
-					@LinkIcon()
-				</span><span class="nav-label">Preview URLs</span><span class="soon-tag">Soon</span>
-			</li>
-		</ul>
-	</div>
 }
 
 templ Sidebar(active NavItem) {

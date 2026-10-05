@@ -34,9 +34,19 @@ func (WakeArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{Queue: CoordinationQueue, MaxAttempts: 5, UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled}}}
 }
 
-// NewExecutionBroker is used only with real execution dependencies (test adapters
-// in integration tests). The production app does not construct this broker yet.
-// All consuming processes must register build, teardown, wake and operation workers.
+// NewRequestBroker records PR observations, owner build requests and their
+// durable wake-ups for the server, which never executes: dispatch and
+// admission stay with workers holding real execution adapters, and each
+// request waits durably until one runs.
+func NewRequestBroker(pool *pgxpool.Pool, client jobInserter) *Broker {
+	b := NewBroker(pool, client)
+	b.requests = true
+	return b
+}
+
+// NewExecutionBroker needs real execution dependencies; the worker builds it
+// only when they are configured and validated. Its processes must register
+// build, teardown, wake and operation workers.
 func NewExecutionBroker(pool *pgxpool.Pool, client jobInserter, service *Service, operations *OperationWorker, now func() time.Time) (*Broker, error) {
 	if pool == nil || client == nil || service == nil || service.runtime == nil || service.repo == nil || service.repo.operations == nil || operations == nil || operations.executor == nil {
 		return nil, ErrExecutionUnavailable
@@ -95,7 +105,7 @@ func (b *Broker) wakeTx(ctx context.Context, tx pgx.Tx, request Request, intent 
 // RequestBuild commits manual authorization and the wake-up together. The
 // outer scope locks are reentrant in RequestIntentTx; lock order never reverses.
 func (b *Broker) RequestBuild(ctx context.Context, command IntentCommand) (outcome IntentOutcome, err error) {
-	if !b.enabled {
+	if !b.enabled && !b.requests {
 		return outcome, ErrExecutionUnavailable
 	}
 	if err := command.validate(); err != nil {

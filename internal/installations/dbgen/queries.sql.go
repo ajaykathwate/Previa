@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const cancelUnstartedAutomaticIntents = `-- name: CancelUnstartedAutomaticIntents :execrows
+const cancelUnstartedAutomaticIntents = `-- name: CancelUnstartedAutomaticIntents :many
 WITH locked_prs AS MATERIALIZED (
     SELECT pr.id FROM pull_requests pr JOIN build_intents b ON b.pull_request_id = pr.id
     WHERE pr.repo_id = $1 AND b.source = 'automatic' AND b.state IN ('pending', 'queued')
@@ -22,14 +22,27 @@ UPDATE build_intents b SET state = 'cancelled', completed_at = clock_timestamp()
 FROM locked_prs pr
 WHERE b.pull_request_id = pr.id AND b.source = 'automatic'
     AND b.state IN ('pending', 'queued')
+RETURNING b.pull_request_id
 `
 
-func (q *Queries) CancelUnstartedAutomaticIntents(ctx context.Context, repoID int64) (int64, error) {
-	result, err := q.db.Exec(ctx, cancelUnstartedAutomaticIntents, repoID)
+func (q *Queries) CancelUnstartedAutomaticIntents(ctx context.Context, repoID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, cancelUnstartedAutomaticIntents, repoID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected(), nil
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var pull_request_id int64
+		if err := rows.Scan(&pull_request_id); err != nil {
+			return nil, err
+		}
+		items = append(items, pull_request_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const countRepositoryPage = `-- name: CountRepositoryPage :one

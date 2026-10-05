@@ -44,6 +44,7 @@ func (e *OperationFailure) Unwrap() error { return e.Err }
 var safeOperationCode = regexp.MustCompile(`^[a-zA-Z0-9_]{1,64}$`)
 
 type OperationWorker struct {
+	river.WorkerDefaults[OperationArgs]
 	repo     *Repository
 	executor OperationExecutor
 	logger   *slog.Logger
@@ -69,11 +70,14 @@ func NewOperationWorker(repo *Repository, executor OperationExecutor, logger *sl
 	return &OperationWorker{repo: repo, executor: executor, logger: logger, lease: lease, timeouts: copyTimeouts}, nil
 }
 
+// Timeout gives River's job the operation's own timeout plus room to claim
+// the operation and record its outcome, which happen outside that timeout.
 func (w *OperationWorker) Timeout(job *river.Job[OperationArgs]) time.Duration {
+	const bookkeeping = 30 * time.Second
 	if timeout := w.timeouts[job.Args.OperationKind]; timeout > 0 {
-		return timeout
+		return timeout + bookkeeping
 	}
-	return 10 * time.Second
+	return 10*time.Second + bookkeeping
 }
 
 func (w *OperationWorker) Work(ctx context.Context, job *river.Job[OperationArgs]) error {

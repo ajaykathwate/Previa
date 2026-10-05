@@ -7,17 +7,25 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ajaykathwatee/previa/internal/buildlogs"
-	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
+	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 	"github.com/ajaykathwatee/previa/internal/platform/githubapp"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
-	"github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/ajaykathwatee/previa/internal/platform/workers"
+	"github.com/jackc/pgx/v5"
+	"github.com/moby/moby/client"
 	"github.com/riverqueue/river"
 )
 
-// RunWorker checks the database and runs River until canceled, draining on shutdown.
+// drainTimeout is how long a stopping worker lets running jobs finish before
+// it cancels them. Cancelled builds are not failures: they run again on the
+// next start; operations and reports resume from their durable rows.
+const drainTimeout = 30 * time.Second
+
+// RunWorker checks its dependencies, registers exactly the work it can do,
+// records those capabilities for the server, and runs River until canceled,
+// draining on shutdown.
 func RunWorker(ctx context.Context, logger *slog.Logger) error {
 	cfg, err := config.LoadWorker()
 	if err != nil {
@@ -33,48 +41,76 @@ func RunWorker(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	var source pullrequests.Source
+	in := pipelineInput{cfg: cfg, pool: pool, producer: producer, logger: logger}
 	if cfg.GitHubAppID > 0 {
-		appClient, err := githubapp.NewApp(cfg.GitHubAppID, cfg.GitHubAppPrivateKeyPath)
+		app, err := githubapp.NewApp(cfg.GitHubAppID, cfg.GitHubAppPrivateKeyPath)
 		if err != nil {
 			return fmt.Errorf("initialize worker GitHub App: %w", err)
 		}
-		source = pullrequests.NewGitHubSource(appClient)
+		in.github = app
 	}
-	syncService := pullrequests.NewSyncService(pool, producer, source, environments.NewBroker(pool, producer))
-	client, err := queue.NewWorker(pool, cfg, logger, func(rc *river.Config) {
-		if source != nil {
-			river.AddWorker(rc.Workers, &pullrequests.SyncWorker{Service: syncService})
-			river.AddWorker(rc.Workers, &pullrequests.MergeabilityWorker{Service: syncService})
-			rc.Queues[pullrequests.SyncQueue] = river.QueueConfig{MaxWorkers: 2}
+	if cfg.RoutingConfigured() && in.github != nil {
+		docker, err := dockerx.New(ctx)
+		if err != nil {
+			return fmt.Errorf("builds need Docker (unset PREVIEW_BASE_DOMAIN to run without builds): %w", err)
 		}
-		// Current-build log retention needs only the database.
-		river.AddWorker(rc.Workers, &buildlogs.PruneWorker{Store: buildlogs.NewStore(pool), Logger: logger})
-		rc.Queues[buildlogs.PruneQueue] = river.QueueConfig{MaxWorkers: 1}
-		rc.PeriodicJobs = append(rc.PeriodicJobs, buildlogs.PeriodicPrune())
-	})
+		defer func(c *client.Client) { _ = c.Close() }(docker)
+		in.docker = docker
+	}
+	p, err := buildPipeline(ctx, in)
+	if err != nil {
+		return fmt.Errorf("compose worker: %w", err)
+	}
+	for _, step := range p.startup {
+		if err := step(ctx); err != nil {
+			return fmt.Errorf("prepare worker: %w", err)
+		}
+	}
+	riverClient, err := queue.NewWorker(pool, cfg, logger, p.register...)
 	if err != nil {
 		return err
 	}
 	// Keep job contexts alive while draining after the process signal is received.
-	if err := client.Start(context.WithoutCancel(ctx)); err != nil {
+	if err := riverClient.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("start River worker (run make migrate-up first): %w", err)
 	}
-	logger.Info("River worker started", "ping_workers", cfg.MaxConcurrentBuilds, "pr_discovery_configured", source != nil)
+	heartbeat, err := workers.Start(ctx, pool, p.capabilities, logger)
+	if err != nil {
+		return errors.Join(err, stopRiver(riverClient, logger))
+	}
+	for _, reason := range p.unavailable {
+		logger.Warn("capability unavailable", "reason", reason)
+	}
+	logger.Info("River worker started", "execution", p.capabilities.Execution, "reporting", p.capabilities.Reporting,
+		"housekeeping", p.capabilities.Housekeeping, "discovery", p.capabilities.Discovery, "build_workers", cfg.MaxConcurrentBuilds)
+	var stopped error
 	select {
 	case <-ctx.Done():
-	case <-client.Stopped():
-		return errors.New("river worker stopped unexpectedly")
+	case <-riverClient.Stopped():
+		stopped = errors.New("river worker stopped unexpectedly")
 	}
-	stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// Tell the server first, so no new request counts on this worker.
+	if err := heartbeat.Stop(context.Background()); err != nil {
+		logger.Warn("remove worker capabilities", "error", err)
+	}
+	if stopped != nil {
+		return stopped
+	}
+	return stopRiver(riverClient, logger)
+}
+
+// stopRiver lets running jobs finish for drainTimeout, then cancels them.
+func stopRiver(c *river.Client[pgx.Tx], logger *slog.Logger) error {
+	stopCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
-	if err := client.Stop(stopCtx); err != nil {
-		cancelCtx, cancelJobs := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := c.Stop(stopCtx); err != nil {
+		cancelCtx, cancelJobs := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancelJobs()
-		if cancelErr := client.StopAndCancel(cancelCtx); cancelErr != nil {
+		if cancelErr := c.StopAndCancel(cancelCtx); cancelErr != nil {
 			return fmt.Errorf("stop River worker: %w", errors.Join(err, cancelErr))
 		}
-		return fmt.Errorf("drain River worker: %w", err)
+		logger.Warn("running jobs were cancelled after the drain period; they resume on the next start")
+		return nil
 	}
 	logger.Info("River worker stopped")
 	return nil

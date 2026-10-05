@@ -14,6 +14,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
+	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
 	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
 	environmentpages "github.com/ajaykathwatee/previa/web/pages/environments"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
@@ -46,6 +47,7 @@ type Handler struct {
 	logger  *slog.Logger
 	enabled bool
 	live    LiveEvents
+	actions *Actions
 }
 
 func NewHandler(repo *Repository, sync Refresher, policy Policy, users UserSession, logger *slog.Logger, enabled bool) *Handler {
@@ -71,6 +73,7 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 		r.Post("/repositories/{repoID}/refresh", h.refresh)
 		r.Post("/repositories/{repoID}/policy", h.setPolicy)
 		r.Post("/repositories/{repoID}/pull-requests/{number}/build", h.build)
+		r.Post("/repositories/{repoID}/pull-requests/{number}/teardown", h.teardown)
 		r.Get("/builds", h.activity)
 		r.Get("/environments", h.activity)
 	})
@@ -256,36 +259,6 @@ func (h *Handler) setPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	h.finishMutation(w, r, user, id)
 }
-func (h *Handler) build(w http.ResponseWriter, r *http.Request) {
-	user, id, err := h.identity(r)
-	if err != nil {
-		h.fail(w, r, err)
-		return
-	}
-	n, err := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
-	if err != nil || n <= 0 {
-		http.NotFound(w, r)
-		return
-	}
-	row, err := h.repo.Detail(r.Context(), user, id, int32(n))
-	if err != nil {
-		h.fail(w, r, err)
-		return
-	}
-	if !row.Available.Bool {
-		h.fail(w, r, ErrUnavailable)
-		return
-	}
-	if row.State == "open" {
-		if err := environments.BuildBlockReason(row.BuildStatus, row.NeedsRefresh); err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		}
-	}
-	// Fail closed. Enabling this boundary requires a fresh upstream observation,
-	// fenced admission, source/config validation and real execution/publication adapters.
-	http.Error(w, "Build execution is not available yet. No build was requested.", http.StatusServiceUnavailable)
-}
 func (h *Handler) activity(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := h.users.UserIDs(r.Context())
 	if !ok {
@@ -313,11 +286,7 @@ func (h *Handler) activity(w http.ResponseWriter, r *http.Request) {
 	}
 	page := pages.Activity{Number: data.Page, Pages: data.Pages, Total: data.Total, RepoID: repoID, Environments: isEnv}
 	for _, row := range data.Rows {
-		state := row.BuildState
-		if isEnv {
-			state = row.EnvironmentStatus
-		}
-		page.Rows = append(page.Rows, pages.ActivityRow{RepoID: row.RepoID, Number: row.Number, Name: row.FullName, Latest: row.HeadSha, Requested: row.RequestedSha, Deployed: row.DeployedSha, State: state, Deadline: timestamp(row.AvailableAt), Available: row.Accessible && row.InstallationStatus == "active"})
+		page.Rows = append(page.Rows, h.activityRow(row, isEnv))
 	}
 	if page.Number != f.Page {
 		http.Redirect(w, r, page.PageURL(page.Number), http.StatusSeeOther)
@@ -329,4 +298,40 @@ func (h *Handler) activity(w http.ResponseWriter, r *http.Request) {
 	} else {
 		templ.Handler(buildpages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
 	}
+}
+
+// activityRow maps one Builds or Environments row to display data.
+func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool) pages.ActivityRow {
+	available := row.Accessible && row.InstallationStatus == "active"
+	out := pages.ActivityRow{RepoID: row.RepoID, Number: row.Number, Name: row.FullName, Latest: row.HeadSha,
+		Requested: row.RequestedSha, Deployed: row.DeployedSha, State: row.BuildState, Deadline: timestamp(row.AvailableAt), Available: available}
+	if deployments {
+		out.State = row.EnvironmentStatus
+	}
+	live := row.DeployedSha != "" && (row.EnvironmentStatus == "running" || row.EnvironmentStatus == "failed" || row.EnvironmentStatus == "publishing")
+	if live {
+		out.OlderPreview = row.DeployedSha != row.HeadSha
+		if h.actions != nil && h.actions.PreviewBaseDomain != "" && row.Hostname != "" {
+			out.PreviewURL = "https://" + row.Hostname + "." + h.actions.PreviewBaseDomain
+		}
+		if row.ExpiresAt.Valid {
+			out.ExpiresAt = row.ExpiresAt.Time.UTC().Format(time.RFC3339)
+		}
+	}
+	if row.WaitingReason != "" && (row.BuildState == "pending" || row.BuildState == "queued" || row.BuildState == "running") {
+		out.Waiting = environments.WaitingTitle(row.WaitingReason)
+	}
+	switch {
+	case !deployments && row.BuildState == "failed":
+		code := ""
+		if row.FailureCurrent {
+			code = row.FailureCode
+		}
+		out.Failure = environments.FailureMessage(code)
+	case deployments && row.EnvironmentStatus == "failed":
+		out.Failure = environments.FailureMessage(row.FailureCode)
+	}
+	out.Teardown = deployments && h.actions != nil && available && row.PrState == "open" &&
+		row.EnvironmentStatus != "tearing_down" && row.EnvironmentStatus != "torn_down"
+	return out
 }

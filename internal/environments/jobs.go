@@ -67,7 +67,8 @@ type jobInserter interface {
 type Broker struct {
 	pool            *pgxpool.Pool
 	client          jobInserter
-	enabled         bool
+	enabled         bool        // dispatches and admits: real execution adapters
+	requests        bool        // records owner build requests (the server)
 	reports         *Repository // reporting enabled: records report work
 	now             func() time.Time
 	recoveryMu      sync.Mutex
@@ -133,7 +134,7 @@ func (b *Broker) EnqueueTx(ctx context.Context, tx pgx.Tx, request Request) (int
 // authorized intent in one transaction. A future deadline keeps its separate
 // durable wake-up; a new Manual observation alone never creates a successor.
 func finishJob[T river.JobArgs](ctx context.Context, broker *Broker, request Request, job *river.Job[T], workErr error) error {
-	if workErr != nil && job.Attempt < job.MaxAttempts {
+	if workErr != nil && job.Attempt < job.MaxAttempts && !permanent(workErr) {
 		return workErr
 	}
 	err := database.InTransaction(ctx, broker.pool, func(tx pgx.Tx) error {

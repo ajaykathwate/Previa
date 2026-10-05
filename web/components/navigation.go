@@ -4,10 +4,10 @@ package components
 type NavItem string
 
 const (
-	NavNone     NavItem = ""
-	NavOverview NavItem = "overview"
- NavRepositories NavItem="repositories"
- NavEnvironments NavItem="environments"
- NavBuilds NavItem="builds"
- NavTools NavItem="tools"
+	NavNone         NavItem = ""
+	NavOverview     NavItem = "overview"
+	NavRepositories NavItem = "repositories"
+	NavEnvironments NavItem = "environments"
+	NavBuilds       NavItem = "builds"
+	NavTools        NavItem = "tools"
 )

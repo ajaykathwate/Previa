@@ -79,7 +79,7 @@ func (r *Repository) SetBuildMode(ctx context.Context, userID, repoID int64, mod
 	if mode != ManualBuilds && mode != AutomaticBuilds {
 		return result, ErrInvalidBuildMode
 	}
-	err = r.transaction(ctx, func(_ pgx.Tx, q *dbgen.Queries) error {
+	err = r.transaction(ctx, func(tx pgx.Tx, q *dbgen.Queries) error {
 		installationID, err := q.FindPolicyInstallation(ctx, repoID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrPolicyUnavailable
@@ -104,11 +104,19 @@ func (r *Repository) SetBuildMode(ctx context.Context, userID, repoID int64, mod
 		}
 		result = BuildPolicy{RepositoryID: repoID, Mode: mode}
 		if mode == ManualBuilds {
-			count, err := q.CancelUnstartedAutomaticIntents(ctx, repoID)
+			cancelled, err := q.CancelUnstartedAutomaticIntents(ctx, repoID)
 			if err != nil {
 				return fmt.Errorf("cancel automatic intent: %w", err)
 			}
-			result.CancelledAutomatic = count
+			result.CancelledAutomatic = int64(len(cancelled))
+			for _, pullRequestID := range cancelled {
+				if r.reports == nil {
+					break
+				}
+				if err := r.reports.RecordReportTx(ctx, tx, pullRequestID); err != nil {
+					return fmt.Errorf("report cancelled request: %w", err)
+				}
+			}
 		}
 		return nil
 	})

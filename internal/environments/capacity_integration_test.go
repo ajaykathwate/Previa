@@ -232,3 +232,26 @@ func TestHeadroomRefusalKeepsTheRequestQueued(t *testing.T) {
 	default:
 	}
 }
+
+func TestAWorkerShutdownMidBuildIsNoFailure(t *testing.T) {
+	f := newFixture(t)
+	a := f.prEvent(t, 71, "sha-a")
+	r := newGatedRuntime()
+	r.gates[a.PullRequestID] = make(chan struct{})
+	s := newCapacityService(t, f, r)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- s.Build(ctx, a) }()
+	<-r.started
+	cancel() // the worker stops while the build runs
+	if err := <-done; !errors.Is(err, env.ErrInterrupted) {
+		t.Fatalf("an interrupted build returned %v", err)
+	}
+	if state, _ := f.intentState(t, a.PullRequestID); state != "running" {
+		t.Fatalf("an interrupted request is %s; it must run again", state)
+	}
+	var status string
+	if err := f.pool.QueryRow(t.Context(), "SELECT status FROM environments WHERE pull_request_id=$1", a.PullRequestID).Scan(&status); err != nil || status == "failed" {
+		t.Fatalf("an interruption was recorded as a failure: %s %v", status, err)
+	}
+}

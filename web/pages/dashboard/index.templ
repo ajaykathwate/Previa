@@ -20,14 +20,20 @@ templ Index(username string, csrfToken string, summary Summary) {
 			@statTile("/repositories?access=available", "Access available", summary.Available, "View accessible repositories", components.ShieldIcon())
 			@statTile("/repositories?access=unavailable", "Access unavailable", summary.Unavailable(), "Review removed access", components.AlertIcon())
 		</section>
+		<section class="stat-grid overview-stats" aria-label="Delivery counts">
+			@statTile("/builds", "Waiting or queued", summary.Waiting, "View builds", components.ClockIcon())
+			@statTile("/builds", "Building", summary.Building, "View builds", components.BuildIcon())
+			@statTile("/environments", "Live previews", summary.Live, "View environments", components.EnvironmentIcon())
+			@statTile("/builds", "Failed requests", summary.Failed, "Review failures", components.AlertIcon())
+		</section>
 		<div class="overview-grid">
 			<section class="panel pipeline-panel" aria-labelledby="pipeline-title">
 				<header class="panel-header">
 					<div><span class="eyebrow">Preview pipeline</span><h2 id="pipeline-title">From pull request to preview</h2></div>
-					<p class="legend"><span class="legend-item is-live">Connected</span><span class="legend-item is-soon">Coming next</span></p>
+					<p class="legend"><span class="legend-item is-live">Connected</span><span class="legend-item is-soon">No worker running</span></p>
 				</header>
 				<ol class="pipeline">
-					for i, stage := range PipelineStages {
+					for i, stage := range summary.Stages() {
 						<li
 							if stage.Live {
 								class="pipeline-stage is-live"
@@ -47,14 +53,18 @@ templ Index(username string, csrfToken string, summary Summary) {
 							if stage.Live {
 								<span class="badge tone-ok">Connected</span>
 							} else {
-								<span class="badge tone-neutral">Coming next</span>
+								<span class="badge tone-neutral">Not running</span>
 							}
 						</li>
 					}
 				</ol>
 				<p class="panel-note">
 					@components.InfoIcon()
-					Build execution stays disabled until source, runtime, routing and cleanup adapters are connected. Nothing on this page is simulated.
+					if summary.Workers.Execution {
+						A running worker builds, publishes and reports previews. Nothing on this page is simulated.
+					} else {
+						No running worker can build yet: it needs the GitHub App, Docker and a preview domain (see the setup guide). Requests wait until one starts.
+					}
 				</p>
 			</section>
 			<section class="panel checklist-panel" aria-labelledby="setup-title">
@@ -64,12 +74,12 @@ templ Index(username string, csrfToken string, summary Summary) {
 					@checkItem(summary.Installations > 0, false, "Connect the GitHub App", "Choose which repositories Previa may read.", "/repositories", "Open repositories")
 					@checkItem(summary.Repositories > 0, false, "Link repositories", "Verified repositories appear in your directory.", "/repositories?access=all", "View directory")
 					@checkItem(false, false, "Sync pull requests", "Open a repository, then choose Sync Pull Requests.", "/repositories?access=available", "Pick a repository")
-					@checkItem(false, true, "Build a preview", "Arrives with the execution adapters.", "", "")
+					@checkItem(summary.Live > 0, false, "Build a preview", "Open a pull request and choose Build latest commit, or enable Automatic builds.", "/repositories?access=available", "Pick a repository")
 				</ol>
 			</section>
 			<section class="shortcut-grid" aria-label="Workspace areas">
 				@shortcut("/builds", "Builds", "Current and latest build requests across your repositories, with their captured commits.", "View builds", components.BuildIcon())
-				@shortcut("/environments", "Environments", "Persisted deployment state and deployed commits for each pull request.", "View environments", components.EnvironmentIcon())
+				@shortcut("/environments", "Environments", "Live previews with their addresses, deployed commits and expiry.", "View environments", components.EnvironmentIcon())
 				@shortcut("/developer-tools", "Developer tools", "Send a harmless queue ping to confirm the River worker is connected.", "Open tools", components.TerminalIcon())
 			</section>
 		</div>

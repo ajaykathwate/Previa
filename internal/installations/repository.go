@@ -22,6 +22,20 @@ type InitialDiscoverer interface {
 type Repository struct {
 	db        database
 	discovery InitialDiscoverer
+	reports   ReportRecorder
+}
+
+// ReportRecorder records, in the caller's transaction, that a PR's GitHub
+// report must catch up; the environments broker implements it.
+type ReportRecorder interface {
+	RecordReportTx(ctx context.Context, tx pgx.Tx, pullRequestID int64) error
+}
+
+// WithReports makes build-mode changes that cancel waiting Automatic requests
+// update those PRs' reports.
+func (r *Repository) WithReports(reports ReportRecorder) *Repository {
+	r.reports = reports
+	return r
 }
 
 func NewRepository(db database, discoverers ...InitialDiscoverer) *Repository {

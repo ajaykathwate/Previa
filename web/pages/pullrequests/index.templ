@@ -98,7 +98,7 @@ templ Panel(p Page, csrf string) {
 			}
 		</header>
 		if p.SelectedPR!=nil {
-			@PRDetail(p, p.Selected())
+			@PRDetail(p, p.Selected(), csrf)
 		} else {
 			@components.RepositoryTabs(p.RepoID, "pull-requests")
 			<p class="policy-hint">
@@ -136,7 +136,7 @@ templ Panel(p Page, csrf string) {
 			</section>
 		}
 		if p.SelectedPR==nil {
-			@components.ConfirmationDialog("build-policy", "Enable automatic builds?", "Future PR updates will schedule work after five quiet minutes. Existing PRs are not bulk-built. Build execution is not available yet.") {
+			@components.ConfirmationDialog("build-policy", "Enable automatic builds?", "Future PR updates will schedule work after five quiet minutes. Existing PRs are not bulk-built.") {
 				@PolicyForm(p, csrf, true)
 			}
 			<noscript>
@@ -249,7 +249,7 @@ templ Results(p Page) {
 	</footer>
 }
 
-templ PRDetail(p Page, pr PR) {
+templ PRDetail(p Page, pr PR, csrf string) {
 	<div class="pr-detail-content">
 		<header class="pr-detail-heading">
 			<a href={ templ.SafeURL(p.PageURL(p.Number)) } class="text-link back-link">
@@ -311,10 +311,19 @@ templ PRDetail(p Page, pr PR) {
 				<h2>Current build request</h2>
 				<code class="sha">{ Short(pr.RequestedSHA) }</code>
 				<p>
-					<span class={ "badge", Tone(pr.Build) }>{ Label(pr.Build) }</span>
+					if pr.Waiting!="" {
+						<span class="badge tone-info"><span class="badge-dot" aria-hidden="true"></span>{ pr.Waiting }</span>
+					} else {
+						<span class={ "badge", Tone(pr.Build) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.Build) }</span>
+					}
 				</p>
-				if pr.Deadline!="" && pr.Build=="pending" {
+				if pr.Waiting!="" {
+					<p class="lifecycle-note">{ pr.WaitingNote }</p>
+				} else if pr.Deadline!="" && pr.Build=="pending" {
 					<p class="lifecycle-note">Eligible after <time datetime={ pr.Deadline }>{ TimeLabel(pr.Deadline) }</time>.</p>
+				}
+				if pr.Failure!="" {
+					<p class="lifecycle-note tone-danger" data-failure>{ pr.Failure } <a class="text-link" href={ templ.SafeURL(LogsURL(p.RepoID, pr.Number)) }>See the build log</a>.</p>
 				}
 			</section>
 			<section class="workspace-panel lifecycle-step" role="listitem">
@@ -327,17 +336,63 @@ templ PRDetail(p Page, pr PR) {
 				<h2>Deployed preview</h2>
 				<code class="sha">{ Short(pr.DeployedSHA) }</code>
 				<p>
-					<span class={ "badge", Tone(pr.Environment) }>{ Label(pr.Environment) }</span>
+					<span class={ "badge", Tone(pr.Environment) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.Environment) }</span>
 				</p>
-				if pr.DeployedSHA!="" && pr.DeployedSHA!=pr.SHA {
-					<p class="lifecycle-note tone-warn">This deployment reflects an older commit.</p>
+				if pr.PreviewURL!="" {
+					<p class="lifecycle-note preview-link">
+						<a class="text-link" href={ templ.SafeURL(pr.PreviewURL) } target="_blank" rel="noopener noreferrer" data-preview-url>
+							{ pr.PreviewURL }
+							@components.ArrowUpRight()
+						</a>
+					</p>
+				}
+				if pr.OlderPreview {
+					<p class="lifecycle-note tone-warn">This preview serves an earlier commit than the latest one.</p>
+				}
+				if pr.ExpiresAt!="" {
+					<p class="lifecycle-note">Expires <time datetime={ pr.ExpiresAt }>{ TimeLabel(pr.ExpiresAt) }</time> unless a newer one is published.</p>
+				}
+				if pr.RemovedNote!="" {
+					<p class="lifecycle-note">{ pr.RemovedNote }</p>
 				}
 			</section>
 		</div>
 		<div class="pr-detail-actions">
-			@button.Button(button.Props{Disabled: true, Attributes: templ.Attributes{"aria-describedby": "build-unavailable"}}) {
-				@components.BuildIcon()
-				Build latest commit
+			if pr.Actions.HasBuildAction() {
+				<form method="post" action={ templ.SafeURL(PRURL(p.RepoID, pr.Number) + "/build") } hx-post={ PRURL(p.RepoID, pr.Number) + "/build" } hx-target="#repository-detail" hx-sync="#repository-detail:replace" hx-disabled-elt="find button">
+					<input type="hidden" name="csrf_token" value={ csrf }/>
+					<input type="hidden" name="workspace_query" value={ p.Query() }/>
+					<input type="hidden" name="expected_revision" value={ strconv.FormatInt(pr.Actions.ExpectedRevision, 10) }/>
+					<input type="hidden" name="request_key" value={ pr.Actions.RequestKey }/>
+					if pr.Actions.Retry {
+						<input type="hidden" name="action" value="retry"/>
+						@button.Button(button.Props{Type: button.TypeSubmit}) {
+							@components.BuildIcon()
+							Retry build
+						}
+					} else if pr.Actions.Rebuild {
+						<input type="hidden" name="action" value="rebuild"/>
+						@button.Button(button.Props{Type: button.TypeSubmit}) {
+							@components.BuildIcon()
+							Rebuild preview
+						}
+					} else {
+						<input type="hidden" name="action" value="build"/>
+						@button.Button(button.Props{Type: button.TypeSubmit}) {
+							@components.BuildIcon()
+							if pr.Actions.BuildNow {
+								Build now
+							} else {
+								Build latest commit
+							}
+						}
+					}
+				</form>
+			}
+			if pr.Actions.Teardown {
+				@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"data-open-dialog": "teardown-preview", "commandfor": "teardown-preview", "command": "show-modal", "aria-haspopup": "dialog"}}) {
+					Tear down preview
+				}
 			}
 			<a class="text-link logs-link" href={ templ.SafeURL(LogsURL(p.RepoID, pr.Number)) }>
 				@components.LogsIcon()
@@ -349,23 +404,25 @@ templ PRDetail(p Page, pr PR) {
 					@components.ArrowUpRight()
 				</a>
 			}
-			<p id="build-unavailable" class="repository-help">Build execution, runtime health and teardown controls are not available yet. Build logs show the current attempt once execution runs.</p>
+			if pr.Actions.Unavailable!="" {
+				<p id="build-unavailable" class="repository-help" data-build-unavailable>{ pr.Actions.Unavailable }</p>
+			}
 		</div>
-		<section class="upcoming-grid" aria-labelledby="upcoming-title">
-			<h2 id="upcoming-title" class="upcoming-title">Coming with build execution</h2>
-			@upcoming("Preview URL and health", "A routed subdomain with readiness checks.", components.LinkIcon())
-			@upcoming("Teardown control", "Remove the preview on demand, before it expires.", components.EyeIcon())
-		</section>
-	</div>
-}
-
-templ upcoming(title, detail string, icon templ.Component) {
-	<div class="upcoming-card">
-		<span class="upcoming-icon" aria-hidden="true">
-			@icon
-		</span>
-		<div><strong>{ title }</strong><span>{ detail }</span></div>
-		<span class="soon-tag">Soon</span>
+		if pr.Actions.Teardown {
+			@components.ConfirmationDialog("teardown-preview", "Tear down this preview?", "The preview stops serving and its containers are removed. Its address stays reserved: build again to bring it back. Nothing rebuilds it until you ask, or a new commit arrives with Automatic builds.") {
+				<form method="post" action={ templ.SafeURL(PRURL(p.RepoID, pr.Number) + "/teardown") } class="dialog-actions" hx-post={ PRURL(p.RepoID, pr.Number) + "/teardown" } hx-target="#repository-detail" hx-sync="#repository-detail:replace" hx-disabled-elt="find button[type=submit]">
+					<input type="hidden" name="csrf_token" value={ csrf }/>
+					<input type="hidden" name="workspace_query" value={ p.Query() }/>
+					<p class="repository-search-feedback" data-dialog-feedback role="status" aria-live="polite"></p>
+					@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "data-close-dialog": true, "commandfor": "teardown-preview", "command": "close"}}) {
+						Cancel
+					}
+					@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantDestructive}) {
+						Tear down preview
+					}
+				</form>
+			}
+		}
 	</div>
 }
 
@@ -385,9 +442,9 @@ templ ActivityIndex(username, csrf string, p Activity) {
 					<span class="eyebrow">Delivery</span>
 					<h1>{ title }</h1>
 					if p.Environments {
-						<p>Persisted deployment state. Runtime health and public routing are not connected yet.</p>
+						<p>Current previews: what each serves, its address, its expiry and its health as last recorded.</p>
 					} else {
-						<p>Current/latest authorized requests, not a permanent attempt history. Execution is not available yet.</p>
+						<p>The current or latest request per pull request, not a permanent attempt history.</p>
 					}
 				</div>
 				<nav class="segmented segmented-nav" aria-label="Delivery views">
@@ -427,13 +484,13 @@ templ ActivityIndex(username, csrf string, p Activity) {
 								<p>Only real saved records appear here. Connecting or discovering a repository does not create a deployment.</p>
 								<ul class="empty-explainer">
 									if p.Environments {
-										<li><strong>Status</strong><span>Deployment lifecycle per pull request</span></li>
-										<li><strong>Deployed SHA</strong><span>The commit a preview is serving</span></li>
-										<li><strong>URL, health, expiry</strong><span class="soon-tag">Soon</span></li>
+										<li><strong>Status</strong><span>Publishing, serving, failed or being removed</span></li>
+										<li><strong>Preview</strong><span>The stable address and the commit it serves</span></li>
+										<li><strong>Expiry</strong><span>When an idle preview is removed</span></li>
 									} else {
-										<li><strong>Status</strong><span>Waiting, queued, running and outcome</span></li>
+										<li><strong>Status</strong><span>Waiting, queued, building and outcome</span></li>
 										<li><strong>Requested SHA</strong><span>The exact commit captured for work</span></li>
-										<li><strong>Live logs</strong><span class="soon-tag">Soon</span></li>
+										<li><strong>Logs</strong><span>The current attempt's output, live</span></li>
 									}
 								</ul>
 								<a class="text-link" href="/repositories">
@@ -447,15 +504,15 @@ templ ActivityIndex(username, csrf string, p Activity) {
 									<tr>
 										<th>Repository / PR</th>
 										<th>Status</th>
-										<th>Latest SHA</th>
-										<th>
-											if p.Environments {
-												Deployed SHA
-											} else {
-												Requested SHA
-											}
-										</th>
-										<th><span class="sr-only">Build logs</span></th>
+										if p.Environments {
+											<th>Deployed SHA</th>
+											<th>Preview</th>
+											<th>Expires</th>
+										} else {
+											<th>Latest SHA</th>
+											<th>Requested SHA</th>
+										}
+										<th><span class="sr-only">Actions</span></th>
 									</tr>
 								</thead>
 								<tbody>
@@ -479,38 +536,78 @@ templ ActivityIndex(username, csrf string, p Activity) {
 												</div>
 											</td>
 											<td class="pr-cell-state" data-label="Status">
-												<span class={ "badge", Tone(row.State) }><span class="badge-dot" aria-hidden="true"></span>{ Label(row.State) }</span>
-												if !p.Environments&&row.State=="pending" {
+												if row.Waiting!="" {
+													<span class="badge tone-info"><span class="badge-dot" aria-hidden="true"></span>{ row.Waiting }</span>
+												} else {
+													<span class={ "badge", Tone(row.State) }><span class="badge-dot" aria-hidden="true"></span>{ Label(row.State) }</span>
+												}
+												if !p.Environments && row.State=="pending" && row.Waiting=="" {
 													<small>
-														Eligible: { row.Deadline }
+														Eligible: <time datetime={ row.Deadline }>{ TimeLabel(row.Deadline) }</time>
 													</small>
 												}
-											</td>
-											<td class="pr-cell-sha" data-label="Latest"><code class="sha">{ Short(row.Latest) }</code></td>
-											<td
-												class="pr-cell-sha"
-												if p.Environments {
-													data-label="Deployed"
-												} else {
-													data-label="Requested"
+												if row.Failure!="" {
+													<small class="tone-danger">{ row.Failure }</small>
 												}
-											>
-												if p.Environments {
+											</td>
+											if p.Environments {
+												<td class="pr-cell-sha" data-label="Deployed">
 													<code class="sha">{ Short(row.Deployed) }</code>
-												} else {
-													<code class="sha">{ Short(row.Requested) }</code>
-												}
-											</td>
-											<td class="pr-cell-logs" data-label="Logs">
+													if row.OlderPreview {
+														<small>Earlier than the latest commit</small>
+													}
+												</td>
+												<td class="pr-cell-url" data-label="Preview">
+													if row.PreviewURL!="" {
+														<a class="text-link" href={ templ.SafeURL(row.PreviewURL) } target="_blank" rel="noopener noreferrer">
+															Open preview
+															@components.ArrowUpRight()
+														</a>
+													} else {
+														<span aria-label="No address">—</span>
+													}
+												</td>
+												<td class="pr-cell-expiry" data-label="Expires">
+													if row.ExpiresAt!="" {
+														<time datetime={ row.ExpiresAt }>{ TimeLabel(row.ExpiresAt) }</time>
+													} else {
+														<span aria-label="Does not expire">—</span>
+													}
+												</td>
+											} else {
+												<td class="pr-cell-sha" data-label="Latest"><code class="sha">{ Short(row.Latest) }</code></td>
+												<td class="pr-cell-sha" data-label="Requested"><code class="sha">{ Short(row.Requested) }</code></td>
+											}
+											<td class="pr-cell-logs" data-label="Actions">
 												<a class="text-link" href={ templ.SafeURL(LogsURL(row.RepoID, row.Number)) } aria-label={ "Build logs for " + row.Name + " #" + strconv.Itoa(int(row.Number)) }>
 													@components.LogsIcon()
 													Logs
 												</a>
+												if row.Teardown {
+													<button type="button" class="danger-link teardown-link" data-open-dialog={ row.TeardownDialog() } commandfor={ row.TeardownDialog() } command="show-modal" aria-haspopup="dialog" aria-label={ "Tear down the preview of " + row.Name + " #" + strconv.Itoa(int(row.Number)) }>Tear down</button>
+												}
 											</td>
 										</tr>
 									}
 								</tbody>
 							</table>
+							for _,row:=range p.Rows {
+								if row.Teardown {
+									@components.ConfirmationDialog(row.TeardownDialog(), "Tear down this preview?", row.Name+" #"+strconv.Itoa(int(row.Number))+": the preview stops serving and its containers are removed. Its address stays reserved; build again from the pull request to bring it back.") {
+										<form method="post" action={ templ.SafeURL(PRURL(row.RepoID, row.Number) + "/teardown") } class="dialog-actions">
+											<input type="hidden" name="csrf_token" value={ csrf }/>
+											<input type="hidden" name="return" value="environments"/>
+											<input type="hidden" name="page" value={ strconv.FormatInt(p.Number, 10) }/>
+											@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "data-close-dialog": true, "commandfor": row.TeardownDialog(), "command": "close"}}) {
+												Cancel
+											}
+											@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantDestructive}) {
+												Tear down preview
+											}
+										</form>
+									}
+								}
+							}
 						}
 					</div>
 					<footer class="repository-pagination">

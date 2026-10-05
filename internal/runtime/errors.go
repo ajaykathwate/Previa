@@ -73,3 +73,7 @@ func AsOperationFailure(err error) error {
 // FailureCode is the stable category the environment records and reports
 // show for a failed attempt; the message stays in the build log.
 func (e *Error) FailureCode() string { return e.Code }
+
+// Permanent reports whether retrying the same request cannot help (an invalid
+// configuration, a failing Dockerfile, an app that never becomes ready).
+func (e *Error) Permanent() bool { return !e.Retryable }

@@ -2,6 +2,7 @@ package reporting
 
 import (
 	"fmt"
+	"github.com/ajaykathwatee/previa/internal/environments"
 	"time"
 )
 
@@ -161,7 +162,7 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 		case env != nil && env.Status == "running" && env.AppliedGeneration == current.Generation && env.AppliedRevision == current.Revision:
 			v.Phase = PhaseReady
 		case env != nil && env.Status == "failed" && env.AppliedGeneration == current.Generation && env.AppliedRevision == current.Revision:
-			v.Phase, v.Failure = PhaseFailed, FailureMessage(env.LastErrorCode)
+			v.Phase, v.Failure = PhaseFailed, environments.FailureMessage(env.LastErrorCode)
 		default:
 			v.Phase = PhaseBuilding // built; publication not confirmed yet
 		}
@@ -171,7 +172,7 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 		if env != nil && env.AppliedGeneration == current.Generation && env.AppliedRevision == current.Revision {
 			code = env.LastErrorCode
 		}
-		v.Failure = FailureMessage(code)
+		v.Failure = environments.FailureMessage(code)
 	}
 	v.Check = checkFor(v, settings)
 	return withNotices(v, s)
@@ -217,22 +218,6 @@ func withNotices(v View, s Snapshot) View {
 	return v
 }
 
-// WaitingTitle and WaitingMessage describe a request waiting for capacity or
-// disk space. Nothing is promised about when or in what order it starts.
-func WaitingTitle(reason string) string {
-	if reason == "disk" {
-		return "Waiting for disk space"
-	}
-	return "Waiting for capacity"
-}
-
-func WaitingMessage(reason string) string {
-	if reason == "disk" {
-		return "The build host is short of disk space. Previa frees space and starts this build automatically once there is enough."
-	}
-	return "Builds or previews already use this host's capacity. This build starts automatically once some frees up."
-}
-
 // checkFor maps the current request to its check run.
 func checkFor(v View, settings Settings) *Check {
 	c := &Check{HeadSHA: v.HeadSHA, Revision: v.Revision, DetailsURL: v.LogsURL}
@@ -243,7 +228,7 @@ func checkFor(v View, settings Settings) *Check {
 	case PhaseQueued:
 		c.Status, c.Title, c.Summary = "queued", "Queued", "The build will start when a worker is free."
 	case PhaseCapacity:
-		c.Status, c.Title, c.Summary = "queued", WaitingTitle(v.Waiting), WaitingMessage(v.Waiting)
+		c.Status, c.Title, c.Summary = "queued", environments.WaitingTitle(v.Waiting), environments.WaitingMessage(v.Waiting)
 	case PhaseBlocked:
 		if v.Conflicts {
 			c.Status, c.Conclusion, c.Title = "completed", "neutral", "Not built: merge conflicts"
@@ -267,37 +252,4 @@ func checkFor(v View, settings Settings) *Check {
 		return nil
 	}
 	return c
-}
-
-// FailureMessage is the safe sentence for a failure category. Raw errors and
-// log lines never reach GitHub; the log page holds the details.
-func FailureMessage(code string) string {
-	switch code {
-	case "source_failed":
-		return "The commit could not be prepared (download, or an invalid .previewrc.yaml)."
-	case "build_failed":
-		return "The image build failed."
-	case "secrets_unavailable":
-		return "Repository secrets could not be decrypted on the server."
-	case "capacity":
-		return "The server had no capacity for another preview."
-	case "unhealthy":
-		return "The app did not become ready."
-	case "crashed":
-		return "The app exited while starting."
-	case "preview_missing":
-		return "The preview's container disappeared. Retry, rebuild or push a commit to start a new one."
-	case "timeout":
-		return "The build took longer than allowed."
-	case "cancelled":
-		return "The build was cancelled."
-	case "inaccessible":
-		return "GitHub access to this repository was removed."
-	case "runtime_unavailable":
-		return "The preview infrastructure was unavailable."
-	case "missing", "not_owned", "route_not_converged", "router_unavailable", "route_store_unavailable", "route_config_unwritable":
-		return "The preview could not be published."
-	default:
-		return "The preview could not be built."
-	}
 }

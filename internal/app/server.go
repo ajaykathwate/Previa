@@ -21,6 +21,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
+	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/secrets"
@@ -54,22 +55,53 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	}
 	pings := queue.NewService(pool, producer)
 
-	coordinator := environments.NewBroker(pool, producer)
-	syncService := pullrequests.NewSyncService(pool, producer, nil, coordinator)
-	var invalidate func(int64)
-	service := installations.NewService(installations.NewRepository(pool), nil, nil, nil)
+	// The server records observations, owner requests and teardowns with
+	// their durable wake-ups and operations; workers execute them.
+	operations, err := environments.NewOperationBroker(producer)
+	if err != nil {
+		return err
+	}
+	environmentRepo := environments.NewRepository(pool, operations)
+	coordinator := environments.NewRequestBroker(pool, producer)
+	var appClient *githubapp.Client
+	var upstream pullrequests.Source
 	if cfg.GitHubAppID != 0 {
-		appClient, err := githubapp.New(cfg)
-		if err != nil {
+		if appClient, err = githubapp.New(cfg); err != nil {
 			return fmt.Errorf("initialize GitHub App: %w", err)
 		}
+		upstream = pullrequests.NewGitHubSource(appClient)
+		// With the App, workers can report: record report work for PR changes.
+		environmentRepo.WithReports()
+		coordinator.WithReports(environmentRepo)
+	}
+	syncService := pullrequests.NewSyncService(pool, producer, upstream, coordinator)
+	var invalidate func(int64)
+	service := installations.NewService(installations.NewRepository(pool), nil, nil, nil)
+	if appClient != nil {
 		invalidate = appClient.Invalidate
 		service = installations.NewService(installations.NewRepository(pool, syncService), appClient, installations.NewGitHubAuthorization(cfg), nil)
 	}
 	installationHandler := installations.NewHandler(service, authHandler, sessions, cfg.GitHubAppSlug, logger)
+	prRepository := pullrequests.NewRepository(pool)
+	capabilities := workers.NewReader(pool)
 	summaryReader := func(ctx context.Context, userID int64) (dashboardpages.Summary, error) {
 		summary, err := service.Summary(ctx, userID)
-		return dashboardpages.Summary{Installations: summary.Installations, Repositories: summary.Repositories, Available: summary.Available}, err
+		if err != nil {
+			return dashboardpages.Summary{}, err
+		}
+		delivery, err := prRepository.Delivery(ctx, userID)
+		if err != nil {
+			return dashboardpages.Summary{}, err
+		}
+		caps, err := capabilities.Current(ctx)
+		if err != nil {
+			return dashboardpages.Summary{}, err
+		}
+		return dashboardpages.Summary{
+			Installations: summary.Installations, Repositories: summary.Repositories, Available: summary.Available,
+			Waiting: delivery.Waiting, Building: delivery.Building, Failed: delivery.Failed, Live: delivery.Live,
+			Workers: dashboardpages.Workers{Discovery: caps.Discovery, Execution: caps.Execution, Reporting: caps.Reporting, Housekeeping: caps.Housekeeping},
+		}, nil
 	}
 	router := httpx.NewRouter(logger)
 	router.Handle("/static/*", web.StaticHandler())
@@ -81,7 +113,11 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	}
 	deliveries := webhooks.NewDeliveryService(pool, coordinator, invalidate, syncService)
 	router.Post("/webhooks/github", webhooks.NewHandler(cfg.GitHubWebhookSecret, deliveries, logger).ServeHTTP)
-	policy, err := installations.NewBuildPolicyService(installations.NewRepository(pool))
+	policyStore := installations.NewRepository(pool)
+	if appClient != nil {
+		policyStore.WithReports(coordinator) // a switch to Manual updates cancelled PRs' reports
+	}
+	policy, err := installations.NewBuildPolicyService(policyStore)
 	if err != nil {
 		return err
 	}
@@ -92,7 +128,14 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	go realtime.Listen(listenCtx, func(ctx context.Context) (*pgx.Conn, error) {
 		return pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
 	}, hub, logger)
-	prs := pullrequests.NewHandler(pullrequests.NewRepository(pool), syncService, policy, authHandler, logger, cfg.GitHubAppID > 0).WithLiveUpdates(hub)
+	prs := pullrequests.NewHandler(prRepository, syncService, policy, authHandler, logger, cfg.GitHubAppID > 0).WithLiveUpdates(hub)
+	if appClient != nil {
+		// Builds need fresh GitHub reads; without the App the controls say so.
+		prs.WithActions(pullrequests.Actions{
+			Builds: coordinator, Verifier: syncService, Teardowns: environmentRepo, Capabilities: capabilities,
+			PreviewBaseDomain: cfg.PreviewBaseDomain,
+		})
+	}
 	installationHandler.WithNavigator(prs)
 	var keyring *secrets.Keyring
 	if cfg.SecretsConfigured() {

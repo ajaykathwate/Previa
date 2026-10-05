@@ -14,7 +14,32 @@ type PR struct {
 	Number                                                                                          int32
 	Title, Author, Branch, SHA, State, Build, URL, RequestedSHA, DeployedSHA, Environment, Deadline string
 	Available, Fork, NeedsRefresh                                                                   bool
+	// Detail only: display data the handler derives from persisted state.
+	Waiting      string // why the current request waits ("Waiting for capacity"), if it does
+	WaitingNote  string
+	Failure      string // safe sentence for the latest failure of the current request
+	PreviewURL   string // only for a published preview on a configured domain
+	ExpiresAt    string // RFC 3339; empty when the preview does not expire
+	PublishedAt  string
+	RemovedNote  string // why the preview was removed (owner, expiry, access)
+	OlderPreview bool   // the preview serves an earlier commit than the latest
+	Actions      Actions
 }
+
+// Actions are what the owner may do on a PR now, with the form values that
+// make each request idempotent and revision-checked.
+type Actions struct {
+	Build, BuildNow, Retry, Rebuild, Teardown bool
+	ExpectedRevision                          int64
+	RequestKey                                string // one per rendered page: a duplicate submit coalesces
+	// Unavailable explains why no build action is offered (no worker can
+	// build, the repository is unavailable, mergeability, ...).
+	Unavailable string
+}
+
+// HasBuildAction reports whether any build action is offered.
+func (a Actions) HasBuildAction() bool { return a.Build || a.BuildNow || a.Retry || a.Rebuild }
+
 type Page struct {
 	RepoID                                          int64
 	Name, Mode, SyncState, SyncMessage, LastRefresh string
@@ -126,7 +151,15 @@ type ActivityRow struct {
 	Number                                             int32
 	Name, Latest, Requested, Deployed, State, Deadline string
 	Available                                          bool
+	Waiting, Failure, PreviewURL, ExpiresAt            string
+	OlderPreview, Teardown                             bool
 }
+
+// TeardownDialog is the row's confirmation dialog ID.
+func (r ActivityRow) TeardownDialog() string {
+	return "teardown-" + strconv.FormatInt(r.RepoID, 10) + "-" + strconv.Itoa(int(r.Number))
+}
+
 type Activity struct {
 	Rows                         []ActivityRow
 	Total, Number, Pages, RepoID int64

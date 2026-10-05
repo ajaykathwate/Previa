@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,6 +22,9 @@ type ExecutionConfig struct {
 	// EgressImage runs the proxy that is the only route out of build and
 	// preview networks.
 	EgressImage string `envconfig:"EGRESS_IMAGE" default:"previa-egress:dev"`
+	// SourceWorkspaceRoot holds each build's extracted source while it builds;
+	// empty uses previa-sources in the system temporary directory.
+	SourceWorkspaceRoot string `envconfig:"SOURCE_WORKSPACE_ROOT"`
 	BuilderConfig
 	PreviewConfig
 }
@@ -40,6 +45,12 @@ func LoadExecution() (ExecutionConfig, error) {
 func (c *ExecutionConfig) check() error {
 	if strings.TrimSpace(c.EgressImage) == "" {
 		return errors.New("EGRESS_IMAGE must not be empty")
+	}
+	if c.SourceWorkspaceRoot == "" {
+		c.SourceWorkspaceRoot = filepath.Join(os.TempDir(), "previa-sources")
+	}
+	if !filepath.IsAbs(c.SourceWorkspaceRoot) || filepath.Clean(c.SourceWorkspaceRoot) != c.SourceWorkspaceRoot {
+		return errors.New("SOURCE_WORKSPACE_ROOT must be an absolute, clean path")
 	}
 	if err := c.BuilderConfig.check(); err != nil {
 		return err

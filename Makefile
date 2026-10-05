@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping router-up router-down route-sync housekeeping-dry-run lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e router-up router-down route-sync housekeeping-dry-run lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -118,6 +118,13 @@ test-runtime: egress-image
 test-routing: egress-image
 	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
 	TEST_ROUTING=1 $(GO) test -count=1 -v -timeout 30m -run '^TestRealRouting' ./internal/routing
+
+# Opt-in real end-to-end proof of the worker's own pipeline on the local
+# Docker Engine: a fake GitHub (TLS), real BuildKit builds, hardened previews,
+# Traefik routing, PR reports, logs and teardown, on a throwaway schema.
+test-e2e: egress-image
+	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
+	TEST_E2E=1 $(GO) test -count=1 -v -timeout 25m -run '^TestRealEndToEnd$$' ./internal/app
 
 # Opt-in real housekeeping on the local Docker Engine: grace periods, dry run,
 # orphans of known and unknown PRs, other instances left alone, and an

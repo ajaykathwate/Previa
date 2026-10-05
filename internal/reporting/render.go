@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/ajaykathwatee/previa/internal/environments"
 	"regexp"
 	"strconv"
 	"strings"
@@ -48,7 +49,7 @@ func CommentContent(v View) string {
 	case PhaseBlocked:
 		b.WriteString(v.Blocked + "\n")
 	case PhaseCapacity:
-		b.WriteString("Commit " + short(v.HeadSHA) + ": " + WaitingMessage(v.Waiting) + "\n")
+		b.WriteString("Commit " + short(v.HeadSHA) + ": " + environments.WaitingMessage(v.Waiting) + "\n")
 	case PhaseBuilding:
 		b.WriteString("Building commit " + short(v.HeadSHA) + ".\n")
 	case PhaseFailed:

@@ -55,6 +55,7 @@ type Service struct {
 	repo         *Repository
 	runtime      Runtime
 	headroom     Headroom
+	verifier     UpstreamVerifier
 	logs         BuildLogs
 	logger       *slog.Logger
 	buildTimeout time.Duration
@@ -77,6 +78,17 @@ func NewService(repo *Repository, runtime Runtime, logger *slog.Logger, buildTim
 	}
 	return &Service{repo: repo, runtime: runtime, logger: logger, buildTimeout: buildTimeout, now: now}, nil
 }
+
+// WithVerifier reads each PR fresh from GitHub before admitting its build;
+// *pullrequests.SyncService implements it.
+func (s *Service) WithVerifier(v UpstreamVerifier) *Service {
+	s.verifier = v
+	return s
+}
+
+// ErrInterrupted: the worker stopped while the build ran; the request is
+// retried, not failed.
+var ErrInterrupted = errors.New("the worker stopped during the build; it runs again")
 
 // WithHeadroom asks h, before admitting a build, whether the host can take
 // it; a request that cannot start waits queued instead of failing.
@@ -124,6 +136,25 @@ func (s *Service) superseded(ctx context.Context, request Request) error {
 // failureCoder is a classified build or runtime failure (runtime.Error).
 type failureCoder interface{ FailureCode() string }
 
+// permanentFailure is a failure that retrying the same request cannot fix
+// (runtime.Error knows which of its failures are). Such a request ends after
+// one attempt instead of spending River's retries.
+type permanentFailure interface{ Permanent() bool }
+
+func permanent(err error) bool {
+	var p permanentFailure
+	return errors.As(err, &p) && p.Permanent()
+}
+
+// upstreamFailure ends a request whose PR GitHub no longer lets the
+// installation read.
+type upstreamFailure struct{ err error }
+
+func (f *upstreamFailure) Error() string       { return f.err.Error() }
+func (f *upstreamFailure) Unwrap() error       { return f.err }
+func (f *upstreamFailure) Permanent() bool     { return true }
+func (f *upstreamFailure) FailureCode() string { return "inaccessible" }
+
 // Build runs one admitted attempt. Reports show its failure only once the
 // request is final (the job handoff marks the intent failed after the last
 // River attempt), so intermediate retries never publish a final failure.
@@ -147,6 +178,21 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	if before.PendingGeneration == request.Generation && before.PendingRevision == request.Revision && before.PendingArtifact.ContainerID != "" && before.PendingArtifact.ImageTag != "" {
 		return s.cleanup(ctx, request)
 	}
+	if s.verifier != nil {
+		// Fresh from GitHub, outside every lock: a new commit, a close or lost
+		// access recorded now supersedes this request before any work.
+		snapshot, err := s.verifier.VerifyUpstream(ctx, request.PullRequestID)
+		switch {
+		case errors.Is(err, ErrUpstreamClosed):
+			return s.superseded(ctx, request)
+		case errors.Is(err, ErrUpstreamInaccessible):
+			return &upstreamFailure{err: err}
+		case err != nil:
+			return err // unavailable, rate limited or still settling: retried
+		case !snapshot.Matches(request):
+			return s.superseded(ctx, request)
+		}
+	}
 	if s.headroom != nil && before.Revision == request.Revision {
 		if err := s.headroom.Admit(ctx, request); err != nil {
 			if reason := waitingReason(err); reason != "" {
@@ -165,6 +211,14 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	buildCtx, cancel := context.WithTimeout(ctx, s.buildTimeout)
 	artifact, buildErr := s.runtime.Build(buildCtx, request, attempt)
 	cancel()
+	if buildErr != nil && ctx.Err() != nil {
+		// The worker is shutting down: this is no failure of the request. It
+		// keeps its slot and runs again when a worker starts.
+		completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), queue.CompletionGrace)
+		defer completeCancel()
+		s.finishLogs(completeCtx, request, attempt)
+		return errors.Join(ErrInterrupted, s.cleanup(completeCtx, request))
+	}
 	if reason := waitingReason(buildErr); reason != "" {
 		// Not a failure: the admitted request keeps its slot and its place,
 		// and is retried once capacity or disk frees up.

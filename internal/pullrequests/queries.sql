@@ -58,12 +58,21 @@ WHERE r.id=$1 AND i.owner_user_id=$2 AND ($3::text='all' OR p.state=$3)
 AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower($4))>0
 ORDER BY p.number DESC LIMIT 10 OFFSET $5;
 -- name: OwnedPR :one
+-- The PR's three lifecycle columns (observed, requested, deployed) and what
+-- the owner may do next. A torn-down environment is shown as removed.
 SELECT p.*,(r.accessible AND i.status='active') AS available,coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
- b.available_at,b.revision AS request_revision,coalesce(e.status,'Not deployed') AS environment_status,
- coalesce(e.head_sha,'') AS deployed_sha
+ b.available_at,b.revision AS request_revision,
+ coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
+ coalesce(b.source,'')::text AS request_source,
+ coalesce(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END,'')::text AS waiting_reason,
+ coalesce(e.status,'Not deployed') AS environment_status,
+ coalesce(e.head_sha,'') AS deployed_sha, coalesce(e.subdomain,'')::text AS hostname,
+ e.expires_at, e.last_active_at AS published_at, coalesce(e.last_error_code,'')::text AS failure_code,
+ coalesce(e.applied_generation = b.generation AND e.applied_revision = b.revision, false)::boolean AS failure_current,
+ (p.teardown_requested_generation = p.generation)::boolean AS teardown_requested
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
-LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
+LEFT JOIN environments e ON e.pull_request_id=p.id
 WHERE r.id=$1 AND i.owner_user_id=$2 AND p.number=$3;
 -- name: CountActivity :one
 SELECT count(*) FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
@@ -74,7 +83,11 @@ AND (($3::boolean AND e.id IS NOT NULL) OR (NOT $3::boolean AND b.pull_request_i
 -- name: Activity :many
 SELECT p.repo_id,p.number,p.head_sha,r.full_name,r.accessible,i.status AS installation_status,
  coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,b.available_at,
- coalesce(e.status,'Not deployed') AS environment_status,coalesce(e.head_sha,'') AS deployed_sha
+ coalesce(e.status,'Not deployed') AS environment_status,coalesce(e.head_sha,'') AS deployed_sha,
+ coalesce(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END,'')::text AS waiting_reason,
+ coalesce(e.subdomain,'')::text AS hostname, e.expires_at, coalesce(e.last_error_code,'')::text AS failure_code,
+ coalesce(e.applied_generation = b.generation AND e.applied_revision = b.revision, false)::boolean AS failure_current,
+ p.state AS pr_state
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
@@ -93,3 +106,16 @@ SELECT EXISTS(SELECT 1 FROM build_intents WHERE pull_request_id=$1 AND generatio
  AND source='automatic' AND state IN ('pending','queued','running'));
 -- name: FindPRIdentity :one
 SELECT repo_id, number FROM pull_requests WHERE id=$1;
+
+-- name: DeliverySummary :one
+-- Overview counts across the owner's repositories: current requests by state
+-- and live previews.
+SELECT
+ count(*) FILTER (WHERE b.state IN ('pending','queued') AND b.generation = p.generation)::bigint AS waiting,
+ count(*) FILTER (WHERE b.state = 'running' AND b.generation = p.generation)::bigint AS building,
+ count(*) FILTER (WHERE b.state = 'failed' AND b.generation = p.generation)::bigint AS failed,
+ count(*) FILTER (WHERE e.status IN ('running','failed','publishing') AND e.head_sha IS NOT NULL)::bigint AS live
+FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
+LEFT JOIN build_intents b ON b.pull_request_id=p.id
+LEFT JOIN environments e ON e.pull_request_id=p.id
+WHERE i.owner_user_id=$1 AND p.state='open';

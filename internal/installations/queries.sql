@@ -106,7 +106,7 @@ FOR UPDATE;
 -- name: SetRepositoryBuildMode :exec
 UPDATE repos SET build_mode = $2 WHERE id = $1;
 
--- name: CancelUnstartedAutomaticIntents :execrows
+-- name: CancelUnstartedAutomaticIntents :many
 WITH locked_prs AS MATERIALIZED (
     SELECT pr.id FROM pull_requests pr JOIN build_intents b ON b.pull_request_id = pr.id
     WHERE pr.repo_id = $1 AND b.source = 'automatic' AND b.state IN ('pending', 'queued')
@@ -116,4 +116,5 @@ UPDATE build_intents b SET state = 'cancelled', completed_at = clock_timestamp()
     updated_at = clock_timestamp()
 FROM locked_prs pr
 WHERE b.pull_request_id = pr.id AND b.source = 'automatic'
-    AND b.state IN ('pending', 'queued');
+    AND b.state IN ('pending', 'queued')
+RETURNING b.pull_request_id;

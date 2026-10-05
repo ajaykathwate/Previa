@@ -44,9 +44,12 @@ type Provider struct {
 	keys  *Keyring
 }
 
+// NewProvider needs the store; keys may be nil on a worker without
+// SECRETS_ENCRYPTION_KEYS, which then starts previews of repositories without
+// secrets and refuses (fails closed) any repository that has some.
 func NewProvider(store SealedStore, keys *Keyring) (*Provider, error) {
-	if store == nil || keys == nil {
-		return nil, errors.New("secret provider requires a store and a keyring")
+	if store == nil {
+		return nil, errors.New("secret provider requires a store")
 	}
 	return &Provider{store: store, keys: keys}, nil
 }
@@ -110,6 +113,9 @@ func (p *Provider) ForContainer(ctx context.Context, repoID int64, source Source
 	sealed, err := p.store.SealedSecrets(ctx, repoID)
 	if err != nil {
 		return nil, fmt.Errorf("read repository secrets: %w", err)
+	}
+	if len(sealed) > 0 && p.keys == nil {
+		return nil, fmt.Errorf("%w (no keyring is configured on this worker)", ErrSecretsUnavailable)
 	}
 	for _, s := range sealed {
 		plain, err := p.keys.Open(repoID, s.Name, s.Version, s.Value)

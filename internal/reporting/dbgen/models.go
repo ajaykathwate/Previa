@@ -251,3 +251,14 @@ type WebhookDelivery struct {
 	PayloadHash string
 	ReceivedAt  pgtype.Timestamptz
 }
+
+type WorkerCapability struct {
+	WorkerID     string
+	Execution    bool
+	Routing      bool
+	Reporting    bool
+	Housekeeping bool
+	Discovery    bool
+	StartedAt    pgtype.Timestamptz
+	SeenAt       pgtype.Timestamptz
+}

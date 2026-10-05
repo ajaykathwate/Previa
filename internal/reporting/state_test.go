@@ -1,6 +1,7 @@
 package reporting
 
 import (
+	"github.com/ajaykathwatee/previa/internal/environments"
 	"strings"
 	"testing"
 	"time"
@@ -84,7 +85,7 @@ func TestDeriveFailureAndNotices(t *testing.T) {
 		t.Fatalf("same-commit rebuild %+v", v)
 	}
 	// A failure category never leaks raw text, and unknown codes are generic.
-	if FailureMessage("panic: secret value") != "The preview could not be built." {
+	if environments.FailureMessage("panic: secret value") != "The preview could not be built." {
 		t.Fatal("unknown failure category passed through")
 	}
 }

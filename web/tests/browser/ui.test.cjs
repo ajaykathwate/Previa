@@ -244,7 +244,77 @@ test('content and native confirmation remain usable without JavaScript', async (
     assert(await nativePage.locator('#logout-confirmation').evaluate(e => e.matches(':modal')));
     await nativePage.getByRole('button', {name: 'Cancel', exact: true}).click();
     assert.equal(await nativePage.locator('#logout-confirmation').evaluate(e => e.open), false);
+    // The teardown confirmation is a native modal too, and its form posts.
+    await nativePage.goto(`${origin}/repositories/1/pull-requests/3`);
+    await nativePage.getByRole('button', {name: 'Tear down preview', exact: true}).click();
+    assert(await nativePage.locator('#teardown-preview').evaluate(e => e.matches(':modal')));
+    await nativePage.locator('#teardown-preview').getByRole('button', {name: 'Tear down preview', exact: true}).click();
+    await nativePage.waitForURL(url => url.pathname === '/repositories/1/pull-requests/3');
+    assert.match(await nativePage.locator('.pr-detail-grid').innerText(), /Removing/);
   } finally { await noJS.close(); }
+});
+
+test('owner builds once and tears a preview down only after confirming in a modal', async () => {
+  await login();
+  await page.goto(`${origin}/repositories/1/pull-requests/5`);
+  await page.getByRole('button', {name: 'Build latest commit', exact: true}).click();
+  await page.waitForFunction(() => /Queued/.test(document.querySelector('.pr-detail-grid')?.innerText || ''));
+  assert.equal(await page.getByRole('button', {name: 'Build latest commit'}).count(), 0, 'a queued request offers no second build');
+
+  await page.goto(`${origin}/repositories/1/pull-requests/3`);
+  const preview = page.locator('[data-preview-url]');
+  assert.equal(await preview.getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
+  assert.equal(await preview.getAttribute('target'), '_blank');
+  assert.match(await page.locator('.pr-detail-grid').innerText(), /Expires/);
+  assert.match(await page.locator('.pr-detail-grid').innerText(), /earlier commit/);
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+  await page.setViewportSize({width: 1440, height: 900});
+  const open = page.getByRole('button', {name: 'Tear down preview', exact: true});
+  await open.click();
+  await page.waitForFunction(() => document.querySelector('#teardown-preview').matches(':modal'));
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#teardown-preview').open);
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent.trim()), 'Tear down preview', 'focus returns to the trigger');
+  assert.match(await page.locator('.pr-detail-grid').innerText(), /Running/, 'cancelling changes nothing');
+  await open.click();
+  await page.waitForFunction(() => document.querySelector('#teardown-preview').matches(':modal'));
+  await page.locator('#teardown-preview').getByRole('button', {name: 'Tear down preview', exact: true}).click();
+  await page.waitForFunction(() => /Removing/.test(document.querySelector('.pr-detail-grid')?.innerText || ''));
+  assert.match(await page.locator('.pr-detail-grid').innerText(), /tore this preview down/);
+  assert.equal(await page.getByRole('button', {name: 'Tear down preview'}).count(), 0);
+});
+
+test('unavailable repository PRs offer no actions and say why', async () => {
+  await login();
+  await page.goto(`${origin}/repositories/2/pull-requests/1`);
+  assert.match(await page.locator('[data-build-unavailable]').innerText(), /GitHub access to this repository is unavailable/);
+  assert.equal(await page.getByRole('button', {name: /Build|Retry|Rebuild|Tear down/}).count(), 0);
+});
+
+test('Environments and Builds show addresses, waits and failures, and teardown confirms per row', async () => {
+  await login();
+  await page.goto(`${origin}/environments?fixture=rows`);
+  const preview = page.getByRole('link', {name: 'Open preview'});
+  assert.equal(await preview.getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
+  assert.match(await page.locator('.activity-table').innerText(), /Earlier than the latest commit/);
+  assert.match(await page.locator('.activity-table').innerText(), /The app did not become ready/);
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+  await page.setViewportSize({width: 1440, height: 900});
+  await page.getByRole('button', {name: 'Tear down the preview of fixture-owner/repository-1 #3'}).click();
+  await page.waitForFunction(() => document.querySelector('#teardown-1-3').matches(':modal'));
+  await page.locator('#teardown-1-3').getByRole('button', {name: 'Tear down preview', exact: true}).click();
+  await page.waitForURL(url => url.pathname === '/environments' && url.searchParams.get('page') === '1');
+  await page.goto(`${origin}/builds?fixture=rows`);
+  assert.match(await page.locator('.activity-table').innerText(), /Waiting for capacity/);
+  // Row controls stay clickable above the row's whole-row link.
+  await page.getByRole('link', {name: 'Build logs for fixture-owner/repository-1 #4'}).click();
+  await page.waitForURL(url => url.pathname === '/repositories/1/pull-requests/4/logs');
 });
 
 test('repository pagination preserves filters and connection action is in the header', async () => {
@@ -306,7 +376,7 @@ test('repository live search restores all records and keeps the input focused', 
   assert.equal(await page.locator('.repository-row').count(),10);
 });
 
-test('PR workspace live search pagination modal and disabled build', async () => {
+test('PR workspace live search pagination modal and build control', async () => {
   await login();
   await page.goto(`${origin}/repositories/1`);
   assert.equal(await page.locator('.pr-table tbody tr').count(),10);
@@ -330,7 +400,7 @@ test('PR workspace live search pagination modal and disabled build', async () =>
   }
   await page.locator('.pr-table tbody a').first().click();
   await page.waitForURL(url=>url.pathname.includes('/pull-requests/'));
-  assert(await page.getByRole('button',{name:'Build latest commit'}).isDisabled());
+  assert(await page.getByRole('button',{name:'Build latest commit'}).isEnabled());
   assert.match(await page.locator('.pr-detail-grid').innerText(),/Not requested/);
 });
 
@@ -459,7 +529,7 @@ test('full pages align desktop filters and remain usable on short mobile and tab
   }
   if(process.env.UI_BROWSER_SCREENSHOTS==='1') await page.screenshot({path:path.join(__dirname,'artifacts',route.replaceAll('/','-')+'.png')});
  }
- assert(await page.getByRole('button',{name:'Build latest commit'}).isDisabled());
+ assert(await page.getByRole('button',{name:'Build latest commit'}).isEnabled());
  const github=page.getByRole('link',{name:'View on GitHub',exact:true});
  assert.equal(await github.locator('svg').count(),1);assert.equal(await github.getAttribute('target'),'_blank');
  await page.getByRole('link',{name:'Back to pull requests'}).click();await page.waitForURL(url=>url.pathname==='/repositories/1');

@@ -385,7 +385,7 @@
 }
 .repository-browser .repository-empty { border: 0; border-radius: 0; background: transparent; }
 .repository-browser .repository-pagination { margin: 0; padding: 12px 16px; background: var(--surface-muted); }
-.repository-table-scroll { overflow-x: auto; outline: none; }
+.repository-table-scroll { position: relative; overflow-x: auto; outline: none; } /* contains visually hidden headers */
 .repository-table-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); }
 
 .pr-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13.5px; }
@@ -430,6 +430,18 @@
 .meta-flag { color: var(--tone-ink, var(--text-muted)); font-weight: 550; }
 .pr-cell-sha, .pr-cell-state, .pr-cell-build { white-space: nowrap; }
 .pr-cell-state small { display: block; margin-top: 5px; color: var(--text-muted); font-size: 11.5px; }
+/* Delivery views: reasons wrap, addresses and dates stay on one line. */
+.pr-cell-state small.tone-danger { max-width: 34ch; color: var(--danger-ink); white-space: normal; }
+.pr-cell-sha small { display: block; margin-top: 5px; color: var(--warn-ink, var(--text-muted)); font-size: 11.5px; white-space: normal; }
+.pr-cell-url, .pr-cell-expiry { white-space: nowrap; font-size: 13px; }
+.pr-cell-url .text-link { display: inline-flex; align-items: center; gap: 4px; }
+.pr-cell-url svg { width: 13px; height: 13px; }
+.pr-cell-logs > * + * { margin-left: 14px; }
+/* Row controls sit above the row's whole-row link. */
+.pr-cell-logs a, .pr-cell-logs button, .pr-cell-url a { position: relative; z-index: 1; }
+.teardown-link { font: inherit; font-size: 13px; }
+.preview-link a { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; overflow-wrap: anywhere; }
+.preview-link svg { width: 13px; height: 13px; flex-shrink: 0; }
 
 /* PR detail */
 .pr-detail-content { display: flex; flex-direction: column; gap: 18px; }

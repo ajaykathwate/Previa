@@ -83,6 +83,7 @@ type ServerConfig struct {
 // WorkerConfig contains only settings used to execute queued jobs.
 type WorkerConfig struct {
 	SharedConfig
+	SecretsConfig
 	ExecutionConfig
 	RoutingConfig
 	HousekeepingConfig
@@ -122,13 +123,16 @@ func LoadWorker() (WorkerConfig, error) {
 	if err := envconfig.Process("", &cfg); err != nil {
 		return WorkerConfig{}, fmt.Errorf("load worker configuration: %w", err)
 	}
-	if err := cfg.validate(); err != nil {
+	if err := cfg.SharedConfig.validate(); err != nil {
 		return WorkerConfig{}, fmt.Errorf("validate worker configuration: %w", err)
 	}
 	if cfg.GitHubAppID != 0 || cfg.GitHubAppPrivateKeyPath != "" {
 		if cfg.GitHubAppID <= 0 || strings.TrimSpace(cfg.GitHubAppPrivateKeyPath) == "" {
 			return WorkerConfig{}, errors.New("GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH must be configured together for PR discovery")
 		}
+	}
+	if err := cfg.SecretsConfig.validate(); err != nil {
+		return WorkerConfig{}, fmt.Errorf("validate worker configuration: %w", err)
 	}
 	if cfg.MaxConcurrentBuilds <= 0 {
 		return WorkerConfig{}, errors.New("MAX_CONCURRENT_BUILDS must be positive")

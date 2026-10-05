@@ -3,6 +3,7 @@ package pullrequests
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
@@ -96,4 +97,13 @@ func (r *Repository) Activity(ctx context.Context, userID, repoID, page int64, e
 		return err
 	})
 	return
+}
+
+// Delivery counts the owner's current requests and live previews on open PRs.
+func (r *Repository) Delivery(ctx context.Context, userID int64) (dbgen.DeliverySummaryRow, error) {
+	row, err := dbgen.New(r.pool).DeliverySummary(ctx, owner(userID))
+	if err != nil {
+		return row, fmt.Errorf("count delivery: %w", err)
+	}
+	return row, nil
 }

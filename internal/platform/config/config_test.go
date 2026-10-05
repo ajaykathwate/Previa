@@ -245,10 +245,15 @@ func TestSecretsKeyringConfigurationByProcess(t *testing.T) {
 	if cfg, err := LoadServer(); err != nil || !cfg.SecretsConfigured() {
 		t.Fatalf("complete keyring: %v", err)
 	}
-	// The worker does not decrypt until runtime integration; it ignores the keyring.
+	// The worker decrypts secrets for previews, so it validates the keyring
+	// the same way; without one it runs previews of repositories without
+	// secrets only.
+	if cfg, err := LoadWorker(); err != nil || !cfg.SecretsConfigured() {
+		t.Fatalf("worker keyring: %v", err)
+	}
 	t.Setenv("SECRETS_ACTIVE_KEY_VERSION", "")
-	if _, err := LoadWorker(); err != nil {
-		t.Fatalf("worker must not validate the server keyring yet: %v", err)
+	if _, err := LoadWorker(); err == nil || strings.Contains(err.Error(), "bm90") {
+		t.Fatalf("a worker keyring without an active version must fail without echoing keys: %v", err)
 	}
 	unsetEnvironment(t, "SECRETS_ENCRYPTION_KEYS", "SECRETS_ACTIVE_KEY_VERSION")
 	if _, err := LoadSecretsMaintenance(); err == nil {

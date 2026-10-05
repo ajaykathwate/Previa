@@ -330,7 +330,9 @@
     livePending = false;
     if (document.querySelector('[data-live-refresh]')) window.htmx?.trigger(document.body, 'live-update');
   };
-  const liveBlocked = () => Boolean(document.querySelector('#build-policy[open]') ||
+  // Live refreshes wait while a confirmation dialog is open (policy, teardown)
+  // or the PR search has focus, so nothing moves under the owner's hand.
+  const liveBlocked = () => Boolean(document.querySelector('dialog[data-confirmation-dialog][open]') ||
     document.activeElement?.closest('#pull-request-filters'));
 
   function initLiveUpdates() {
@@ -506,7 +508,7 @@
     const targets = new Set(['repository-results', 'repository-detail', 'pull-request-results']);
     const queryKeys = ['q', 'access', 'page', 'pr_q', 'pr_state', 'pr_page'];
     const feedbackFor = target => target.id === 'repository-detail'
-      ? document.querySelector('dialog[open] [data-policy-feedback]') || document.querySelector('[data-detail-feedback]')
+      ? document.querySelector('dialog[open] [data-policy-feedback], dialog[open] [data-dialog-feedback]') || document.querySelector('[data-detail-feedback]')
       : target.parentElement.querySelector('[data-repository-feedback]');
     document.addEventListener('htmx:configRequest', event => {
       const {target, elt, verb, parameters} = event.detail;
@@ -560,8 +562,13 @@
       if (!successful) target.removeAttribute('aria-busy');
       const feedback = feedbackFor(target);
       if (!feedback) return;
-      if (successful) feedback.textContent = '';
-      else {feedback.dataset.error = 'true'; feedback.textContent = 'Could not update this view. Check your connection or sign in again, then retry.';}
+      if (successful) {feedback.textContent = ''; return;}
+      feedback.dataset.error = 'true';
+      // Refused actions explain themselves in a short plain-text sentence
+      // (for example "GitHub is still checking mergeability"); show it as text.
+      const reason = (xhr.getResponseHeader('Content-Type') || '').startsWith('text/plain') ? xhr.responseText.trim() : '';
+      const explained = reason !== '' && reason.length <= 300 && ((xhr.status >= 400 && xhr.status < 500) || xhr.status === 503);
+      feedback.textContent = explained ? reason : 'Could not update this view. Check your connection or sign in again, then retry.';
     });
     document.addEventListener('htmx:afterSettle', event => {
       const {target} = event.detail;

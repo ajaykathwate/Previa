@@ -238,7 +238,8 @@ func (h *harness) noLeftovers(t *testing.T, pr int64) {
 	if err != nil || len(resources) != 0 {
 		t.Fatalf("leftovers for PR %d: %+v %v", pr, resources, err)
 	}
-	filter := client.Filters{}.Add("label", dockerx.LabelPR+"="+fmt.Sprint(pr))
+	// Only this run's objects: other databases on the host reuse PR IDs.
+	filter := client.Filters{}.Add("label", dockerx.LabelInstance+"="+h.instance, dockerx.LabelPR+"="+fmt.Sprint(pr))
 	images, err := h.docker.ImageList(ctx, client.ImageListOptions{Filters: filter})
 	if err != nil || len(images.Items) != 0 {
 		t.Fatalf("images left for PR %d: %d %v", pr, len(images.Items), err)

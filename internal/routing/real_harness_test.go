@@ -115,6 +115,7 @@ func TestMain(m *testing.M) {
 // real tests, which run one after another with their own pull requests.
 type harness struct {
 	docker      *client.Client
+	instance    string // this database's instance: every Docker object it creates carries it
 	admin, pool *pgxpool.Pool
 	schema      string
 	repo        *env.Repository
@@ -416,6 +417,7 @@ func (h *harness) startPrevia(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	h.instance = instance
 	h.runtime, err = runtime.New(runtime.Parts{
 		Instance: instance, Admission: runtime.NewAdmissionLock(h.pool), Docker: h.docker, Egress: h.gateway, Targets: runtime.NewTargetStore(h.pool), Sources: appSources{}, Builder: h.builder, Secrets: provider,
 		Logs: func(context.Context, env.Attempt, *secrets.Redactor) (runtime.LogSink, error) {

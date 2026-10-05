@@ -14,7 +14,11 @@ import (
 const activity = `-- name: Activity :many
 SELECT p.repo_id,p.number,p.head_sha,r.full_name,r.accessible,i.status AS installation_status,
  coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,b.available_at,
- coalesce(e.status,'Not deployed') AS environment_status,coalesce(e.head_sha,'') AS deployed_sha
+ coalesce(e.status,'Not deployed') AS environment_status,coalesce(e.head_sha,'') AS deployed_sha,
+ coalesce(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END,'')::text AS waiting_reason,
+ coalesce(e.subdomain,'')::text AS hostname, e.expires_at, coalesce(e.last_error_code,'')::text AS failure_code,
+ coalesce(e.applied_generation = b.generation AND e.applied_revision = b.revision, false)::boolean AS failure_current,
+ p.state AS pr_state
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
@@ -42,6 +46,12 @@ type ActivityRow struct {
 	AvailableAt        pgtype.Timestamptz
 	EnvironmentStatus  string
 	DeployedSha        string
+	WaitingReason      string
+	Hostname           string
+	ExpiresAt          pgtype.Timestamptz
+	FailureCode        string
+	FailureCurrent     bool
+	PrState            string
 }
 
 func (q *Queries) Activity(ctx context.Context, arg ActivityParams) ([]ActivityRow, error) {
@@ -70,6 +80,12 @@ func (q *Queries) Activity(ctx context.Context, arg ActivityParams) ([]ActivityR
 			&i.AvailableAt,
 			&i.EnvironmentStatus,
 			&i.DeployedSha,
+			&i.WaitingReason,
+			&i.Hostname,
+			&i.ExpiresAt,
+			&i.FailureCode,
+			&i.FailureCurrent,
+			&i.PrState,
 		); err != nil {
 			return nil, err
 		}
@@ -134,6 +150,39 @@ func (q *Queries) CountPRs(ctx context.Context, arg CountPRsParams) (int64, erro
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const deliverySummary = `-- name: DeliverySummary :one
+SELECT
+ count(*) FILTER (WHERE b.state IN ('pending','queued') AND b.generation = p.generation)::bigint AS waiting,
+ count(*) FILTER (WHERE b.state = 'running' AND b.generation = p.generation)::bigint AS building,
+ count(*) FILTER (WHERE b.state = 'failed' AND b.generation = p.generation)::bigint AS failed,
+ count(*) FILTER (WHERE e.status IN ('running','failed','publishing') AND e.head_sha IS NOT NULL)::bigint AS live
+FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
+LEFT JOIN build_intents b ON b.pull_request_id=p.id
+LEFT JOIN environments e ON e.pull_request_id=p.id
+WHERE i.owner_user_id=$1 AND p.state='open'
+`
+
+type DeliverySummaryRow struct {
+	Waiting  int64
+	Building int64
+	Failed   int64
+	Live     int64
+}
+
+// Overview counts across the owner's repositories: current requests by state
+// and live previews.
+func (q *Queries) DeliverySummary(ctx context.Context, ownerUserID pgtype.Int8) (DeliverySummaryRow, error) {
+	row := q.db.QueryRow(ctx, deliverySummary, ownerUserID)
+	var i DeliverySummaryRow
+	err := row.Scan(
+		&i.Waiting,
+		&i.Building,
+		&i.Failed,
+		&i.Live,
+	)
+	return i, err
 }
 
 const failSync = `-- name: FailSync :exec
@@ -509,11 +558,18 @@ func (q *Queries) MarkSyncing(ctx context.Context, arg MarkSyncingParams) error 
 
 const ownedPR = `-- name: OwnedPR :one
 SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason,(r.accessible AND i.status='active') AS available,coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
- b.available_at,b.revision AS request_revision,coalesce(e.status,'Not deployed') AS environment_status,
- coalesce(e.head_sha,'') AS deployed_sha
+ b.available_at,b.revision AS request_revision,
+ coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
+ coalesce(b.source,'')::text AS request_source,
+ coalesce(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END,'')::text AS waiting_reason,
+ coalesce(e.status,'Not deployed') AS environment_status,
+ coalesce(e.head_sha,'') AS deployed_sha, coalesce(e.subdomain,'')::text AS hostname,
+ e.expires_at, e.last_active_at AS published_at, coalesce(e.last_error_code,'')::text AS failure_code,
+ coalesce(e.applied_generation = b.generation AND e.applied_revision = b.revision, false)::boolean AS failure_current,
+ (p.teardown_requested_generation = p.generation)::boolean AS teardown_requested
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
-LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
+LEFT JOIN environments e ON e.pull_request_id=p.id
 WHERE r.id=$1 AND i.owner_user_id=$2 AND p.number=$3
 `
 
@@ -551,10 +607,21 @@ type OwnedPRRow struct {
 	RequestedSha                string
 	AvailableAt                 pgtype.Timestamptz
 	RequestRevision             pgtype.Int8
+	RequestCurrent              bool
+	RequestSource               string
+	WaitingReason               string
 	EnvironmentStatus           string
 	DeployedSha                 string
+	Hostname                    string
+	ExpiresAt                   pgtype.Timestamptz
+	PublishedAt                 pgtype.Timestamptz
+	FailureCode                 string
+	FailureCurrent              bool
+	TeardownRequested           bool
 }
 
+// The PR's three lifecycle columns (observed, requested, deployed) and what
+// the owner may do next. A torn-down environment is shown as removed.
 func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, error) {
 	row := q.db.QueryRow(ctx, ownedPR, arg.ID, arg.OwnerUserID, arg.Number)
 	var i OwnedPRRow
@@ -586,8 +653,17 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 		&i.RequestedSha,
 		&i.AvailableAt,
 		&i.RequestRevision,
+		&i.RequestCurrent,
+		&i.RequestSource,
+		&i.WaitingReason,
 		&i.EnvironmentStatus,
 		&i.DeployedSha,
+		&i.Hostname,
+		&i.ExpiresAt,
+		&i.PublishedAt,
+		&i.FailureCode,
+		&i.FailureCurrent,
+		&i.TeardownRequested,
 	)
 	return i, err
 }

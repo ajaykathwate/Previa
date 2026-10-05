@@ -63,11 +63,11 @@ func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Val
 		if err != nil {
 			return pages.Page{}, panelError(err)
 		}
-		page.SelectedPR = &pages.PR{Number: row.Number, Title: row.Title, Author: row.Author,
-			Branch: row.HeadBranch, SHA: row.HeadSha, State: DisplayStatus(row.State, row.BuildStatus), Build: row.BuildState,
-			URL: row.HtmlUrl, RequestedSHA: row.RequestedSha, DeployedSHA: row.DeployedSha,
-			Environment: row.EnvironmentStatus, Available: row.Available.Bool,
-			Deadline: timestamp(row.AvailableAt), Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh}
+		pr, err := h.detailPR(ctx, row)
+		if err != nil {
+			return pages.Page{}, err
+		}
+		page.SelectedPR = &pr
 	}
 	return page, nil
 }

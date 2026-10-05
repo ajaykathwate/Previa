@@ -30,6 +30,13 @@ func (w *BuildWorker) Work(ctx context.Context, job *river.Job[BuildArgs]) error
 		w.Service.logger.InfoContext(ctx, "build waits", "pr_id", request.PullRequestID, "revision", request.Revision, "reason", waiting.Reason)
 		return river.JobSnooze(waitDelay(job.JobRow))
 	}
+	if errors.Is(err, ErrInterrupted) {
+		return river.JobSnooze(0) // runs again on the next start, no attempt spent
+	}
+	var limited *UpstreamRetryAfter
+	if errors.As(err, &limited) {
+		return river.JobSnooze(max(limited.Delay, time.Second)) // GitHub's rate limit
+	}
 	return finishJob(ctx, w.Broker, request, job, err)
 }
 
