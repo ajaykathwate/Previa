@@ -3,7 +3,7 @@
 Everything that happens between "this PR may be built" and "here is a directory to
 build": confirm the PR with GitHub right now, download exactly that commit, unpack
 it without trusting it, and read `.previewrc.yaml` from the same tree. None of this
-builds or runs code; image builds start in the next phase ([22-roadmap.md](22-roadmap.md)).
+builds or runs code; image builds start in the next phase ([26-roadmap.md](26-roadmap.md)).
 
 The PR author controls everything in the archive, including the config file, so
 all of it is treated as hostile input: identity is verified, paths are confined,

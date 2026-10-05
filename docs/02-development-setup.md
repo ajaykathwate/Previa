@@ -4,12 +4,12 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 17**, **River 007**. After pulling changes, run
+Current schema: **Goose 18**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker.
 
 ## 1. Prerequisites
 
-- Go **1.26.5 or newer** (required by `go.mod` and `tools/go.mod`).
+- Go **1.26.8 or newer** (required by `go.mod` and `tools/go.mod`; 1.26.8 fixes standard-library vulnerabilities `make vuln` reports in earlier releases).
 - Git, GNU Make, curl, a SHA-256 tool (`sha256sum` or `shasum`) and OpenSSL.
 - Docker Engine with the Compose plugin, or Docker Desktop running Linux containers.
 - Internet access for the first dependency, tool and image downloads.
@@ -49,6 +49,11 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | --- | --- | --- | --- |
 | `DATABASE_URL` | server, worker, migrations | Keep the example for the Compose database. | Application data, sessions and River jobs. |
 | `HTTP_ADDR` | server | `127.0.0.1:8080` | Listen address. |
+| `APP_ENV` | server, worker | Optional; `development` (default) or `production`. | Production requires an HTTPS `APP_BASE_URL` and `GITHUB_WEBHOOK_SECRET`, refuses a GitHub App key readable by group or others, and turns the queue-ping tools off ([22](22-observability-and-hardening.md)). |
+| `LOG_LEVEL` | server, worker, egress | Optional; `debug`, `info` (default), `warn`, `error`. | JSON logs with correlation fields; secrets redacted. |
+| `INTERNAL_ADDR` | server | Optional; default `127.0.0.1:9090`. | `/livez`, `/readyz`, `/metrics`; never publish it. |
+| `TRUSTED_PROXIES` | server | Optional; addresses or CIDR ranges; empty trusts nobody. | Reverse proxies allowed to set `X-Forwarded-For`/`-Host`. |
+| `BACKUP_STATUS_FILE` | server | Optional; set in production Compose. | Its modification time becomes the last-backup metric ([24](24-production-deployment.md#backups-and-restore)). |
 | `APP_BASE_URL` | server | `http://localhost:8080` | OAuth redirects, CSRF origin checks, cookie security. |
 | `GITHUB_OAUTH_CLIENT_ID` / `_SECRET` | server | From a GitHub **OAuth App** ([04](04-github-sign-in-and-app.md)). | Dashboard sign-in. |
 | `SESSION_SECRET` | server | `openssl rand -hex 32` | Signs OAuth state; at least 32 characters. |
@@ -66,6 +71,8 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT` | worker | Optional; defaults `256MiB`, `512`, `120s`. | Preview `/tmp` size, process limit and readiness deadline. |
 | `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY` | worker | Optional; empty budgets use 60% of Docker memory and 75% of its CPUs; `10`. | What all previews may use together, and per repository. |
 | `PREVIEW_OCI_RUNTIME` | worker | Optional, e.g. `runsc` where gVisor is installed. | Docker runtime for previews. |
+| `WORKER_INTERNAL_ADDR` | worker | Optional; default `127.0.0.1:9091`. | `/livez`, `/readyz` (with capabilities), `/metrics`. |
+| `BUILDS_PAUSED` | worker | Optional; default `false`. | The execution kill switch: builds wait; teardown, cleanup, routing, reports and housekeeping continue ([23](23-incident-runbook.md#execution-kill-switch)). |
 | `SOURCE_WORKSPACE_ROOT` | worker | Optional; default `previa-sources` in the system temporary directory. An absolute path on a Linux filesystem. | Where each build's extracted source lives while it builds. |
 | `ENV_TTL_HOURS` | worker | Optional; default `48`, `0` never expires. | Preview lifetime after its latest publication ([14](14-housekeeping-and-capacity.md)). |
 | `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE` | worker | Optional; defaults `false`, `15m`. | Log housekeeping deletions without making them; the minimum age of an orphan. |
@@ -112,7 +119,8 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | `make run-server`, `make run-worker`, `make dev` | Yes; already-exported variables take precedence. Restart Air after editing `.env`. |
 | `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `test-reporting`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e`, `housekeeping-dry-run`, `router-up`, `router-down`, `route-sync` | Yes; falls back to `.env.example` for migrations if `.env` is absent. `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e` and `test-reporting` use `DATABASE_URL` as `TEST_DATABASE_URL` unless that is exported (they create and drop their own schemas). |
 | Direct `go run`, manual Goose commands | No; run `set -a; . ./.env; set +a` once per terminal. |
-| `make build`, `make lint`, `make generate` | No configuration needed. |
+| `make build`, `make lint`, `make generate`, `make vuln`, `make observability-check`, `make release-images` | No configuration needed (the last two need Docker). |
+| `make prod-smoke` | No; it writes its own settings into a temporary directory ([24](24-production-deployment.md#local-staging-smoke-test)). |
 | `make test` | Database tests need an explicitly exported `TEST_DATABASE_URL`. |
 
 Select another file with `ENV_FILE=.env.local make run-server`. Keep `.env` in
@@ -154,6 +162,7 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0015 | PR feedback state (`pull_request_reports`: wanted/reported report versions, digests, current check run, reporter lease, last error category) and `environments.last_error_code`. |
 | 0016 | This database's instance identity (`platform_instance`), waiting notes on build requests (`waiting_revision`, `waiting_reason`) and `pr_reconciliations`. |
 | 0017 | `worker_capabilities`: what each running worker can do, refreshed every 30 seconds, read by the server. |
+| 0018 | The execution kill switch: build requests may wait with reason `paused`, and workers report `paused` ([22](22-observability-and-hardening.md#execution-kill-switch)). |
 
 Optional check that live updates are wired:
 
@@ -174,7 +183,9 @@ schema). Rolling back 0001 drops application tables; use it only on disposable d
 ```sh
 make build    # compile CSS, generate templ/sqlc code, go build ./...
 make lint     # go vet + pinned golangci-lint; expect 0 issues
+make vuln     # govulncheck; expect "Your code is affected by 0 vulnerabilities"
 make test     # go test ./...; database tests skip without TEST_DATABASE_URL
+make observability-check   # alert rules and their tests, Prometheus config, dashboard queries (Docker)
 ```
 
 Run the PostgreSQL-backed tests after migrating:
@@ -297,11 +308,28 @@ make test-e2e             # about a minute
 
 **Expected:** `TestRealEndToEnd` passes and logs `published pr-7-…preview.test from
 1111111; reported Ready; log has N lines`, `torn down: route removed, containers
-removed, reported`, `Automatic: the burst built only the newest commit, back at
+removed, reported` (after `GitHub outage: N report calls rejected; the preview
+published anyway and the report caught up`), `Automatic: the burst built only the newest commit, back at
 pr-7-…; one living comment throughout` and `closed: route, containers, image and
 network removed`. Set `TEST_E2E_LOG=1` for the worker's logs. Anything the run could
 not remove fails the test. Afterwards only the `previa-egress` container and network
 remain (`docker network ls --filter label=io.previa.managed`).
+
+### Release images and production smoke test (optional)
+
+Needs Docker and, for the backup drill, `age` (`sudo apt-get install age`). It
+builds the three release images, then runs the production Compose stack on this
+machine under the project `previa-smoke` and removes it afterwards:
+
+```sh
+make release-images PREVIA_VERSION=v0.1.0-rc.1   # about 6 minutes the first time
+make prod-smoke PREVIA_VERSION=v0.1.0-rc.1        # about 3 minutes
+```
+
+**Expected:** a line per check (`ok   dashboard home over HTTPS`, …) ending in
+`smoke test passed: 40 checks` (43 with `SMOKE_OLD_DUMP`, 33 without `age`). Ports used: 127.0.0.1:18080,
+18443 and 13000. What it covers and its options are in
+[24](24-production-deployment.md#local-staging-smoke-test).
 
 ### Real housekeeping check (optional)
 
@@ -392,8 +420,11 @@ Terminal 1, server (or `make dev` for live reload):
 make run-server
 ```
 
-**Expected:** `database health check passed`, then `HTTP server listening`. Open
-<http://localhost:8080/> and sign in with GitHub.
+**Expected:** `internal listener serving /livez, /readyz and /metrics`,
+`database health check passed` (with `version`, `schema=18` and `environment`), then
+`HTTP server listening`. Open <http://localhost:8080/> and sign in with GitHub.
+`curl -s localhost:9090/readyz` answers `{"checks":{"database":"ok","schema":"ok"},"status":"ready",...}`.
+The server refuses to start if migrations are behind (`run migrations first`).
 
 Terminal 2, worker:
 
@@ -402,8 +433,9 @@ make run-worker
 ```
 
 **Expected:** `database health check passed`, then `River worker started
-execution=… reporting=… housekeeping=… discovery=…`, preceded by a `capability
-unavailable` warning naming each missing dependency. The server records work; the
+execution=… paused=… reporting=… housekeeping=… discovery=…`, preceded by a `capability
+unavailable` warning naming each missing dependency. `curl -s localhost:9091/readyz`
+lists its checks and capabilities. The server records work; the
 worker executes it. With App credentials it runs PR discovery and mergeability
 checks; with builds configured ([21](21-mvp-operations.md#capability-and-configuration-matrix))
 it also builds, publishes, reports and keeps house. It always runs

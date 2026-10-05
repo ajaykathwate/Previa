@@ -6,8 +6,11 @@ an HTTPS route, a PR comment and check run, live logs, expiry and teardown. This
 document says what each process does, what each capability needs and what happens
 when it is missing, how the work is queued and stopped, how to run the whole
 pipeline locally or on staging, what is proven by which test, and every live proof
-still required before a public rollout. This is an operational **local/staging**
-MVP; it does not authorize public production use ([22](22-roadmap.md)).
+still required before a public rollout. Observability and hardening are in
+[22](22-observability-and-hardening.md), incidents in [23](23-incident-runbook.md),
+production deployment in [24](24-production-deployment.md) and the release evidence
+in [25](25-release-report.md). Nothing here authorizes public production use before
+the pending live checks pass ([26](26-roadmap.md)).
 
 ## Who does what
 
@@ -27,6 +30,8 @@ MVP; it does not authorize public production use ([22](22-roadmap.md)).
 | PR comment and check runs | Part of builds; the App's ID and slug are read from GitHub (`GET /app`) at start | Part of builds. |
 | Housekeeping (recovery, expiry, orphans, PR reconciliation, pruning) | Part of builds; `ENV_TTL_HOURS`, `HOUSEKEEPING_*`, `BUILD_CACHE_BUDGET` | Part of builds. |
 | Build, Retry, Rebuild and teardown controls (server) | The five server App settings, and a worker with builds seen within 90 seconds | The PR page explains why; the endpoint answers 503 and records nothing. Teardown is recorded without a worker and runs when one starts. |
+| Builds paused (kill switch) | `BUILDS_PAUSED=true` | Off by default. When on, builds wait (reason `paused`) and the dashboard refuses new requests saying builds are paused; teardown, cleanup, routing, reports and housekeeping continue ([23](23-incident-runbook.md#execution-kill-switch)). |
+| Health and metrics | `INTERNAL_ADDR` (server), `WORKER_INTERNAL_ADDR` (worker) | Always on, loopback by default; `/readyz` lists failing dependencies ([22](22-observability-and-hardening.md)). |
 | Source workspaces | `SOURCE_WORKSPACE_ROOT` (default `previa-sources` in the system temporary directory; keep it on a Linux filesystem) | Defaulted. |
 
 The worker's startup log states it: `River worker started execution=true
@@ -83,7 +88,8 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 
 Without a domain and DNS token the router cannot obtain a certificate, so builds
 stay unavailable; `make test-e2e` proves the whole pipeline on this machine without
-them (a router with Traefik's default certificate).
+them (a router with Traefik's default certificate). For a production host use the
+release images and Compose file instead ([24](24-production-deployment.md)).
 
 ## What is proven, and by which test
 
@@ -107,6 +113,11 @@ them (a router with Traefik's default certificate).
 | Cross-owner rejection | `TestActionsRefuseAnotherOwnersPullRequest` (build, Retry, Rebuild and teardown of another owner's real PR: 404, nothing recorded, absent from Builds and Environments), `TestWorkspaceHTTPAuthorizationCSRFActions`, `TestTeardownIsConfirmedOwnerOnlyAndIdempotent` |
 | Teardown confirmed in a modal, owner-only, CSRF-protected | `TestTeardownIsConfirmedOwnerOnlyAndIdempotent`, browser tests (with and without JavaScript) |
 | Dashboard pages show real state | `TestEnvironmentsAndBuildsShowRealDeliveryState`, browser tests |
+| A GitHub outage never blocks publication; reports catch up | `TestRealEndToEnd` (comment and check-run API failing during a build) |
+| Execution kill switch | `TestPausedBuildsWaitWithoutTouchingGitHubOrDocker`, `TestPausedWorkersSayWhyNothingBuilds`, `TestBuildIsUnavailableWithoutAWorkerThatCanBuild` |
+| Ingress controls, security headers, internal endpoints, redaction, bounded metrics | `internal/platform/httpx`, `logging`, `metrics` tests; browser suite under the CSP |
+| Alerts | `make observability-check` (promtool rule unit tests) |
+| Production stack, backup and restore, upgrade and rollback, older-schema restore | `make prod-smoke` ([24](24-production-deployment.md#local-staging-smoke-test)) |
 
 ## Live proofs still required before a public rollout
 
@@ -124,6 +135,13 @@ Each needs something this environment does not have; none is claimed.
 6. **Capacity and disk pressure on the target host's real resources**, with
    `MAX_CONCURRENT_BUILDS` concurrent builds.
 7. **gVisor** (`PREVIEW_OCI_RUNTIME=runsc`) if the threat model requires it.
-8. **Backups and restore, metrics and alerts, CI and releases** (Prompts 11–12).
+8. **The production stack on the target host**: `setup.sh`, the release images,
+   staged certificates, the backup timer with a real object-storage remote, a
+   restore rehearsal there, and an upgrade ([24](24-production-deployment.md)).
+   `make prod-smoke` rehearses all of it on local staging.
+9. **CI and releases on GitHub**: the workflows have not run on GitHub yet, the
+   protected `release` environment and its reviewers need configuring, and
+   publishing images to GHCR needs a tag pushed by a maintainer.
+10. **Alert delivery**: an Alertmanager and a receiver of the operator's choice.
 
 One worker host is supported: source workspaces and the route file are per host.

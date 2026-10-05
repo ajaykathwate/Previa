@@ -26,7 +26,11 @@ run and use Previa, the rest explain how and why it works.
 | 19 | [Realtime updates](19-realtime-updates.md) | Live dashboard updates with triggers, LISTEN/NOTIFY and SSE. |
 | 20 | [UI architecture](20-ui-architecture.md) | Templ/HTMX structure, theme, navigation, progressive enhancement. |
 | 21 | [Operating the MVP](21-mvp-operations.md) | What server and worker do, the capability and configuration matrix, queues and draining, running the full pipeline, what is proven and the live proofs still required. |
-| 22 | [Roadmap](22-roadmap.md) | Prompts 1–10 done; the remaining hardening and release tasks, and the release checklist. |
+| 22 | [Observability and hardening](22-observability-and-hardening.md) | Logs, metrics, readiness, dashboards and alerts; ingress controls, production mode, the kill switch and dependency checks. |
+| 23 | [Incident runbook](23-incident-runbook.md) | What to do for each alert: outages, backlogs, failures, disk, backups, certificates, key rotation. |
+| 24 | [Production deployment](24-production-deployment.md) | Release images, host setup, GitHub and DNS, staged certificates, backups and restore, upgrades and rollback, CI and releases, the smoke test. |
+| 25 | [Release report](25-release-report.md) | Evidence for each release acceptance item: what passed, how, and what is still pending. |
+| 26 | [Roadmap](26-roadmap.md) | Prompts 1–12 and the release checklist. |
 
 Related files outside this folder:
 

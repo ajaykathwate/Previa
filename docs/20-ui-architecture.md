@@ -15,6 +15,12 @@ user's point of view is in [03-user-guide.md](03-user-guide.md).
   health or URLs. A control that cannot work now (no worker that can build, no
   GitHub access, conflicts) is absent and a sentence says why; unbuilt features are
   labelled ("Coming next" on the home page).
+- **Strict Content-Security-Policy.** Every page is served with a per-request nonce
+  policy: the theme boot script carries the nonce (and passes it to the style it
+  creates), `ui.js` gives it to the speculation rules it injects, and HTMX is
+  configured (`htmx-config` meta) not to inject styles or evaluate code. No inline
+  event handlers, inline styles or `eval`. The browser suite runs under the same
+  policy and fails on any violation ([22](22-observability-and-hardening.md)).
 - **Presentation never reaches into the backend.** Templates receive display data;
   they never query, read sessions or authorize.
 

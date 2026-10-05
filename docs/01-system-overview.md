@@ -27,12 +27,17 @@ per-feature design lives in [DESIGN.md](../DESIGN.md).
 | Teardown on close, revocation and owner request (confirmation dialog), owner-verified cleanup, teardown sweep | Working; verified on real Docker and Traefik (`make test-routing`, `make test-e2e`) |
 | PR feedback: one living comment and exact-commit check runs, rendered from persisted state | Working against a fake GitHub (`make test-e2e`); the live proof on a real PR (`make test-reporting`) is still to run |
 | Housekeeping: recovery, expiry, orphan cleanup with grace periods, PR reconciliation, pruning; build slots and atomic preview capacity | Working; tested against PostgreSQL, River and real Docker (`make test-housekeeping`, `make test-runtime`); dry-run diagnostics (`make housekeeping-dry-run`) |
-| Worker capabilities, Build/Retry/Rebuild/Tear down controls, Builds/Environments/Overview with real state | Working; the whole pipeline proven on real Docker, BuildKit and Traefik with a fake GitHub (`make test-e2e`) |
+| Worker capabilities, Build/Retry/Rebuild/Tear down controls, Builds/Environments/Overview with real state | Working; the whole pipeline proven on real Docker, BuildKit and Traefik with a fake GitHub, including a GitHub reporting outage (`make test-e2e`) |
+| Observability: correlated redacted logs, bounded metrics, readiness on internal listeners, Grafana dashboard, 24 alert rules | Working; rules unit-tested (`make observability-check`) ([22](22-observability-and-hardening.md)) |
+| Hardening: nonce CSP and security headers, host and trusted-proxy validation, body and rate limits, production mode, execution kill switch | Working; browser suite runs under the CSP; incident runbook ([23](23-incident-runbook.md)) |
+| Release images, production Compose, host setup, encrypted backups and restore, upgrades and rollback, CI and releases | Working on local staging (`make prod-smoke`: 43 checks); a real host, DNS and hosted GitHub are pending ([24](24-production-deployment.md), [25](25-release-report.md)) |
 
-This is an operational **local/staging** MVP. What each capability needs, what is
-proven by which test and every live proof still required before a public rollout
-are in [21-mvp-operations.md](21-mvp-operations.md); [22-roadmap.md](22-roadmap.md)
-lists the remaining work in order.
+This is an operational MVP, packaged and rehearsed for production on local staging
+infrastructure. What each capability needs and what is proven by which test are
+in [21](21-mvp-operations.md); running it on a host is [24](24-production-deployment.md);
+the evidence for every release acceptance item, and the live checks still pending
+before a public rollout, are in [25](25-release-report.md);
+[26-roadmap.md](26-roadmap.md) lists the work in order.
 
 ## Architecture
 
@@ -76,7 +81,7 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 
 | Path | What it holds |
 | --- | --- |
-| `cmd/server`, `cmd/worker`, `cmd/river-migrate`, `cmd/secrets-reencrypt`, `cmd/route-sync`, `cmd/egress` | Thin entry points (`river-migrate`, `secrets-reencrypt` and `route-sync` are maintenance commands run through Make; `egress` runs as `previa-egress`, the proxy and prober container). |
+| `cmd/server`, `cmd/worker`, `cmd/migrate`, `cmd/river-migrate`, `cmd/secrets-reencrypt`, `cmd/route-sync`, `cmd/housekeeping`, `cmd/egress` | Thin entry points. `server` and `worker` also answer `healthcheck` and `check-config`; `migrate` applies the embedded migrations in release images; `river-migrate`, `secrets-reencrypt`, `route-sync` and `housekeeping` (dry run) are maintenance commands; `egress` runs as `previa-egress`, the proxy and prober container. |
 | `internal/app` | Composition root: builds dependencies, starts and stops processes; `pipeline.go` composes the worker's pipeline from validated dependencies and records why anything is unavailable. |
 | `internal/auth` | GitHub OAuth login, user upsert, SCS sessions, CSRF, logout. |
 | `internal/installations` | Verified App linking, installation lifecycle, repository directory, build-mode policy. |
@@ -91,13 +96,16 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | `internal/runtime` | Hardened preview candidates: recheck, secrets, readiness, capacity, inventory, the pre-publication check and the owner-verified cleanup executor. |
 | `internal/routing` | Stable hostnames, the route controller (Traefik file provider), forward-only route table file, router control through Docker, the unavailable page. |
 | `internal/dashboard` | Home, overview, session and developer-tools pages; queue ping. |
-| `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub, SSE, stream limiter), `workers` (capability heartbeat), `dockerx` (Docker client, shared labels), `egress` (the egress proxy, readiness probe and its container). |
+| `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub, SSE, stream limiter), `workers` (capability heartbeat), `logging` (correlation, redaction), `metrics` (Prometheus), `version`, `dockerx` (Docker client, shared labels), `egress` (the egress proxy, readiness probe and its container). |
 | `internal/reporting` | PR feedback: state derivation, comment and check run rendering, the GitHub adapter and the leased reporter ([13](13-pr-feedback.md)). |
 | `internal/housekeeping` | Startup and periodic River jobs: recovery, resource inventory with grace periods, PR reconciliation, expiry, pruning, dry runs ([14](14-housekeeping-and-capacity.md)). |
 | `web/` | `pages/<feature>`, `layouts`, `components`, `styles` (Tailwind), `static` (HTMX, compiled CSS, `ui.js`), browser tests. |
-| `db/migrations` | Goose migrations 0001–0017; sqlc generates typed queries into each feature's `dbgen/`. |
+| `db/migrations` | Goose migrations 0001–0018 (embedded by `db/migrations.go`); sqlc generates typed queries into each feature's `dbgen/`. |
 | `deploy/egress` | Dockerfile for the egress proxy and prober image (`make egress-image`). |
-| `deploy/traefik` | The router's Compose file (`make router-up`): file provider, loopback API, staging ACME, secret-file DNS credential. |
+| `deploy/traefik` | The development router's Compose file (`make router-up`): file provider, loopback API, staging ACME, secret-file DNS credential. |
+| `deploy/production`, `Dockerfile` | Release images; production Compose; host setup, backup, restore and smoke-test scripts ([24](24-production-deployment.md)). |
+| `deploy/observability` | Prometheus configuration, alert rules and their tests, the Grafana dashboard ([22](22-observability-and-hardening.md)). |
+| `.github/workflows`, `.goreleaser.yaml` | CI (checks, browser, images, real Docker suites) and tag-driven releases. |
 | `tools/go.mod` | Pinned dev tools: templ, sqlc, Goose, Air, golangci-lint. |
 
 ## Data model
@@ -117,7 +125,7 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | `env_secrets` | Repository secrets: nonce ‖ AES-256-GCM ciphertext bound to repository, name and key version. |
 | `build_log_streams` | One row per environment for the current build attempt: `epoch`, generation/revision, state, line and byte counts, truncation and loss counters. |
 | `build_logs` | That attempt's lines (`epoch`, `sequence`, `kind`); replaced on admission, pruned after 14 days. |
-| `worker_capabilities` | One row per running worker: what it can do (execution, routing, reporting, housekeeping, discovery) and when it was last seen. |
+| `worker_capabilities` | One row per running worker: what it can do (execution, routing, reporting, housekeeping, discovery), whether builds are paused, and when it was last seen. |
 | `river_*` | River's own job tables, migrated separately. |
 
 ## Key decisions and trade-offs
@@ -148,6 +156,9 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | Host-derived preview budget | 60% of Docker memory and 75% of CPUs for previews keeps the platform responsive. | Previews may be refused (retryable) on a busy host. |
 | Package by feature, consumer-defined interfaces | Features evolve independently; no global handler/store layers. | Some small duplication across features. |
 | The server records, the worker executes and publishes its capabilities | The server needs no Docker or execution secrets; a missing capability is an explicit unavailable state, never a silent no-op. | The dashboard trusts a heartbeat seen within 90 seconds, so it can lag a crashed worker by that much; requests made meanwhile wait durably. |
+| Health and metrics on an internal listener; durable state exported by the server | Nothing operational is reachable from the internet or from previews; queue depth stays visible when no worker runs. | Prometheus must run on the control network. |
+| Release images distroless and non-root; only the worker has the Docker socket | The smallest attack surface that still lets the worker build and run previews. | The worker's socket access is root-equivalent on the host: the host is dedicated to Previa. |
+| Forward-only migrations, binaries refusing an older schema | Upgrades are one command; a rollback is the previous image, or a restore when a release says its migrations are not backward compatible. | Every migration must stay compatible with the previous release. |
 
 ## Hard problems and how they are handled
 

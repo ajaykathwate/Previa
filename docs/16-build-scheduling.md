@@ -27,6 +27,9 @@ to make execution look available.
 
 1. The request still matches the PR's generation, commit, state and request
    revision in PostgreSQL; otherwise it is superseded.
+   When builds are paused (`BUILDS_PAUSED`, the kill switch), the request waits
+   here with reason `paused`, before any GitHub or Docker call
+   ([23](23-incident-runbook.md#execution-kill-switch)).
 2. **A fresh GitHub read** (`WithVerifier`: `VerifyUpstream`), outside every lock and
    transaction. A closed PR or a different head supersedes the request; lost access
    ends it as a permanent failure; an outage is retried; a rate limit snoozes the

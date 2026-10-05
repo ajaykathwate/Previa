@@ -1,8 +1,11 @@
-# 22 · Roadmap: remaining MVP work
+# 26 · Roadmap: remaining MVP work
 
-The remaining MVP work, as **12 sequential tasks**. Prompts 1–10 are done: Previa
-builds and serves real previews on a local/staging setup. Each task is written as a
-self-contained prompt (for a developer or a coding agent) with its acceptance
+The MVP work, as **12 sequential tasks**. All twelve are done: Previa builds and
+serves real previews, is observable and hardened, and is packaged and rehearsed for
+production on local staging infrastructure. The release acceptance checklist at
+the end is answered item by item in [25](25-release-report.md); its live checks on
+hosted GitHub, real DNS and a real host are still pending. Each task is written as
+a self-contained prompt (for a developer or a coding agent) with its acceptance
 boundary. Run one task at a time with the shared
 instructions below. This plan does not certify the current application for
 production; the release checklist at the end does.
@@ -94,6 +97,26 @@ production; the release checklist at the end does.
   `make test-e2e` on real Docker, BuildKit and Traefik with a fake GitHub over TLS,
   plus DB and browser regressions; the capability matrix, proof matrix and the
   remaining live proofs are in [21](21-mvp-operations.md).
+- **Prompt 11 done** ([22](22-observability-and-hardening.md), [23](23-incident-runbook.md)):
+  correlated, redacted JSON logs; bounded Prometheus metrics with the headline
+  request-to-preview latency and scrape-time state exported by the server;
+  `/livez`, `/readyz` and `/metrics` on internal listeners with `healthcheck` and
+  `check-config` subcommands; a provisioned Grafana dashboard and 24 unit-tested
+  alert rules; a nonce Content-Security-Policy and security headers, host and
+  trusted-proxy validation, body and header limits, per-client sign-in rate limits
+  and a webhook concurrency cap; `APP_ENV=production` checks; the
+  `BUILDS_PAUSED` kill switch (migration 0018); govulncheck (Go 1.26.8 and
+  containerd 2.3.6 remove every reachable finding); an incident runbook.
+- **Prompt 12 done** ([24](24-production-deployment.md), [25](25-release-report.md)):
+  reproducible multi-stage release images (distroless, non-root, health checks,
+  cross-compiled); production Compose with a migration step, resource limits,
+  stop budgets and the router's dashboard route; `cmd/migrate` with embedded
+  migrations and a schema check in every process; host setup, encrypted backup and
+  restore scripts with a nightly timer; upgrade and rollback procedures; GitHub
+  Actions CI and tag-driven releases with GoReleaser; a GitHub-outage phase in
+  `make test-e2e`; and `make prod-smoke`, which ran the whole production stack
+  locally (43 checks: HTTPS through the router, hardening, metrics, restarts,
+  upgrade and rollback, backup and restore, and an older-schema restore).
 - Implemented: signed/deduplicated webhook ingress, bounded open-only PR discovery,
   tracked close/merge retention, bounded mergeability checks and build refusal for
   Checking/Conflicts ([05](05-webhooks-and-pr-discovery.md)).
@@ -185,8 +208,8 @@ for live proofs require an explicitly authorized disposable repository.
 | 8 ✅ | GitHub living comment and exact-SHA checks | 3, 6–7 |
 | 9 ✅ | Recovery, expiry, reconciliation and capacity | 4–8 |
 | 10 ✅ | Real worker orchestration and completed dashboard actions | 1–9 |
-| 11 | Observability and production hardening | 10 |
-| 12 | Deployment packaging, CI and release acceptance | 1–11 |
+| 11 ✅ | Observability and production hardening | 10 |
+| 12 ✅ | Deployment packaging, CI and release acceptance | 1–11 |
 
 Prompts 1–9 exercised adapters using isolated test harnesses with normal preview
 dispatch disabled. Prompt 10 connected the complete pipeline in a controlled

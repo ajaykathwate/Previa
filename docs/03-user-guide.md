@@ -132,8 +132,9 @@ chosen from the current request:
 - A queued request shows no second button. Its progress appears on the page, on
   **Builds**, in **Build logs** and on the pull request on GitHub.
 - When nothing can build, the button is replaced by the reason: GitHub access
-  removed, a closed PR, Checking or Conflicts, or **no running worker can build
-  previews**. Requests made while the worker is stopped (Automatic or teardown) wait
+  removed, a closed PR, Checking or Conflicts, **no running worker can build
+  previews**, or **Builds are paused by the operator** (an incident switch; queued
+  requests show **Builds paused** and start when builds resume). Requests made while the worker is stopped (Automatic or teardown) wait
   and run when it starts.
 - A failed build or rebuild never replaces a working preview: the old one keeps
   serving and the page shows both.
@@ -218,7 +219,7 @@ attempt; a new attempt replaces it.
 | --- | --- |
 | Builds | The current or latest request per PR across your repositories: latest and requested commit, waiting/queued/building/outcome, why it waits or failed, the eligibility time and a **Logs** link. Not an attempt history: a new request replaces the row. |
 | Environments | Each preview: status (Publishing, Running, Failed, Removing), the deployed commit (marked when earlier than the latest), **Open preview**, expiry, **Logs** and **Tear down**. |
-| Developer tools | Queue diagnostic: submit a ping and watch the worker process it. |
+| Developer tools | Queue diagnostic: submit a ping and watch the worker process it. A production server (`APP_ENV=production`) does not offer it and the page says so. |
 | Session | Your GitHub identity; reached from the account menu. |
 
 Empty Builds/Environments views are normal: only real records appear. Logging out

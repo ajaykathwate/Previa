@@ -11,10 +11,14 @@ period. Previews are torn down when the PR closes or merges.
 The full pipeline runs end to end as an operational **local/staging** MVP: the
 worker composes source fetching, isolated builds, hardened previews, fenced HTTPS
 routing, PR feedback, durable teardown and housekeeping from validated settings, and
-the dashboard's Build, Retry, Rebuild and Tear down controls drive it. Live proofs
-against hosted GitHub and real DNS remain before a public rollout. See
-[operating the MVP](docs/21-mvp-operations.md) and the
-[roadmap](docs/22-roadmap.md). Start with the [documentation index](docs/README.md)
+the dashboard's Build, Retry, Rebuild and Tear down controls drive it. It is
+observable (correlated logs, Prometheus metrics, readiness, a Grafana dashboard
+and alerts), hardened for production, and packaged as release images with a
+production Compose file, host setup, encrypted backups with a rehearsed restore,
+CI and releases. Live proofs against hosted GitHub, real DNS and a real host remain
+before a public rollout. See [operating the MVP](docs/21-mvp-operations.md),
+[production deployment](docs/24-production-deployment.md), the
+[release report](docs/25-release-report.md) and the [roadmap](docs/26-roadmap.md). Start with the [documentation index](docs/README.md)
 for a guided reading order.
 
 This document is written for the builder (me), not an end user — every step
@@ -391,7 +395,7 @@ forward ([docs/11-routing-and-https.md](docs/11-routing-and-https.md)).
 
 | Layer | Choice |
 |---|---|
-| Backend | Go 1.22+, `net/http` + `chi` |
+| Backend | Go 1.26 (1.26.8 or newer), `net/http` + `chi` |
 | Database | PostgreSQL |
 | Job queue | River (Postgres-backed) |
 | Routing / TLS | Traefik v3 + Let's Encrypt wildcard cert (DNS-01) |
@@ -537,6 +541,7 @@ each one turns on, and what happens without it, is in
 [docs/21-mvp-operations.md](docs/21-mvp-operations.md).
 
 - `DATABASE_URL`
+- `APP_ENV` (`development` or `production`), `LOG_LEVEL`, `INTERNAL_ADDR` / `WORKER_INTERNAL_ADDR` (internal health and metrics listeners), `TRUSTED_PROXIES`, `BACKUP_STATUS_FILE` (server), `BUILDS_PAUSED` (worker; the execution kill switch); see [docs/22-observability-and-hardening.md](docs/22-observability-and-hardening.md)
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
 - `APP_BASE_URL` (server; also the worker once previews are routed: unknown preview hosts redirect to it)
@@ -554,6 +559,14 @@ each one turns on, and what happens without it, is in
 - Provisioning: Terraform for the VPS and DNS, or a documented setup script for the MVP
 - CI/CD: GitHub Actions for tests and image builds; `goreleaser` for versioned releases
 - Backups: nightly `pg_dump` to object storage
+
+Implemented as [docs/24-production-deployment.md](docs/24-production-deployment.md)
+describes: `deploy/production/compose.yml` (PostgreSQL, a migration step, server,
+worker, Traefik, optional Prometheus and Grafana), release images from the
+`Dockerfile`, the documented setup script `deploy/production/setup.sh` (Terraform
+is optional and not provided), GitHub Actions CI and tag-driven releases with
+GoReleaser, and a nightly `pg_dump` encrypted with age before it is copied to
+object storage through rclone, with a scripted, rehearsed restore.
 
 ### 4.10 Operational limits to set on day one
 

@@ -268,6 +268,11 @@ High. This is the coordination core of the system.
     snoozed and runs again without spending an attempt); a GitHub rate limit waits
     for GitHub's delay. On `SIGTERM` the worker removes its capability row, lets
     running jobs finish for 30 seconds, then cancels the rest.
+12. The execution kill switch (`BUILDS_PAUSED`, migration 0018): a paused worker
+    admits no build and makes no GitHub or Docker call for one; requests wait with
+    reason `paused` while teardown, cleanup, routing, reports and housekeeping keep
+    running. The worker reports `paused`, so the dashboard says why builds are
+    refused ([23-incident-runbook.md](docs/23-incident-runbook.md#execution-kill-switch)).
 
 ### Design decisions and edge cases
 - **Transactional outbox for free:** the database-backed queue avoids the classic lost-job window.
@@ -392,7 +397,7 @@ High. Correctness under churn and certificate handling are the hard parts.
 - **Subdomain takeover risk:** stale DNS is not an issue with a wildcard record, and hostnames are never reassigned; containers are fully removed on teardown.
 - **Origins:** the dashboard may not be the preview domain or below it; a separate registrable domain is recommended, and dashboard cookies are `__Host-` prefixed over HTTPS.
 - **Security headers and access:** MVP previews are public by URL obscurity (now real, through the random hostname part); optional access control (login required) is a documented upgrade.
-- **Current implementation:** `internal/routing` (controller, rendering, forward-only file, Traefik adapter, hostnames, unavailable page), the fence in `internal/environments`, `deploy/traefik/compose.yml` and `cmd/route-sync`, verified with real Traefik, Pebble-issued certificates and real previews by `make test-routing`. See [11-routing-and-https.md](docs/11-routing-and-https.md).
+- **Current implementation:** `internal/routing` (controller, rendering, forward-only file, Traefik adapter, hostnames, unavailable page), the fence in `internal/environments`, `deploy/traefik/compose.yml` and `cmd/route-sync`, verified with real Traefik, Pebble-issued certificates and real previews by `make test-routing`. In production `deploy/production/compose.yml` runs the same router (still no Docker provider) with the dashboard's own route and a TLS-ALPN-01 certificate for it ([24-production-deployment.md](docs/24-production-deployment.md)). See [11-routing-and-https.md](docs/11-routing-and-https.md).
 
 ---
 
@@ -645,6 +650,18 @@ Medium.
 ### Design decisions and edge cases
 - **Correlation IDs** turn a scattered incident into one searchable story.
 - **Never log secrets or tokens;** redaction happens at the logging layer.
+- **Current implementation:** `internal/platform/logging` (JSON at `LOG_LEVEL`,
+  correlation fields from request, webhook and job contexts, redaction by key and
+  by credential shape), `internal/platform/metrics` (bounded labels; durable state
+  exported by the server at scrape time), River job middleware in
+  `internal/platform/queue`, and `/livez`, `/readyz` and `/metrics` on an internal
+  listener per process (`internal/platform/httpx`). The headline number is
+  `previa_request_to_preview_seconds`, measured from a request becoming eligible
+  (after Automatic's quiet period) to its preview serving. `deploy/observability`
+  holds the Prometheus configuration, 24 alert rules with promtool tests and a
+  provisioned Grafana dashboard. Tracing stays optional and is not built. See
+  [22-observability-and-hardening.md](docs/22-observability-and-hardening.md) and
+  [23-incident-runbook.md](docs/23-incident-runbook.md).
 
 ---
 
@@ -807,14 +824,17 @@ preview/
 ├── cmd/
 │   ├── server/main.go              # thin: load config, call app.RunServer
 │   ├── worker/main.go              # thin: load config, call app.RunWorker
-│   ├── river-migrate/  secrets-reencrypt/  route-sync/   # maintenance commands run through Make
+│   ├── migrate/main.go             # release images: embedded Goose + River migrations
+│   ├── river-migrate/  secrets-reencrypt/  route-sync/  housekeeping/   # maintenance commands
 │   └── egress/main.go              # previa-egress: proxy and prober, in its own container
 │
 ├── internal/
 │   ├── app/                        # composition root: builds and wires everything
 │   │   ├── server.go               # creates features, mounts routes, starts HTTP
 │   │   ├── worker.go               # starts River, the capability heartbeat, draining
-│   │   └── pipeline.go             # composes the worker pipeline from validated dependencies
+│   │   ├── pipeline.go             # composes the worker pipeline from validated dependencies
+│   │   ├── observe.go              # scrape-time state gauges from the features' counts
+│   │   └── migrate.go              # embedded Goose and River migrations (cmd/migrate)
 │   │
 │   ├── auth/                       # FEATURE: GitHub OAuth login + sessions
 │   │   ├── handler.go              # login, callback, logout (the "controller")
@@ -927,11 +947,13 @@ preview/
 │       ├── githubapp/              # App JWT, installation-token cache, API client
 │       ├── dockerx/                # Docker client construction, shared labels
 │       ├── egress/                 # egress proxy, readiness probe, its container
-│       ├── httpx/                  # middleware, error responses, HTMX helpers
-│       ├── logging/                # slog setup + secret redaction
-│       └── metrics/                # Prometheus registry + shared metrics
+│       ├── httpx/                  # router, ingress controls, security headers, internal listener
+│       ├── logging/                # slog setup, correlation, secret redaction
+│       ├── metrics/                # Prometheus registry + bounded shared metrics
+│       └── version/                # release identity for logs, readiness and metrics
 │
 ├── db/
+│   ├── migrations.go               # embeds the migrations for release images
 │   └── migrations/                 # goose files: 0001_init.sql ...
 │
 ├── web/
@@ -951,13 +973,17 @@ preview/
 │   └── static/                     # local HTMX, generated CSS, browser assets
 │
 ├── deploy/
-│   ├── docker-compose.yml
-│   ├── egress/Dockerfile           # previa-egress image (make egress-image)
-│   ├── traefik/compose.yml         # the router (static flags; routes come from the worker's file)
-│   └── setup.sh
+│   ├── docker-compose.yml          # local PostgreSQL
+│   ├── egress/Dockerfile           # previa-egress image for development (make egress-image)
+│   ├── traefik/compose.yml         # the development router (static flags; routes come from the worker's file)
+│   ├── production/                 # production Compose, setup, backup, restore, smoke test
+│   └── observability/              # Prometheus config, alert rules and tests, Grafana dashboard
+│
+├── Dockerfile                      # release images: server, worker, egress
+├── .goreleaser.yaml                # versioned binaries, archives, checksums, SBOMs
 │
 ├── docs/                           # README.md, DESIGN.md, ADRs
-├── .github/workflows/              # CI + release
+├── .github/workflows/              # ci.yml (checks, browser, images, real Docker) + release.yml
 ├── sqlc.yaml                       # one entry per feature (see below)
 ├── .air.toml                       # live reload
 ├── Makefile                        # generate, test, run, migrate
