@@ -6,7 +6,8 @@ author, so a build is untrusted code execution. This document describes how each
 is isolated, bounded and cleaned up, what was verified, and what remains a limit.
 The builder is tested against a real Docker Engine. The preview runtime
 ([10](10-preview-runtime.md)) builds with it and starts containers from its images;
-the worker does not dispatch builds until Prompt 10 ([21](21-roadmap.md)).
+the worker runs every admitted build through it ([21](21-mvp-operations.md)), up to
+`MAX_CONCURRENT_BUILDS` at once across all workers.
 
 ## Decisions
 

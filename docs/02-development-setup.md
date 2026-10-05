@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 16**, **River 007**. After pulling changes, run
+Current schema: **Goose 17**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker.
 
 ## 1. Prerequisites
@@ -52,13 +52,13 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | `APP_BASE_URL` | server | `http://localhost:8080` | OAuth redirects, CSRF origin checks, cookie security. |
 | `GITHUB_OAUTH_CLIENT_ID` / `_SECRET` | server | From a GitHub **OAuth App** ([04](04-github-sign-in-and-app.md)). | Dashboard sign-in. |
 | `SESSION_SECRET` | server | `openssl rand -hex 32` | Signs OAuth state; at least 32 characters. |
-| `MAX_CONCURRENT_BUILDS` | worker | `2` | Ping worker concurrency per process, and builds running at once across all workers once execution is wired ([14](14-housekeeping-and-capacity.md)). |
+| `MAX_CONCURRENT_BUILDS` | worker | `2` | Builds running at once across all workers (and build workers per process); also the ping queue's concurrency ([14](14-housekeeping-and-capacity.md)). |
 | `BUILD_TIMEOUT` | worker | `12m` (max `24h`) | Build execution budget plus a one-minute grace. |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | server, worker | From a GitHub **App** ([04](04-github-sign-in-and-app.md)). | App JWTs; the worker needs only these two for discovery. |
 | `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | server | Same GitHub App. | Installation page and verified linking. |
 | `GITHUB_WEBHOOK_SECRET` | server | `openssl rand -hex 32`, same value in the App settings. | Verifies webhook signatures ([05](05-webhooks-and-pr-discovery.md)). |
-| `SECRETS_ENCRYPTION_KEYS` | server (worker from Prompt 5) | `1:` + output of `openssl rand -base64 32`; comma-separate versions. | Encrypts repository secrets ([07](07-repository-secrets.md)). |
-| `SECRETS_ACTIVE_KEY_VERSION` | server (worker from Prompt 5) | The version new values use, e.g. `1`. | Selects the key for new values. |
+| `SECRETS_ENCRYPTION_KEYS` | server, worker | `1:` + output of `openssl rand -base64 32`; comma-separate versions. | Encrypts repository secrets ([07](07-repository-secrets.md)). |
+| `SECRETS_ACTIVE_KEY_VERSION` | server, worker | The version new values use, e.g. `1`. | Selects the key for new values. |
 | `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS` | worker | Optional; defaults `2`, `4GiB`, `2048`. | Per-build limits for the isolated builder ([09](09-image-builds.md)). |
 | `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK` | worker | Optional; defaults `20GiB`, `4GiB`, `15GiB`. | Disk and image bounds; sizes take `KiB`, `MiB`, `GiB` or `TiB`. |
 | `BUILDKIT_IMAGE`, `EGRESS_IMAGE` | worker | Optional; defaults to the pinned rootless BuildKit image and `previa-egress:dev`. | Builder image; egress proxy and prober image for builds and previews. |
@@ -66,6 +66,7 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT` | worker | Optional; defaults `256MiB`, `512`, `120s`. | Preview `/tmp` size, process limit and readiness deadline. |
 | `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY` | worker | Optional; empty budgets use 60% of Docker memory and 75% of its CPUs; `10`. | What all previews may use together, and per repository. |
 | `PREVIEW_OCI_RUNTIME` | worker | Optional, e.g. `runsc` where gVisor is installed. | Docker runtime for previews. |
+| `SOURCE_WORKSPACE_ROOT` | worker | Optional; default `previa-sources` in the system temporary directory. An absolute path on a Linux filesystem. | Where each build's extracted source lives while it builds. |
 | `ENV_TTL_HOURS` | worker | Optional; default `48`, `0` never expires. | Preview lifetime after its latest publication ([14](14-housekeeping-and-capacity.md)). |
 | `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE` | worker | Optional; defaults `false`, `15m`. | Log housekeeping deletions without making them; the minimum age of an orphan. |
 | `BUILD_CACHE_BUDGET` | worker | Optional; default `40GiB`. | All build caches together; the oldest unused ones are pruned first. |
@@ -81,19 +82,25 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
   repository linking visibly disabled. A partial set fails validation.
 - Without the two worker App settings, the worker processes only `ping`.
 - An unset webhook secret makes `/webhooks/github` return 503.
-- The two `SECRETS_*` values go together. Without them, the Secrets tab explains that
-  secrets are not configured; a malformed keyring stops the server with a message
-  that never shows key material. Restart the server after changing them.
-- The housekeeping settings (`ENV_TTL_HOURS`, `HOUSEKEEPING_*`, `BUILD_CACHE_BUDGET`)
-  are validated at worker start; housekeeping runs once the worker registers it
-  (Prompt 10). `make housekeeping-dry-run` uses them today.
-- The `BUILD*` settings have working defaults. The worker validates them at start
-  (an invalid value stops it with the variable's name) but does not build images yet;
-  `make test-builder` uses them, and build execution will from Prompt 10.
+- The two `SECRETS_*` values go together, on the server and the worker alike (the
+  same keyring). Without them, the Secrets tab explains that secrets are not
+  configured, and the worker starts previews only for repositories without secrets
+  (a repository with secrets fails closed). A malformed keyring stops the process
+  with a message that never shows key material. Restart after changing them.
+- **Builds run only when the worker has everything they need:** the App settings,
+  `PREVIEW_BASE_DOMAIN` with the routing settings, a reachable Docker Engine and the
+  egress image. Otherwise the worker registers no build workers, logs
+  `capability unavailable` with the reason, and the dashboard says no worker can
+  build; requests wait durably. The full matrix is in
+  [21](21-mvp-operations.md#capability-and-configuration-matrix).
+- The `BUILD*`, `PREVIEW_*` and housekeeping settings (`ENV_TTL_HOURS`,
+  `HOUSEKEEPING_*`, `BUILD_CACHE_BUDGET`) have working defaults; the worker validates
+  them at start and stops with the variable's name if one is invalid.
 - Routing is off until `PREVIEW_BASE_DOMAIN` is set. Then the worker requires
   `APP_BASE_URL` and an existing `ROUTER_DYNAMIC_DIR`, and both processes refuse a
   dashboard host equal to or below the preview domain (the server also warns when they
-  share a registrable domain). Nothing routes until execution is wired (Prompt 10).
+  share a registrable domain). The router must be running (`make router-up`) for
+  previews to be published.
 - Over HTTPS the dashboard's session and OAuth state cookies are named
   `__Host-previa_session` and `__Host-previa_oauth_state`; switching `APP_BASE_URL`
   between HTTP and HTTPS signs everyone out once.
@@ -103,7 +110,7 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | Command | Loads `.env`? |
 | --- | --- |
 | `make run-server`, `make run-worker`, `make dev` | Yes; already-exported variables take precedence. Restart Air after editing `.env`. |
-| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `test-reporting`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime`, `test-routing`, `test-housekeeping`, `housekeeping-dry-run`, `router-up`, `router-down`, `route-sync` | Yes; falls back to `.env.example` for migrations if `.env` is absent. `test-runtime`, `test-routing`, `test-housekeeping` and `test-reporting` use `DATABASE_URL` as `TEST_DATABASE_URL` unless that is exported (they create and drop their own schemas). |
+| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `test-reporting`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e`, `housekeeping-dry-run`, `router-up`, `router-down`, `route-sync` | Yes; falls back to `.env.example` for migrations if `.env` is absent. `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e` and `test-reporting` use `DATABASE_URL` as `TEST_DATABASE_URL` unless that is exported (they create and drop their own schemas). |
 | Direct `go run`, manual Goose commands | No; run `set -a; . ./.env; set +a` once per terminal. |
 | `make build`, `make lint`, `make generate` | No configuration needed. |
 | `make test` | Database tests need an explicitly exported `TEST_DATABASE_URL`. |
@@ -146,6 +153,7 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0014 | Route controller state (`environment_routes`, `route_table`), local teardown requests on PRs, `environments.teardown_generation`, a DNS-label check on hostnames and nullable `expires_at`. Fails if an existing hostname is not a lowercase DNS label. |
 | 0015 | PR feedback state (`pull_request_reports`: wanted/reported report versions, digests, current check run, reporter lease, last error category) and `environments.last_error_code`. |
 | 0016 | This database's instance identity (`platform_instance`), waiting notes on build requests (`waiting_revision`, `waiting_reason`) and `pr_reconciliations`. |
+| 0017 | `worker_capabilities`: what each running worker can do, refreshed every 30 seconds, read by the server. |
 
 Optional check that live updates are wired:
 
@@ -276,6 +284,25 @@ starts) and refusal to remove objects Previa (or another Previa instance) did no
 create. Preview networks (`previa-<instance>-pr-<id>`) and images are removed by
 the tests; only `previa-egress` stays running.
 
+### Real end-to-end check (optional)
+
+Needs Docker, internet access the first time (alpine and Traefik images), the egress
+image and PostgreSQL; no GitHub account, domain or DNS token. It runs the worker's own
+pipeline against a fake GitHub over TLS and a Traefik router with its default
+certificate, on a throwaway schema.
+
+```sh
+make test-e2e             # about a minute
+```
+
+**Expected:** `TestRealEndToEnd` passes and logs `published pr-7-…preview.test from
+1111111; reported Ready; log has N lines`, `torn down: route removed, containers
+removed, reported`, `Automatic: the burst built only the newest commit, back at
+pr-7-…; one living comment throughout` and `closed: route, containers, image and
+network removed`. Set `TEST_E2E_LOG=1` for the worker's logs. Anything the run could
+not remove fails the test. Afterwards only the `previa-egress` container and network
+remain (`docker network ls --filter label=io.previa.managed`).
+
 ### Real housekeeping check (optional)
 
 Needs Docker, the egress image and PostgreSQL; uses a throwaway schema and never
@@ -338,7 +365,7 @@ make router-down
 Encrypt **staging** wildcard certificate and a 302 to
 `APP_BASE_URL/previews/unavailable`. `make router-up` first runs `make route-sync`,
 which writes the accepted route table from PostgreSQL (the worker's route controller
-does the same once execution is wired); Traefik requests the certificate only once a
+does the same at start and on every route change); Traefik requests the certificate only once a
 router uses it, and the table's fallback router does. Switch `ACME_CA_SERVER` to
 production and remove the `previa-router_acme` volume only after staging works
 ([11](11-routing-and-https.md)).
@@ -374,12 +401,15 @@ Terminal 2, worker:
 make run-worker
 ```
 
-**Expected:** `database health check passed`, then `River worker started`. The
-server inserts jobs; the worker executes them. With App credentials it also runs
-the `pr_discovery` queue (two workers, 45-second timeout) for sync pages and
-mergeability checks. It always runs `build_log_prune` at start and hourly, deleting
-build logs 14 days after their attempt finished. `Ctrl+C` drains active work before
-exiting.
+**Expected:** `database health check passed`, then `River worker started
+execution=… reporting=… housekeeping=… discovery=…`, preceded by a `capability
+unavailable` warning naming each missing dependency. The server records work; the
+worker executes it. With App credentials it runs PR discovery and mergeability
+checks; with builds configured ([21](21-mvp-operations.md#capability-and-configuration-matrix))
+it also builds, publishes, reports and keeps house. It always runs
+`build_log_prune` at start and hourly. `Ctrl+C` removes the worker's capability row,
+lets running jobs finish for 30 seconds, then cancels them; an interrupted build
+runs again on the next start.
 
 `make dev` runs Air: it compiles CSS, regenerates templates, rebuilds and restarts
 the server when Go, templ, CSS, JS or SQL files change (polling works on

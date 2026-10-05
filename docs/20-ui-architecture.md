@@ -11,8 +11,10 @@ user's point of view is in [03-user-guide.md](03-user-guide.md).
   SPA, frontend service or Node.js runtime.
 - **Works without JavaScript.** Links, GET forms, POST forms and native `<dialog>`
   confirmations all function with scripting off.
-- **Honest UI.** Only real saved state is shown. Unbuilt features are labelled
-  ("Coming next", "Soon"); no invented metrics, activity, health or URLs.
+- **Honest UI.** Only real saved state is shown: no invented metrics, activity,
+  health or URLs. A control that cannot work now (no worker that can build, no
+  GitHub access, conflicts) is absent and a sentence says why; unbuilt features are
+  labelled ("Coming next" on the home page).
 - **Presentation never reaches into the backend.** Templates receive display data;
   they never query, read sessions or authorize.
 
@@ -57,7 +59,7 @@ repository's Secrets tab).
   between 900 and 1180px; below 900px a drawer opened from the header (a native
   `<details>`, closed by link click, backdrop or Escape).
 - **Navigation groups:** Workspace (Overview, Repositories), Delivery (Builds,
-  Environments), System (Developer tools), plus non-link "Coming next" items.
+  Environments), System (Developer tools).
   `layouts.App` receives an explicit `components.NavItem`; titles never decide the
   active item.
 - **Repository tabs.** `components.RepositoryTabs` switches a repository between
@@ -85,7 +87,7 @@ Making full-page navigation feel instant, without giving up MPA semantics:
 | --- | --- | --- |
 | `#repository-results` | Directory search (300 ms debounce), access tabs, pagination | URL replaced, not pushed per keystroke; input keeps focus. |
 | `#pull-request-results` | PR search, state tabs, pagination | Same behaviour, independent query keys. |
-| `#repository-detail` | Sync, policy save, live refresh | Server re-renders the whole panel. |
+| `#repository-detail` | Sync, policy save, live refresh; on a PR page Build, Retry, Rebuild and the teardown dialog's form | Server re-renders the whole panel. Without JavaScript the same forms post and redirect back (post/redirect/get). |
 
 - Every partial response repeats authentication and ownership checks; responses vary
   on `HX-Request`/`HX-Target`. An expired session returns `HX-Redirect` to sign-in.
@@ -116,7 +118,8 @@ CSS that only makes sense with scripting. No third-party JavaScript besides HTMX
 Decisions open a shared native `<dialog>` (`components.ConfirmationDialog`) over the
 current page: labelled title and description, Cancel focused first, Escape/close/
 backdrop dismiss without a request, focus returns to the trigger. The caller
-supplies the CSRF-protected form. Logout and enabling Automatic builds use it.
+supplies the CSRF-protected form. Logout, enabling Automatic builds, deleting a
+secret and tearing a preview down (on a PR page and per row on Environments) use it.
 Native `commandfor`/`command` attributes open dialogs without JavaScript in
 supporting browsers.
 
@@ -181,7 +184,10 @@ dismissal, logout, CSRF, live search, pagination, Automatic confirmation, live
 updates without polling, the command palette, theme persistence, the repository
 Secrets tab (write-only saving, replacing, modal deletion), build logs (live append,
 following, reset for a new attempt, inert script-looking output, paging without
-JavaScript), reduced motion and no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-optional).
+JavaScript), build requests (one per click, no second Build while queued), preview
+teardown confirmed in a modal (PR page and Environments rows, with and without
+JavaScript), unavailable actions, Builds/Environments content, reduced motion and
+no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-optional).
 
 ## Decisions and trade-offs
 

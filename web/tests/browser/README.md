@@ -37,7 +37,13 @@ deletion over the real secrets handler, keyring and CSRF with an in-memory store
 and build logs over the real log handler, live stream and hub with an in-memory
 store: live append, following, reset for a new attempt, script-looking output
 rendered as text, and paging without JavaScript. Test-only `/__fixture/logs/*`
-routes change that store and publish like the database trigger.
+routes change that store and publish like the database trigger. PR actions run
+against fixture build and teardown endpoints: one request per click with no second
+Build while queued, teardown confirmed in a modal on the PR page and per row on
+Environments (with and without JavaScript, focus returning to the trigger), no
+actions for an unavailable repository, and Builds/Environments showing addresses,
+waits and failures. The real handlers' authorization, CSRF, idempotency and
+revision checks are covered by `internal/pullrequests` tests against PostgreSQL.
 
 To capture ignored screenshots:
 

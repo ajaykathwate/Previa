@@ -7,7 +7,8 @@ the image builder ([09](09-image-builds.md)) and repository secrets
 ([07](07-repository-secrets.md)); every lifecycle transaction stays in
 `internal/environments`. The route controller ([11](11-routing-and-https.md)) publishes
 its candidates and its cleanup executor removes them ([12](12-teardown-and-cleanup.md));
-worker dispatch comes in Prompt 10, and until then the runtime runs only in tests.
+the worker composes it whenever it can build ([21](21-mvp-operations.md)), streaming
+each attempt's output into the build log ([08](08-build-logs.md)).
 
 ## Decisions
 
@@ -152,8 +153,10 @@ previews stays blocked ([11](11-routing-and-https.md)).
 | `PREVIEW_MAX_PER_REPOSITORY` | `10` | Running previews per repository. |
 | `PREVIEW_OCI_RUNTIME` | empty | Docker runtime for previews, for example `runsc`. |
 
-The worker validates these at start. Starting previews will also need the secrets
-keyring on the worker (Prompt 10 wiring).
+The worker validates these at start. Repository secrets need the same keyring on
+the worker as on the server (`SECRETS_ENCRYPTION_KEYS`, `SECRETS_ACTIVE_KEY_VERSION`).
+Without it, repositories without secrets still get previews and a repository with
+secrets fails closed (`secrets_unavailable`) instead of starting without them.
 
 ```sh
 make egress-image   # proxy + prober image (needed by builds and previews)

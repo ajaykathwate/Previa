@@ -8,9 +8,9 @@ older state back. This document covers the decisions, what GitHub shows in each
 state, how a report gets from a database change to GitHub, how comments and check
 runs keep a stable identity, ordering and its limits, failures, permissions and what
 was verified. It builds on the durable outbox ([17](17-durable-publication-design.md))
-and generation fences ([18](18-generation-ordering.md)). The reporter is registered
-as the report executor in Prompt 10 ([21](21-roadmap.md)); until then reporting is
-off and runs only in tests and the opt-in live proof.
+and generation fences ([18](18-generation-ordering.md)). The worker registers the
+reporter as the report executor whenever it can build ([21](21-mvp-operations.md)),
+and both processes record report work whenever the GitHub App is configured.
 
 ## Decisions
 
@@ -22,7 +22,7 @@ off and runs only in tests and the opt-in live proof.
 | One reporter per PR | A lease in `pull_request_reports`, in PostgreSQL | Two reporters can never both create a first comment or check run for the same PR. |
 | Check run identity | One run per (head commit, request revision), external ID `previa:pr:<pr id>:<sha>:r<revision>` | A same-commit Retry or Rebuild gets its own run instead of rewriting a finished one; a retried create finds its run again instead of duplicating it. |
 | Reporting and deployments | Separate durable operations with their own retries | A GitHub outage never blocks, delays or rolls back a publication or teardown. |
-| Off by default | `Repository.WithReports()` / `Broker.WithReports(repo)` | Nothing accumulates before Prompt 10 registers the reporter. |
+| Off without the App | `Repository.WithReports()` / `Broker.WithReports(repo)` / `installations.Repository.WithReports(broker)`, enabled by the server and worker when the App is configured | Nothing accumulates where no worker could ever report it. Work recorded while no worker can build waits durably and is reported when one starts. |
 
 ## What GitHub shows
 
@@ -176,9 +176,14 @@ and slug, used to recognise its own comments, come from the App itself
 - `internal/environments/reports.go`: `reportTx`, `WithReports`; hooks in the
   lifecycle transactions listed above. `pullrequests` records reports for refreshed
   observations through the broker (`RecordReportTx`).
-- Prompt 10 wiring: `reporting.NewGitHubAPI(githubapp client, app ID, slug)`,
-  `reporting.NewReporter(pool, api, Settings{AppBaseURL, PreviewBaseDomain}, logger)`
-  as the `report_status` executor, and `WithReports` on the repository and broker.
+- Wiring (`internal/app/pipeline.go`): the App's ID and slug are read from GitHub
+  (`GET /app`) at start, then `reporting.NewGitHubAPI(githubapp client, app ID, slug)`
+  and `reporting.NewReporter(pool, api, Settings{AppBaseURL, PreviewBaseDomain}, logger)`
+  become the `report_status` executor of the operation worker. The server
+  (`internal/app/server.go`) enables `WithReports` on its repository, request broker
+  and build-policy store, so owner requests, webhooks and mode switches record reports.
+- Waiting and failure wording lives in `internal/environments/messages.go`, shared by
+  the reporter and the dashboard so both say the same thing.
 
 ## What was verified
 
@@ -194,6 +199,10 @@ and slug, used to recognise its own comments, come from the App itself
   teardown, and not at all with reporting off; failed activation stores its category.
   `internal/pullrequests`: refreshed observations report only when they change the PR.
 - `TestLiveProofRehearsal` runs the live proof's script against the fake GitHub.
+- `make test-e2e` (`TestRealEndToEnd`) drives the comment and check runs through the
+  worker's whole pipeline against a fake GitHub over TLS: one comment throughout,
+  Ready with the preview address, a failed rebuild reported while the old preview
+  keeps serving, removal, and no check run left open on a superseded commit.
 - **Live proof** (`make test-reporting`, opt-in): on an authorized disposable PR it
   drives queued, building, ready, a failed same-commit rebuild, a deleted comment, a
   lost comment ID and removal, logs only the resulting comment and check run IDs,
@@ -204,7 +213,9 @@ and slug, used to recognise its own comments, come from the App itself
 
 ## Not done yet
 
-- Registering the reporter and enabling reports in the worker (Prompt 10).
+- The live proof on a real PR (`make test-reporting`) has not run: it needs an
+  authorized disposable PR in the `TEST_GITHUB_*` settings
+  ([21](21-mvp-operations.md#live-proofs-still-required-before-a-public-rollout)).
 - Expiry, PR reconciliation (which finds a close missed while webhooks were down)
   and the waiting states come from housekeeping and capacity
-  ([14](14-housekeeping-and-capacity.md)), registered in Prompt 10.
+  ([14](14-housekeeping-and-capacity.md)).

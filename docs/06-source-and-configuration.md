@@ -3,7 +3,7 @@
 Everything that happens between "this PR may be built" and "here is a directory to
 build": confirm the PR with GitHub right now, download exactly that commit, unpack
 it without trusting it, and read `.previewrc.yaml` from the same tree. None of this
-builds or runs code; image builds start in the next phase ([21-roadmap.md](21-roadmap.md)).
+builds or runs code; image builds start in the next phase ([22-roadmap.md](22-roadmap.md)).
 
 The PR author controls everything in the archive, including the config file, so
 all of it is treated as hostile input: identity is verified, paths are confined,
@@ -15,7 +15,8 @@ Saved PR state can be minutes old, and mergeability changes when the base branch
 moves even without a push. So immediately before manual authorization and before
 executing eligible work, `pullrequests.SyncService.VerifyUpstream` re-reads the PR
 from GitHub. It implements the consumer-owned `environments.UpstreamVerifier`
-interface; the real Build action and worker connect to it in Prompt 10.
+interface. The owner's Build, Retry and Rebuild call it before recording a request,
+and the worker calls it again before admitting a build ([16](16-build-scheduling.md)).
 
 1. A short transaction captures the installation revision, the repository
    observation version and the PR generation. A locally closed PR fails closed

@@ -29,7 +29,7 @@ survives crashes, retries and races. Scheduling the decision is
 Accepted trade-offs: Manual users must click to refresh a preview; continuous pushes
 keep postponing an Automatic build (Manual is the override, and there is no
 maximum-wait rule); debounce is not a spending cap, so TTLs and per-repository
-limits are still required ([21-roadmap.md](21-roadmap.md)).
+limits are still required ([22-roadmap.md](22-roadmap.md)).
 
 ## Observed state versus authorized intent
 

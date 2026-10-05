@@ -8,12 +8,13 @@ defaults to **Manual**: its owner requests a build for a specific PR. Owners can
 enable **Automatic**, which builds the latest commit after a five-minute quiet
 period. Previews are torn down when the PR closes or merges.
 
-Manual/Automatic policy, durable build intent and scheduling are implemented, and
-so are isolated builds, hardened previews, fenced HTTPS routing and durable teardown,
-each verified against real Docker and Traefik; connecting them into the worker is
-the next step. See
-[build policy and build intent](docs/15-build-policy-and-intents.md) and the
-[roadmap](docs/21-roadmap.md). Start with the [documentation index](docs/README.md)
+The full pipeline runs end to end as an operational **local/staging** MVP: the
+worker composes source fetching, isolated builds, hardened previews, fenced HTTPS
+routing, PR feedback, durable teardown and housekeeping from validated settings, and
+the dashboard's Build, Retry, Rebuild and Tear down controls drive it. Live proofs
+against hosted GitHub and real DNS remain before a public rollout. See
+[operating the MVP](docs/21-mvp-operations.md) and the
+[roadmap](docs/22-roadmap.md). Start with the [documentation index](docs/README.md)
 for a guided reading order.
 
 This document is written for the builder (me), not an end user — every step
@@ -122,11 +123,11 @@ listening port. Named tiers are `small` (0.5 vCPU / 512 MiB), `standard` (1 vCPU
 1 GiB, default), and `large` (2 vCPU / 2 GiB). Default platform ceilings are 2 vCPU
 and 2 GiB per preview; lower platform ceilings clamp the resolved limits with a
 notice. Numeric resource fields are not supported. These are runtime container
-limits, separate from build concurrency/timeouts. Omitted health path does not
-authorize publishing an unchecked container; runtime readiness remains a later
-integration requirement.
+limits, separate from build concurrency/timeouts. An omitted health path does not
+authorize publishing an unchecked container: the preview must still pass the
+runtime's readiness check before it is routed.
 
-Standalone fetching/validation is implemented; real builds are not connected.
+Every build fetches and validates the exact commit's configuration first.
 See [repository configuration](docs/06-source-and-configuration.md) for strict validation,
 safe error categories, fixtures and effective config hashing. Build mode remains
 platform-owned and cannot be set through this YAML.
@@ -234,11 +235,13 @@ pages over Server-Sent Events rather than polled. Each repository also has a
 given to fork PRs). Page URLs are shareable
 and navigation works without JavaScript.
 
-PR discovery and latest/requested/deployed commit views are implemented. Builds
-and Environments show actual saved state and link to each PR's **Build logs** page,
-which shows the current attempt's output live over Server-Sent Events (bounded,
-redacted, readable without JavaScript). Build execution, preview routing and
-teardown controls remain unavailable until their adapters are connected.
+PR discovery, latest/requested/deployed commit views and the owner's Build,
+Build now, Retry, Rebuild and Tear down controls are implemented. Builds and
+Environments show actual saved state (queued and running work, failure reasons,
+preview URL, health and expiry) and link to each PR's **Build logs** page, which
+shows the current attempt's output live over Server-Sent Events (bounded, redacted,
+readable without JavaScript). When no worker that can build is running, the
+controls say so and the endpoints refuse with 503 instead of recording work.
 See [03-user-guide.md](docs/03-user-guide.md) for the current browser workflow.
 
 - **Builds** describes current/latest execution work and its commit/logs, not a
@@ -483,20 +486,20 @@ exhausted checks remain `Checking` until another event or sync. Each push replac
 the old mergeability observation. Both manual authorization and scheduled dispatch
 check the saved status; the generation/admission lock repeats the check immediately
 before runtime execution. Conflicts and checking refuse builds with contributor
-feedback in the PR dashboard. Production execution remains disabled until its
-runtime/publication adapters are implemented.
+feedback in the PR dashboard. The worker reads the PR from GitHub once more before
+admitting a build, outside database locks.
 
 `build_intents` now stores one current authorized request per PR: revision, captured
 generation/SHA, source, action, idempotency key, state and eligibility deadline.
 Migrations 6–7 and ownership-scoped coordination APIs are implemented. Durable
-five-minute wake-ups and intent-aware dispatch/handoff are tested behind adapters;
-production dispatch and UI wiring remain unbuilt. Repeated Build requests coalesce; explicit Retry after
+five-minute wake-ups and intent-aware dispatch/handoff run in the production worker,
+and the server records requests with their wake-ups. Repeated Build requests coalesce; explicit Retry after
 failure or Rebuild after success creates a new revision without bumping PR
 generation. Switching to Manual cancels unstarted Automatic intent; running work
 may finish if still current. No historical builds archive is introduced. See
 [15-build-policy-and-intents.md](docs/15-build-policy-and-intents.md) for request semantics and
 [16-build-scheduling.md](docs/16-build-scheduling.md) for atomic admission, wake-up
-uniqueness, revision fencing and remaining production integration.
+uniqueness, revision fencing, worker admission checks and interruption.
 
 A unique constraint on (repo_id, number) for `pull_requests` and on `subdomain` for `environments` prevents duplicate environments when webhooks arrive twice.
 
@@ -529,16 +532,18 @@ This system runs other people's code on your machine, so isolation is a core req
 ### 4.8 Configuration (environment variables)
 
 The authoritative list of current settings, and which process needs each one, is
-in [docs/02-development-setup.md](docs/02-development-setup.md). This list also
-includes settings for features that are not built yet.
+in [docs/02-development-setup.md](docs/02-development-setup.md); which capability
+each one turns on, and what happens without it, is in
+[docs/21-mvp-operations.md](docs/21-mvp-operations.md).
 
 - `DATABASE_URL`
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
+- `APP_BASE_URL` (server; also the worker once previews are routed: unknown preview hosts redirect to it)
 - `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`; server and worker), `ROUTER_DYNAMIC_DIR`, `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS` (worker; route controller)
-- `SESSION_SECRET`, `SECRETS_ENCRYPTION_KEYS`, `SECRETS_ACTIVE_KEY_VERSION` (versioned keyring for repository secrets)
+- `SESSION_SECRET` (server); `SECRETS_ENCRYPTION_KEYS`, `SECRETS_ACTIVE_KEY_VERSION` (server and worker; versioned keyring for repository secrets, optional for the worker, which then fails repositories with secrets closed)
 - `MAX_CONCURRENT_BUILDS` (builds at once across all workers), `ENV_TTL_HOURS` (preview lifetime after its latest publication), `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE`, `BUILD_CACHE_BUDGET` (worker; housekeeping and capacity, see [docs/14-housekeeping-and-capacity.md](docs/14-housekeeping-and-capacity.md))
-- `BUILD_TIMEOUT`, `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS`, `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK`, `BUILDKIT_IMAGE` (worker; isolated image builds)
+- `BUILD_TIMEOUT`, `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS`, `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK`, `BUILDKIT_IMAGE`, `SOURCE_WORKSPACE_ROOT` (worker; isolated image builds and exact-commit source workspaces)
 - `EGRESS_IMAGE`, `PREVIEW_ALLOW_ROOT`, `PREVIEW_WRITABLE_ROOTFS`, `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT`, `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY`, `PREVIEW_OCI_RUNTIME` (worker; hardened previews and the shared egress proxy)
 - `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE`, `ACME_CA_SERVER` (router; Traefik's wildcard certificate over DNS-01, staging by default, the DNS token read from a protected file instead of the originally planned `DNS_PROVIDER_API_TOKEN` variable)
 

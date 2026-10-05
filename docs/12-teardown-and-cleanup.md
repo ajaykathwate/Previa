@@ -6,14 +6,15 @@ PR, durably and without GitHub. This document covers the triggers, the states, t
 order of removal, what is kept, how revocation works, why an old teardown can never
 remove a newer preview, and how each step resumes after a crash. It extends the
 existing teardown job, outbox and cleanup contracts ([17](17-durable-publication-design.md),
-[18](18-generation-ordering.md)); there is no second teardown queue. Workers are
-registered in Prompt 10 ([21](21-roadmap.md)); until then this runs in tests.
+[18](18-generation-ordering.md)); there is no second teardown queue. The worker
+registers the teardown, route, cleanup and sweep workers whenever it can build
+([21](21-mvp-operations.md)); a teardown recorded while none runs waits durably.
 
 ## Decisions
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| One teardown path | Close keeps its teardown job; revocation and, later, owner requests and expiry record a **teardown request** and start the same transition | Every teardown moves the environment's artifacts into one durable route-removal operation; cleanup follows from it. |
+| One teardown path | Close keeps its teardown job; revocation, owner requests and expiry record a **teardown request** and start the same transition | Every teardown moves the environment's artifacts into one durable route-removal operation; cleanup follows from it. |
 | Fencing a teardown of an open PR | Requesting one advances the PR's generation and supersedes its build request | Every in-flight build, publication and report of an earlier generation is defeated by the existing fences, and nothing rebuilds until a new owner request or a later relevant Automatic event. |
 | GitHub access | **Never needed** for teardown, route removal or cleanup | Revoked access must not strand a preview; locks follow the usual order without requiring an active installation or an accessible repository. |
 | Removal order | Route first (confirmed by the router), then containers (graceful stop, then force), then images (never forced), then networks | No request reaches a removed container, and no image is removed while anything uses it. |
@@ -25,7 +26,7 @@ registered in Prompt 10 ([21](21-roadmap.md)); until then this runs in tests.
 ```
 close/merge webhook ──► teardown job ──► Service.Teardown ─┐
 revocation webhook ──► teardown requests (same tx) ──► sweep ┤   one short transaction, no external call:
-owner request / expiry (Prompt 10, [14](14-housekeeping-and-capacity.md)) ─► RequestTeardown ─┘   environment ─► tearing_down at generation g;
+owner request (dashboard) / expiry ([14](14-housekeeping-and-capacity.md)) ─► RequestTeardown ─┘   environment ─► tearing_down at generation g;
                                                                 its active and pending artifacts move into
                                                                 remove_route(g, 0) in the outbox
 remove_route ──► route controller: tombstone (g, 0) unless a newer route exists;
@@ -123,14 +124,22 @@ decrypted values live only in the preview container's configuration, which is
 removed with it (until then, anyone with Docker access can read them, as documented
 in [10](10-preview-runtime.md)). Build logs follow their retention ([08](08-build-logs.md)).
 
-## Not yet
+## Owner teardown from the dashboard
 
-- Workers, and the periodic sweep and reconciler (now housekeeping jobs,
-  [14](14-housekeeping-and-capacity.md)), are registered in Prompt 10. Build caches of
-  revoked repositories and source-workspace leftovers are pruned by housekeeping.
-- The "Preview removed" PR comment is rendered by the reporter ([13](13-pr-feedback.md))
-  once it is registered in Prompt 10; dashboard teardown is Prompt 10
-  (it will call `Repository.RequestTeardown` after its ownership check).
+**Tear down preview** appears on an open PR's page (and **Tear down** on its
+Environments row) while it has a preview or unfinished work. It opens a confirmation
+dialog; the confirmed form is a CSRF-protected POST to
+`/repositories/{id}/pull-requests/{n}/teardown`. The handler resolves the PR for the
+signed-in owner only (another user's PR is a 404), refuses a closed or merged PR
+(those are torn down already) and calls `RequestTeardown` with reason `requested`.
+That supersedes the build request; the worker then removes the route and the
+containers, and the PR comment says the preview was removed. Repeating the request
+records nothing new. A teardown needs no running worker to be recorded. Building
+again brings the preview back at the same address.
+
+The periodic sweep and reconciler run as housekeeping jobs
+([14](14-housekeeping-and-capacity.md)); build caches of revoked repositories and
+source-workspace leftovers are pruned there.
 
 ## Verified
 
@@ -144,12 +153,15 @@ in [10](10-preview-runtime.md)). Build logs follow their retention ([08](08-buil
 | Worker "crashes" after a removal, before recording it | the retry finds nothing and succeeds |
 | Installation suspended (no GitHub client in the test) | teardown requested in the webhook transaction; the sweep starts it; marker cleared after cleanup; restored access does not rebuild |
 | Close while the image builds | the build is refused before a candidate starts; its image is removed |
+| Owner teardown through the worker's own pipeline (`make test-e2e`) | route and containers removed; the PR comment and check run say so |
 | Afterwards | no container, image or network labelled for the PR; the router left its network; an unlabelled container, another PR's labelled container and image survive; PR and lifetime environment kept |
 
 PostgreSQL tests cover teardown without access, duplicate and empty requests, the
 revocation webhook and sweep (including a Docker leftover keeping the marker),
 removal and cleanup never given up, re-armed failed cleanup, and the old teardown
-after a reopen.
+after a reopen. `TestTeardownIsConfirmedOwnerOnlyAndIdempotent` covers the owner
+endpoint (CSRF, owner only, idempotent, a fixed return path); browser tests cover
+the dialog with and without JavaScript.
 
 ## Code and tests
 
@@ -160,3 +172,4 @@ after a reopen.
 | `internal/environments/repository.go` | Access-free teardown in `Apply`; reference protection in cleanup scheduling. |
 | `internal/runtime/cleanup.go`, `inventory.go` | Owner-verified removal and the cleanup executor; inventory including networks. |
 | `internal/webhooks/delivery.go` | Revocation requests inside the lifecycle transaction. |
+| `internal/pullrequests/actions.go` | The owner's teardown endpoint. |

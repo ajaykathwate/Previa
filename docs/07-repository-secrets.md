@@ -5,8 +5,9 @@ URLs) without putting it in the repository, without exposing it to fork authors 
 without leaking it into logs. This document covers how values are stored, who
 receives them, how keys rotate and what redaction can and cannot do. The preview
 runtime ([10](10-preview-runtime.md)) calls the worker contract below after a fresh
-access and fork recheck; the worker starts previews from Prompt 10
-([21-roadmap.md](21-roadmap.md)).
+access and fork recheck. The worker needs the same keyring as the server; without
+it, a repository with secrets fails closed (`secrets_unavailable`) and repositories
+without secrets build normally.
 
 ## Decisions
 
@@ -56,8 +57,10 @@ SECRETS_ACTIVE_KEY_VERSION=2
 - Generate each key with `openssl rand -base64 32`. Versions are positive integers.
 - **Server**: needs the keyring to encrypt new values. Without it, the Secrets tab
   explains that secrets are not configured and existing names stay visible.
-- **Worker**: will need the same keyring to decrypt at container start once the
-  runtime exists (Prompt 5). Today it does not read these variables.
+- **Worker**: reads the same keyring to decrypt at container start. It is optional
+  there: without it the worker logs that repositories with secrets cannot start
+  previews, builds repositories without secrets normally, and fails a repository
+  with secrets closed (`secrets_unavailable`) instead of starting it without them.
 - Startup fails with a message that never echoes key material if the keyring is
   malformed: bad base64, wrong length, duplicate or missing versions.
 

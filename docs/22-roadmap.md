@@ -1,8 +1,9 @@
-# 21 · Roadmap: remaining MVP work
+# 22 · Roadmap: remaining MVP work
 
-What is left before Previa can build and serve real previews, as **12 sequential
-tasks**. Each task is written as a self-contained prompt (for a developer or a coding
-agent) with its acceptance boundary. Run one task at a time with the shared
+The remaining MVP work, as **12 sequential tasks**. Prompts 1–10 are done: Previa
+builds and serves real previews on a local/staging setup. Each task is written as a
+self-contained prompt (for a developer or a coding agent) with its acceptance
+boundary. Run one task at a time with the shared
 instructions below. This plan does not certify the current application for
 production; the release checklist at the end does.
 
@@ -16,7 +17,7 @@ production; the release checklist at the end does.
   through the base repository, credential-free download, commit identity check,
   hardened extraction, crash-discoverable workspaces, config from the same tree),
   verified against real GitHub with `make test-source`
-  ([06](06-source-and-configuration.md)). Not yet called by the Build action/worker.
+  ([06](06-source-and-configuration.md)). Called by the Build action and the worker since Prompt 10.
 - **Prompt 2 done:** `internal/secrets` (AES-256-GCM keyring with versions and
   `make secrets-reencrypt`, owner Secrets tab, fork withholding, secret-over-YAML
   precedence, `Provider.ForContainer` worker contract, streaming `Redactor`)
@@ -24,7 +25,7 @@ production; the release checklist at the end does.
 - **Prompt 3 done:** `internal/buildlogs` (current-attempt streams with an epoch
   reset inside admission, fenced bounded writer with redaction, owner page with live
   SSE resume/reset, stream caps, retention job) and `environments.Attempt` passed to
-  `Runtime.Build` ([08](08-build-logs.md)). No writer runs until execution exists.
+  `Runtime.Build` ([08](08-build-logs.md)). Every build writes through it since Prompt 10.
 - **Prompt 4 done:** `internal/builds` (fresh rootless BuildKit builder per build on a
   private network, Go egress proxy, per-source-repository caches, enforced limits,
   size-capped export, labelled cleanup) verified with `make test-builder`
@@ -33,7 +34,7 @@ production; the release checklist at the end does.
   internal networks, egress only via the shared `previa-egress` proxy, secrets after
   a fresh access/fork recheck, readiness from the proxy container, crash-loop
   detection, host-derived capacity, owner-verified inventory and removal), verified
-  with `make test-runtime` ([10](10-preview-runtime.md)). Not yet called by the worker.
+  with `make test-runtime` ([10](10-preview-runtime.md)). Called by the worker since Prompt 10.
 - **Prompt 6 done:** `internal/routing` (owner decisions: Traefik's file provider fed
   by a route controller instead of Docker labels, DESIGN §11 updated; hostnames
   `pr-<n>-<repo id>-<token>`; Pebble for the TLS proof; unknown hosts redirected to a
@@ -52,8 +53,8 @@ production; the release checklist at the end does.
   owner-verified cleanup (graceful stop, unforced images, idle networks); removal and
   cleanup retried until done; idempotent retries; old teardowns never remove a
   reopened PR's replacement. Verified with real Docker/Traefik in `make test-routing`
-  ([12](12-teardown-and-cleanup.md)). Workers and the periodic sweep are registered
-  in Prompts 9–10.
+  ([12](12-teardown-and-cleanup.md)). Workers, the periodic sweep and the owner's
+  teardown action are connected since Prompt 10.
 - **Prompt 8 done:** `internal/reporting` renders each PR's persisted state into one
   living comment (stored ID, App-owned marker, bounded discovery for deleted comments
   and ambiguous creates) and one check run per (head SHA, revision) with a stable
@@ -61,7 +62,7 @@ production; the release checklist at the end does.
   `report_status` operation in its own transaction; one leased reporter per PR writes
   the latest state, so stale or duplicate reports cannot remain final. Rate limits,
   permission changes and safe error categories are handled; deployments never wait
-  for GitHub. Off until Prompt 10 enables `WithReports` and registers the reporter
+  for GitHub. Prompt 10 enabled `WithReports` and registered the reporter
   ([13](13-pr-feedback.md)). The hosted proof (`make test-reporting`) needs an
   authorized disposable PR.
 - **Prompt 9 done:** `internal/housekeeping` startup and periodic River jobs (owner
@@ -76,25 +77,45 @@ production; the release checklist at the end does.
   housekeeping-dry-run`. Every Docker object now carries its database's instance
   (migration 0016). Verified with PostgreSQL/River tests and `make test-housekeeping`
   / `make test-runtime` on real Docker ([14](14-housekeeping-and-capacity.md)).
+- **Prompt 10 done:** the worker composes the whole pipeline in
+  `internal/app/pipeline.go` from validated dependencies only (owner decisions:
+  `worker_capabilities` heartbeat in migration 0017; an optional worker secrets
+  keyring that fails closed only for repositories with secrets;
+  `SOURCE_WORKSPACE_ROOT`; no invented queue positions). Without the App the
+  worker runs log retention only; without a preview domain, discovery only; with
+  it but without Docker it refuses to start. Per-kind queues and timeouts, a
+  30-second drain, interrupted builds that are no failures, permanent failures
+  that end after one attempt and a fresh GitHub read at admission. The server
+  records requests (`NewRequestBroker`) and never executes. The owner's Build latest
+  commit, Build now, Retry build, Rebuild preview and Tear down preview (modal,
+  CSRF, owner-only) replace the unavailable endpoint; PR detail, Builds,
+  Environments and Overview show real queued/running work, commits, wait and
+  failure reasons, preview address, expiry and worker capabilities. Proven by
+  `make test-e2e` on real Docker, BuildKit and Traefik with a fake GitHub over TLS,
+  plus DB and browser regressions; the capability matrix, proof matrix and the
+  remaining live proofs are in [21](21-mvp-operations.md).
 - Implemented: signed/deduplicated webhook ingress, bounded open-only PR discovery,
   tracked close/merge retention, bounded mergeability checks and build refusal for
   Checking/Conflicts ([05](05-webhooks-and-pr-discovery.md)).
 - Implemented: live dashboard updates over SSE from PostgreSQL triggers through
   `internal/platform/realtime` ([19](19-realtime-updates.md)); reuse it for live logs.
-- Implemented: repository/PR pages, owner policy controls and current Builds/
-  Environments views. The approved presentation and no-JavaScript flows exist.
+- Implemented: repository/PR pages, owner policy controls, build and teardown
+  actions, and current Builds/Environments views. The approved presentation and
+  no-JavaScript flows exist.
 - Existing environment code provides tested admission, generation/revision fences,
   candidate/active artifacts, outbox, cleanup and reconciliation contracts.
   Extend those contracts rather than create a second orchestration system.
-- Production worker wiring currently registers ping, build-log retention and
-  App-configured discovery/mergeability jobs. Verification, source preparation, the
-  secrets provider, the log store, the image builder, the preview runtime, the route
-  controller, the cleanup executor, the teardown sweep, the PR reporter and
-  housekeeping exist but are not wired into execution yet. The
-  worker validates routing settings when `PREVIEW_BASE_DOMAIN` is set.
-  The manual Build endpoint returns unavailable; it authorizes no execution.
-- Live hosted GitHub PR/mergeability proof remains pending. Local fixtures and a
-  real local Git conflict are evidence, but do not prove hosted webhook delivery.
+- Production worker wiring registers ping, build-log retention, App-configured
+  discovery/mergeability and, with a validated preview domain, Docker and router,
+  every build, wake, teardown, route, report, cleanup, sweep and housekeeping
+  worker ([21](21-mvp-operations.md)). The dashboard reads which capabilities a
+  live worker provides and refuses build requests with 503 when none can build.
+- Live proofs remain pending: hosted GitHub webhooks and discovery, real source
+  through `codeload.github.com`, PR feedback on a real PR, Let's Encrypt
+  staging/production over real DNS, the whole pipeline and capacity on a target
+  host ([21](21-mvp-operations.md#live-proofs-still-required-before-a-public-rollout)).
+  Local fixtures and a real local Git conflict are evidence, but do not prove hosted
+  webhook delivery.
 
 Verify this baseline against current code and [HANDOFF.md](../HANDOFF.md) at the
 start of each task. Do not rerun old phases or purge retained PR records.
@@ -163,13 +184,13 @@ for live proofs require an explicitly authorized disposable repository.
 | 7 ✅ | Durable teardown, revocation and resource cleanup | 5–6 |
 | 8 ✅ | GitHub living comment and exact-SHA checks | 3, 6–7 |
 | 9 ✅ | Recovery, expiry, reconciliation and capacity | 4–8 |
-| 10 | Real worker orchestration and completed dashboard actions | 1–9 |
+| 10 ✅ | Real worker orchestration and completed dashboard actions | 1–9 |
 | 11 | Observability and production hardening | 10 |
 | 12 | Deployment packaging, CI and release acceptance | 1–11 |
 
-Prompts 1–9 can exercise adapters using isolated test harnesses, but must keep
-normal preview dispatch disabled. Prompt 10 connects the complete pipeline in a
-controlled local/staging configuration. Public production rollout requires the
+Prompts 1–9 exercised adapters using isolated test harnesses with normal preview
+dispatch disabled. Prompt 10 connected the complete pipeline in a controlled
+local/staging configuration ([21](21-mvp-operations.md)). Public production rollout requires the
 observed release checks in Prompt 12, including isolation, recovery and restore.
 
 ## Prompt 1 — Fresh PR verification and safe exact-SHA source fetching

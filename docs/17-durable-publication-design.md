@@ -435,7 +435,9 @@ Implemented and verified against real systems:
   recover wake-ups, leases, sweeps and route drift, inventory Docker objects with a
   grace period and confirm live PRs with GitHub ([14](14-housekeeping-and-capacity.md)).
 
-Remaining: worker wiring (Prompt 10).
+The worker composes all of them from validated settings
+([21](21-mvp-operations.md)); `make test-e2e` proves the chain on real Docker,
+BuildKit and Traefik with a fake GitHub.
 
 ## Guarantees and explicit limits
 

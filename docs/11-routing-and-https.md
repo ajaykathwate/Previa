@@ -5,8 +5,9 @@ publishes healthy candidates from the preview runtime ([10](10-preview-runtime.m
 through Traefik v3. This document explains the hostname scheme, why routes come from
 a fenced controller instead of Docker labels, how a version becomes served, what is
 guaranteed and what is not, TLS, origin separation and the unknown-host page. The
-worker does not dispatch real work yet (Prompt 10, [21](21-roadmap.md)); everything
-below runs in the tests listed at the end.
+worker runs the controller whenever it can build ([21](21-mvp-operations.md)); the
+tests listed at the end prove it, and `make test-e2e` proves it inside the whole
+pipeline.
 
 ## Decisions
 
@@ -186,9 +187,10 @@ make test-routing   # real HTTPS routing, swaps, fences, restarts, teardown, rev
 
 Traefik requests the wildcard certificate only once some router uses the HTTPS entry
 point; the table's fallback router does, which is why `router-up` writes the table
-first. The worker validates routing settings at start; nothing routes until execution
-is wired (Prompt 10). Starting the router without a real domain and DNS token is not
-useful; use `make test-routing` instead.
+first. The worker validates routing settings at start, starts the egress proxy and writes
+the accepted route table to the route file before it accepts work. Without a real
+domain and DNS token the router cannot obtain a certificate; use `make test-routing`
+or `make test-e2e` (Traefik's default certificate) on a machine without one.
 
 ## Verified
 

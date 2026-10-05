@@ -1,9 +1,10 @@
 # 03 · User guide
 
 A walk through the working screens: sign in, connect repositories, track pull
-requests, choose a build policy, manage secrets and read build logs. Setup commands
-are in [02-development-setup.md](02-development-setup.md). Building and serving
-previews is not available yet; the screens show real saved state only.
+requests, choose a build policy, build and tear down previews, manage secrets and
+read build logs. Setup commands are in [02-development-setup.md](02-development-setup.md);
+what a worker needs before it can build is in [21](21-mvp-operations.md). The screens
+show real saved state only.
 
 ## Before you start
 
@@ -13,13 +14,15 @@ previews is not available yet; the screens show real saved state only.
   five GitHub App settings; discovery workers need App ID and private-key path;
   webhooks need `GITHUB_WEBHOOK_SECRET`. See [04](04-github-sign-in-and-app.md).
 - Repository secrets need `SECRETS_ENCRYPTION_KEYS` and `SECRETS_ACTIVE_KEY_VERSION`
-  on the server ([02](02-development-setup.md), [07](07-repository-secrets.md)).
+  on the server and the worker ([02](02-development-setup.md), [07](07-repository-secrets.md)).
+- Building previews needs a worker started with the App settings, Docker, a preview
+  domain and a running router ([21](21-mvp-operations.md)). Without one, build
+  controls are replaced by a sentence saying so.
 
 ## Moving around
 
 - The sidebar groups **Workspace** (Overview, Repositories), **Delivery** (Builds,
-  Environments) and **System** (Developer tools). **Coming next** items (preview
-  URLs) are labels, not links.
+  Environments) and **System** (Developer tools).
 - Medium screens collapse the sidebar to icons; phones use the menu button.
 - **Ctrl K** (**⌘K** on macOS) or the header search opens the command palette. Type
   to filter pages, repository filters and account actions; arrow keys and Enter
@@ -32,8 +35,10 @@ previews is not available yet; the screens show real saved state only.
 ## Sign in and connect repositories
 
 1. On Home, click **Get started with GitHub** and authorize. You land on **Overview**:
-   real installation/repository/access counts, a setup checklist derived from those
-   counts and a pipeline view showing which stages are connected.
+   real installation/repository/access counts, delivery counts (waiting or queued,
+   building, live previews, failed requests), a setup checklist derived from those
+   counts and a pipeline view showing which stages a running worker provides
+   (**Connected**) and which have no worker (**Not running**).
 2. Open **Repositories** and click **Install on a repo** (later **Manage
    connections**). On GitHub, choose the account and repositories.
 3. Complete GitHub's redirect and App user authorization with the **same account**.
@@ -63,7 +68,7 @@ discovery for each newly accessible repository.
 
    | State | Meaning | Can it build? |
    | --- | --- | --- |
-   | **Open** | GitHub reports the PR as mergeable. | Yes, once execution exists. |
+   | **Open** | GitHub reports the PR as mergeable. | Yes. |
    | **Checking** | GitHub has not finished computing mergeability. | No; wait or sync again. |
    | **Conflicts** | The PR conflicts with its base branch. | No; resolve and push a new commit. |
 
@@ -72,13 +77,19 @@ discovery for each newly accessible repository.
    sync again to get an authoritative snapshot.
 6. Select a PR for its detail page, which tracks three things separately:
    - **Latest observed commit:** the head GitHub reports.
-   - **Current build request:** authorized work, its captured commit and any deadline.
-   - **Deployed preview:** what a preview actually serves. It can lag the latest commit.
+   - **Current build request:** authorized work, its captured commit, its state
+     (**Waiting** with the time it becomes eligible, **Queued**, **Running**,
+     **Succeeded**, **Failed** with a short reason and a link to the log), or why it
+     waits (capacity, disk space).
+   - **Deployed preview:** what a preview actually serves, its status as last
+     recorded (**Publishing**, **Running**, **Failed** when its container went missing,
+     **Removing**, **Removed**), its address and when it expires. It can lag the
+     latest commit; a note says so.
 
    **Not requested** means no build intent exists; **Not deployed** means no
-   environment exists. **Build logs** opens the PR's log page (below). Placeholders
-   for preview URL/health and teardown are labelled **Soon**. **View on GitHub**
-   opens the real PR.
+   environment exists. **Build logs** opens the PR's log page (below). **View on
+   GitHub** opens the real PR. The actions are described in
+   [Build and tear down previews](#build-and-tear-down-previews).
 7. **Back to pull requests**, the breadcrumb and **Repositories** return to the
    previous list with its search, tab and page preserved.
 
@@ -98,25 +109,59 @@ repository's PR list, never on PR details.
   from it, tears down that repository's previews too; restoring access does not
   rebuild them by itself.
 
-**Build latest commit is disabled.** Source fetching, image builds, isolated previews,
-HTTPS routing and cleanup exist and are verified on their own; the worker connects
-them in a later step ([21-roadmap.md](21-roadmap.md)).
+## Build and tear down previews
 
-**Preview addresses.** Each PR will get one HTTPS address for its whole life, such as
+On an open pull request's detail page the owner sees at most one build button,
+chosen from the current request:
+
+| Button | When | What it does |
+| --- | --- | --- |
+| **Build latest commit** | No current request, or it was cancelled or superseded | Requests a build of the commit GitHub reports now. |
+| **Build now** | An Automatic request is waiting for its quiet period | Builds it without waiting. |
+| **Retry build** | The current request failed | A new attempt of the same commit. Transient errors are retried automatically before a request counts as failed; after that, nothing retries it until you do. |
+| **Rebuild preview** | The current request succeeded | Builds the same commit again; the serving preview stays until the new one is healthy. |
+
+- Before recording anything Previa reads the PR from GitHub again, and the worker
+  reads it once more before building. A newer commit is built instead of the stale
+  one; a closed PR, removed access or a GitHub outage refuses the request and says
+  so. Nothing builds on the dashboard's server.
+- Clicking twice, or two tabs submitting the same form, records one request. A form
+  rendered before the build changed (it finished, failed, or a new commit arrived) is
+  refused with **Reload and try again**.
+- There is no bulk build: each PR is built from its own page, or by Automatic mode.
+- A queued request shows no second button. Its progress appears on the page, on
+  **Builds**, in **Build logs** and on the pull request on GitHub.
+- When nothing can build, the button is replaced by the reason: GitHub access
+  removed, a closed PR, Checking or Conflicts, or **no running worker can build
+  previews**. Requests made while the worker is stopped (Automatic or teardown) wait
+  and run when it starts.
+- A failed build or rebuild never replaces a working preview: the old one keeps
+  serving and the page shows both.
+
+**Tear down preview** (an open PR with a preview, or a build in progress) opens a
+confirmation dialog over the page; Cancel, Close or Escape changes nothing. Confirming
+stops the preview, cancels unfinished work and removes its containers. The address
+stays reserved: build again to bring it back. On **Environments**, each row has its
+own **Tear down** with the same dialog. Only the repository's owner can tear down,
+and closing or merging the PR tears down automatically.
+
+**Preview addresses.** Each PR gets one HTTPS address for its whole life, such as
 `https://pr-42-k2j4ld-7xq9m2fa.preview.example.com`, kept across rebuilds, teardown and
 reopening. Opening the address of a preview that does not exist (never published,
 closed, torn down, expired or revoked) shows **Preview not found or expired** on the
 dashboard's site.
 
-**On the pull request** (once the worker runs it, [13](13-pr-feedback.md)), Previa keeps
+**On the pull request** ([13](13-pr-feedback.md)), Previa keeps
 one comment up to date and adds a check run per build request: queued, waiting for
 capacity or disk space, building, ready (with the address and when it expires,
 48 hours after the latest publication by default), failed with a short reason,
 removed or expired. An expired preview comes back at the same address with the next
 commit on an Automatic repository, or when you request a build
 ([14](14-housekeeping-and-capacity.md)).
-Direct POSTs are refused too: HTTP 409 with the reason for Checking, Conflicts or
-Refresh required PRs, otherwise HTTP 503 "not available yet". No intent is created.
+
+Direct POSTs get the same checks: HTTP 409 with the reason for a closed PR, Checking,
+Conflicts, Refresh required or a changed request, HTTP 503 when no worker can build
+or GitHub cannot confirm the PR. A refused request records nothing.
 
 ## Manage repository secrets
 
@@ -146,8 +191,7 @@ Good to know:
 
 Open **Build logs** from a PR's detail page, or **Logs** on any row of **Builds** or
 **Environments**. The page belongs to that PR and shows only its **current** build
-attempt; a new attempt replaces it. Builds do not run yet, so today it normally says
-**No build requested** or shows a queued request.
+attempt; a new attempt replaces it.
 
 - The status line states only recorded facts: **No build requested**, **Waiting**
   (Automatic quiet period, with the time it becomes eligible), **Queued**, **Running**,
@@ -172,8 +216,8 @@ attempt; a new attempt replaces it. Builds do not run yet, so today it normally 
 
 | Screen | What it shows |
 | --- | --- |
-| Builds | Current/latest authorized build requests across your repositories, with captured commits, deadlines and a **Logs** link. Not an attempt history. |
-| Environments | Persisted deployment state and deployed commit per PR, with a **Logs** link. URLs, health and teardown arrive with execution. |
+| Builds | The current or latest request per PR across your repositories: latest and requested commit, waiting/queued/building/outcome, why it waits or failed, the eligibility time and a **Logs** link. Not an attempt history: a new request replaces the row. |
+| Environments | Each preview: status (Publishing, Running, Failed, Removing), the deployed commit (marked when earlier than the latest), **Open preview**, expiry, **Logs** and **Tear down**. |
 | Developer tools | Queue diagnostic: submit a ping and watch the worker process it. |
 | Session | Your GitHub identity; reached from the account menu. |
 
@@ -197,6 +241,10 @@ flowchart TD
     D --> M[Automatic builds confirmation]
     P --> G[PR on GitHub]
     P --> B[Build logs: current attempt, live]
+    P --> Q[Build / Retry / Rebuild: fresh GitHub read, one request]
+    Q -.->|worker builds, routes, reports| P
+    P --> T[Tear down: confirmation dialog]
+    T -.->|worker removes route and containers| P
 ```
 
 ```mermaid

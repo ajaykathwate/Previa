@@ -14,23 +14,25 @@ per-feature design lives in [DESIGN.md](../DESIGN.md).
 | GitHub App installation linking and repository access | Working |
 | Signed, deduplicated webhook ingestion | Working (local signed fixtures verified; hosted delivery not yet observed) |
 | Open-only PR discovery, sync and mergeability checks | Working |
-| Manual/Automatic build policy, durable build intent, five-minute debounce | Working as persisted coordination; **no build executes** |
+| Manual/Automatic build policy, durable build intent, five-minute debounce | Working end to end: the server records requests and wake-ups, the worker admits and builds |
 | Repository/PR dashboard with live updates (SSE) | Working |
-| Build/teardown orchestration, durable publication outbox, reconciler | Implemented and tested behind interfaces; **not registered in production** |
-| Fresh upstream verification before authorization/execution | Implemented and tested; connected to the Build action and worker in Prompt 10 |
-| Exact-commit source fetch, safe extraction, `.previewrc.yaml` from the same tree | Implemented and tested, including a real GitHub check; not yet called by a build |
+| Build/teardown orchestration, durable publication outbox, reconciler | Working: registered by the worker when its dependencies validate ([21](21-mvp-operations.md)) |
+| Fresh upstream verification before authorization/execution | Working: before the owner's request is recorded and again at worker admission, outside locks |
+| Exact-commit source fetch, safe extraction, `.previewrc.yaml` from the same tree | Working; every build starts with it (real GitHub check: `make test-source`) |
 | Repository secrets: encrypted storage, Secrets tab, key rotation, fork withholding, redaction | Working for owners; the preview runtime injects them for trusted sources |
-| Current-build logs: bounded, redacted storage, live log page with resume/reset, retention | Working page and store; empty until builds execute |
+| Current-build logs: bounded, redacted storage, live log page with resume/reset, retention | Working; every build writes its output |
 | Isolated image builds: rootless BuildKit per build, egress proxy, per-source caches, limits | Implemented and verified on real Docker (`make test-builder`) |
-| Preview runtime: hardened unrouted candidates, secrets after recheck, readiness, capacity, cleanup | Implemented and verified on real Docker (`make test-runtime`); not yet called by the worker |
-| Stable HTTPS hostnames, fenced route controller, Traefik wildcard TLS, unavailable page | Implemented and verified with real Traefik, Pebble-issued certificates and previews (`make test-routing`); Let's Encrypt staging/live needs a domain; not yet called by the worker |
-| Teardown on close and revocation, owner-verified cleanup, teardown sweep | Implemented and verified on real Docker and Traefik (`make test-routing`); workers registered in Prompt 10 |
-| PR feedback: one living comment and exact-commit check runs, rendered from persisted state | Implemented and tested against PostgreSQL and a fake GitHub, with an opt-in live proof (`make test-reporting`); registered with the worker in Prompt 10 |
-| Housekeeping: recovery, expiry, orphan cleanup with grace periods, PR reconciliation, pruning; build slots and atomic preview capacity | Implemented and tested against PostgreSQL, River and real Docker (`make test-housekeeping`, `make test-runtime`); dry-run diagnostics (`make housekeeping-dry-run`); registered with the worker in Prompt 10 |
+| Preview runtime: hardened unrouted candidates, secrets after recheck, readiness, capacity, cleanup | Working; verified on real Docker (`make test-runtime`) |
+| Stable HTTPS hostnames, fenced route controller, Traefik wildcard TLS, unavailable page | Working; verified with real Traefik, Pebble-issued certificates and previews (`make test-routing`); Let's Encrypt staging/live needs a domain |
+| Teardown on close, revocation and owner request (confirmation dialog), owner-verified cleanup, teardown sweep | Working; verified on real Docker and Traefik (`make test-routing`, `make test-e2e`) |
+| PR feedback: one living comment and exact-commit check runs, rendered from persisted state | Working against a fake GitHub (`make test-e2e`); the live proof on a real PR (`make test-reporting`) is still to run |
+| Housekeeping: recovery, expiry, orphan cleanup with grace periods, PR reconciliation, pruning; build slots and atomic preview capacity | Working; tested against PostgreSQL, River and real Docker (`make test-housekeeping`, `make test-runtime`); dry-run diagnostics (`make housekeeping-dry-run`) |
+| Worker capabilities, Build/Retry/Rebuild/Tear down controls, Builds/Environments/Overview with real state | Working; the whole pipeline proven on real Docker, BuildKit and Traefik with a fake GitHub (`make test-e2e`) |
 
-The **Build latest commit** action is deliberately disabled and its endpoint refuses
-work. Nothing deploys a preview yet. [21-roadmap.md](21-roadmap.md) lists the
-remaining work in order.
+This is an operational **local/staging** MVP. What each capability needs, what is
+proven by which test and every live proof still required before a public rollout
+are in [21-mvp-operations.md](21-mvp-operations.md); [22-roadmap.md](22-roadmap.md)
+lists the remaining work in order.
 
 ## Architecture
 
@@ -41,7 +43,10 @@ flowchart LR
     S -->|OAuth, App API| GH
     S <-->|pgx| DB[(PostgreSQL 17)]
     W[Worker<br/>cmd/worker] <-->|River jobs| DB
-    W -->|App API: PR pages, mergeability| GH
+    W -->|App API: PRs, source, comments, checks| GH
+    W -->|builds, previews| D[Docker + previa-egress]
+    W -->|route file, API| T[Traefik]
+    T -->|HTTPS| D
     DB -.->|NOTIFY previa_events| S
 ```
 
@@ -49,16 +54,20 @@ flowchart LR
   sessions (SCS `pgxstore`), the job queue (River) and change notifications
   (`LISTEN/NOTIFY`). There is no Redis, broker or separate queue server.
 - **Two processes.** The server handles HTTP, OAuth, webhooks, the dashboard and
-  live event streams, and inserts jobs. The worker runs River jobs: the `ping`
-  diagnostic and, when App credentials are configured, PR discovery and
-  mergeability checks. Each process loads only its own configuration.
+  live event streams, and records work (requests, wake-ups, teardowns, reports); it
+  never touches Docker. The worker executes: PR discovery and mergeability with the
+  App settings, and with a preview domain, Docker and the router also builds,
+  previews, routing, PR feedback, teardown and housekeeping. It publishes what it can
+  do in `worker_capabilities`, which the dashboard reads. Each process loads only
+  its own configuration; the worker holds no sign-in or session secrets.
 - **Server-rendered UI.** Go `templ` pages enhanced with local HTMX and one plain
   JavaScript file. No SPA, frontend build service or Node.js runtime.
 - **Docker for builds and previews.** The image builder ([09](09-image-builds.md))
   runs one rootless BuildKit container per build on a private network; the preview
   runtime ([10](10-preview-runtime.md)) runs each PR's hardened preview on its own
   internal network. The only exit from either is the shared `previa-egress` proxy
-  container. The worker does not call them yet.
+  container. Traefik ([11](11-routing-and-https.md)) serves the healthy preview at
+  its stable HTTPS address.
 
 ## Code layout
 
@@ -68,11 +77,11 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | Path | What it holds |
 | --- | --- |
 | `cmd/server`, `cmd/worker`, `cmd/river-migrate`, `cmd/secrets-reencrypt`, `cmd/route-sync`, `cmd/egress` | Thin entry points (`river-migrate`, `secrets-reencrypt` and `route-sync` are maintenance commands run through Make; `egress` runs as `previa-egress`, the proxy and prober container). |
-| `internal/app` | Composition root: builds dependencies, starts and stops processes. |
+| `internal/app` | Composition root: builds dependencies, starts and stops processes; `pipeline.go` composes the worker's pipeline from validated dependencies and records why anything is unavailable. |
 | `internal/auth` | GitHub OAuth login, user upsert, SCS sessions, CSRF, logout. |
 | `internal/installations` | Verified App linking, installation lifecycle, repository directory, build-mode policy. |
 | `internal/webhooks` | Signed ingress, delivery deduplication, lifecycle dispatch. |
-| `internal/pullrequests` | PR observations, discovery/sync, mergeability, repository/PR pages, event stream endpoint. |
+| `internal/pullrequests` | PR observations, discovery/sync, mergeability, repository/PR pages, Build/Retry/Rebuild and teardown actions, Builds/Environments, event stream endpoint. |
 | `internal/environments` | Build intent, scheduling, admission and environment provisioning, generation-fenced results, publication outbox, the route fence, teardown requests and the teardown sweep, reconciler. |
 | `internal/repoconfig` | `.previewrc.yaml` strict validation, defaults, resource tiers, effective hash. |
 | `internal/source` | Exact-commit archive download through the base repository, identity check, hardened extraction, workspaces, config from the tree. |
@@ -82,11 +91,11 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | `internal/runtime` | Hardened preview candidates: recheck, secrets, readiness, capacity, inventory, the pre-publication check and the owner-verified cleanup executor. |
 | `internal/routing` | Stable hostnames, the route controller (Traefik file provider), forward-only route table file, router control through Docker, the unavailable page. |
 | `internal/dashboard` | Home, overview, session and developer-tools pages; queue ping. |
-| `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub, SSE, stream limiter), `dockerx` (Docker client, shared labels), `egress` (the egress proxy, readiness probe and its container). |
+| `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub, SSE, stream limiter), `workers` (capability heartbeat), `dockerx` (Docker client, shared labels), `egress` (the egress proxy, readiness probe and its container). |
 | `internal/reporting` | PR feedback: state derivation, comment and check run rendering, the GitHub adapter and the leased reporter ([13](13-pr-feedback.md)). |
 | `internal/housekeeping` | Startup and periodic River jobs: recovery, resource inventory with grace periods, PR reconciliation, expiry, pruning, dry runs ([14](14-housekeeping-and-capacity.md)). |
 | `web/` | `pages/<feature>`, `layouts`, `components`, `styles` (Tailwind), `static` (HTMX, compiled CSS, `ui.js`), browser tests. |
-| `db/migrations` | Goose migrations 0001–0016; sqlc generates typed queries into each feature's `dbgen/`. |
+| `db/migrations` | Goose migrations 0001–0017; sqlc generates typed queries into each feature's `dbgen/`. |
 | `deploy/egress` | Dockerfile for the egress proxy and prober image (`make egress-image`). |
 | `deploy/traefik` | The router's Compose file (`make router-up`): file provider, loopback API, staging ACME, secret-file DNS credential. |
 | `tools/go.mod` | Pinned dev tools: templ, sqlc, Goose, Air, golangci-lint. |
@@ -108,6 +117,7 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | `env_secrets` | Repository secrets: nonce ‖ AES-256-GCM ciphertext bound to repository, name and key version. |
 | `build_log_streams` | One row per environment for the current build attempt: `epoch`, generation/revision, state, line and byte counts, truncation and loss counters. |
 | `build_logs` | That attempt's lines (`epoch`, `sequence`, `kind`); replaced on admission, pruned after 14 days. |
+| `worker_capabilities` | One row per running worker: what it can do (execution, routing, reporting, housekeeping, discovery) and when it was last seen. |
 | `river_*` | River's own job tables, migrated separately. |
 
 ## Key decisions and trade-offs
@@ -137,6 +147,7 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | Previews strict by default: UID 65532, read-only root, no capabilities, own internal network, egress only via the proxy | The safest default for running PR code; exceptions are explicit and server-wide. | Some apps need the operator opt-outs; proxy-ignoring libraries cannot reach the internet. |
 | Host-derived preview budget | 60% of Docker memory and 75% of CPUs for previews keeps the platform responsive. | Previews may be refused (retryable) on a busy host. |
 | Package by feature, consumer-defined interfaces | Features evolve independently; no global handler/store layers. | Some small duplication across features. |
+| The server records, the worker executes and publishes its capabilities | The server needs no Docker or execution secrets; a missing capability is an explicit unavailable state, never a silent no-op. | The dashboard trusts a heartbeat seen within 90 seconds, so it can lag a crashed worker by that much; requests made meanwhile wait durably. |
 
 ## Hard problems and how they are handled
 

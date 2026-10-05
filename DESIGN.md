@@ -219,12 +219,13 @@ Medium. Small code, high consequence: authenticity, idempotency and ordering all
   observations cannot revert current state; timestamp conflicts require a fenced
   API refresh, with close/revocation favored conservatively. Discovery never
   bulk-authorizes builds. Installation deletion is terminal; per-repository access
-  tombstones preserve revocation on ambiguous timestamp ties. Cleanup remains
-  durably pending until a real adapter handles it. See
+  tombstones preserve revocation on ambiguous timestamp ties. Cleanup stays
+  durably pending until the worker's revocation sweep (feature 14) confirms nothing
+  is left. See
   [05-webhooks-and-pr-discovery.md](docs/05-webhooks-and-pr-discovery.md).
 - **Out-of-order delivery:** jobs carry the head SHA; a job whose SHA is no longer the latest for that PR is discarded on start (see feature 13).
 - **Fork PRs:** detect them from the payload and apply the fork policy from feature 10 and 16.
-- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. Real runtime integration remains unbuilt. See [15-build-policy-and-intents.md](docs/15-build-policy-and-intents.md); see [16-build-scheduling.md](docs/16-build-scheduling.md) for parsed-event coordination and production dispatch boundaries.
+- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. The worker runs them against the real runtime ([21-mvp-operations.md](docs/21-mvp-operations.md)). See [15-build-policy-and-intents.md](docs/15-build-policy-and-intents.md); see [16-build-scheduling.md](docs/16-build-scheduling.md) for parsed-event coordination, worker admission and interruption.
 
 ---
 
@@ -251,15 +252,30 @@ High. This is the coordination core of the system.
 9. Once worker admission has rechecked access, generation, revision and eligibility,
    clear the environment's previous build logs in that same short transaction,
    before invoking the runtime. Rejected jobs preserve logs; a log-clear failure
-   rolls back admission. Log writing/streaming remains a later adapter integration.
+   rolls back admission. The build then writes its output to that stream.
+10. The worker composes the pipeline only from validated dependencies
+    (`internal/app/pipeline.go`): without the App nothing but log retention runs;
+    with the App, discovery; with a preview domain, Docker and the routing settings,
+    every build, wake-up, route, report, cleanup, teardown and housekeeping worker.
+    Whatever is missing is logged with its reason and the worker publishes what it
+    can do in `worker_capabilities` (a 30-second heartbeat, stale after 90 seconds).
+    The server only records work (requests with their wake-ups, teardowns, reports)
+    and refuses owner build requests with 503 while no live worker can build. See
+    [21-mvp-operations.md](docs/21-mvp-operations.md).
+11. Before admitting a build the worker reads the PR from GitHub again, outside any
+    lock; a newer commit or close supersedes the request. Permanent failures end the
+    request after one attempt; a worker shutdown mid-build is no failure (the job is
+    snoozed and runs again without spending an attempt); a GitHub rate limit waits
+    for GitHub's delay. On `SIGTERM` the worker removes its capability row, lets
+    running jobs finish for 30 seconds, then cancels the rest.
 
 ### Design decisions and edge cases
 - **Transactional outbox for free:** the database-backed queue avoids the classic lost-job window.
 - **Latest-SHA-wins:** if commits arrive faster than builds finish, superseded builds are cancelled or skipped.
 - **Intent-aware handoff:** a newer observed PR generation does not itself authorize a successor build. Completion, terminal failure, retries and recovery must consult durable authorized intent and its deadline; teardown remains immediate in either mode.
-- **Request identity:** one current `build_intents` row per PR captures generation/SHA and an independent monotonic revision. Duplicate Build commands coalesce; explicit Retry/Rebuild uses a fresh key and expected revision. Intent transitions use locked PR state plus guarded SQL. Result/publication guards now carry generation and revision, including operation keys/payloads, pending/active state and resource references. External adapters must enforce the same version fence; production dispatch remains disabled without them.
+- **Request identity:** one current `build_intents` row per PR captures generation/SHA and an independent monotonic revision. Duplicate Build commands coalesce; explicit Retry/Rebuild uses a fresh key and expected revision. Intent transitions use locked PR state plus guarded SQL. Result/publication guards now carry generation and revision, including operation keys/payloads, pending/active state and resource references. External adapters enforce the same version fence; production dispatch runs in the worker described above.
 - **Manual override:** an ownership-checked, CSRF-protected request builds the current PR SHA without the Automatic delay; coalesce matching pending Automatic work and repeated submissions. Mode is platform-owned, not a repo YAML field.
-- **Backpressure:** a queued job's status is visible in the PR comment ("queued, position N") so waiting is not mistaken for failure.
+- **Backpressure:** a waiting request's status is visible in the PR comment, check run and dashboard so waiting is not mistaken for failure: queued, waiting for the quiet period (with its time), waiting for build capacity or for disk space. **Deviation:** no queue position ("position N") is shown. Waiting requests are retried with backoff, not served in a strict order, so a position would be invented; see [14-housekeeping-and-capacity.md](docs/14-housekeeping-and-capacity.md).
 
 ---
 
@@ -405,7 +421,7 @@ Medium. Simple API calls, but rate limits, race conditions and idempotency matte
 - **Debouncing (changed from the original design):** no timer; collapsing queued reports and skipping unchanged content give the same effect, and the final state is always written.
 - **First report (owner decision):** once a PR has preview work, not on every observed PR.
 - **Rate limiting and permissions:** primary and secondary limits are retried after GitHub's own delay; 403/404 on the repository records `inaccessible` and writes nothing; a refused comment or check write is recorded and does not block the other.
-- **Current implementation:** `internal/reporting` (state, render, GitHub adapter, reporter) and `internal/environments/reports.go`, migration 0015, tested against PostgreSQL and a fake GitHub, with an opt-in live proof (`make test-reporting`). Registered with the worker in Prompt 10. See [13-pr-feedback.md](docs/13-pr-feedback.md).
+- **Current implementation:** `internal/reporting` (state, render, GitHub adapter, reporter) and `internal/environments/reports.go`, migration 0015, tested against PostgreSQL and a fake GitHub, with an opt-in live proof (`make test-reporting`, still to run on a real PR). The worker registers the reporter with builds; `make test-e2e` proves the comment and check runs through the whole pipeline. See [13-pr-feedback.md](docs/13-pr-feedback.md).
 
 ---
 
@@ -445,7 +461,10 @@ recovery across crashes. The swap itself is implemented by the route controller
 and accepted behind the fence, the router is confirmed to serve it, and only then is
 the environment recorded running and the old container retired; a candidate that
 fails before publication leaves the old preview serving and the environment `failed`.
-Workers are connected in Prompt 10.
+The worker runs this pipeline ([21-mvp-operations.md](docs/21-mvp-operations.md));
+`make test-e2e` proves it on real Docker, BuildKit and Traefik, including a failed
+rebuild that keeps the old preview serving and an Automatic burst that builds only
+the newest commit.
 
 ---
 
@@ -476,7 +495,7 @@ Medium.
 - **Never remove the replacement:** a late teardown after a reopen cannot remove the newer route (tombstone ordering) or its artifacts (reference checks).
 - **Missed webhook:** if the `closed` event is lost, the reconciler (feature 15) catches it by comparing with GitHub's actual PR state.
 - **Logs retention:** build logs may be kept for a short period after teardown for debugging, then deleted.
-- **Current implementation:** see [12-teardown-and-cleanup.md](docs/12-teardown-and-cleanup.md); verified with real Docker and Traefik by `make test-routing`. Workers, the periodic sweep and the dashboard teardown action are connected in Prompts 9–10.
+- **Current implementation:** see [12-teardown-and-cleanup.md](docs/12-teardown-and-cleanup.md); verified with real Docker and Traefik by `make test-routing`. The worker registers the teardown, route, cleanup and sweep workers; the owner's **Tear down preview** (a CSRF-protected form in a confirmation dialog, on the PR page and per row on Environments) records a teardown with reason `requested` that supersedes unfinished work and runs when a worker does. `make test-e2e` proves it end to end.
 
 ---
 
@@ -508,7 +527,7 @@ High. Reconciliation logic is subtle, and getting it wrong can delete live envir
 - **Instance identity (added during implementation):** every Docker object is labelled and named with its database's instance (`platform_instance`), so two databases on one Docker host (a test schema next to a development one) never touch each other's objects when PR IDs coincide.
 - **Recovery never authorizes:** re-dispatched work passes the usual policy, deadline, generation and mergeability checks; an expired preview is never rebuilt by recovery.
 - **Disk exhaustion is the most likely real outage;** a build short of disk waits and triggers an emergency prune. Metrics and alerts are Prompt 11.
-- **Current implementation:** `internal/housekeeping` (recovery, resources, PR reconciliation, expiry, prune, River jobs) with capacity in `internal/environments` (build slots, waiting), `internal/runtime` (admission lock, headroom) and `internal/builds` (disk check, caches), migration 0016. Registered with the worker in Prompt 10. See [14-housekeeping-and-capacity.md](docs/14-housekeeping-and-capacity.md).
+- **Current implementation:** `internal/housekeeping` (recovery, resources, PR reconciliation, expiry, prune, River jobs) with capacity in `internal/environments` (build slots, waiting), `internal/runtime` (admission lock, headroom) and `internal/builds` (disk check, caches), migration 0016. The worker registers housekeeping with builds and applies build slots and preview headroom at admission. See [14-housekeeping-and-capacity.md](docs/14-housekeeping-and-capacity.md).
 
 ---
 
@@ -535,7 +554,7 @@ High. Security-sensitive with subtle leakage paths.
 - **Not in the repo config file:** anything in the repo is visible to anyone with read access.
 - **Build-time vs run-time:** secrets are runtime by default; build-time use only through BuildKit secret mounts.
 - **Blast radius:** a preview-only credential (for example, a sandbox API key) should be recommended in docs; previews are not the place for production keys.
-- **Current implementation:** `internal/secrets` stores values as AES-256-GCM ciphertext with random nonces, authenticating repository, name and key version. Keys come from `SECRETS_ENCRYPTION_KEYS`/`SECRETS_ACTIVE_KEY_VERSION`; rotation uses an explicit, repeatable `make secrets-reencrypt` (not lazy re-encryption) and keeps old keys until it reports zero. Owners manage values on a repository Secrets tab (write-only, CSRF, modal deletion). At container creation the worker calls `Provider.ForContainer`: untrusted sources (forks, unknown heads) decrypt nothing; for trusted sources a stored secret overrides a same-named YAML entry. `Redactor` streams exact-value redaction across write boundaries; its limits are documented. Runtime injection arrives with the container runtime. See [07-repository-secrets.md](docs/07-repository-secrets.md).
+- **Current implementation:** `internal/secrets` stores values as AES-256-GCM ciphertext with random nonces, authenticating repository, name and key version. Keys come from `SECRETS_ENCRYPTION_KEYS`/`SECRETS_ACTIVE_KEY_VERSION`; rotation uses an explicit, repeatable `make secrets-reencrypt` (not lazy re-encryption) and keeps old keys until it reports zero. Owners manage values on a repository Secrets tab (write-only, CSRF, modal deletion). At container creation the worker calls `Provider.ForContainer`: untrusted sources (forks, unknown heads) decrypt nothing; for trusted sources a stored secret overrides a same-named YAML entry. `Redactor` streams exact-value redaction across write boundaries; its limits are documented. The preview runtime injects them after a fresh access recheck. The worker's keyring is optional: without it, repositories without secrets build normally and a repository with secrets fails closed (`secrets_unavailable`). See [07-repository-secrets.md](docs/07-repository-secrets.md).
 
 ---
 
@@ -554,7 +573,7 @@ Medium.
 1. During builds and container startup, each output line is appended to the log table with a sequence number per environment.
 2. The logs page loads existing lines, then opens an SSE stream that pushes new lines as they arrive. Use `internal/platform/realtime`: the hub wakes the stream on a log notification and `realtime.SSE` frames lines whose ids are log sequence numbers.
 3. A reconnecting client resumes from the last sequence number it received, so nothing is duplicated or lost.
-4. The workspace has separate Overview, Repositories, Builds and Environments pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 records), search and Available/Unavailable/All access tabs (Available by default). Once the environment feature is connected, Environments shows status, URL, commit SHA, age, and a manual "tear down now" action. Developer tools has its own local diagnostic page.
+4. The workspace has separate Overview, Repositories, Builds and Environments pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 records), search and Available/Unavailable/All access tabs (Available by default). Environments shows each preview's status, URL, deployed commit SHA (marked when earlier than the latest), expiry and a **Tear down** action confirmed in a modal; it shows the expiry rather than the age, because expiry is what an owner acts on. Builds shows queued and running work with latest and requested SHAs, wait and failure reasons and log links. Overview counts waiting, building, live and failed work and shows which pipeline stages a running worker provides. Developer tools has its own local diagnostic page.
 5. Dashboard actions check both authentication and ownership: a user can only see and act on environments in installations they own.
 6. Log retention has a size and age cap; old logs are pruned.
 
@@ -582,14 +601,20 @@ Committed changes stream to open repository/PR pages as Server-Sent Events
 -> per-repository stream). Events are invalidation signals with resumable cursors;
 pages refetch through ordinary authorized GETs, defer while search is focused or a
 policy modal is open, and send nothing while idle. See docs/19-realtime-updates.md;
-build-log streaming reuses the same SSE writer with its own sequence replay. Current build/logs and deployed
-preview controls remain dependent on the execution adapters. Builds is
+build-log streaming reuses the same SSE writer with its own sequence replay. PR
+detail shows the latest observed, requested and deployed commits separately, with
+the owner's Build latest commit, Build now (an Automatic request still waiting),
+Retry build (after a failure) or Rebuild preview (after a success), and Tear down
+preview. Builds is
 a cross-repository view of current/latest work; Environments is a deployment view,
 not another name for Builds. Do not add historical build storage implicitly.
 Initial discovery and detail screens are implemented by a feature-owned
 `internal/pullrequests` package: explicit refresh, bounded River pagination,
-source/access snapshot fences and owned Templ pages. The build action fails closed
-until real execution adapters exist. See [03-user-guide.md](docs/03-user-guide.md).
+source/access snapshot fences and owned Templ pages. The build action checks
+ownership, the PR's state and mergeability, a live worker that can build (otherwise
+503 with nothing recorded) and a fresh GitHub read, then records one idempotent,
+revision-checked request with its wake-up. There is no bulk build. See
+[03-user-guide.md](docs/03-user-guide.md).
 
 ### Design decisions and edge cases
 - **Server-rendered UI** keeps everything in one binary and one deploy.
@@ -788,8 +813,8 @@ preview/
 ├── internal/
 │   ├── app/                        # composition root: builds and wires everything
 │   │   ├── server.go               # creates features, mounts routes, starts HTTP
-│   │   ├── worker.go               # creates features, registers jobs, starts River
-│   │   └── wire.go                 # dependency construction in one readable place
+│   │   ├── worker.go               # starts River, the capability heartbeat, draining
+│   │   └── pipeline.go             # composes the worker pipeline from validated dependencies
 │   │
 │   ├── auth/                       # FEATURE: GitHub OAuth login + sessions
 │   │   ├── handler.go              # login, callback, logout (the "controller")
@@ -820,11 +845,13 @@ preview/
 │   │   ├── jobs.go                 # build / rebuild / teardown River jobs
 │   │   ├── routes.go               # route fence: accept, remove, served, protection
 │   │   ├── teardown.go             # teardown requests, revocation, the teardown sweep
-│   │   ├── handler.go              # dashboard actions (teardown, Prompt 10)
+│   │   ├── scheduler.go            # request broker (server) and execution broker (worker)
+│   │   ├── messages.go             # waiting and failure wording (PR reports, dashboard)
 │   │   ├── queries.sql  dbgen/
 │   │
 │   ├── pullrequests/               # FEATURE: PR observations, discovery and workspace
 │   │   ├── handler.go  repository.go  queries.sql  dbgen/
+│   │   ├── actions.go              # owner actions: Build/Retry/Rebuild, teardown
 │   │   ├── observation.go  github.go  sync.go
 │   │
 │   ├── repoconfig/                 # FEATURE: .previewrc.yaml parse + validate
@@ -896,6 +923,7 @@ preview/
 │       ├── database/               # pgx pool, transaction helper, migrations runner
 │       ├── queue/                  # River client setup
 │       ├── realtime/               # LISTEN/NOTIFY hub + Server-Sent Events streams
+│       ├── workers/                # capability heartbeat: what running workers can do
 │       ├── githubapp/              # App JWT, installation-token cache, API client
 │       ├── dockerx/                # Docker client construction, shared labels
 │       ├── egress/                 # egress proxy, readiness probe, its container
@@ -915,8 +943,8 @@ preview/
 │   │   ├── dashboard/              # overview, session, developer tools
 │   │   ├── repositories/           # paginated, filtered repository page
 │   │   ├── pullrequests/           # repository/PR detail and shared current activity
-│   │   ├── builds/                 # current build intent page
-│   │   ├── environments/           # persisted deployment state page
+│   │   ├── builds/                 # Builds page, current-attempt build log page
+│   │   ├── environments/           # Environments page (shares the activity view)
 │   │   └── routing/                # "preview not found or expired" (public)
 │   ├── components/                 # local, reusable UI; no backend imports
 │   ├── styles/                     # Tailwind entry CSS and theme tokens
@@ -938,7 +966,7 @@ preview/
 
 ### The rules that make it stay clean
 
-**1. A feature owns its backend behavior.** Teardown functionality lives in `internal/environments`; its pages and fragments belong in `web/pages/environments` when built. Auth HTTP/session behavior lives in `internal/auth`, while its presentation lives in `web/pages/auth`. Shared presentation stays in `web/layouts` and `web/components`.
+**1. A feature owns its backend behavior.** Teardown functionality lives in `internal/environments`; the owner's teardown action is an HTTP handler in `internal/pullrequests` behind a consumer-defined interface, and its page in `web/pages/environments`. Auth HTTP/session behavior lives in `internal/auth`, while its presentation lives in `web/pages/auth`. Shared presentation stays in `web/layouts` and `web/components`.
 
 **2. Dependencies point one way.**
 
@@ -961,7 +989,7 @@ type Reporter interface {
 }
 ```
 
-`reporting.Reporter` happens to satisfy it. `app/wire.go` connects them. `environments` never imports `reporting`, so there are no cycles and testing is easy with a fake.
+`reporting.Reporter` happens to satisfy it. `internal/app` (`pipeline.go`) connects them. `environments` never imports `reporting`, so there are no cycles and testing is easy with a fake.
 
 **4. `environments` is the center.** `webhooks`, `dashboard` and `housekeeping` call into it. It orchestrates `source`, `builds`, `runtime`, `routing` and `reporting` through interfaces. The pure-mechanism packages (`source`, `builds`, `runtime`, `routing`) know nothing about PRs or users, which is what makes them reusable and testable.
 
@@ -1034,16 +1062,27 @@ Now a feature can only call queries it owns. If `dashboard` needs data from `env
 
 ### The composition root
 
-All the wiring lives in `internal/app/wire.go`, so it's obvious in one file how the system is assembled:
+All the wiring lives in `internal/app`: `server.go` assembles the HTTP side and
+`pipeline.go` assembles the worker's pipeline, so it is obvious in two files how
+each process is put together. The worker builds a stage only from dependencies
+that validated, and records why the rest is unavailable:
 
 ```go
-func buildEnvironments(p *platform, rep *reporting.Reporter, rt runtime.Runtime) *environments.Service {
-    repo := environments.NewRepository(p.DB)
-    return environments.NewService(repo, p.Queue, rep, rt)
+// internal/app/pipeline.go (abridged)
+if !cfg.RoutingConfigured() {
+    p.addDiscovery(discovery) // requests and wake-ups still wait durably
+    p.unavailable = append(p.unavailable, "PREVIEW_BASE_DOMAIN is not set: ...")
+    return p, nil
 }
+repo := environments.NewRepository(pool, operations).WithHostnames(routing.NewLabel).
+    WithReports().WithLifetime(cfg.PreviewLifetime()).WithBuildSlots(cfg.MaxConcurrentBuilds)
+service, err := environments.NewService(repo, rt, log, cfg.BuildTimeout)
+service.WithVerifier(sync).WithHeadroom(rt).WithBuildLogs(logStore)
 ```
 
-`cmd/server/main.go` and `cmd/worker/main.go` stay a few lines each. The server and worker share the same `wire.go`, so the same features are constructed the same way in both processes.
+`cmd/server/main.go` and `cmd/worker/main.go` stay a few lines each. The two
+processes construct the features they share (repositories, brokers) the same way;
+the server records work and the worker executes it.
 
 ### Why this is the industry-standard shape
 

@@ -2,24 +2,53 @@
 
 How an authorized intent ([15](15-build-policy-and-intents.md)) becomes executable
 work: durable deadlines, River wake-ups, atomic admission, one build per PR, handoff
-to the next request and crash recovery. Everything here is implemented and tested
-with real PostgreSQL and River; what is missing is the real build/runtime adapters.
+to the next request and crash recovery. Everything here is implemented, tested
+with real PostgreSQL and River, and runs in the worker against the real source,
+build, runtime, routing and reporting adapters ([21](21-mvp-operations.md)).
 
 ## What runs in production today
 
-The server constructs the **observation coordinator**: webhooks and policy changes
-persist intent and wake-ups. Workers execute `ping`, PR discovery and mergeability
-checks. Executable build, teardown, route and reporting workers are **not
-registered**, so durable intent and wake-ups simply wait until capable adapters exist.
+The **server records, the worker executes.** The server constructs
+`NewRequestBroker`: webhooks, policy changes and the owner's Build, Retry and
+Rebuild persist intent with its durable wake-up in one transaction, but it never
+dispatches build or teardown work (`Dispatch` and `EnqueueTx` return
+`ErrExecutionUnavailable`). A worker that can build constructs `NewExecutionBroker`,
+which requires an environment service with a real runtime and outbox and an
+operation worker with real executors, and registers the build, teardown, wake,
+operation and sweep workers on their own queues. A worker without those
+dependencies registers none of them (`NewBroker`: observation and discovery only),
+says so in its startup log and in `worker_capabilities`, and every request and
+wake-up waits durably until a capable worker starts. No-op adapters are never used
+to make execution look available.
 
-`NewBroker` can persist coordination wake-ups but **cannot dispatch executable
-build/teardown work**. Its `RequestBuild`, `EnqueueTx` and `Dispatch` reject execution
-with `ErrExecutionUnavailable`. `NewExecutionBroker` requires an environment service
-with runtime/outbox dependencies and an operation worker with an executor. It is
-used with test adapters in integration tests. Future production construction must
-register capable build, teardown, wake and operation workers and configure all
-queues on every consuming/maintenance process. Supplying no-op adapters to enable
-production execution is not supported.
+## Worker admission, failures and interruption
+
+`Service.Build` runs these checks in order, each before any work is spent:
+
+1. The request still matches the PR's generation, commit, state and request
+   revision in PostgreSQL; otherwise it is superseded.
+2. **A fresh GitHub read** (`WithVerifier`: `VerifyUpstream`), outside every lock and
+   transaction. A closed PR or a different head supersedes the request; lost access
+   ends it as a permanent failure; an outage is retried; a rate limit snoozes the
+   job for GitHub's own delay without spending an attempt.
+3. Host headroom (`WithHeadroom`): no room or low disk keeps the request queued and
+   waiting.
+4. The atomic claim: lock order, access, mergeability, eligibility and a build slot,
+   rechecked in one transaction.
+
+After the claim the runtime rechecks access and fork status from PostgreSQL before
+deciding secrets, and publication repeats the generation/revision fences under the
+PR lock before a candidate becomes active or a route is accepted.
+
+- **Permanent failures** (the runtime's `Permanent()`: invalid configuration, a
+  failing Dockerfile, an app that never becomes ready, the time limit) end the
+  request after one attempt; `finishJob` hands off at once and the failure is
+  reported once. Transient failures keep River's backoff and attempt budget.
+- **Interruption.** If the worker stops while a build runs (`SIGTERM`, then 30
+  seconds of draining), the build returns `ErrInterrupted`: its logs are closed, its
+  leftovers cleaned, the request stays `running` with its slot, and the job is
+  snoozed instead of failed. It runs again on the next start without spending an
+  attempt; recovery covers a crash that skipped this.
 
 ## State and scheduling
 
@@ -133,7 +162,7 @@ Migration 9 adds unconditional environment uniqueness by PR. The existing row an
 subdomain survive rebuild, teardown and reopen; fixture tests exercise this lifecycle.
 Admission now provisions the environment, allocating its hostname once, inside the
 claim transaction when the repository is constructed with a hostname allocator
-([11](11-routing-and-https.md)); production wiring passes `routing.NewLabel` (Prompt 10).
+([11](11-routing-and-https.md)); the worker passes `routing.NewLabel`.
 
 ## Completion, handoff and recovery
 
@@ -159,7 +188,7 @@ completion, **not proof of external route removal**. Route removal still require
 its durable operation finalization/recovery. A no-environment close is safe to
 complete without creating a preview record. The marker is recorded even when GitHub
 access was revoked meanwhile, since teardown needs none. A local teardown of an open
-PR (revocation; owner requests and expiry later) is recorded with
+PR (revocation, owner requests and expiry) is recorded with
 `teardown_requested_generation` and started by its own transaction or the teardown
 sweep rather than by a teardown job ([12](12-teardown-and-cleanup.md)).
 
@@ -217,5 +246,8 @@ duplicate requests, mode/access revocation, recovery, atomic rollback, concurren
 observation/request changes, same-generation stale success/failure/publication,
 generation-zero finalization, real River wake-up processing and PR uniqueness,
 future handoff deadlines, success/terminal-failure handoff and close-during-build
-cleanup. The source, build, runtime, router and reporting adapters exist and are
-connected to these workers in Prompt 10 ([21-roadmap.md](21-roadmap.md)).
+cleanup, worker admission reading GitHub fresh (`TestAdmissionReadsThePRFreshFromGitHub`),
+permanent failures ending after one attempt (`TestPermanentFailuresEndAfterOneAttempt`)
+and a shutdown mid-build that is no failure (`TestAWorkerShutdownMidBuildIsNoFailure`).
+`make test-e2e` runs these workers with the real source, build, runtime, routing and
+reporting adapters ([21](21-mvp-operations.md)).

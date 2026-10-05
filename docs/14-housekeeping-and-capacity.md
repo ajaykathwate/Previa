@@ -10,8 +10,9 @@ GitHub, pruning, capacity controls, dry runs, configuration and what was verifie
 It extends the environments contracts ([16](16-build-scheduling.md),
 [17](17-durable-publication-design.md), [12](12-teardown-and-cleanup.md)); the
 code is `internal/housekeeping` plus capacity in `internal/environments`,
-`internal/runtime` and `internal/builds`. The worker registers it in Prompt 10
-([21](21-roadmap.md)); until then it runs in tests and in the dry-run diagnostics.
+`internal/runtime` and `internal/builds`. The worker registers it whenever it can
+build ([21](21-mvp-operations.md)); `make housekeeping-dry-run` runs it as a
+diagnostic.
 
 ## Decisions
 
@@ -169,16 +170,20 @@ Dry run for instance 40faee5f0a2d (nothing was changed):
 | `BUILD_CACHE_BUDGET` | 40GiB | All build caches together (at least 1GiB) |
 | `MAX_CONCURRENT_BUILDS` | (required) | Builds running at once across all workers |
 
-## Wiring for Prompt 10
+## Wiring
 
-`Repository.WithLifetime(cfg.PreviewLifetime()).WithBuildSlots(cfg.MaxConcurrentBuilds)`;
+`internal/app/pipeline.go` composes it: `Repository.WithLifetime(cfg.PreviewLifetime()).WithBuildSlots(cfg.MaxConcurrentBuilds)`;
 `Service.WithHeadroom(runtime)`; `runtime.Parts{Instance, Admission: runtime.NewAdmissionLock(pool)}`
 and `builds.ConfigFrom(…, instance, …)` with `instance` from `database.Instance`;
 `housekeeping.NewRecovery(broker, repo, sweeper, controller)`,
 `NewResources(repo, runtime, …)`, `NewPullRequests(pool, syncService, …)`,
 `NewExpiry(pool, repo, …)`, `NewPrune(builder, workspaces, …)` with
 `SettingsFrom(cfg.HousekeepingConfig, cfg.BuildTimeout)`, gathered in a
-`Housekeeper` whose `Register` is passed to `queue.NewWorker`.
+`Housekeeper` whose `Register` is passed to `queue.NewWorker`. The housekeeping queue
+has one worker per process. Jobs run every minute (recovery), 5 minutes (resources),
+15 minutes (PR reconciliation), 10 minutes (expiry) and hourly (pruning), with
+timeouts of 2, 5, 5, 2 and 15 minutes. The dashboard shows
+the waiting reason and the expiry on PR pages, Builds and Environments.
 
 ## What was verified
 
@@ -203,6 +208,9 @@ and `builds.ConfigFrom(…, instance, …)` with `instance` from `database.Insta
 
 ## Not done yet
 
-- Registration in the worker and dashboard display of expiry and waiting (Prompt 10).
+- Capacity and disk pressure on a target host's real resources with
+  `MAX_CONCURRENT_BUILDS` concurrent builds ([21](21-mvp-operations.md)).
+- A queue position for waiting requests: waits are retried with backoff, not served
+  in strict order, so none is shown.
 - Metrics and alerts for disk pressure and stuck work (Prompt 11).
 - More than one worker host: source workspaces and the route file are per host.

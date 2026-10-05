@@ -9,10 +9,12 @@ request revision it carries alongside generation comes from
 
 **Status:** generation and revision fencing, guarded results and the database/River
 publication outbox are implemented in `internal/environments` and tested with real
-PostgreSQL and River plus simulated runtime/publication adapters. Docker, routing,
-GitHub reporting ([13](13-pr-feedback.md)) and a production reconciliation timer are
-not connected to the worker, so these tests prove database behaviour, not real
-deployments. Migration 9 keeps one
+PostgreSQL and River plus simulated runtime/publication adapters. The worker runs
+the same fences against real Docker, routing, GitHub reporting
+([13](13-pr-feedback.md)) and periodic housekeeping ([14](14-housekeeping-and-capacity.md));
+`make test-e2e` proves them end to end, including a failed rebuild that cannot
+replace the serving preview and an Automatic burst that builds only the newest
+commit. Migration 9 keeps one
 environment row per PR for its whole life; admission clears the previous build's
 logs only after its checks pass.
 
