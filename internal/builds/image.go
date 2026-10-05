@@ -114,7 +114,7 @@ func (b *Builder) reusable(ctx context.Context, job Job) (Image, bool) {
 		return Image{}, false
 	}
 	labels := inspected.Config.Labels
-	if labels[dockerx.LabelManaged] != "true" || labels[dockerx.LabelPR] != itoa(job.PullRequestID) || labels[dockerx.LabelGeneration] != itoa(job.Generation) ||
+	if !dockerx.OwnedBy(labels, job.Instance, dockerx.KindImage) || labels[dockerx.LabelPR] != itoa(job.PullRequestID) || labels[dockerx.LabelGeneration] != itoa(job.Generation) ||
 		labels[dockerx.LabelRevision] != itoa(job.Revision) || labels[dockerx.LabelSHA] != job.HeadSHA || inspected.Size > b.cfg.MaxImageSize {
 		return Image{}, false
 	}
@@ -132,7 +132,7 @@ type Artifact struct {
 // including leftovers of crashed builds. Shared cache volumes are per source
 // repository, not per PR, and are pruned by housekeeping.
 func (b *Builder) Resources(ctx context.Context, pullRequestID int64) ([]Artifact, error) {
-	filter := client.Filters{}.Add("label", dockerx.LabelManaged+"=true", dockerx.LabelPR+"="+itoa(pullRequestID))
+	filter := client.Filters{}.Add("label", dockerx.LabelManaged+"=true", dockerx.LabelInstance+"="+b.cfg.Instance, dockerx.LabelPR+"="+itoa(pullRequestID))
 	var found []Artifact
 	images, err := b.docker.ImageList(ctx, client.ImageListOptions{Filters: filter})
 	if err != nil {

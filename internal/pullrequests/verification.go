@@ -94,7 +94,7 @@ func (s *SyncService) VerifyUpstream(ctx context.Context, pullRequestID int64) (
 		if err != nil {
 			return fmt.Errorf("check existing automatic authorization: %w", err)
 		}
-		if _, err := ObserveTx(ctx, tx, captured.RepoID, upstream.Observation, false, nil); err != nil {
+		if _, err := ObserveTx(ctx, tx, captured.RepoID, upstream.Observation, false, s.observer); err != nil {
 			return err
 		}
 		saved, err := q.LockPR(ctx, dbgen.LockPRParams{RepoID: captured.RepoID, Number: captured.Number})

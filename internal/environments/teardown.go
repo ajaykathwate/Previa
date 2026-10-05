@@ -159,6 +159,9 @@ func (r *Repository) startTeardownTx(ctx context.Context, tx pgx.Tx, pullRequest
 	if _, err := q.CompleteTeardownRequest(ctx, dbgen.CompleteTeardownRequestParams{ID: pr.ID, Generation: pr.Generation}); err != nil {
 		return false, fmt.Errorf("record started teardown: %w", err)
 	}
+	if err := r.reportTx(ctx, tx, pr.ID); err != nil {
+		return false, err
+	}
 	return started, nil
 }
 

@@ -56,7 +56,7 @@ func (r *Runtime) Health(ctx context.Context, containerID string) (Health, error
 	if err != nil {
 		return Health{}, failure(CodeUnavailable, "The preview could not be inspected.", true, err)
 	}
-	if inspected.Container.Config == nil || !dockerx.Owned(inspected.Container.Config.Labels, dockerx.KindPreview) {
+	if inspected.Container.Config == nil || !dockerx.OwnedBy(inspected.Container.Config.Labels, r.instance, dockerx.KindPreview) {
 		return Health{}, failure(CodeNotOwned, "This container was not created by Previa.", false, nil)
 	}
 	return observedHealth(inspected.Container), nil

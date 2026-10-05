@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const baseRepository = `-- name: BaseRepository :one
+SELECT r.github_repo_id FROM pull_requests p JOIN repos r ON r.id = p.repo_id WHERE p.id = $1
+`
+
+func (q *Queries) BaseRepository(ctx context.Context, id int64) (pgtype.Int8, error) {
+	row := q.db.QueryRow(ctx, baseRepository, id)
+	var github_repo_id pgtype.Int8
+	err := row.Scan(&github_repo_id)
+	return github_repo_id, err
+}
+
 const executionTarget = `-- name: ExecutionTarget :one
 SELECT p.id AS pull_request_id, p.repo_id, p.number, p.head_sha, p.state, p.generation, p.is_fork, p.head_repo_id,
        r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status,

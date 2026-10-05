@@ -13,7 +13,7 @@ func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 // identity labels an artifact of one build attempt (see dockerx labels).
 func (j Job) identity(kind string) map[string]string {
 	return map[string]string{
-		dockerx.LabelManaged: "true", dockerx.LabelKind: kind,
+		dockerx.LabelManaged: "true", dockerx.LabelInstance: j.Instance, dockerx.LabelKind: kind,
 		dockerx.LabelPR: itoa(j.PullRequestID), dockerx.LabelGeneration: itoa(j.Generation), dockerx.LabelRevision: itoa(j.Revision),
 		dockerx.LabelSHA: j.HeadSHA, dockerx.LabelBaseRepo: itoa(j.BaseRepoID), dockerx.LabelHeadRepo: itoa(j.HeadRepoID),
 	}
@@ -21,7 +21,7 @@ func (j Job) identity(kind string) map[string]string {
 
 // ImageRef is the unique local tag of the image built for one PR revision.
 func (j Job) ImageRef() string {
-	return fmt.Sprintf("previa/pr-%d:g%d-r%d-%s", j.PullRequestID, j.Generation, j.Revision, j.HeadSHA[:12])
+	return fmt.Sprintf("previa/%s-pr-%d:g%d-r%d-%s", j.Instance, j.PullRequestID, j.Generation, j.Revision, j.HeadSHA[:12])
 }
 
 // cacheScope separates build caches by base repository and by the repository
@@ -36,10 +36,15 @@ func (j Job) cacheScope() string {
 	return fmt.Sprintf("r%d-h%d", j.BaseRepoID, j.HeadRepoID)
 }
 
-func cacheVolumeName(scope string) string   { return "previa-buildcache-" + scope }
-func cachedBuilderName(scope string) string { return "previa-builder-" + scope }
+// CacheVolumeName is the scope's cache volume; housekeeping prunes these.
+func CacheVolumeName(instance, scope string) string {
+	return "previa-buildcache-" + instance + "-" + scope
+}
+func cachedBuilderName(instance, scope string) string {
+	return "previa-builder-" + instance + "-" + scope
+}
 
 // attemptName is unique per build attempt, for networks and uncached builders.
 func (j Job) attemptName(prefix string, now time.Time) string {
-	return fmt.Sprintf("%s-pr%d-g%d-r%d-%d", prefix, j.PullRequestID, j.Generation, j.Revision, now.UnixNano())
+	return fmt.Sprintf("%s-%s-pr%d-g%d-r%d-%d", prefix, j.Instance, j.PullRequestID, j.Generation, j.Revision, now.UnixNano())
 }

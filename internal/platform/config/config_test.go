@@ -57,15 +57,18 @@ func TestLoadServer(t *testing.T) {
 func TestLoadWorkerWithoutServerOrFutureSettings(t *testing.T) {
 	validEnvironment(t)
 	// APP_BASE_URL matters to the worker only once PREVIEW_BASE_DOMAIN configures routing.
-	unrelated := []string{"APP_BASE_URL", "HTTP_ADDR", "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "SESSION_SECRET", "GITHUB_WEBHOOK_SECRET", "SECRETS_ENCRYPTION_KEY", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN"}
+	unrelated := []string{"APP_BASE_URL", "HTTP_ADDR", "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "SESSION_SECRET", "GITHUB_WEBHOOK_SECRET", "SECRETS_ENCRYPTION_KEY", "DNS_PROVIDER_API_TOKEN"}
 	unsetEnvironment(t, unrelated...)
-	unsetEnvironment(t, "BUILD_TIMEOUT")
+	unsetEnvironment(t, "BUILD_TIMEOUT", "ENV_TTL_HOURS", "HOUSEKEEPING_DRY_RUN", "HOUSEKEEPING_GRACE", "BUILD_CACHE_BUDGET")
 	cfg, err := LoadWorker()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.DatabaseURL != os.Getenv("DATABASE_URL") || cfg.MaxConcurrentBuilds != 2 || cfg.BuildTimeout != 12*time.Minute {
 		t.Fatal("worker configuration not loaded")
+	}
+	if cfg.PreviewLifetime() != 48*time.Hour || cfg.HousekeepingDryRun || cfg.HousekeepingGrace != 15*time.Minute || cfg.BuildCacheBudget != 40<<30 {
+		t.Fatalf("housekeeping defaults: %+v", cfg.HousekeepingConfig)
 	}
 	for _, key := range unrelated {
 		t.Setenv(key, "invalid")
@@ -128,6 +131,10 @@ func TestLoadWorkerRejectsInvalidEnvironment(t *testing.T) {
 		{"BUILD_TIMEOUT", "-1m"},
 		{"BUILD_TIMEOUT", "25h"},
 		{"BUILD_TIMEOUT", "invalid"},
+		{"ENV_TTL_HOURS", "-1"},
+		{"ENV_TTL_HOURS", "1.5"},
+		{"HOUSEKEEPING_GRACE", "10s"},
+		{"BUILD_CACHE_BUDGET", "100MiB"},
 	} {
 		t.Run(tt.key+"/"+tt.value, func(t *testing.T) {
 			validEnvironment(t)

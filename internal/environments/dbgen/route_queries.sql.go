@@ -15,19 +15,19 @@ const failPendingActivation = `-- name: FailPendingActivation :one
 WITH locked AS MATERIALIZED (
     SELECT e.id, e.pending_container_id, e.pending_image_tag
     FROM environments e JOIN pull_requests pr ON pr.id = e.pull_request_id
-    WHERE e.pull_request_id = $3
+    WHERE e.pull_request_id = $4
       AND pr.generation = $1 AND pr.state = 'open'
       AND e.pending_generation = $1
       AND e.pending_revision = $2
-      AND e.pending_container_id = $4
-      AND e.pending_image_tag = $5
+      AND e.pending_container_id = $5
+      AND e.pending_image_tag = $6
     FOR UPDATE OF pr, e
 )
 UPDATE environments e
 SET status = 'failed', applied_generation = $1,
     applied_revision = $2, pending_container_id = NULL,
     pending_image_tag = NULL, pending_generation = NULL, pending_revision = NULL,
-    pending_head_sha = NULL
+    pending_head_sha = NULL, last_error_code = $3::text
 FROM locked
 WHERE e.id = locked.id
 RETURNING locked.pending_container_id, locked.pending_image_tag
@@ -36,6 +36,7 @@ RETURNING locked.pending_container_id, locked.pending_image_tag
 type FailPendingActivationParams struct {
 	ExpectedGeneration int64
 	ExpectedRevision   int64
+	ErrorCode          string
 	PrID               int64
 	ContainerID        pgtype.Text
 	ImageTag           pgtype.Text
@@ -52,6 +53,7 @@ func (q *Queries) FailPendingActivation(ctx context.Context, arg FailPendingActi
 	row := q.db.QueryRow(ctx, failPendingActivation,
 		arg.ExpectedGeneration,
 		arg.ExpectedRevision,
+		arg.ErrorCode,
 		arg.PrID,
 		arg.ContainerID,
 		arg.ImageTag,

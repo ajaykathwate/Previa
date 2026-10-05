@@ -20,10 +20,9 @@ type Artifact struct {
 }
 
 type Result struct {
-	Status        string   `json:"status"`
-	Artifact      Artifact `json:"artifact,omitempty"`
-	ErrorCode     string   `json:"error_code,omitempty"`
-	ReportFailure bool     `json:"report_failure,omitempty"`
+	Status    string   `json:"status"`
+	Artifact  Artifact `json:"artifact,omitempty"`
+	ErrorCode string   `json:"error_code,omitempty"`
 }
 
 type Snapshot struct {
@@ -39,6 +38,17 @@ type Repository struct {
 	pool       *pgxpool.Pool
 	operations *OperationBroker
 	hostnames  HostnameAllocator
+	reports    bool
+	lifetime   time.Duration
+	buildSlots int
+}
+
+// WithLifetime makes each publication set the preview's expiry to now plus
+// lifetime (PREVIEW_TTL); housekeeping tears expired previews down. Zero, the
+// default, means previews never expire.
+func (r *Repository) WithLifetime(lifetime time.Duration) *Repository {
+	r.lifetime = max(lifetime, 0)
+	return r
 }
 
 // HostnameAllocator returns a new DNS label for a PR's lifetime environment
@@ -144,6 +154,7 @@ func (r *Repository) Apply(ctx context.Context, request Request, result Result) 
 			ContainerID:  pgtype.Text{String: result.Artifact.ContainerID, Valid: result.Artifact.ContainerID != ""},
 			ImageTag:     pgtype.Text{String: result.Artifact.ImageTag, Valid: result.Artifact.ImageTag != ""},
 			HeadSha:      request.HeadSHA,
+			ErrorCode:    text(safeErrorCode(result.ErrorCode)),
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			latest, readErr := q.ReadRequest(ctx, request.PullRequestID)
@@ -163,7 +174,16 @@ func (r *Repository) Apply(ctx context.Context, request Request, result Result) 
 			return fmt.Errorf("apply guarded environment result: %w", err)
 		}
 		applied = true
-		return r.enqueueResultTx(ctx, tx, request, result, previous)
+		if request.State == "open" {
+			// A result ends any wait for capacity or disk.
+			if _, err := q.ClearIntentWaiting(ctx, dbgen.ClearIntentWaitingParams{PullRequestID: request.PullRequestID, Revision: request.Revision}); err != nil {
+				return fmt.Errorf("clear build wait: %w", err)
+			}
+		}
+		if err := r.enqueueResultTx(ctx, tx, request, result, previous); err != nil {
+			return err
+		}
+		return r.reportTx(ctx, tx, request.PullRequestID)
 	})
 	if err != nil {
 		return false, err
@@ -201,10 +221,8 @@ func (r *Repository) enqueueResultTx(ctx context.Context, tx pgx.Tx, request Req
 		payload.Artifact = result.Artifact
 		payload.PreviousPending = priorPending
 	case "failed":
-		if result.ReportFailure {
-			kind = ReportStatus
-			payload.ErrorCode = result.ErrorCode
-		}
+		// Reporting renders the failure from the environment once the request
+		// is final (reportTx); nothing else is needed here.
 	case "torn_down":
 		kind = RemoveRoute
 		payload.Artifact = priorPending
@@ -225,7 +243,21 @@ func (r *Repository) enqueueResultTx(ctx context.Context, tx pgx.Tx, request Req
 // transaction. The transaction only verifies ownership/references and persists
 // cleanup operations; deletion is performed later by an operation worker.
 func (r *Repository) ScheduleResourceCleanup(ctx context.Context, request Request, resources []Resource) error {
-	return database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
+	_, err := r.scheduleResourceCleanup(ctx, request, resources, false)
+	return err
+}
+
+// PlanResourceCleanup returns what ScheduleResourceCleanup would schedule,
+// changing nothing (housekeeping's dry run).
+func (r *Repository) PlanResourceCleanup(ctx context.Context, request Request, resources []Resource) ([]Resource, error) {
+	return r.scheduleResourceCleanup(ctx, request, resources, true)
+}
+
+var errDryRun = errors.New("dry run")
+
+func (r *Repository) scheduleResourceCleanup(ctx context.Context, request Request, resources []Resource, dryRun bool) (planned []Resource, err error) {
+	err = database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
+		planned = nil
 		q := dbgen.New(tx)
 		latest, err := q.LockRequest(ctx, request.PullRequestID)
 		if err != nil {
@@ -259,12 +291,26 @@ func (r *Repository) ScheduleResourceCleanup(ctx context.Context, request Reques
 			if resourceReferenced(resource, keep) {
 				continue
 			}
+			planned = append(planned, resource)
+			if dryRun {
+				continue
+			}
 			if err := r.enqueueCleanupTx(ctx, tx, current, resource); err != nil {
 				return err
 			}
 		}
+		if dryRun {
+			return errDryRun // roll back: a dry run leaves no trace
+		}
 		return nil
 	})
+	if errors.Is(err, errDryRun) {
+		err = nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return planned, nil
 }
 
 // referencedArtifacts is everything cleanup must keep for a PR: the active and
@@ -387,4 +433,28 @@ func (r *Repository) RecoverOperations(ctx context.Context, batchSize int32) (re
 		return 0, err
 	}
 	return requeued, nil
+}
+
+// MarkActiveMissing records that the active preview's container vanished
+// (removed outside Previa, or lost with the Docker host's storage): the
+// environment becomes failed without a deployed preview and the PR is
+// reported. Nothing is rebuilt; a Retry, Rebuild or new commit publishes a
+// new preview. It reports whether the environment changed.
+func (r *Repository) MarkActiveMissing(ctx context.Context, pullRequestID int64, containerID string) (bool, error) {
+	var changed bool
+	err := database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
+		q := dbgen.New(tx)
+		if _, err := q.LockRequest(ctx, pullRequestID); err != nil {
+			return fmt.Errorf("lock PR to record a missing preview: %w", err)
+		}
+		affected, err := q.MarkActiveMissing(ctx, dbgen.MarkActiveMissingParams{PrID: pullRequestID, ContainerID: containerID})
+		if err != nil {
+			return fmt.Errorf("record missing preview: %w", err)
+		}
+		if changed = affected == 1; !changed {
+			return nil
+		}
+		return r.reportTx(ctx, tx, pullRequestID)
+	})
+	return changed, err
 }

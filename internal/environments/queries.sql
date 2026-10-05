@@ -67,6 +67,10 @@ SET status = CASE sqlc.arg(result_status)::text
         THEN NULL ELSE e.head_sha END,
     teardown_generation = CASE WHEN sqlc.arg(result_status)::text = 'torn_down'
         THEN sqlc.arg(expected_generation)::bigint ELSE e.teardown_generation END,
+    expires_at = CASE WHEN sqlc.arg(result_status)::text = 'torn_down'
+        THEN NULL ELSE e.expires_at END,
+    last_error_code = CASE WHEN sqlc.arg(result_status)::text = 'failed'
+        THEN sqlc.narg(error_code)::text ELSE e.last_error_code END,
     pending_revision = CASE WHEN sqlc.arg(result_status)::text = 'running'
         THEN sqlc.arg(expected_revision)::bigint
         WHEN sqlc.arg(result_status)::text = 'failed' THEN e.pending_revision ELSE NULL END,
@@ -202,7 +206,12 @@ SET status = 'running',
     pending_generation = NULL,
     pending_revision = NULL,
     pending_head_sha = NULL,
-    last_active_at = now()
+    last_error_code = NULL,
+    last_active_at = now(),
+    -- Each publication restarts the preview's lifetime; a failed attempt does
+    -- not. A zero lifetime means previews never expire.
+    expires_at = CASE WHEN sqlc.arg(ttl_seconds)::bigint > 0
+        THEN now() + sqlc.arg(ttl_seconds)::bigint * interval '1 second' END
 FROM locked
 WHERE e.id = locked.id
 RETURNING locked.container_id AS previous_container_id,
@@ -229,6 +238,7 @@ UPDATE environments e
 SET status = 'torn_down',
     applied_generation = sqlc.arg(expected_generation),
     applied_revision = sqlc.arg(expected_revision),
+    expires_at = NULL,
     container_id = NULL,
     image_tag = NULL,
     head_sha = NULL,
@@ -248,3 +258,11 @@ RETURNING locked.container_id, locked.image_tag,
 UPDATE environment_operations
 SET state = 'pending', available_at = now(), updated_at = now(), completed_at = NULL
 WHERE id = $1 AND kind = 'cleanup_artifact' AND state = 'failed';
+
+-- name: MarkActiveMissing :execrows
+-- The active preview's container no longer exists in Docker. The environment
+-- records a failure without a deployed preview, so reports stop calling it
+-- ready; only the container housekeeping saw missing, still active, is affected.
+UPDATE environments
+SET status = 'failed', last_error_code = 'preview_missing', container_id = NULL, image_tag = NULL, head_sha = NULL, expires_at = NULL
+WHERE pull_request_id = sqlc.arg(pr_id) AND status = 'running' AND container_id = sqlc.arg(container_id)::text;

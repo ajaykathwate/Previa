@@ -1,10 +1,13 @@
 package dockerx
 
+import "regexp"
+
 // Labels identify every Docker object Previa creates. Retries find earlier
 // results by them, removal verifies ownership with them before deleting
 // anything, and housekeeping finds crash leftovers through them.
 const (
-	LabelManaged     = "io.previa.managed" // always "true"
+	LabelManaged     = "io.previa.managed"  // always "true"
+	LabelInstance    = "io.previa.instance" // the Previa database that owns it (platform_instance)
 	LabelKind        = "io.previa.kind"
 	LabelPR          = "io.previa.pull-request-id"
 	LabelGeneration  = "io.previa.generation"
@@ -29,7 +32,22 @@ const (
 	KindPreviewNetwork = "preview-network"
 )
 
-// Owned reports whether labels mark a Previa object of one of kinds.
+var instancePattern = regexp.MustCompile(`^[a-z0-9]{8,32}$`)
+
+// ValidInstance reports whether instance can name and label Docker objects:
+// 8 to 32 lowercase letters and digits.
+func ValidInstance(instance string) bool { return instancePattern.MatchString(instance) }
+
+// OwnedBy reports whether labels mark an object of one of kinds that this
+// Previa instance created. Instances sharing a Docker host (a test database
+// next to a development one, for example) never touch each other's objects,
+// even when their pull request IDs coincide.
+func OwnedBy(labels map[string]string, instance string, kinds ...string) bool {
+	return ValidInstance(instance) && labels[LabelInstance] == instance && Owned(labels, kinds...)
+}
+
+// Owned reports whether labels mark a Previa object of one of kinds, from any
+// instance.
 func Owned(labels map[string]string, kinds ...string) bool {
 	if labels[LabelManaged] != "true" {
 		return false

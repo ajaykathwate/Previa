@@ -326,7 +326,7 @@ func TestSchedulingSameGenerationRebuildFencesOperationsAndCleanup(t *testing.T)
 		t.Fatal("rebuild faked a generation")
 	}
 	for _, status := range []string{"running", "failed"} {
-		if ok, err := f.repo.Apply(t.Context(), a, env.Result{Status: status, Artifact: env.Artifact{ContainerID: "late", ImageTag: "late-image"}, ReportFailure: true}); err != nil || ok {
+		if ok, err := f.repo.Apply(t.Context(), a, env.Result{Status: status, Artifact: env.Artifact{ContainerID: "late", ImageTag: "late-image"}}); err != nil || ok {
 			t.Fatalf("old result accepted: %v %v", ok, err)
 		}
 	}

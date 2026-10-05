@@ -13,8 +13,9 @@ import (
 )
 
 func (r *Repository) claimBuild(ctx context.Context, request Request, now time.Time) (attempt Attempt, allowed bool, err error) {
+	waiting := false
 	err = database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
-		attempt, allowed = Attempt{}, false
+		attempt, allowed, waiting = Attempt{}, false, false
 		q := dbgen.New(tx)
 		owner, e := q.FindPROwner(ctx, request.PullRequestID)
 		if e != nil {
@@ -31,6 +32,15 @@ func (r *Repository) claimBuild(ctx context.Context, request Request, now time.T
 			if e := BuildBlockReason(scope.pr.BuildStatus, scope.pr.NeedsRefresh); e != nil {
 				return e
 			}
+		}
+		full, e := r.buildSlotsFullTx(ctx, q, request.PullRequestID)
+		if e != nil {
+			return e
+		}
+		if full {
+			// Every slot is taken: the request stays queued and says so.
+			waiting = true
+			return r.markWaitingTx(ctx, tx, request, WaitCapacity)
 		}
 		affected, e := q.ClaimBuildIntent(ctx, dbgen.ClaimBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, HeadSha: request.HeadSHA, BuildMode: scope.mode, NowAt: pgtype.Timestamptz{Time: now, Valid: true}})
 		if e != nil {
@@ -58,11 +68,15 @@ func (r *Repository) claimBuild(ctx context.Context, request Request, now time.T
 			if e := q.ClearBuildLogs(ctx, request.PullRequestID); e != nil {
 				return fmt.Errorf("clear previous build logs: %w", e)
 			}
+			return r.reportTx(ctx, tx, request.PullRequestID)
 		}
 		return nil
 	})
 	if err != nil {
 		return Attempt{}, false, err
+	}
+	if waiting {
+		return Attempt{}, false, &WaitingError{Reason: WaitCapacity}
 	}
 	return attempt, allowed, nil
 }

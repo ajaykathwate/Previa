@@ -16,7 +16,7 @@ WITH locked AS MATERIALIZED (
     SELECT e.id, e.container_id, e.image_tag
     FROM environments e
     JOIN pull_requests pr ON pr.id = e.pull_request_id
-    WHERE e.pull_request_id = $3
+    WHERE e.pull_request_id = $4
       AND pr.generation = $1
       AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh
       AND EXISTS (SELECT 1 FROM build_intents b WHERE b.pull_request_id = pr.id
@@ -40,7 +40,12 @@ SET status = 'running',
     pending_generation = NULL,
     pending_revision = NULL,
     pending_head_sha = NULL,
-    last_active_at = now()
+    last_error_code = NULL,
+    last_active_at = now(),
+    -- Each publication restarts the preview's lifetime; a failed attempt does
+    -- not. A zero lifetime means previews never expire.
+    expires_at = CASE WHEN $3::bigint > 0
+        THEN now() + $3::bigint * interval '1 second' END
 FROM locked
 WHERE e.id = locked.id
 RETURNING locked.container_id AS previous_container_id,
@@ -53,6 +58,7 @@ RETURNING locked.container_id AS previous_container_id,
 type ActivatePendingEnvironmentParams struct {
 	ExpectedGeneration int64
 	ExpectedRevision   int64
+	TtlSeconds         int64
 	PrID               int64
 }
 
@@ -65,7 +71,12 @@ type ActivatePendingEnvironmentRow struct {
 }
 
 func (q *Queries) ActivatePendingEnvironment(ctx context.Context, arg ActivatePendingEnvironmentParams) (ActivatePendingEnvironmentRow, error) {
-	row := q.db.QueryRow(ctx, activatePendingEnvironment, arg.ExpectedGeneration, arg.ExpectedRevision, arg.PrID)
+	row := q.db.QueryRow(ctx, activatePendingEnvironment,
+		arg.ExpectedGeneration,
+		arg.ExpectedRevision,
+		arg.TtlSeconds,
+		arg.PrID,
+	)
 	var i ActivatePendingEnvironmentRow
 	err := row.Scan(
 		&i.PreviousContainerID,
@@ -80,8 +91,8 @@ func (q *Queries) ActivatePendingEnvironment(ctx context.Context, arg ActivatePe
 const applyResult = `-- name: ApplyResult :one
 WITH current_request AS MATERIALIZED (
     SELECT pr.id FROM pull_requests pr
-    WHERE pr.id = $7 AND pr.generation = $2
-      AND pr.head_sha = $6
+    WHERE pr.id = $8 AND pr.generation = $2
+      AND pr.head_sha = $7
       AND ((pr.state IN ('closed','merged') AND $3::bigint = 0)
         -- A local teardown (revocation, owner request, expiry) of an open PR.
         OR (pr.teardown_requested_generation = pr.generation
@@ -94,7 +105,7 @@ WITH current_request AS MATERIALIZED (
         )))
     FOR UPDATE
 ), previous AS MATERIALIZED (
-    SELECT e.id, e.pull_request_id, e.container_id, e.image_tag, e.subdomain, e.status, e.created_at, e.last_active_at, e.expires_at, e.applied_generation, e.head_sha, e.pending_container_id, e.pending_image_tag, e.pending_generation, e.pending_head_sha, e.applied_revision, e.pending_revision, e.teardown_generation FROM environments e
+    SELECT e.id, e.pull_request_id, e.container_id, e.image_tag, e.subdomain, e.status, e.created_at, e.last_active_at, e.expires_at, e.applied_generation, e.head_sha, e.pending_container_id, e.pending_image_tag, e.pending_generation, e.pending_head_sha, e.applied_revision, e.pending_revision, e.teardown_generation, e.last_error_code FROM environments e
     JOIN current_request p ON p.id = e.pull_request_id
     FOR UPDATE OF e
 )
@@ -117,15 +128,19 @@ SET status = CASE $1::text
         THEN NULL ELSE e.head_sha END,
     teardown_generation = CASE WHEN $1::text = 'torn_down'
         THEN $2::bigint ELSE e.teardown_generation END,
+    expires_at = CASE WHEN $1::text = 'torn_down'
+        THEN NULL ELSE e.expires_at END,
+    last_error_code = CASE WHEN $1::text = 'failed'
+        THEN $4::text ELSE e.last_error_code END,
     pending_revision = CASE WHEN $1::text = 'running'
         THEN $3::bigint
         WHEN $1::text = 'failed' THEN e.pending_revision ELSE NULL END,
     pending_container_id = CASE WHEN $1::text = 'running'
-        THEN $4::text
+        THEN $5::text
         WHEN $1::text = 'failed' THEN e.pending_container_id
         ELSE NULL END,
     pending_image_tag = CASE WHEN $1::text = 'running'
-        THEN $5::text
+        THEN $6::text
         WHEN $1::text = 'failed' THEN e.pending_image_tag
         ELSE NULL END,
     pending_generation = CASE WHEN $1::text = 'running'
@@ -133,7 +148,7 @@ SET status = CASE $1::text
         WHEN $1::text = 'failed' THEN e.pending_generation
         ELSE NULL END,
     pending_head_sha = CASE WHEN $1::text = 'running'
-        THEN $6::text
+        THEN $7::text
         WHEN $1::text = 'failed' THEN e.pending_head_sha
         ELSE NULL END
 FROM previous
@@ -147,6 +162,7 @@ type ApplyResultParams struct {
 	ResultStatus       string
 	ExpectedGeneration int64
 	ExpectedRevision   int64
+	ErrorCode          pgtype.Text
 	ContainerID        pgtype.Text
 	ImageTag           pgtype.Text
 	HeadSha            string
@@ -171,6 +187,7 @@ func (q *Queries) ApplyResult(ctx context.Context, arg ApplyResultParams) (Apply
 		arg.ResultStatus,
 		arg.ExpectedGeneration,
 		arg.ExpectedRevision,
+		arg.ErrorCode,
 		arg.ContainerID,
 		arg.ImageTag,
 		arg.HeadSha,
@@ -293,6 +310,7 @@ UPDATE environments e
 SET status = 'torn_down',
     applied_generation = $1,
     applied_revision = $2,
+    expires_at = NULL,
     container_id = NULL,
     image_tag = NULL,
     head_sha = NULL,
@@ -566,6 +584,28 @@ func (q *Queries) LockRequest(ctx context.Context, id int64) (LockRequestRow, er
 		&i.NeedsRefresh,
 	)
 	return i, err
+}
+
+const markActiveMissing = `-- name: MarkActiveMissing :execrows
+UPDATE environments
+SET status = 'failed', last_error_code = 'preview_missing', container_id = NULL, image_tag = NULL, head_sha = NULL, expires_at = NULL
+WHERE pull_request_id = $1 AND status = 'running' AND container_id = $2::text
+`
+
+type MarkActiveMissingParams struct {
+	PrID        int64
+	ContainerID string
+}
+
+// The active preview's container no longer exists in Docker. The environment
+// records a failure without a deployed preview, so reports stop calling it
+// ready; only the container housekeeping saw missing, still active, is affected.
+func (q *Queries) MarkActiveMissing(ctx context.Context, arg MarkActiveMissingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markActiveMissing, arg.PrID, arg.ContainerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const markOperationFailed = `-- name: MarkOperationFailed :execrows

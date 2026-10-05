@@ -104,15 +104,26 @@ func TestContainerSpecIsHardened(t *testing.T) {
 
 func TestAdmitEnforcesRepositoryCountAndHostBudget(t *testing.T) {
 	b := budget{cpuMillis: 4000, memory: 8 << 30, perRepo: 2}
-	if err := admit(usage{cpuMillis: 2000, memory: 4 << 30, inRepo: 1}, b, 1000, 2<<30); err != nil {
+	prs := func(ids ...string) map[string]bool {
+		m := map[string]bool{}
+		for _, id := range ids {
+			m[id] = true
+		}
+		return m
+	}
+	if err := admit(usage{cpuMillis: 2000, memory: 4 << 30, repoPRs: prs("5")}, b, 7, 1000, 2<<30); err != nil {
 		t.Fatalf("within budget: %v", err)
 	}
+	// A PR's swap never competes with its own active preview for the count.
+	if err := admit(usage{repoPRs: prs("5", "7")}, b, 7, 1000, 2<<30); err != nil {
+		t.Fatalf("a swap at the repository limit: %v", err)
+	}
 	for name, u := range map[string]usage{
-		"repository count": {inRepo: 2},
+		"repository count": {repoPRs: prs("5", "6")},
 		"memory":           {memory: 7 << 30},
 		"cpu":              {cpuMillis: 3500},
 	} {
-		if err := admit(u, b, 1000, 2<<30); CodeOf(err) != CodeCapacity {
+		if err := admit(u, b, 7, 1000, 2<<30); CodeOf(err) != CodeCapacity {
 			t.Errorf("%s: %v", name, err)
 		} else if e := err.(*Error); !e.Retryable {
 			t.Errorf("%s: capacity refusals must be retryable", name)

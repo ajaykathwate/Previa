@@ -49,7 +49,7 @@ func (r *Runtime) Endpoint(ctx context.Context, want Expected) (Endpoint, error)
 		return Endpoint{}, failure(CodeUnavailable, "The candidate could not be inspected.", true, err)
 	}
 	c := inspected.Container
-	if c.Config == nil || !dockerx.Owned(c.Config.Labels, dockerx.KindPreview) || !candidateMatches(c.Config.Labels, want) {
+	if c.Config == nil || !dockerx.OwnedBy(c.Config.Labels, r.instance, dockerx.KindPreview) || !candidateMatches(c.Config.Labels, want) {
 		return Endpoint{}, failure(CodeNotOwned, "The container is not this request's candidate.", false, nil)
 	}
 	health := observedHealth(c)
@@ -63,7 +63,7 @@ func (r *Runtime) Endpoint(ctx context.Context, want Expected) (Endpoint, error)
 	if err != nil || port <= 0 || port > 65535 {
 		return Endpoint{}, failure(CodeNotOwned, "The candidate has no valid port label.", false, nil)
 	}
-	network := networkName(want.PullRequestID)
+	network := r.networkName(want.PullRequestID)
 	addr, ok := candidateAddress(c, network)
 	endpoint := c.NetworkSettings.Networks[network]
 	if !ok || endpoint == nil || endpoint.NetworkID == "" {

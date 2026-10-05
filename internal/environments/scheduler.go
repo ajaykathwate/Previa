@@ -43,6 +43,7 @@ func NewExecutionBroker(pool *pgxpool.Pool, client jobInserter, service *Service
 	}
 	b := NewBroker(pool, client)
 	b.enabled = true
+	b.reports = service.repo // records report work only once the repository has WithReports
 	if now != nil {
 		b.now = now
 	}
@@ -66,6 +67,11 @@ func (b *Broker) ObserveTx(ctx context.Context, tx pgx.Tx, request Request) (Req
 		if err := b.wakeTx(ctx, tx, request, outcome.Intent); err != nil {
 			return Request{}, err
 		}
+	}
+	// A new commit, close or deadline changes what the PR's report says (for
+	// example the deployed commit against the latest one).
+	if err := b.reportTx(ctx, tx, request.PullRequestID); err != nil {
+		return Request{}, err
 	}
 	return request, nil
 }
@@ -104,7 +110,13 @@ func (b *Broker) RequestBuild(ctx context.Context, command IntentCommand) (outco
 		i := outcome.Intent
 		r := NewRequest(i.PullRequestID, i.Generation, i.HeadSHA, "open")
 		r.Revision = i.Revision
-		return b.wakeTx(ctx, tx, r, &i)
+		if err := b.wakeTx(ctx, tx, r, &i); err != nil {
+			return err
+		}
+		if outcome.Coalesced {
+			return nil
+		}
+		return b.reportTx(ctx, tx, i.PullRequestID)
 	})
 	if err != nil {
 		return IntentOutcome{}, err
@@ -191,8 +203,14 @@ func (b *Broker) dispatchLockedTx(ctx context.Context, tx pgx.Tx, scope intentSc
 		return 0, fmt.Errorf("decode admitted request: %w", err)
 	}
 	if captured.Generation == r.Generation && captured.Revision == r.Revision && captured.State == r.State && r.State == "open" {
-		if _, err := q.QueueCurrentIntent(ctx, dbgen.QueueCurrentIntentParams{PullRequestID: r.PullRequestID, Revision: r.Revision}); err != nil {
+		queued, err := q.QueueCurrentIntent(ctx, dbgen.QueueCurrentIntentParams{PullRequestID: r.PullRequestID, Revision: r.Revision})
+		if err != nil {
 			return 0, fmt.Errorf("mark admitted intent queued: %w", err)
+		}
+		if queued > 0 {
+			if err := b.reportTx(ctx, tx, r.PullRequestID); err != nil {
+				return 0, err
+			}
 		}
 	}
 	return result.Job.ID, nil

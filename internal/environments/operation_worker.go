@@ -27,7 +27,10 @@ type OperationExecutor interface {
 type OperationFailure struct {
 	Code      string
 	Permanent bool
-	Err       error
+	// RetryAfter is the provider's own delay (a rate limit's reset or
+	// Retry-After); the next attempt waits at least this long, at most an hour.
+	RetryAfter time.Duration
+	Err        error
 }
 
 func (e *OperationFailure) Error() string {
@@ -186,7 +189,12 @@ func (w *OperationWorker) failClaim(ctx context.Context, op Operation, owner, co
 		w.logger.ErrorContext(ctx, "environment operation permanently failed", "operation_id", op.ID, "kind", op.Kind, "pr_id", op.PullRequestID, "generation", op.Generation, "revision", op.Revision, "error_code", code)
 		return river.JobCancel(errors.New("environment operation permanently failed: " + code))
 	}
-	if err := w.repo.markOperationRetryable(writeCtx, op.ID, owner, code); err != nil {
+	var delay time.Duration
+	var classified *OperationFailure
+	if errors.As(cause, &classified) {
+		delay = classified.RetryAfter
+	}
+	if err := w.repo.markOperationRetryable(writeCtx, op.ID, owner, code, delay); err != nil {
 		return errors.Join(errors.New("environment operation failed"), err)
 	}
 	w.logger.WarnContext(ctx, "environment operation will retry", "operation_id", op.ID, "kind", op.Kind, "pr_id", op.PullRequestID, "generation", op.Generation, "revision", op.Revision, "error_code", code)
@@ -217,6 +225,9 @@ func (r *Repository) operation(ctx context.Context, id int64) (Operation, error)
 
 func (r *Repository) operationStillRelevant(ctx context.Context, op Operation) (bool, error) {
 	switch op.Kind {
+	case ReportStatus:
+		// A report renders the PR's current state, whatever change queued it.
+		return true, nil
 	case RemoveRoute:
 		// A removal stays relevant until a newer route version exists; the PR
 		// may have been reopened since without that making the removal unsafe.
@@ -275,7 +286,7 @@ func (r *Repository) markOperationFailed(ctx context.Context, id int64, owner, c
 	return requireOperationTransition(id, "failed", affected)
 }
 
-func (r *Repository) markOperationRetryable(ctx context.Context, id int64, owner, code string) error {
+func (r *Repository) markOperationRetryable(ctx context.Context, id int64, owner, code string, retryAfter time.Duration) error {
 	var backoffSeconds float64 = 5
 	row, err := r.operation(ctx, id)
 	if err != nil {
@@ -286,6 +297,9 @@ func (r *Repository) markOperationRetryable(ctx context.Context, id int64, owner
 	}
 	if backoffSeconds > 300 {
 		backoffSeconds = 300
+	}
+	if wait := min(retryAfter, time.Hour).Seconds(); wait > backoffSeconds {
+		backoffSeconds = wait
 	}
 	backoff := pgtype.Interval{Microseconds: int64(backoffSeconds * float64(time.Second/time.Microsecond)), Valid: true}
 	affected, err := dbgen.New(r.pool).MarkOperationRetryable(ctx, dbgen.MarkOperationRetryableParams{
@@ -306,8 +320,11 @@ func requireOperationTransition(id int64, state string, affected int64) error {
 }
 
 func (r *Repository) completeOperation(ctx context.Context, op Operation, owner string) error {
-	if op.Kind == RemoveRoute {
+	switch op.Kind {
+	case RemoveRoute:
 		return r.completeRemoval(ctx, op, owner)
+	case ReportStatus:
+		return r.completeReport(ctx, op, owner)
 	}
 	return database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
@@ -355,7 +372,7 @@ func (r *Repository) completeOperation(ctx context.Context, op Operation, owner 
 		}
 		switch op.Kind {
 		case ActivateRoute:
-			active, err := q.ActivatePendingEnvironment(ctx, dbgen.ActivatePendingEnvironmentParams{PrID: op.PullRequestID, ExpectedGeneration: op.Generation, ExpectedRevision: op.Revision})
+			active, err := q.ActivatePendingEnvironment(ctx, dbgen.ActivatePendingEnvironmentParams{PrID: op.PullRequestID, ExpectedGeneration: op.Generation, ExpectedRevision: op.Revision, TtlSeconds: int64(r.lifetime / time.Second)})
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return errors.New("route activation has no current pending candidate")
@@ -373,6 +390,9 @@ func (r *Repository) completeOperation(ctx context.Context, op Operation, owner 
 				if err := r.enqueueCleanupTx(ctx, tx, op.Payload.Request, resource); err != nil {
 					return err
 				}
+			}
+			if err := r.reportTx(ctx, tx, op.PullRequestID); err != nil {
+				return err
 			}
 		case ReportStatus, CleanupArtifact:
 		default:
@@ -417,6 +437,9 @@ func (r *Repository) completeRemoval(ctx context.Context, op Operation, owner st
 				Artifact{ContainerID: removed.PendingContainerID.String, ImageTag: removed.PendingImageTag.String})
 		}
 		if err := r.enqueueTakenTx(ctx, tx, op, taken); err != nil {
+			return err
+		}
+		if err := r.reportTx(ctx, tx, op.PullRequestID); err != nil {
 			return err
 		}
 		affected, err := q.MarkOperationSucceeded(ctx, dbgen.MarkOperationSucceededParams{ID: op.ID, LeaseOwner: pgtype.Text{String: owner, Valid: true}})
@@ -492,9 +515,13 @@ func (r *Repository) failActivation(ctx context.Context, op Operation, owner, co
 			return fmt.Errorf("lock current environment operation lease: %w", err)
 		}
 		candidate := op.Payload.Artifact
+		category := safeErrorCode(code)
+		if category == "" {
+			category = "external_operation_failed"
+		}
 		_, err := q.FailPendingActivation(ctx, dbgen.FailPendingActivationParams{
 			PrID: op.PullRequestID, ExpectedGeneration: op.Generation, ExpectedRevision: op.Revision,
-			ContainerID: text(candidate.ContainerID), ImageTag: text(candidate.ImageTag),
+			ContainerID: text(candidate.ContainerID), ImageTag: text(candidate.ImageTag), ErrorCode: category,
 		})
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
@@ -506,13 +533,8 @@ func (r *Repository) failActivation(ctx context.Context, op Operation, owner, co
 			if err := r.enqueueTakenTx(ctx, tx, op, []Artifact{candidate, op.Payload.PreviousPending}); err != nil {
 				return err
 			}
-			request := op.Payload.Request
-			result := Result{Status: "failed", ErrorCode: code, ReportFailure: true}
-			if _, err := r.operations.EnqueueTx(ctx, tx, OperationSpec{
-				Request: request, Kind: ReportStatus, IdempotencyKey: operationIdempotencyKey(request, ReportStatus, "activation"),
-				Payload: OperationPayload{Request: request, Result: result, ErrorCode: code},
-			}); err != nil {
-				return fmt.Errorf("persist activation failure report: %w", err)
+			if err := r.reportTx(ctx, tx, op.PullRequestID); err != nil {
+				return err
 			}
 		}
 		affected, err := q.MarkOperationFailed(ctx, dbgen.MarkOperationFailedParams{ID: op.ID, LeaseOwner: pgtype.Text{String: owner, Valid: true}, LastErrorCode: pgtype.Text{String: code, Valid: true}})
@@ -521,4 +543,14 @@ func (r *Repository) failActivation(ctx context.Context, op Operation, owner, co
 		}
 		return requireOperationTransition(op.ID, "failed", affected)
 	})
+}
+
+// completeReport records a finished report. The reporter itself recorded
+// which version it wrote; a newer change has its own report operation.
+func (r *Repository) completeReport(ctx context.Context, op Operation, owner string) error {
+	affected, err := dbgen.New(r.pool).MarkOperationSucceeded(ctx, dbgen.MarkOperationSucceededParams{ID: op.ID, LeaseOwner: pgtype.Text{String: owner, Valid: true}})
+	if err != nil {
+		return fmt.Errorf("mark report succeeded: %w", err)
+	}
+	return requireOperationTransition(op.ID, "succeeded", affected)
 }

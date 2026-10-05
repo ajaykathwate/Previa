@@ -10,7 +10,11 @@ UPDATE build_intents SET state = 'queued', updated_at = clock_timestamp()
 WHERE pull_request_id = $1 AND revision = $2 AND state = 'pending';
 
 -- name: ClaimBuildIntent :execrows
-UPDATE build_intents b SET state = 'running', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp()
+-- Admission ends a wait for a build slot; a running request that waits for
+-- preview capacity or disk keeps its note until a result is applied.
+UPDATE build_intents b SET state = 'running', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp(),
+    waiting_revision = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_revision END,
+    waiting_reason = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_reason END
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
     AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation) AND pr.head_sha = sqlc.arg(head_sha)
@@ -38,7 +42,8 @@ DELETE FROM build_logs l USING environments e
 WHERE l.environment_id = e.id AND e.pull_request_id = $1;
 
 -- name: FinishBuildIntent :execrows
-UPDATE build_intents b SET state = sqlc.arg(next_state), completed_at = clock_timestamp(), updated_at = clock_timestamp()
+UPDATE build_intents b SET state = sqlc.arg(next_state), completed_at = clock_timestamp(), updated_at = clock_timestamp(),
+    waiting_revision = NULL, waiting_reason = NULL
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
     AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation)
@@ -56,3 +61,25 @@ WHERE pr.id > sqlc.arg(after_id) AND ((pr.state = 'open' AND b.generation = pr.g
         AND b.state IN ('pending','queued','running'))
    OR (pr.state IN ('closed','merged') AND pr.teardown_completed_generation < pr.generation)
 ) ORDER BY pr.id LIMIT sqlc.arg(batch_size);
+
+-- name: LockBuildSlots :exec
+-- Serializes build admission across workers, so the running count is exact.
+-- Keyed by instance: advisory locks are shared by a database's schemas.
+SELECT pg_advisory_xact_lock(hashtext('previa.build_slots.' || instance)) FROM platform_instance;
+
+-- name: CountRunningBuilds :one
+-- An admitted build holds its slot until its final attempt ends, including
+-- between River retries; another attempt of the same PR's request reuses it.
+SELECT count(*) FROM build_intents WHERE state = 'running' AND pull_request_id <> $1;
+
+-- name: MarkIntentWaiting :execrows
+-- Notes that the current request waits for capacity or disk space. Reports
+-- follow only when the note changes.
+UPDATE build_intents SET waiting_revision = sqlc.arg(revision)::bigint, waiting_reason = sqlc.arg(reason)::text, updated_at = clock_timestamp()
+WHERE pull_request_id = sqlc.arg(pr_id) AND generation = sqlc.arg(generation)::bigint AND revision = sqlc.arg(revision)::bigint
+  AND state IN ('pending', 'queued', 'running')
+  AND (waiting_revision IS DISTINCT FROM sqlc.arg(revision)::bigint OR waiting_reason IS DISTINCT FROM sqlc.arg(reason)::text);
+
+-- name: ClearIntentWaiting :execrows
+UPDATE build_intents SET waiting_revision = NULL, waiting_reason = NULL, updated_at = clock_timestamp()
+WHERE pull_request_id = $1 AND revision = $2 AND waiting_revision IS NOT NULL;

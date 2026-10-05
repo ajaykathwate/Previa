@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source secrets-reencrypt egress-image test-builder test-runtime test-routing router-up router-down route-sync lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping router-up router-down route-sync housekeeping-dry-run lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -77,6 +77,16 @@ test-source:
 	fi; \
 	$(GO) test -count=1 -v -run '^TestRealSourcePrepare$$' ./internal/source
 
+# Opt-in live PR feedback proof on an authorized disposable PR: writes one
+# living comment and check runs named "Previa preview (live proof)" to that PR,
+# then deletes the comment and completes open runs. Uses a throwaway schema.
+test-reporting:
+	@$(load_run_env) if [ -z "$${TEST_GITHUB_INSTALLATION_ID:-}" ] || [ -z "$${TEST_GITHUB_REPO_ID:-}" ] || [ -z "$${TEST_GITHUB_PR_NUMBER:-}" ]; then \
+		echo 'Set TEST_GITHUB_INSTALLATION_ID, TEST_GITHUB_REPO_ID and TEST_GITHUB_PR_NUMBER to a disposable PR you may write to' >&2; exit 1; \
+	fi; \
+	export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
+	TEST_REPORTING=1 $(GO) test -count=1 -v -timeout 10m -run '^TestRealReportingOnADisposablePR$$' ./internal/reporting
+
 # Moves repository secrets onto SECRETS_ACTIVE_KEY_VERSION; prints counts only.
 secrets-reencrypt:
 	@$(load_run_env) $(GO) run ./cmd/secrets-reencrypt
@@ -99,7 +109,8 @@ test-builder: egress-image
 # Opt-in real previews on the local Docker Engine: hardening, readiness, crash
 # handling, secrets withholding, network denial, capacity and cleanup.
 test-runtime: egress-image
-	@$(load_run_env) TEST_RUNTIME=1 $(GO) test -count=1 -v -timeout 30m -run '^TestRealRuntime' ./internal/runtime
+	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
+	TEST_RUNTIME=1 $(GO) test -count=1 -v -timeout 30m -run '^TestRealRuntime' ./internal/runtime
 
 # Opt-in real routing, publication and teardown: Traefik with a wildcard
 # certificate from a local Pebble ACME server over DNS-01, real previews,
@@ -107,6 +118,13 @@ test-runtime: egress-image
 test-routing: egress-image
 	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
 	TEST_ROUTING=1 $(GO) test -count=1 -v -timeout 30m -run '^TestRealRouting' ./internal/routing
+
+# Opt-in real housekeeping on the local Docker Engine: grace periods, dry run,
+# orphans of known and unknown PRs, other instances left alone, and an
+# emergency prune of caches and untagged images, against a throwaway schema.
+test-housekeeping: egress-image
+	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
+	TEST_HOUSEKEEPING=1 $(GO) test -count=1 -v -timeout 15m -run '^TestRealHousekeeping' ./internal/housekeeping
 
 # The router (Traefik) for local/staging use. Reads routing and ACME settings
 # from .env; the DNS credential stays in its own mode-600 file.
@@ -125,6 +143,12 @@ router-up:
 # worker's route controller does this too once execution is wired).
 route-sync:
 	@$(load_run_env) $(GO) run ./cmd/route-sync
+
+# Housekeeping diagnostics: one inventory, expiry and prune pass as a dry run
+# against the configured database and Docker. Logs every decision; changes
+# nothing. WORKSPACES=/abs/path also inspects a source workspace directory.
+housekeeping-dry-run:
+	@$(load_run_env) $(GO) run ./cmd/housekeeping $${WORKSPACES:+-workspaces "$$WORKSPACES"}
 
 router-down:
 	@$(load_run_env) docker compose -f deploy/traefik/compose.yml down

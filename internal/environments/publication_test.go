@@ -347,6 +347,7 @@ func TestCleanupKeepsWhatTheRouterServes(t *testing.T) {
 
 func TestFailedActivationKeepsTheServingPreview(t *testing.T) {
 	f := newFixture(t)
+	f.repo.WithReports()
 	a := f.event(t, "opened", "sha-A")
 	f.provision(t, a)
 	r := newRuntime()
@@ -373,8 +374,13 @@ func TestFailedActivationKeepsTheServingPreview(t *testing.T) {
 	if snapshot.Status != "failed" || snapshot.Artifact.ContainerID != "container-1" || snapshot.PendingArtifact.ContainerID != "" || snapshot.AppliedGeneration != b.Generation {
 		t.Fatalf("failed swap lost the serving preview: %+v", snapshot)
 	}
+	var code string
+	var wanted int64
+	if err := f.pool.QueryRow(t.Context(), "SELECT e.last_error_code, r.wanted_version FROM environments e JOIN pull_request_reports r ON r.pull_request_id = e.pull_request_id WHERE e.pull_request_id=$1", a.PullRequestID).Scan(&code, &wanted); err != nil || code != "unhealthy" {
+		t.Fatalf("failure category %q %v", code, err)
+	}
 	var reports int
-	if err := f.pool.QueryRow(t.Context(), "SELECT count(*) FROM environment_operations WHERE kind='report_status' AND generation=$1 AND payload->>'error_code'='unhealthy'", b.Generation).Scan(&reports); err != nil || reports != 1 {
+	if err := f.pool.QueryRow(t.Context(), "SELECT count(*) FROM environment_operations WHERE kind='report_status' AND idempotency_key=$1", fmt.Sprintf("report:pr:%d:v:%d", a.PullRequestID, wanted)).Scan(&reports); err != nil || reports != 1 {
 		t.Fatalf("failure report %d %v", reports, err)
 	}
 	executor.fail = nil

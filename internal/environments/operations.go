@@ -109,9 +109,11 @@ func operationQueue(kind OperationKind) string {
 func (kind OperationKind) valid() bool { return operationQueue(kind) != "" }
 
 // retriedUntilDone reports whether an operation kind is idempotent and must
-// eventually happen, so exhausting River attempts leaves it retryable.
+// eventually happen, so exhausting River attempts leaves it retryable. A
+// report converges GitHub on the PR's current state, which an outage only
+// delays.
 func (kind OperationKind) retriedUntilDone() bool {
-	return kind == RemoveRoute || kind == CleanupArtifact
+	return kind == RemoveRoute || kind == CleanupArtifact || kind == ReportStatus
 }
 
 type operationInserter interface {

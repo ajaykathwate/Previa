@@ -534,19 +534,41 @@ func TestRealRoutingRecoversAfterControllerAndRouterRestarts(t *testing.T) {
 		t.Fatalf("environment %+v", s)
 	}
 	// The router restarts: routes come back from the file and the certificate
-	// from its persistent ACME storage, without a new issuance.
+	// from its persistent ACME storage, without a new issuance. Traefik writes a
+	// new certificate to that storage asynchronously, so restart only once the
+	// certificate it serves is stored. (Traefik renews at start what it thinks
+	// is near expiry; the harness gives it Pebble's real certificate duration.)
+	var stored *x509.Certificate
+	h.eventually(t, "the served certificate in ACME storage", func() error {
+		served, err := h.certificate(host)
+		if err != nil {
+			return err
+		}
+		if stored, err = h.readStoredCertificate(); err != nil {
+			return err
+		}
+		if served.SerialNumber.Cmp(stored.SerialNumber) != 0 {
+			return errors.New("not stored yet")
+		}
+		return nil
+	})
 	restartedAt := time.Now()
 	if _, err := h.docker.ContainerRestart(ctx, h.routerName, client.ContainerRestartOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	h.serves(t, host, want)
-	after, err := h.certificate(host)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored := h.storedCertificate(t); after.SerialNumber.Cmp(stored.SerialNumber) != 0 {
-		t.Fatal("the restarted router does not serve the certificate from its ACME storage")
-	}
+	// Traefik may answer with its default certificate for a moment while it
+	// loads the stored one; it must settle on exactly that one.
+	h.eventually(t, "the restarted router serves the certificate from its ACME storage", func() error {
+		after, err := h.certificate(host)
+		if err != nil {
+			return err
+		}
+		if after.SerialNumber.Cmp(stored.SerialNumber) != 0 {
+			return errors.New("not the stored certificate")
+		}
+		return nil
+	})
 	if logs := h.routerLogs(t, restartedAt); strings.Contains(logs, "Server responded with a certificate") {
 		t.Fatal("the router obtained a new certificate after restarting")
 	}
@@ -576,11 +598,13 @@ func TestRealRoutingRecoversAfterControllerAndRouterRestarts(t *testing.T) {
 
 // storedCertificate reads the wildcard certificate from the router's
 // persistent acme.json.
-func (h *harness) storedCertificate(t *testing.T) *x509.Certificate {
-	t.Helper()
-	result, err := dockerx.Run(ctxFor(t), h.docker, h.routerName, "cat", "/acme/acme.json")
+// readStoredCertificate reads the one certificate in the router's acme.json.
+func (h *harness) readStoredCertificate() (*x509.Certificate, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	result, err := dockerx.Run(ctx, h.docker, h.routerName, "cat", "/acme/acme.json")
 	if err != nil || result.ExitCode != 0 {
-		t.Fatalf("read acme.json: %v (exit %d)", err, result.ExitCode)
+		return nil, fmt.Errorf("read acme.json: %v (exit %d)", err, result.ExitCode)
 	}
 	var storage map[string]struct {
 		Certificates []struct {
@@ -588,25 +612,21 @@ func (h *harness) storedCertificate(t *testing.T) *x509.Certificate {
 		} `json:"Certificates"`
 	}
 	if err := json.Unmarshal([]byte(result.Stdout), &storage); err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	certificates := storage["preview"].Certificates
 	if len(certificates) != 1 {
-		t.Fatalf("acme.json holds %d certificates", len(certificates))
+		return nil, fmt.Errorf("acme.json holds %d certificates", len(certificates))
 	}
 	chain, err := base64.StdEncoding.DecodeString(certificates[0].Certificate)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	block, _ := pem.Decode(chain)
 	if block == nil {
-		t.Fatal("acme.json certificate is not PEM")
+		return nil, errors.New("acme.json certificate is not PEM")
 	}
-	leaf, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return leaf
+	return x509.ParseCertificate(block.Bytes)
 }
 
 // routerLogs returns the router's output since a moment.

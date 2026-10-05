@@ -50,6 +50,20 @@ func NewApp(appID int64, privateKeyPath string) (*Client, error) {
 	return &Client{app: app, installations: make(map[int64]*ghinstallation.Transport)}, nil
 }
 
+// App returns the authenticated App itself (ID and slug), for example to
+// recognise comments the App wrote.
+func (c *Client) App(ctx context.Context) (*github.App, error) {
+	client, err := github.NewClient(github.WithHTTPClient(&http.Client{Transport: c.app, Timeout: 10 * time.Second}))
+	if err != nil {
+		return nil, fmt.Errorf("construct App client: %w", err)
+	}
+	app, _, err := client.Apps.Get(ctx, "")
+	if err != nil {
+		return nil, fmt.Errorf("get authenticated App: %w", err)
+	}
+	return app, nil
+}
+
 func (c *Client) Installation(ctx context.Context, id int64) (*github.Installation, error) {
 	client, err := github.NewClient(github.WithHTTPClient(&http.Client{Transport: c.app, Timeout: 10 * time.Second}))
 	if err != nil {

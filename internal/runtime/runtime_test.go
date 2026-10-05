@@ -51,6 +51,10 @@ type scriptedTargets struct {
 	calls   int
 }
 
+func (s *scriptedTargets) BaseRepository(context.Context, int64) (int64, error) {
+	return sameRepo.BaseRepoID, nil
+}
+
 func (s *scriptedTargets) Current(context.Context, environments.Request) (Target, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -73,7 +74,7 @@ func newRealFixture(t *testing.T, tweak func(*Config)) *realFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := ConfigFrom(settings.BuilderConfig, 10*time.Minute)
+	cfg := ConfigFrom(settings.BuilderConfig, "tb"+strconv.FormatInt(time.Now().UnixNano(), 36), 10*time.Minute)
 	cfg.MinFreeDisk = 1 << 30
 	if tweak != nil {
 		tweak(&cfg)
@@ -101,7 +102,7 @@ func (f *realFixture) job(t *testing.T, pr, revision, headRepo int64, files map[
 		}
 	}
 	sink := &memorySink{}
-	return Job{PullRequestID: f.base + pr, Generation: 1, Revision: revision, HeadSHA: fmt.Sprintf("%040x", f.base+pr*1000+revision),
+	return Job{Instance: f.builder.cfg.Instance, PullRequestID: f.base + pr, Generation: 1, Revision: revision, HeadSHA: fmt.Sprintf("%040x", f.base+pr*1000+revision),
 		BaseRepoID: f.base, HeadRepoID: headRepo, ContextDir: dir, Dockerfile: "Dockerfile", Logs: sink}, sink
 }
 
@@ -357,7 +358,7 @@ func TestRealBuilderSeparatesForkCachesAndSharesNone(t *testing.T) {
 		t.Fatalf("a fork build reused the trusted scope's cache:\n%s", forkLogs)
 	}
 	for _, scope := range []string{trusted.cacheScope(), fork.cacheScope()} {
-		if _, err := f.docker.VolumeInspect(t.Context(), cacheVolumeName(scope), client.VolumeInspectOptions{}); err != nil {
+		if _, err := f.docker.VolumeInspect(t.Context(), CacheVolumeName(f.builder.cfg.Instance, scope), client.VolumeInspectOptions{}); err != nil {
 			t.Fatalf("cache volume for %s: %v", scope, err)
 		}
 	}

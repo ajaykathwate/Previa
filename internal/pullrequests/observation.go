@@ -45,6 +45,26 @@ func FromGitHub(p *github.PullRequest, baseRepoID int64) (Observation, error) {
 type Observer interface {
 	ObserveTx(context.Context, pgx.Tx, environments.Request) (environments.Request, error)
 }
+
+// ReportRecorder records, in the caller's transaction, that a PR's GitHub
+// report must catch up with a change. An Observer that implements it (the
+// environments broker) also hears about changes recorded outside webhook
+// processing, such as discovery, refreshed mergeability or verification.
+type ReportRecorder interface {
+	RecordReportTx(ctx context.Context, tx pgx.Tx, pullRequestID int64) error
+}
+
+func reportChangeTx(ctx context.Context, tx pgx.Tx, observer Observer, pullRequestID int64) error {
+	recorder, ok := observer.(ReportRecorder)
+	if !ok {
+		return nil
+	}
+	if err := recorder.RecordReportTx(ctx, tx, pullRequestID); err != nil {
+		return fmt.Errorf("record PR report: %w", err)
+	}
+	return nil
+}
+
 type scope struct {
 	install dbgen.LockInstallationRow
 	repo    dbgen.LockRepositoryRow
@@ -79,6 +99,8 @@ func scopeError(err error) error {
 // ObserveTx expects installation/repository locks in that order. Source time is
 // distinct from local generation. Snapshot callers have additionally fenced the
 // entire API read against repository observation and installation revisions.
+// Only webhook observations reach observer.ObserveTx (and so can authorize
+// work); other observations that change the PR only record a report.
 func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webhook bool, observer Observer) (bool, error) {
 	q := dbgen.New(tx)
 	old, err := q.LockPR(ctx, dbgen.LockPRParams{RepoID: repoID, Number: o.Number})
@@ -94,10 +116,7 @@ func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webh
 	// before a conflicting open observation can replace their known state.
 	if exists && !old.SourceUpdatedAt.Valid && webhook &&
 		(old.HeadSha != o.SHA || old.State != o.State) && (old.State != "open" || o.State == "open") {
-		if err := q.RequireRefresh(ctx, old.ID); err != nil {
-			return false, err
-		}
-		return false, q.InvalidateObservedIntent(ctx, dbgen.InvalidateObservedIntentParams{PullRequestID: old.ID, Generation: old.Generation + 1})
+		return false, requireRefreshTx(ctx, tx, q, old, observer)
 	}
 	if exists && old.SourceUpdatedAt.Valid {
 		if o.UpdatedAt.Before(old.SourceUpdatedAt.Time) {
@@ -108,10 +127,7 @@ func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webh
 			return false, nil
 		}
 		if webhook && o.UpdatedAt.Equal(old.SourceUpdatedAt.Time) && conflicting && (old.State != "open" || o.State == "open") {
-			if err := q.RequireRefresh(ctx, old.ID); err != nil {
-				return false, err
-			}
-			return false, q.InvalidateObservedIntent(ctx, dbgen.InvalidateObservedIntentParams{PullRequestID: old.ID, Generation: old.Generation + 1})
+			return false, requireRefreshTx(ctx, tx, q, old, observer)
 		}
 	}
 	generation := old.Generation
@@ -133,8 +149,23 @@ func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webh
 		}
 		// Close is a durable teardown request in the PR row. No runtime adapter is
 		// present; discovery never creates build intent or executable work.
+		if err := reportChangeTx(ctx, tx, observer, id); err != nil {
+			return false, err
+		}
 	}
 	return true, nil
+}
+
+// requireRefreshTx fences a conflicting observation until an authoritative
+// read settles it.
+func requireRefreshTx(ctx context.Context, tx pgx.Tx, q *dbgen.Queries, old dbgen.PullRequest, observer Observer) error {
+	if err := q.RequireRefresh(ctx, old.ID); err != nil {
+		return err
+	}
+	if err := q.InvalidateObservedIntent(ctx, dbgen.InvalidateObservedIntentParams{PullRequestID: old.ID, Generation: old.Generation + 1}); err != nil {
+		return err
+	}
+	return reportChangeTx(ctx, tx, observer, old.ID)
 }
 
 // ProcessWebhookTx resolves immutable GitHub repository identity under the same

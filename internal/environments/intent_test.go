@@ -85,6 +85,7 @@ func newIntentFixture(t *testing.T) *intentFixture {
 	applyIntentMigration(t, pool, "0007_intent_dispatch.sql")
 	applyIntentMigration(t, pool, "0008_pr_workspace.sql")
 	applyIntentMigration(t, pool, "0010_pr_mergeability.sql")
+	applyIntentMigration(t, pool, "0016_housekeeping.sql") // build requests that wait for capacity
 	if _, err := pool.Exec(ctx, "UPDATE pull_requests SET mergeable=true, mergeable_state='clean', build_status='open'"); err != nil {
 		t.Fatal(err)
 	}
@@ -466,6 +467,9 @@ func TestIntentAtomicObservationAndModeRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A failure below must not leave the transaction holding locks that
+	// block the schema's cleanup.
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	if _, err := f.service.ObserveTx(t.Context(), tx, f.owner, f.prID, time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}

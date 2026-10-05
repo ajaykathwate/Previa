@@ -50,6 +50,18 @@ func (s *TargetStore) Current(ctx context.Context, request environments.Request)
 	return currentTarget(row, request)
 }
 
+// BaseRepository returns the GitHub ID of the PR's base repository.
+func (s *TargetStore) BaseRepository(ctx context.Context, pullRequestID int64) (int64, error) {
+	id, err := dbgen.New(s.pool).BaseRepository(ctx, pullRequestID)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && !id.Valid {
+		return 0, failure(CodeNotCurrent, "The pull request no longer exists.", false, err)
+	}
+	if err != nil {
+		return 0, failure(CodeUnavailable, "The build target could not be read.", true, fmt.Errorf("read base repository: %w", err))
+	}
+	return id.Int64, nil
+}
+
 func currentTarget(row dbgen.ExecutionTargetRow, request environments.Request) (Target, error) {
 	switch {
 	case row.State != "open" || row.Generation != request.Generation || row.HeadSha != request.HeadSHA:

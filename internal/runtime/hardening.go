@@ -141,9 +141,9 @@ func containerSpec(c candidate, p Policy) (*container.Config, *container.HostCon
 
 // previewLabels identifies a candidate for inventory, ownership checks,
 // capacity accounting and the router's pre-publication check.
-func previewLabels(t Target, request requestIdentity, imageRef string, port int, healthPath string, cpuMillis, memory int64, now time.Time) map[string]string {
+func previewLabels(instance string, t Target, request requestIdentity, imageRef string, port int, healthPath string, cpuMillis, memory int64, now time.Time) map[string]string {
 	labels := map[string]string{
-		dockerx.LabelManaged: "true", dockerx.LabelKind: dockerx.KindPreview,
+		dockerx.LabelManaged: "true", dockerx.LabelInstance: instance, dockerx.LabelKind: dockerx.KindPreview,
 		dockerx.LabelPR: strconv.FormatInt(request.PullRequestID, 10), dockerx.LabelGeneration: strconv.FormatInt(request.Generation, 10),
 		dockerx.LabelRevision: strconv.FormatInt(request.Revision, 10), dockerx.LabelSHA: request.HeadSHA,
 		dockerx.LabelBaseRepo: strconv.FormatInt(t.BaseRepoID, 10), dockerx.LabelHeadRepo: strconv.FormatInt(t.HeadRepoID, 10),

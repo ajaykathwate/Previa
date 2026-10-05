@@ -4,16 +4,32 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
+	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
 
-// usage is what previews already hold: running, restarting or just created.
+// Locker serializes preview admission across workers, from the capacity
+// check until the candidate exists with its labels, so two candidates never
+// both take the last free capacity. *AdmissionLock implements it.
+type Locker interface {
+	Lock(ctx context.Context) (unlock func(), err error)
+}
+
+// usage is what previews already hold: running, restarting or just created
+// containers, counted by the limits on their labels. During a swap the active
+// preview and its candidate both count, and a container counts until its
+// removal: capacity is released only by verified cleanup.
 type usage struct {
 	cpuMillis, memory int64
-	inRepo            int
+	// repoPRs are the repository's PRs that hold a preview or candidate on
+	// this instance. The per-repository limit counts PRs, so a PR's swap never
+	// competes with its own active preview.
+	repoPRs map[string]bool
 }
 
 // budget is what previews may hold together.
@@ -21,6 +37,10 @@ type budget struct {
 	cpuMillis, memory int64
 	perRepo           int
 }
+
+// smallestPreview is the least a preview can need (the small tier); the
+// advisory pre-admission check asks whether even that fits.
+const smallestCPUMillis, smallestMemory = 500, 512 << 20
 
 // budget derives the preview budget: the operator's values, or 60% of the
 // Docker host's memory and 75% of its CPUs, leaving the rest for the platform.
@@ -42,14 +62,16 @@ func (r *Runtime) budget(ctx context.Context) (budget, error) {
 	return b, nil
 }
 
-// usage sums the limits recorded on preview containers' labels.
+// usage sums the limits recorded on preview containers' labels. The host
+// budget counts every Previa preview on the Docker host, whichever instance
+// created it; the repository count only this instance's.
 func (r *Runtime) usage(ctx context.Context, baseRepoID int64) (usage, error) {
 	listed, err := r.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.Add("label",
 		dockerx.LabelManaged+"=true", dockerx.LabelKind+"="+dockerx.KindPreview)})
 	if err != nil {
 		return usage{}, fmt.Errorf("list running previews: %w", err)
 	}
-	var u usage
+	u := usage{repoPRs: map[string]bool{}}
 	for _, c := range listed.Items {
 		if c.State != container.StateRunning && c.State != container.StateRestarting && c.State != container.StateCreated {
 			continue
@@ -58,8 +80,8 @@ func (r *Runtime) usage(ctx context.Context, baseRepoID int64) (usage, error) {
 		memory, _ := strconv.ParseInt(c.Labels[dockerx.LabelMemory], 10, 64)
 		u.cpuMillis += cpu
 		u.memory += memory
-		if c.Labels[dockerx.LabelBaseRepo] == strconv.FormatInt(baseRepoID, 10) {
-			u.inRepo++
+		if c.Labels[dockerx.LabelInstance] == r.instance && c.Labels[dockerx.LabelBaseRepo] == strconv.FormatInt(baseRepoID, 10) {
+			u.repoPRs[c.Labels[dockerx.LabelPR]] = true
 		}
 	}
 	return u, nil
@@ -67,10 +89,14 @@ func (r *Runtime) usage(ctx context.Context, baseRepoID int64) (usage, error) {
 
 // admit refuses a candidate that would exceed the per-repository count or the
 // host budget. The refusal is retryable: capacity frees up as previews end.
-func admit(u usage, b budget, cpuMillis, memory int64) error {
+func admit(u usage, b budget, pullRequestID, cpuMillis, memory int64) error {
+	others := len(u.repoPRs)
+	if u.repoPRs[strconv.FormatInt(pullRequestID, 10)] {
+		others--
+	}
 	switch {
-	case u.inRepo >= b.perRepo:
-		return failure(CodeCapacity, fmt.Sprintf("This repository already runs %d previews, its limit.", u.inRepo), true, nil)
+	case others >= b.perRepo:
+		return failure(CodeCapacity, fmt.Sprintf("This repository already has %d previews, its limit.", others), true, nil)
 	case u.memory+memory > b.memory:
 		return failure(CodeCapacity, fmt.Sprintf("Previews would need %s of memory together; the host allows %s.", humanBytes(u.memory+memory), humanBytes(b.memory)), true, nil)
 	case u.cpuMillis+cpuMillis > b.cpuMillis:
@@ -88,7 +114,59 @@ func (r *Runtime) checkCapacity(ctx context.Context, t Target, cpuMillis, memory
 	if err != nil {
 		return failure(CodeUnavailable, "Preview capacity could not be checked.", true, err)
 	}
-	return admit(u, b, cpuMillis, memory)
+	return admit(u, b, t.PullRequestID, cpuMillis, memory)
+}
+
+// Admit implements environments.Headroom: before a build is admitted it asks
+// whether even the smallest preview would fit, so a request that cannot run
+// waits queued instead of building an image it cannot start. It takes no
+// lock; startCandidate checks again atomically.
+func (r *Runtime) Admit(ctx context.Context, request environments.Request) error {
+	baseRepoID, err := r.targets.BaseRepository(ctx, request.PullRequestID)
+	if err != nil {
+		return err
+	}
+	err = r.checkCapacity(ctx, Target{PullRequestID: request.PullRequestID, BaseRepoID: baseRepoID}, smallestCPUMillis, smallestMemory)
+	if CodeOf(err) == CodeCapacity {
+		return &environments.WaitingError{Reason: environments.WaitCapacity, Err: err}
+	}
+	return err
+}
+
+// AdmissionLock is a Locker backed by a PostgreSQL session advisory lock. A
+// worker that crashes while holding it loses its connection, which releases
+// the lock; nothing is left to reconcile.
+type AdmissionLock struct{ pool *pgxpool.Pool }
+
+func NewAdmissionLock(pool *pgxpool.Pool) *AdmissionLock { return &AdmissionLock{pool: pool} }
+
+// The key includes this database's instance: advisory locks are shared by
+// every schema of a PostgreSQL database.
+const admissionLockKey = "(SELECT hashtext('previa.preview_admission.' || instance) FROM platform_instance)"
+
+func (l *AdmissionLock) Lock(ctx context.Context) (func(), error) {
+	conn, err := l.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire connection for preview admission: %w", err)
+	}
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock("+admissionLockKey+")"); err != nil {
+		// A cancelled wait may still have been granted; closing the
+		// connection releases the lock either way.
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = conn.Conn().Close(closeCtx)
+		cancel()
+		conn.Release()
+		return nil, fmt.Errorf("lock preview admission: %w", err)
+	}
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.Exec(ctx, "SELECT pg_advisory_unlock("+admissionLockKey+")"); err != nil {
+			// Never return a connection that may still hold the lock.
+			_ = conn.Conn().Close(ctx)
+		}
+		conn.Release()
+	}, nil
 }
 
 // humanBytes renders a size with one decimal in binary units.

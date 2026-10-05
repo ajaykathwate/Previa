@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -155,12 +156,27 @@ func (f fixedTarget) Current(context.Context, environments.Request) (Target, err
 	return f.target, nil
 }
 
+func (f fixedTarget) BaseRepository(context.Context, int64) (int64, error) {
+	return f.target.BaseRepoID, nil
+}
+
+// processLock serializes admissions within the test process, as
+// AdmissionLock does across workers.
+type processLock struct{ mu sync.Mutex }
+
+func (l *processLock) Lock(context.Context) (func(), error) {
+	l.mu.Lock()
+	return l.mu.Unlock, nil
+}
+
 type realFixture struct {
-	docker   *client.Client
-	gateway  *egress.Gateway
-	builder  *builds.Builder
-	provider *secrets.Provider
-	settings config.ExecutionConfig
+	admission *processLock
+	instance  string
+	docker    *client.Client
+	gateway   *egress.Gateway
+	builder   *builds.Builder
+	provider  *secrets.Provider
+	settings  config.ExecutionConfig
 }
 
 func newRealFixture(t *testing.T) *realFixture {
@@ -181,7 +197,8 @@ func newRealFixture(t *testing.T) *realFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder, err := builds.NewBuilder(docker, gateway, builds.ConfigFrom(settings.BuilderConfig, 10*time.Minute), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	instance := "tr" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	builder, err := builds.NewBuilder(docker, gateway, builds.ConfigFrom(settings.BuilderConfig, instance, 10*time.Minute), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +218,12 @@ func newRealFixture(t *testing.T) *realFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &realFixture{docker: docker, gateway: gateway, builder: builder, provider: provider, settings: settings}
+	return &realFixture{admission: &processLock{}, instance: instance, docker: docker, gateway: gateway, builder: builder, provider: provider, settings: settings}
+}
+
+// networkName is a PR's preview network for this fixture's instance.
+func (f *realFixture) networkName(pullRequestID int64) string {
+	return (&Runtime{instance: f.instance}).networkName(pullRequestID)
 }
 
 // target is PR pr of the test repository; fork gives it another head repository.
@@ -232,7 +254,7 @@ func (f *realFixture) runtime(t *testing.T, target Target, settings repoconfig.C
 	}
 	sink := &memorySink{}
 	r, err := New(Parts{
-		Docker: f.docker, Egress: f.gateway, Targets: fixedTarget{target}, Sources: dirSources{t: t, settings: settings}, Builder: f.builder, Secrets: f.provider,
+		Instance: f.instance, Admission: f.admission, Docker: f.docker, Egress: f.gateway, Targets: fixedTarget{target}, Sources: dirSources{t: t, settings: settings}, Builder: f.builder, Secrets: f.provider,
 		// Like buildlogs.Writer, the sink redacts with the redactor the runtime
 		// hands it, so the tests prove that redactor knows the injected secrets.
 		Logs: func(_ context.Context, _ environments.Attempt, redactor *secrets.Redactor) (LogSink, error) {
@@ -267,7 +289,7 @@ func (f *realFixture) cleanup(t *testing.T, r *Runtime, pullRequestID int64) {
 			}
 		}
 	}
-	name := networkName(pullRequestID)
+	name := r.networkName(pullRequestID)
 	_ = f.gateway.Detach(ctx, name)
 	if _, err := f.docker.NetworkRemove(ctx, name, client.NetworkRemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
 		t.Errorf("remove preview network: %v", err)
@@ -323,7 +345,7 @@ func TestRealRuntimeStartsAHardenedHealthyCandidate(t *testing.T) {
 			t.Fatalf("a candidate must not be routed yet: %s", key)
 		}
 	}
-	if _, ok := c.NetworkSettings.Networks[networkName(target.PullRequestID)]; !ok || len(c.NetworkSettings.Networks) != 1 {
+	if _, ok := c.NetworkSettings.Networks[f.networkName(target.PullRequestID)]; !ok || len(c.NetworkSettings.Networks) != 1 {
 		t.Fatalf("a preview joins only its own network: %v", c.NetworkSettings.Networks)
 	}
 	health, err := r.Health(t.Context(), artifact.ContainerID)
@@ -342,7 +364,7 @@ func TestRealRuntimeStartsAHardenedHealthyCandidate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := f.docker.NetworkInspect(t.Context(), networkName(target.PullRequestID), client.NetworkInspectOptions{}); !cerrdefs.IsNotFound(err) {
+	if _, err := f.docker.NetworkInspect(t.Context(), f.networkName(target.PullRequestID), client.NetworkInspectOptions{}); !cerrdefs.IsNotFound(err) {
 		t.Fatalf("idle preview network kept: %v", err)
 	}
 	if health, err := r.Health(t.Context(), artifact.ContainerID); err != nil || health.State != "missing" {
@@ -394,7 +416,7 @@ func TestRealRuntimeDeniesNetworkAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, otherLogs)
 	}
-	otherIP := addressOf(t, f.docker, otherArtifact.ContainerID, networkName(realBase+3))
+	otherIP := addressOf(t, f.docker, otherArtifact.ContainerID, f.networkName(realBase+3))
 	r, logs := f.runtime(t, f.target(4, false), repoconfig.Config{HealthCheckPath: "/health", Env: []string{"PROBES=1", "SERVICE_IP=" + serviceIP, "OTHER_IP=" + otherIP}}, nil)
 	if _, err := r.Build(buildCtx(t), request(4), environments.Attempt{}); err != nil {
 		t.Fatalf("%v\n%s", err, logs)
@@ -520,9 +542,21 @@ func TestRealRuntimeRefusesForeignObjectsAndFindsLeftovers(t *testing.T) {
 	}
 	// A builder left behind by a crashed worker is found and removed.
 	leftover, err := f.docker.ContainerCreate(ctx, client.ContainerCreateOptions{Config: &container.Config{Image: "alpine:3.22", Cmd: []string{"sleep", "60"},
-		Labels: map[string]string{dockerx.LabelManaged: "true", dockerx.LabelKind: dockerx.KindBuilder, dockerx.LabelPR: fmt.Sprint(realBase + 12), dockerx.LabelGeneration: "1", dockerx.LabelRevision: "1"}}})
+		Labels: map[string]string{dockerx.LabelManaged: "true", dockerx.LabelInstance: f.instance, dockerx.LabelKind: dockerx.KindBuilder, dockerx.LabelPR: fmt.Sprint(realBase + 12), dockerx.LabelGeneration: "1", dockerx.LabelRevision: "1"}}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Another Previa instance's object for the same PR ID is invisible and untouchable.
+	neighbour, err := f.docker.ContainerCreate(ctx, client.ContainerCreateOptions{Config: &container.Config{Image: "alpine:3.22", Cmd: []string{"sleep", "60"},
+		Labels: map[string]string{dockerx.LabelManaged: "true", dockerx.LabelInstance: "zz" + f.instance, dockerx.LabelKind: dockerx.KindBuilder, dockerx.LabelPR: fmt.Sprint(realBase + 12), dockerx.LabelGeneration: "1", dockerx.LabelRevision: "1"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = f.docker.ContainerRemove(context.Background(), neighbour.ID, client.ContainerRemoveOptions{Force: true})
+	})
+	if err := r.RemoveContainer(ctx, neighbour.ID); CodeOf(err) != CodeNotOwned {
+		t.Fatalf("another instance's container: %v", err)
 	}
 	resources, err := r.Resources(ctx, realBase+12)
 	if err != nil || len(resources) != 1 || resources[0].Artifact.ContainerID != leftover.ID {
@@ -532,7 +566,7 @@ func TestRealRuntimeRefusesForeignObjectsAndFindsLeftovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A same-named network Previa did not create is never used.
-	squatter := networkName(realBase + 13)
+	squatter := f.networkName(realBase + 13)
 	if _, err := f.docker.NetworkCreate(ctx, squatter, client.NetworkCreateOptions{Driver: "bridge"}); err != nil {
 		t.Fatal(err)
 	}
@@ -541,4 +575,69 @@ func TestRealRuntimeRefusesForeignObjectsAndFindsLeftovers(t *testing.T) {
 	if _, err := squatted.Build(buildCtx(t), request(13), environments.Attempt{}); CodeOf(err) != CodeNotOwned {
 		t.Fatalf("squatted network: %v\n%s", err, logs)
 	}
+}
+
+// Two candidates race for capacity that fits one: the PostgreSQL admission
+// lock lets exactly one start, whichever worker it runs on.
+func TestRealRuntimeAdmitsConcurrentCandidatesAtomically(t *testing.T) {
+	f := newRealFixture(t)
+	lock := NewAdmissionLock(isolatedPool(t))
+	settings := repoconfig.Config{Port: 8080, Resources: repoconfig.Resources{CPUMillis: 500, MemoryBytes: 256 << 20}}
+	budget := func(p *Policy) { p.MemoryBudget, p.CPUBudget = 400<<20, 64 }
+	first, firstLogs := f.runtime(t, f.target(20, false), settings, budget)
+	second, secondLogs := f.runtime(t, f.target(21, false), settings, budget)
+	first.admission, second.admission = lock, lock
+	image := f.listeningImage(t)
+	results := make(chan error, 2)
+	for i, r := range []*Runtime{first, second} {
+		target := f.target(int64(20+i), false)
+		id := requestIdentity{PullRequestID: target.PullRequestID, Generation: 1, Revision: 1, HeadSHA: request(int64(20 + i)).HeadSHA}
+		sink := firstLogs
+		if i == 1 {
+			sink = secondLogs
+		}
+		go func() {
+			_, err := r.startCandidate(buildCtx(t), id, target, image, settings, nil, sink)
+			results <- err
+		}()
+	}
+	var started, refused int
+	for range 2 {
+		switch err := <-results; {
+		case err == nil:
+			started++
+		case CodeOf(err) == CodeCapacity:
+			refused++
+		default:
+			t.Fatalf("unexpected start failure: %v\n%s\n%s", err, firstLogs, secondLogs)
+		}
+	}
+	if started != 1 || refused != 1 {
+		t.Fatalf("%d candidates started and %d were refused with room for one", started, refused)
+	}
+}
+
+// listeningImage commits an image whose command answers TCP on port 8080.
+func (f *realFixture) listeningImage(t *testing.T) builds.Image {
+	t.Helper()
+	ctx := t.Context()
+	created, err := f.docker.ContainerCreate(ctx, client.ContainerCreateOptions{Config: &container.Config{Image: "alpine:3.22"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = f.docker.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
+	}()
+	ref := "previa/" + f.instance + "-capacity:test"
+	committed, err := f.docker.ContainerCommit(ctx, created.ID, client.ContainerCommitOptions{Reference: ref, Changes: []string{
+		"LABEL " + dockerx.LabelManaged + "=true", "LABEL " + dockerx.LabelInstance + "=" + f.instance, "LABEL " + dockerx.LabelKind + "=" + dockerx.KindImage,
+		`CMD ["sh", "-c", "while true; do echo ok | nc -l -p 8080 >/dev/null 2>&1; done"]`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = f.docker.ImageRemove(context.Background(), ref, client.ImageRemoveOptions{Force: true})
+	})
+	return builds.Image{Ref: ref, ID: committed.ID}
 }

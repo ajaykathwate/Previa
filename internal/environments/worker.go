@@ -2,6 +2,7 @@ package environments
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
@@ -22,7 +23,13 @@ func (w *BuildWorker) Work(ctx context.Context, job *river.Job[BuildArgs]) error
 	if err := request.validate(); err != nil {
 		return river.JobCancel(err)
 	}
-	err := w.Service.build(ctx, request, job.Attempt >= job.MaxAttempts)
+	err := w.Service.Build(ctx, request)
+	var waiting *WaitingError
+	if errors.As(err, &waiting) {
+		// The request keeps its place; snoozing spends no attempt.
+		w.Service.logger.InfoContext(ctx, "build waits", "pr_id", request.PullRequestID, "revision", request.Revision, "reason", waiting.Reason)
+		return river.JobSnooze(waitDelay(job.JobRow))
+	}
 	return finishJob(ctx, w.Broker, request, job, err)
 }
 

@@ -16,6 +16,7 @@ const (
 	CodeBuild        = "build_failed"        // the image build failed
 	CodeSecrets      = "secrets_unavailable" // secrets exist but could not be decrypted
 	CodeCapacity     = "capacity"            // previews already use the host's budget
+	CodeDiskLow      = "disk_low"            // the build host is short of disk space
 	CodeUnhealthy    = "unhealthy"           // not ready before the startup deadline
 	CodeCrashed      = "crashed"             // exited repeatedly while starting
 	CodeTimeout      = "timeout"
@@ -68,3 +69,7 @@ func AsOperationFailure(err error) error {
 	}
 	return &environments.OperationFailure{Code: CodeUnavailable, Err: err}
 }
+
+// FailureCode is the stable category the environment records and reports
+// show for a failed attempt; the message stays in the build log.
+func (e *Error) FailureCode() string { return e.Code }

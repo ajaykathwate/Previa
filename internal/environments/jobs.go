@@ -68,9 +68,31 @@ type Broker struct {
 	pool            *pgxpool.Pool
 	client          jobInserter
 	enabled         bool
+	reports         *Repository // reporting enabled: records report work
 	now             func() time.Time
 	recoveryMu      sync.Mutex
 	recoveryAfterID int64
+}
+
+// WithReports makes the broker's observations, requests and dispatches record
+// report work through a repository built WithReports.
+func (b *Broker) WithReports(repo *Repository) *Broker {
+	b.reports = repo
+	return b
+}
+
+func (b *Broker) reportTx(ctx context.Context, tx pgx.Tx, pullRequestID int64) error {
+	if b.reports == nil {
+		return nil
+	}
+	return b.reports.reportTx(ctx, tx, pullRequestID)
+}
+
+// RecordReportTx records, in tx, that the PR's GitHub report must catch up
+// with a change recorded elsewhere, such as a refreshed PR observation. It
+// does nothing unless reports are enabled.
+func (b *Broker) RecordReportTx(ctx context.Context, tx pgx.Tx, pullRequestID int64) error {
+	return b.reportTx(ctx, tx, pullRequestID)
 }
 
 func NewBroker(pool *pgxpool.Pool, client jobInserter) *Broker {
@@ -155,6 +177,10 @@ func finishJob[T river.JobArgs](ctx context.Context, broker *Broker, request Req
 			}
 			if _, err := q.FinishBuildIntent(ctx, dbgen.FinishBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, NextState: next}); err != nil {
 				return fmt.Errorf("finish build intent: %w", err)
+			}
+			// A final failure is reported only now, after the last attempt.
+			if err := broker.reportTx(ctx, tx, request.PullRequestID); err != nil {
+				return err
 			}
 		}
 		current, err := readLockedIntent(ctx, q, request.PullRequestID)

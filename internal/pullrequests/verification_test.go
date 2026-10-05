@@ -10,6 +10,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
 	pr "github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/jackc/pgx/v5"
 )
 
 // upstreamFake serves discovery pages (unused here) and targeted verification reads.
@@ -219,5 +220,40 @@ func TestVerifyUpstreamPreservesEventAuthorizedAutomaticWork(t *testing.T) {
 	}
 	if generation != snapshot.Generation || source != "automatic" || state != "pending" {
 		t.Fatalf("automatic intent not carried forward: generation %d (snapshot %d), %s/%s", generation, snapshot.Generation, source, state)
+	}
+}
+
+// reportingObserver records which PRs were reported, like the environments
+// broker with reports enabled.
+type reportingObserver struct{ reported []int64 }
+
+func (o *reportingObserver) ObserveTx(_ context.Context, _ pgx.Tx, r environments.Request) (environments.Request, error) {
+	return r, nil
+}
+func (o *reportingObserver) RecordReportTx(_ context.Context, _ pgx.Tx, pullRequestID int64) error {
+	o.reported = append(o.reported, pullRequestID)
+	return nil
+}
+
+func TestRefreshedObservationsRecordReportsOnlyWhenTheyChangeThePR(t *testing.T) {
+	f := setup(t)
+	id := seedPR(t, f, `"mergeable":true,"mergeable_state":"clean",`)
+	observer := &reportingObserver{}
+	current := upstreamPR("sha-a", "open", yes(), "clean", verifyBase)
+	fake := &upstreamFake{inspect: func(context.Context, int64, int64, int32) (pr.Upstream, error) { return current, nil }}
+	service := pr.NewSyncService(f.pool, f.producer, fake, observer)
+	if _, err := service.VerifyUpstream(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if len(observer.reported) != 0 {
+		t.Fatalf("an unchanged PR was reported: %v", observer.reported)
+	}
+	// A missed close, found by verification, must reach the PR's report.
+	current = upstreamPR("sha-a", "closed", yes(), "clean", verifyBase.Add(time.Minute))
+	if _, err := service.VerifyUpstream(t.Context(), id); !errors.Is(err, environments.ErrUpstreamClosed) {
+		t.Fatalf("closed upstream: %v", err)
+	}
+	if len(observer.reported) != 1 || observer.reported[0] != id {
+		t.Fatalf("reported %v, want [%d]", observer.reported, id)
 	}
 }

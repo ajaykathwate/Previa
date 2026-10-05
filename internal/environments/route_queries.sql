@@ -120,7 +120,7 @@ UPDATE environments e
 SET status = 'failed', applied_generation = sqlc.arg(expected_generation),
     applied_revision = sqlc.arg(expected_revision), pending_container_id = NULL,
     pending_image_tag = NULL, pending_generation = NULL, pending_revision = NULL,
-    pending_head_sha = NULL
+    pending_head_sha = NULL, last_error_code = sqlc.arg(error_code)::text
 FROM locked
 WHERE e.id = locked.id
 RETURNING locked.pending_container_id, locked.pending_image_tag;

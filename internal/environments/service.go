@@ -46,11 +46,15 @@ type Resource struct {
 	Revision      int64    `json:"revision"`
 	Artifact      Artifact `json:"artifact"`
 	Network       string   `json:"network,omitempty"`
+	// CreatedAt is when Docker created the object, for housekeeping's grace
+	// period. It is not part of a cleanup operation's identity.
+	CreatedAt time.Time `json:"-"`
 }
 
 type Service struct {
 	repo         *Repository
 	runtime      Runtime
+	headroom     Headroom
 	logs         BuildLogs
 	logger       *slog.Logger
 	buildTimeout time.Duration
@@ -72,6 +76,13 @@ func NewService(repo *Repository, runtime Runtime, logger *slog.Logger, buildTim
 		now = clocks[0]
 	}
 	return &Service{repo: repo, runtime: runtime, logger: logger, buildTimeout: buildTimeout, now: now}, nil
+}
+
+// WithHeadroom asks h, before admitting a build, whether the host can take
+// it; a request that cannot start waits queued instead of failing.
+func (s *Service) WithHeadroom(h Headroom) *Service {
+	s.headroom = h
+	return s
 }
 
 // WithBuildLogs closes each attempt's log stream when its execution returns.
@@ -110,11 +121,13 @@ func (s *Service) superseded(ctx context.Context, request Request) error {
 	return s.cleanup(ctx, request)
 }
 
-func (s *Service) Build(ctx context.Context, request Request) error {
-	return s.build(ctx, request, false)
-}
+// failureCoder is a classified build or runtime failure (runtime.Error).
+type failureCoder interface{ FailureCode() string }
 
-func (s *Service) build(ctx context.Context, request Request, finalAttempt bool) error {
+// Build runs one admitted attempt. Reports show its failure only once the
+// request is final (the job handoff marks the intent failed after the last
+// River attempt), so intermediate retries never publish a final failure.
+func (s *Service) Build(ctx context.Context, request Request) error {
 	if err := request.validate(); err != nil {
 		return err
 	}
@@ -134,6 +147,14 @@ func (s *Service) build(ctx context.Context, request Request, finalAttempt bool)
 	if before.PendingGeneration == request.Generation && before.PendingRevision == request.Revision && before.PendingArtifact.ContainerID != "" && before.PendingArtifact.ImageTag != "" {
 		return s.cleanup(ctx, request)
 	}
+	if s.headroom != nil && before.Revision == request.Revision {
+		if err := s.headroom.Admit(ctx, request); err != nil {
+			if reason := waitingReason(err); reason != "" {
+				return errors.Join(&WaitingError{Reason: reason, Err: err}, s.repo.markWaiting(ctx, request, reason))
+			}
+			return err
+		}
+	}
 	attempt, allowed, err := s.repo.claimBuild(ctx, request, s.now())
 	if err != nil {
 		return err
@@ -144,13 +165,26 @@ func (s *Service) build(ctx context.Context, request Request, finalAttempt bool)
 	buildCtx, cancel := context.WithTimeout(ctx, s.buildTimeout)
 	artifact, buildErr := s.runtime.Build(buildCtx, request, attempt)
 	cancel()
+	if reason := waitingReason(buildErr); reason != "" {
+		// Not a failure: the admitted request keeps its slot and its place,
+		// and is retried once capacity or disk frees up.
+		completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), queue.CompletionGrace)
+		defer completeCancel()
+		s.finishLogs(completeCtx, request, attempt)
+		return errors.Join(&WaitingError{Reason: reason, Err: buildErr}, s.repo.markWaiting(completeCtx, request, reason))
+	}
 	result := Result{Status: "running", Artifact: artifact}
 	if buildErr != nil {
-		result = Result{Status: "failed", ErrorCode: "build_failed", ReportFailure: finalAttempt}
+		code := "build_failed"
+		var coded failureCoder
+		if errors.As(buildErr, &coded) && safeErrorCode(coded.FailureCode()) != "" {
+			code = safeErrorCode(coded.FailureCode())
+		}
+		result = Result{Status: "failed", ErrorCode: code}
 	}
 	if buildErr == nil && (artifact.ContainerID == "" || artifact.ImageTag == "") {
 		buildErr = errors.New("runtime returned an incomplete artifact")
-		result = Result{Status: "failed", ErrorCode: "incomplete_artifact", ReportFailure: finalAttempt}
+		result = Result{Status: "failed", ErrorCode: "incomplete_artifact"}
 	}
 	// This is the pre-registration gate. Cancellation/timeouts still get a bounded
 	// chance to record a CURRENT failure and clean up, never a stale final state.

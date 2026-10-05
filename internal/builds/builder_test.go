@@ -18,8 +18,10 @@ type discardSink struct{ io.Writer }
 
 func (discardSink) System(string) {}
 
+const testInstance = "0a1b2c3d4e5f"
+
 func validJob() Job {
-	return Job{PullRequestID: 7, Generation: 3, Revision: 2, HeadSHA: testCommit, BaseRepoID: 100, HeadRepoID: 100,
+	return Job{Instance: testInstance, PullRequestID: 7, Generation: 3, Revision: 2, HeadSHA: testCommit, BaseRepoID: 100, HeadRepoID: 100,
 		ContextDir: "/work/source", Dockerfile: "docker/Dockerfile", Logs: discardSink{io.Discard}}
 }
 
@@ -38,6 +40,7 @@ func TestJobValidation(t *testing.T) {
 		"escaping Dockerfile": func(j *Job) { j.Dockerfile = "../Dockerfile" },
 		"absolute Dockerfile": func(j *Job) { j.Dockerfile = "/etc/Dockerfile" },
 		"no log sink":         func(j *Job) { j.Logs = nil },
+		"no instance":         func(j *Job) { j.Instance = "" },
 	} {
 		j := validJob()
 		change(&j)
@@ -49,7 +52,7 @@ func TestJobValidation(t *testing.T) {
 
 func TestImageIdentityAndCacheScopes(t *testing.T) {
 	j := validJob()
-	if got := j.ImageRef(); got != "previa/pr-7:g3-r2-0123456789ab" {
+	if got := j.ImageRef(); got != "previa/"+testInstance+"-pr-7:g3-r2-0123456789ab" {
 		t.Fatalf("image ref %q", got)
 	}
 	retry := j
@@ -58,7 +61,7 @@ func TestImageIdentityAndCacheScopes(t *testing.T) {
 		t.Fatal("revisions must not share an image")
 	}
 	labels := j.identity(dockerx.KindImage)
-	if labels[dockerx.LabelPR] != "7" || labels[dockerx.LabelGeneration] != "3" || labels[dockerx.LabelRevision] != "2" || labels[dockerx.LabelSHA] != testCommit || labels[dockerx.LabelKind] != dockerx.KindImage {
+	if labels[dockerx.LabelInstance] != testInstance || labels[dockerx.LabelPR] != "7" || labels[dockerx.LabelGeneration] != "3" || labels[dockerx.LabelRevision] != "2" || labels[dockerx.LabelSHA] != testCommit || labels[dockerx.LabelKind] != dockerx.KindImage {
 		t.Fatalf("labels %v", labels)
 	}
 	fork := j
@@ -149,7 +152,7 @@ func TestFailureClassificationAndMessages(t *testing.T) {
 
 func TestBuilderConfiguration(t *testing.T) {
 	c := ConfigFrom(config.BuilderConfig{BuildKitImage: "bk", BuildCPUs: 2, BuildMemory: 4 << 30, BuildPIDs: 2048,
-		BuildDiskBudget: 20 << 30, BuildMaxImageSize: 4 << 30, BuildMinFreeDisk: 15 << 30}, 12*time.Minute)
+		BuildDiskBudget: 20 << 30, BuildMaxImageSize: 4 << 30, BuildMinFreeDisk: 15 << 30}, testInstance, 12*time.Minute)
 	if c.Memory != 4<<30 || c.MinFreeDisk != 15<<30 || c.MaxDuration != 12*time.Minute || c.BuildKitImage != "bk" {
 		t.Fatalf("config %+v", c)
 	}

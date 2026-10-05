@@ -133,7 +133,7 @@ func (s *SyncService) RunPage(ctx context.Context, args SyncArgs) error {
 			if o.State != "open" {
 				continue
 			}
-			if _, err := ObserveTx(ctx, tx, args.RepoID, o, false, nil); err != nil {
+			if _, err := ObserveTx(ctx, tx, args.RepoID, o, false, s.observer); err != nil {
 				return err
 			}
 			stored++

@@ -113,3 +113,48 @@ func TestTargetStoreReadsTheCurrentAuthorizedTarget(t *testing.T) {
 		t.Fatalf("missing PR: %v", err)
 	}
 }
+
+func TestAdmissionLockSerializesAndSurvivesCancellation(t *testing.T) {
+	pool := isolatedPool(t)
+	lock := NewAdmissionLock(pool)
+	unlock, err := lock.Lock(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second admission waits; giving up while waiting leaks nothing.
+	waitCtx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	if _, err := lock.Lock(waitCtx); err == nil {
+		t.Fatal("a second admission did not wait")
+	}
+	cancel()
+	acquired := make(chan func(), 1)
+	go func() {
+		next, err := lock.Lock(t.Context())
+		if err != nil {
+			t.Error(err)
+			close(acquired)
+			return
+		}
+		acquired <- next
+	}()
+	select {
+	case <-acquired:
+		t.Fatal("admission granted while held")
+	case <-time.After(200 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case next := <-acquired:
+		if next != nil {
+			next()
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("admission not granted after release")
+	}
+	// Every connection went back unlocked: the lock is free again.
+	final, err := lock.Lock(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	final()
+}

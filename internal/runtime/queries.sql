@@ -7,3 +7,6 @@ SELECT p.id AS pull_request_id, p.repo_id, p.number, p.head_sha, p.state, p.gene
 FROM pull_requests p JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = p.id
 WHERE p.id = $1;
+
+-- name: BaseRepository :one
+SELECT r.github_repo_id FROM pull_requests p JOIN repos r ON r.id = p.repo_id WHERE p.id = $1;

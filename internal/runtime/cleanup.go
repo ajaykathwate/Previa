@@ -41,7 +41,7 @@ func (r *Runtime) RemoveResource(ctx context.Context, resource environments.Reso
 		}
 	}
 	if resource.Artifact.ContainerID != "" {
-		if err := r.removeOwnedNetwork(ctx, resource.PullRequestID, networkName(resource.PullRequestID)); err != nil && CodeOf(err) != CodeInUse {
+		if err := r.removeOwnedNetwork(ctx, resource.PullRequestID, r.networkName(resource.PullRequestID)); err != nil && CodeOf(err) != CodeInUse {
 			// The inventory lists an idle network, so a later pass retries it.
 			r.logger.WarnContext(ctx, "remove idle preview network", "pr_id", resource.PullRequestID, "error", err)
 		}
@@ -49,8 +49,8 @@ func (r *Runtime) RemoveResource(ctx context.Context, resource environments.Reso
 	return nil
 }
 
-func ownedByPR(labels map[string]string, pullRequestID int64, kinds ...string) bool {
-	return dockerx.Owned(labels, kinds...) && labels[dockerx.LabelPR] == strconv.FormatInt(pullRequestID, 10)
+func (r *Runtime) ownedByPR(labels map[string]string, pullRequestID int64, kinds ...string) bool {
+	return dockerx.OwnedBy(labels, r.instance, kinds...) && labels[dockerx.LabelPR] == strconv.FormatInt(pullRequestID, 10)
 }
 
 func (r *Runtime) removeOwnedContainer(ctx context.Context, pullRequestID int64, id string) error {
@@ -62,7 +62,7 @@ func (r *Runtime) removeOwnedContainer(ctx context.Context, pullRequestID int64,
 		return failure(CodeUnavailable, "The container could not be inspected.", true, err)
 	}
 	c := inspected.Container
-	if c.Config == nil || !ownedByPR(c.Config.Labels, pullRequestID, dockerx.KindPreview, dockerx.KindBuilder) {
+	if c.Config == nil || !r.ownedByPR(c.Config.Labels, pullRequestID, dockerx.KindPreview, dockerx.KindBuilder) {
 		return failure(CodeNotOwned, "Refusing to remove a container that is not this pull request's.", false, nil)
 	}
 	if c.State != nil && (c.State.Running || c.State.Restarting) {
@@ -85,7 +85,7 @@ func (r *Runtime) removeOwnedImage(ctx context.Context, pullRequestID int64, ref
 	if err != nil {
 		return failure(CodeUnavailable, "The image could not be inspected.", true, err)
 	}
-	if inspected.Config == nil || !ownedByPR(inspected.Config.Labels, pullRequestID, dockerx.KindImage) {
+	if inspected.Config == nil || !r.ownedByPR(inspected.Config.Labels, pullRequestID, dockerx.KindImage) {
 		return failure(CodeNotOwned, "Refusing to remove an image that is not this pull request's.", false, nil)
 	}
 	if _, err := r.docker.ImageRemove(ctx, ref, client.ImageRemoveOptions{PruneChildren: true}); err != nil && !cerrdefs.IsNotFound(err) {
@@ -109,7 +109,7 @@ func (r *Runtime) removeOwnedNetwork(ctx context.Context, pullRequestID int64, i
 		return failure(CodeUnavailable, "The network could not be inspected.", true, err)
 	}
 	n := inspected.Network
-	if !ownedByPR(n.Labels, pullRequestID, dockerx.KindPreviewNetwork, dockerx.KindBuildNetwork) {
+	if !r.ownedByPR(n.Labels, pullRequestID, dockerx.KindPreviewNetwork, dockerx.KindBuildNetwork) {
 		return failure(CodeNotOwned, "Refusing to remove a network that is not this pull request's.", false, nil)
 	}
 	for containerID := range n.Containers {

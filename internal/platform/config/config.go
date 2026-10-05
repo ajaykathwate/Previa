@@ -85,6 +85,7 @@ type WorkerConfig struct {
 	SharedConfig
 	ExecutionConfig
 	RoutingConfig
+	HousekeepingConfig
 	GitHubAppID             int64         `envconfig:"GITHUB_APP_ID"`
 	GitHubAppPrivateKeyPath string        `envconfig:"GITHUB_APP_PRIVATE_KEY_PATH"`
 	MaxConcurrentBuilds     int           `envconfig:"MAX_CONCURRENT_BUILDS" required:"true"`
@@ -137,6 +138,9 @@ func LoadWorker() (WorkerConfig, error) {
 	}
 	if err := cfg.ExecutionConfig.check(); err != nil {
 		return WorkerConfig{}, fmt.Errorf("validate execution configuration: %w", err)
+	}
+	if err := cfg.HousekeepingConfig.check(); err != nil {
+		return WorkerConfig{}, fmt.Errorf("validate housekeeping configuration: %w", err)
 	}
 	if err := cfg.RoutingConfig.check(); err != nil {
 		return WorkerConfig{}, fmt.Errorf("validate routing configuration: %w", err)

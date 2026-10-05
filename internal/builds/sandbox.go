@@ -93,21 +93,22 @@ func (b *Builder) ensureBuildKitImage(ctx context.Context) error {
 // same source builds without cache instead of waiting.
 func (b *Builder) createBuilder(ctx context.Context, job Job, s *sandbox) (string, bool, error) {
 	scope := job.cacheScope()
-	volume := cacheVolumeName(scope)
+	volume := CacheVolumeName(job.Instance, scope)
 	if _, err := b.docker.VolumeCreate(ctx, client.VolumeCreateOptions{Name: volume, Labels: map[string]string{
-		dockerx.LabelManaged: "true", dockerx.LabelKind: dockerx.KindBuildCache, dockerx.LabelBaseRepo: itoa(job.BaseRepoID), dockerx.LabelHeadRepo: itoa(job.HeadRepoID),
+		dockerx.LabelManaged: "true", dockerx.LabelInstance: job.Instance, dockerx.LabelKind: dockerx.KindBuildCache,
+		dockerx.LabelBaseRepo: itoa(job.BaseRepoID), dockerx.LabelHeadRepo: itoa(job.HeadRepoID),
 	}}); err != nil {
 		return "", false, fmt.Errorf("create build cache volume: %w", err)
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		id, err := b.createBuilderContainer(ctx, job, s, cachedBuilderName(scope), volume)
+		id, err := b.createBuilderContainer(ctx, job, s, cachedBuilderName(job.Instance, scope), volume)
 		if err == nil {
 			return id, true, nil
 		}
 		if !cerrdefs.IsConflict(err) {
 			return "", false, err
 		}
-		if removed, err := b.removeStaleBuilder(ctx, cachedBuilderName(scope)); err != nil || !removed {
+		if removed, err := b.removeStaleBuilder(ctx, cachedBuilderName(job.Instance, scope)); err != nil || !removed {
 			break
 		}
 	}
@@ -173,10 +174,10 @@ func (b *Builder) removeStaleBuilder(ctx context.Context, name string) (bool, er
 		return false, fmt.Errorf("inspect cached builder: %w", err)
 	}
 	c := inspected.Container
-	var started time.Time
-	if c.Config != nil {
-		started, _ = time.Parse(time.RFC3339, c.Config.Labels[dockerx.LabelStarted])
+	if c.Config == nil || !dockerx.OwnedBy(c.Config.Labels, b.cfg.Instance, dockerx.KindBuilder) {
+		return false, nil // Not ours to remove; build without the cache.
 	}
+	started, _ := time.Parse(time.RFC3339, c.Config.Labels[dockerx.LabelStarted])
 	running := c.State != nil && c.State.Running
 	if running && !started.IsZero() && b.now().Sub(started) < b.staleAfter() {
 		return false, nil

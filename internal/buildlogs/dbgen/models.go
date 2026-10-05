@@ -9,21 +9,23 @@ import (
 )
 
 type BuildIntent struct {
-	PullRequestID  int64
-	Revision       int64
-	BaseRevision   int64
-	Generation     int64
-	HeadSha        string
-	Source         string
-	RequestAction  string
-	RequestedBy    pgtype.Int8
-	IdempotencyKey string
-	State          string
-	AvailableAt    pgtype.Timestamptz
-	RequestedAt    pgtype.Timestamptz
-	StartedAt      pgtype.Timestamptz
-	CompletedAt    pgtype.Timestamptz
-	UpdatedAt      pgtype.Timestamptz
+	PullRequestID   int64
+	Revision        int64
+	BaseRevision    int64
+	Generation      int64
+	HeadSha         string
+	Source          string
+	RequestAction   string
+	RequestedBy     pgtype.Int8
+	IdempotencyKey  string
+	State           string
+	AvailableAt     pgtype.Timestamptz
+	RequestedAt     pgtype.Timestamptz
+	StartedAt       pgtype.Timestamptz
+	CompletedAt     pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	WaitingRevision pgtype.Int8
+	WaitingReason   pgtype.Text
 }
 
 type BuildLog struct {
@@ -83,6 +85,7 @@ type Environment struct {
 	AppliedRevision    int64
 	PendingRevision    pgtype.Int8
 	TeardownGeneration pgtype.Int8
+	LastErrorCode      pgtype.Text
 }
 
 type EnvironmentOperation struct {
@@ -145,6 +148,18 @@ type InstallationRepositoryEvent struct {
 	Removed         bool
 }
 
+type PlatformInstance struct {
+	Singleton bool
+	Instance  string
+	CreatedAt pgtype.Timestamptz
+}
+
+type PrReconciliation struct {
+	PullRequestID int64
+	ReconciledAt  pgtype.Timestamptz
+	Outcome       string
+}
+
 type PrSync struct {
 	RepoID        int64
 	Revision      int64
@@ -180,6 +195,23 @@ type PullRequest struct {
 	BuildStatus                 string
 	TeardownRequestedGeneration int64
 	TeardownReason              pgtype.Text
+}
+
+type PullRequestReport struct {
+	PullRequestID   int64
+	WantedVersion   int64
+	ReportedVersion int64
+	CommentDigest   pgtype.Text
+	CheckHeadSha    pgtype.Text
+	CheckRevision   pgtype.Int8
+	CheckRunID      pgtype.Int8
+	CheckOpen       bool
+	CheckDigest     pgtype.Text
+	LeaseOwner      pgtype.Text
+	LeaseExpiresAt  pgtype.Timestamptz
+	LastErrorCode   pgtype.Text
+	ReportedAt      pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
 }
 
 type Repo struct {

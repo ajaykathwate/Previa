@@ -26,6 +26,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/builds"
 	env "github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
@@ -92,6 +93,9 @@ var (
 		"--ping=true", "--ping.entrypoint=traefik",
 		"--certificatesresolvers.preview.acme.email=ops@" + baseDomain, "--certificatesresolvers.preview.acme.storage=/acme/acme.json",
 		"--certificatesresolvers.preview.acme.caserver=https://pebble:14000/dir",
+		// Pebble issues six-day certificates; at Traefik's default (90 days) it
+		// would renew one at every start, as if it were about to expire.
+		"--certificatesresolvers.preview.acme.certificatesduration=144",
 		"--certificatesresolvers.preview.acme.dnschallenge.provider=exec",
 		"--certificatesresolvers.preview.acme.dnschallenge.propagation.disablechecks=true",
 	}
@@ -391,7 +395,8 @@ func (h *harness) startPrevia(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	h.repo = env.NewRepository(h.pool, operations).WithHostnames(routing.NewLabel)
+	h.repo = env.NewRepository(h.pool, operations).WithHostnames(routing.NewLabel).WithReports()
+	h.reports.pool = h.pool
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return err
@@ -407,8 +412,12 @@ func (h *harness) startPrevia(ctx context.Context) error {
 	policy := runtime.PolicyFrom(settings.PreviewConfig)
 	policy.StartupTimeout = time.Minute
 	h.builder = &commitBuilder{docker: h.docker}
+	instance, err := database.Instance(ctx, h.pool)
+	if err != nil {
+		return err
+	}
 	h.runtime, err = runtime.New(runtime.Parts{
-		Docker: h.docker, Egress: h.gateway, Targets: runtime.NewTargetStore(h.pool), Sources: appSources{}, Builder: h.builder, Secrets: provider,
+		Instance: instance, Admission: runtime.NewAdmissionLock(h.pool), Docker: h.docker, Egress: h.gateway, Targets: runtime.NewTargetStore(h.pool), Sources: appSources{}, Builder: h.builder, Secrets: provider,
 		Logs: func(context.Context, env.Attempt, *secrets.Redactor) (runtime.LogSink, error) {
 			return discardSink{}, nil
 		},
@@ -605,7 +614,7 @@ func (b *commitBuilder) Build(ctx context.Context, job builds.Job) (builds.Image
 	ref := job.ImageRef()
 	label := func(name, value string) string { return "LABEL " + name + "=" + strconv.Quote(value) }
 	committed, err := b.docker.ContainerCommit(ctx, created.ID, client.ContainerCommitOptions{Reference: ref, Changes: []string{
-		label(dockerx.LabelManaged, "true"), label(dockerx.LabelKind, dockerx.KindImage),
+		label(dockerx.LabelManaged, "true"), label(dockerx.LabelInstance, job.Instance), label(dockerx.LabelKind, dockerx.KindImage),
 		label(dockerx.LabelPR, strconv.FormatInt(job.PullRequestID, 10)), label(dockerx.LabelGeneration, strconv.FormatInt(job.Generation, 10)),
 		label(dockerx.LabelRevision, strconv.FormatInt(job.Revision, 10)), label(dockerx.LabelSHA, job.HeadSHA),
 		`CMD ["sh", "-c", ` + strconv.Quote(appCommand) + `]`,
@@ -649,15 +658,22 @@ func (discardSink) Write(p []byte) (int, error) { return len(p), nil }
 func (discardSink) System(string)               {}
 func (discardSink) Close(context.Context) error { return nil }
 
-// reportRecorder stands in for GitHub reporting (Prompt 8).
+// reportRecorder stands in for the GitHub reporter: like it, it reads the
+// PR's persisted state when it runs, here only the environment's failure
+// category.
 type reportRecorder struct {
+	pool  *pgxpool.Pool
 	mu    sync.Mutex
 	codes []string
 }
 
-func (r *reportRecorder) Execute(_ context.Context, op env.Operation) error {
+func (r *reportRecorder) Execute(ctx context.Context, op env.Operation) error {
+	var code string
+	if err := r.pool.QueryRow(ctx, "SELECT COALESCE(last_error_code, '') FROM environments WHERE pull_request_id=$1", op.PullRequestID).Scan(&code); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.codes = append(r.codes, op.Payload.ErrorCode)
+	r.codes = append(r.codes, code)
 	return nil
 }

@@ -19,8 +19,11 @@ import (
 	"github.com/tonistiigi/fsutil"
 )
 
-// Config bounds builds. Values come from config.BuilderConfig.
+// Config bounds builds. Values come from config.BuilderConfig, except
+// Instance: this database's identity (database.Instance), which names and
+// labels everything the builder creates.
 type Config struct {
+	Instance      string
 	BuildKitImage string
 	CPUs          float64
 	Memory        int64
@@ -34,9 +37,9 @@ type Config struct {
 }
 
 // ConfigFrom adapts the worker's builder settings.
-func ConfigFrom(c config.BuilderConfig, maxDuration time.Duration) Config {
+func ConfigFrom(c config.BuilderConfig, instance string, maxDuration time.Duration) Config {
 	return Config{
-		BuildKitImage: c.BuildKitImage, CPUs: c.BuildCPUs,
+		Instance: instance, BuildKitImage: c.BuildKitImage, CPUs: c.BuildCPUs,
 		Memory: int64(c.BuildMemory), PIDs: c.BuildPIDs, DiskBudget: int64(c.BuildDiskBudget),
 		MaxImageSize: int64(c.BuildMaxImageSize), MinFreeDisk: int64(c.BuildMinFreeDisk), MaxDuration: maxDuration,
 	}
@@ -60,11 +63,16 @@ func NewBuilder(docker *client.Client, gateway *egress.Gateway, cfg Config, logg
 	if cfg.BuildKitImage == "" || cfg.CPUs <= 0 || cfg.Memory <= 0 || cfg.PIDs <= 0 || cfg.DiskBudget <= 0 || cfg.MaxImageSize <= 0 || cfg.MinFreeDisk < 0 {
 		return nil, errors.New("builder limits are incomplete")
 	}
+	if !dockerx.ValidInstance(cfg.Instance) {
+		return nil, errors.New("builder requires this database's instance identity")
+	}
 	return &Builder{docker: docker, egress: gateway, cfg: cfg, logger: logger, now: time.Now}, nil
 }
 
 // Job is one admitted build attempt.
 type Job struct {
+	// Instance is this database's identity; it must match the builder's.
+	Instance                            string
 	PullRequestID, Generation, Revision int64
 	HeadSHA                             string
 	// GitHub repository IDs. HeadRepoID is 0 when the head repository is
@@ -86,6 +94,8 @@ var commitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 func (j Job) validate() error {
 	switch {
+	case !dockerx.ValidInstance(j.Instance):
+		return errors.New("a build needs this database's instance identity")
 	case j.PullRequestID <= 0 || j.Generation < 0 || j.Revision <= 0:
 		return errors.New("a build needs a PR, generation and revision")
 	case !commitSHA.MatchString(j.HeadSHA):
@@ -115,6 +125,9 @@ const diskPoll = 5 * time.Second
 func (b *Builder) Build(ctx context.Context, job Job) (Image, error) {
 	if err := job.validate(); err != nil {
 		return Image{}, failure(CodeInvalidJob, "The build request is incomplete.", false, err)
+	}
+	if job.Instance != b.cfg.Instance {
+		return Image{}, failure(CodeInvalidJob, "The build request belongs to another Previa instance.", false, nil)
 	}
 	if existing, ok := b.reusable(ctx, job); ok {
 		job.Logs.System("Reusing the image an earlier attempt built for this revision.")
@@ -149,8 +162,15 @@ func (b *Builder) Build(ctx context.Context, job Job) (Image, error) {
 	if err != nil {
 		return Image{}, b.interrupted(ctx, err, failure(CodeBuilderUnavailable, "The builder could not measure free disk space.", true, err))
 	}
-	if free < b.cfg.MinFreeDisk {
-		return Image{}, failure(CodeDiskLow, fmt.Sprintf("The build host has %s free; a build needs at least %s.", humanBytes(free), humanBytes(b.cfg.MinFreeDisk)), true, nil)
+	// Every other running build may still grow to its disk budget; count that
+	// as already used. Builders exist before they measure, so two builds
+	// starting together each count the other.
+	others, err := b.otherBuilders(ctx, sb.containerID)
+	if err != nil {
+		return Image{}, b.interrupted(ctx, err, failure(CodeBuilderUnavailable, "The builder could not count running builds.", true, err))
+	}
+	if needed := b.cfg.MinFreeDisk + int64(others)*b.cfg.DiskBudget; free < needed {
+		return Image{}, failure(CodeDiskLow, fmt.Sprintf("The build host has %s free; with %d other builds running, a build needs at least %s.", humanBytes(free), others, humanBytes(needed)), true, nil)
 	}
 	bk, err := buildkit.New(ctx, "", buildkit.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 		return dialBuilder(ctx, b.docker, sb.containerID)
@@ -160,6 +180,22 @@ func (b *Builder) Build(ctx context.Context, job Job) (Image, error) {
 	}
 	defer func() { _ = bk.Close() }()
 	return b.solve(ctx, cancel, bk, sb, job)
+}
+
+// otherBuilders counts this instance's running builders other than self.
+func (b *Builder) otherBuilders(ctx context.Context, self string) (int, error) {
+	listed, err := b.docker.ContainerList(ctx, client.ContainerListOptions{Filters: client.Filters{}.Add("label",
+		dockerx.LabelManaged+"=true", dockerx.LabelInstance+"="+b.cfg.Instance, dockerx.LabelKind+"="+dockerx.KindBuilder)})
+	if err != nil {
+		return 0, fmt.Errorf("list running builders: %w", err)
+	}
+	n := 0
+	for _, c := range listed.Items {
+		if c.ID != self {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (b *Builder) solve(ctx context.Context, cancel context.CancelCauseFunc, bk *buildkit.Client, sb *sandbox, job Job) (Image, error) {

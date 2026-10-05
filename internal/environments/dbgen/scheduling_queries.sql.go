@@ -12,7 +12,9 @@ import (
 )
 
 const claimBuildIntent = `-- name: ClaimBuildIntent :execrows
-UPDATE build_intents b SET state = 'running', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp()
+UPDATE build_intents b SET state = 'running', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp(),
+    waiting_revision = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_revision END,
+    waiting_reason = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_reason END
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = $1
     AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = $2 AND pr.head_sha = $3
@@ -30,6 +32,8 @@ type ClaimBuildIntentParams struct {
 	BuildMode  string
 }
 
+// Admission ends a wait for a build slot; a running request that waits for
+// preview capacity or disk keeps its note until a result is applied.
 func (q *Queries) ClaimBuildIntent(ctx context.Context, arg ClaimBuildIntentParams) (int64, error) {
 	result, err := q.db.Exec(ctx, claimBuildIntent,
 		arg.PrID,
@@ -55,6 +59,24 @@ func (q *Queries) ClearBuildLogs(ctx context.Context, pullRequestID int64) error
 	return err
 }
 
+const clearIntentWaiting = `-- name: ClearIntentWaiting :execrows
+UPDATE build_intents SET waiting_revision = NULL, waiting_reason = NULL, updated_at = clock_timestamp()
+WHERE pull_request_id = $1 AND revision = $2 AND waiting_revision IS NOT NULL
+`
+
+type ClearIntentWaitingParams struct {
+	PullRequestID int64
+	Revision      int64
+}
+
+func (q *Queries) ClearIntentWaiting(ctx context.Context, arg ClearIntentWaitingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearIntentWaiting, arg.PullRequestID, arg.Revision)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const completeTeardownRequest = `-- name: CompleteTeardownRequest :execrows
 UPDATE pull_requests SET teardown_completed_generation = generation
 WHERE id = $1 AND generation = $2
@@ -74,6 +96,19 @@ func (q *Queries) CompleteTeardownRequest(ctx context.Context, arg CompleteTeard
 	return result.RowsAffected(), nil
 }
 
+const countRunningBuilds = `-- name: CountRunningBuilds :one
+SELECT count(*) FROM build_intents WHERE state = 'running' AND pull_request_id <> $1
+`
+
+// An admitted build holds its slot until its final attempt ends, including
+// between River retries; another attempt of the same PR's request reuses it.
+func (q *Queries) CountRunningBuilds(ctx context.Context, pullRequestID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countRunningBuilds, pullRequestID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const findPROwner = `-- name: FindPROwner :one
 SELECT i.owner_user_id FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
 JOIN installations i ON i.id = r.installation_id WHERE pr.id = $1
@@ -87,7 +122,8 @@ func (q *Queries) FindPROwner(ctx context.Context, id int64) (pgtype.Int8, error
 }
 
 const finishBuildIntent = `-- name: FinishBuildIntent :execrows
-UPDATE build_intents b SET state = $1, completed_at = clock_timestamp(), updated_at = clock_timestamp()
+UPDATE build_intents b SET state = $1, completed_at = clock_timestamp(), updated_at = clock_timestamp(),
+    waiting_revision = NULL, waiting_reason = NULL
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = $2
     AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = $3
@@ -148,6 +184,17 @@ func (q *Queries) ListSchedulingCandidates(ctx context.Context, arg ListScheduli
 	return items, nil
 }
 
+const lockBuildSlots = `-- name: LockBuildSlots :exec
+SELECT pg_advisory_xact_lock(hashtext('previa.build_slots.' || instance)) FROM platform_instance
+`
+
+// Serializes build admission across workers, so the running count is exact.
+// Keyed by instance: advisory locks are shared by a database's schemas.
+func (q *Queries) LockBuildSlots(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockBuildSlots)
+	return err
+}
+
 const lockSchedulingPR = `-- name: LockSchedulingPR :one
 SELECT id, generation, head_sha, state, teardown_completed_generation FROM pull_requests WHERE id = $1 FOR UPDATE
 `
@@ -171,6 +218,35 @@ func (q *Queries) LockSchedulingPR(ctx context.Context, id int64) (LockSchedulin
 		&i.TeardownCompletedGeneration,
 	)
 	return i, err
+}
+
+const markIntentWaiting = `-- name: MarkIntentWaiting :execrows
+UPDATE build_intents SET waiting_revision = $1::bigint, waiting_reason = $2::text, updated_at = clock_timestamp()
+WHERE pull_request_id = $3 AND generation = $4::bigint AND revision = $1::bigint
+  AND state IN ('pending', 'queued', 'running')
+  AND (waiting_revision IS DISTINCT FROM $1::bigint OR waiting_reason IS DISTINCT FROM $2::text)
+`
+
+type MarkIntentWaitingParams struct {
+	Revision   int64
+	Reason     string
+	PrID       int64
+	Generation int64
+}
+
+// Notes that the current request waits for capacity or disk space. Reports
+// follow only when the note changes.
+func (q *Queries) MarkIntentWaiting(ctx context.Context, arg MarkIntentWaitingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markIntentWaiting,
+		arg.Revision,
+		arg.Reason,
+		arg.PrID,
+		arg.Generation,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const queueCurrentIntent = `-- name: QueueCurrentIntent :execrows

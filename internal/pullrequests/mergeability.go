@@ -125,7 +125,7 @@ func (s *SyncService) CheckMergeability(ctx context.Context, args MergeabilityAr
 		}
 		// The resolved snapshot is authoritative and fenced; it may also close a
 		// tracked PR. It can authorize Automatic work, never an untracked PR.
-		applied, err := ObserveTx(ctx, tx, args.RepoID, o, false, nil)
+		applied, err := ObserveTx(ctx, tx, args.RepoID, o, false, s.observer)
 		if err != nil || !applied {
 			return err
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/builds"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	"github.com/ajaykathwatee/previa/internal/repoconfig"
 	"github.com/ajaykathwatee/previa/internal/secrets"
@@ -21,6 +22,8 @@ import (
 // Targets rechecks that a request may still run; *TargetStore implements it.
 type Targets interface {
 	Current(ctx context.Context, request environments.Request) (Target, error)
+	// BaseRepository returns the GitHub ID of the PR's base repository.
+	BaseRepository(ctx context.Context, pullRequestID int64) (int64, error)
 }
 
 // Sources prepares an exact commit; *source.Preparer implements it.
@@ -54,44 +57,68 @@ type LogOpener func(ctx context.Context, attempt environments.Attempt, redactor 
 
 // Parts are the runtime's collaborators.
 type Parts struct {
-	Docker  *client.Client
-	Egress  *egress.Gateway
-	Targets Targets
-	Sources Sources
-	Builder Builder
-	Secrets Secrets
-	Logs    LogOpener
+	// Instance is this database's identity (database.Instance); it names and
+	// labels every object the runtime creates, and the runtime only ever
+	// inspects, counts or removes objects that carry it.
+	Instance string
+	Docker   *client.Client
+	// Admission serializes preview capacity checks across workers.
+	Admission Locker
+	Egress    *egress.Gateway
+	Targets   Targets
+	Sources   Sources
+	Builder   Builder
+	Secrets   Secrets
+	Logs      LogOpener
 }
 
 // Runtime turns an admitted request into a healthy, hardened preview
 // container that is not yet routed. It implements environments.Runtime; the
 // lifecycle transactions stay in internal/environments.
 type Runtime struct {
-	docker  *client.Client
-	egress  *egress.Gateway
-	targets Targets
-	sources Sources
-	builder Builder
-	secrets Secrets
-	logs    LogOpener
-	policy  Policy
-	logger  *slog.Logger
-	now     func() time.Time
+	instance  string
+	admission Locker
+	docker    *client.Client
+	egress    *egress.Gateway
+	targets   Targets
+	sources   Sources
+	builder   Builder
+	secrets   Secrets
+	logs      LogOpener
+	policy    Policy
+	logger    *slog.Logger
+	now       func() time.Time
 }
 
-var _ environments.Runtime = (*Runtime)(nil)
+var (
+	_ environments.Runtime  = (*Runtime)(nil)
+	_ environments.Headroom = (*Runtime)(nil)
+)
 
 func New(parts Parts, policy Policy, logger *slog.Logger) (*Runtime, error) {
-	if parts.Docker == nil || parts.Egress == nil || parts.Targets == nil || parts.Sources == nil || parts.Builder == nil || parts.Secrets == nil || parts.Logs == nil || logger == nil {
-		return nil, errors.New("runtime requires Docker, egress, targets, sources, builder, secrets, logs and a logger")
+	if parts.Docker == nil || parts.Admission == nil || parts.Egress == nil || parts.Targets == nil || parts.Sources == nil || parts.Builder == nil || parts.Secrets == nil || parts.Logs == nil || logger == nil {
+		return nil, errors.New("runtime requires Docker, an admission lock, egress, targets, sources, builder, secrets, logs and a logger")
+	}
+	if !dockerx.ValidInstance(parts.Instance) {
+		return nil, errors.New("runtime requires this database's instance identity")
 	}
 	if policy.TmpfsBytes <= 0 || policy.PIDs <= 0 || policy.StartupTimeout <= 0 || policy.MaxPerRepo <= 0 {
 		return nil, errors.New("runtime policy is incomplete")
 	}
 	return &Runtime{
-		docker: parts.Docker, egress: parts.Egress, targets: parts.Targets, sources: parts.Sources,
+		instance: parts.Instance, admission: parts.Admission, docker: parts.Docker, egress: parts.Egress, targets: parts.Targets, sources: parts.Sources,
 		builder: parts.Builder, secrets: parts.Secrets, logs: parts.Logs, policy: policy, logger: logger, now: time.Now,
 	}, nil
+}
+
+// NewInventory returns a Runtime that can only list and remove this
+// instance's Docker objects (Resources, PullRequests, RemoveResource and the
+// cleanup executor), for housekeeping and its diagnostics. It cannot build.
+func NewInventory(docker *client.Client, instance string, logger *slog.Logger) (*Runtime, error) {
+	if docker == nil || logger == nil || !dockerx.ValidInstance(instance) {
+		return nil, errors.New("inventory requires Docker, this database's instance identity and a logger")
+	}
+	return &Runtime{instance: instance, docker: docker, logger: logger, now: time.Now}, nil
 }
 
 // PolicyFrom adapts the worker's preview settings.
@@ -108,6 +135,9 @@ func PolicyFrom(c config.PreviewConfig) Policy {
 // candidate on the PR's private network. It returns once the candidate is
 // healthy; it never routes it. On failure the candidate is removed.
 func (r *Runtime) Build(ctx context.Context, request environments.Request, attempt environments.Attempt) (environments.Artifact, error) {
+	if r.targets == nil {
+		return environments.Artifact{}, failure(CodeUnavailable, "This runtime only inventories objects.", false, nil)
+	}
 	target, err := r.targets.Current(ctx, request)
 	if err != nil {
 		return environments.Artifact{}, err
@@ -176,7 +206,7 @@ func (r *Runtime) buildImage(ctx context.Context, request environments.Request, 
 		logs.System(notice.Message)
 	}
 	image, err := r.builder.Build(ctx, builds.Job{
-		PullRequestID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, HeadSHA: request.HeadSHA,
+		Instance: r.instance, PullRequestID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, HeadSHA: request.HeadSHA,
 		BaseRepoID: t.BaseRepoID, HeadRepoID: t.HeadRepoID, ContextDir: prepared.ContextDir, Dockerfile: prepared.Dockerfile, Logs: logs,
 	})
 	if err != nil {
@@ -192,6 +222,8 @@ func (r *Runtime) buildImage(ctx context.Context, request environments.Request, 
 			return builds.Image{}, repoconfig.Config{}, failure(CodeTimeout, message, false, err)
 		case builds.CodeSuperseded:
 			return builds.Image{}, repoconfig.Config{}, failure(CodeNotCurrent, message, false, err)
+		case builds.CodeDiskLow:
+			return builds.Image{}, repoconfig.Config{}, failure(CodeDiskLow, message, true, err)
 		}
 		return builds.Image{}, repoconfig.Config{}, failure(CodeBuild, message, retryable, err)
 	}
@@ -201,6 +233,18 @@ func (r *Runtime) buildImage(ctx context.Context, request environments.Request, 
 // startCandidate admits, creates and starts the hardened container and waits
 // until it is ready. Any failure removes it after capturing its output.
 func (r *Runtime) startCandidate(ctx context.Context, id requestIdentity, t Target, image builds.Image, settings repoconfig.Config, env []string, logs LogSink) (containerID string, err error) {
+	// Hold the admission lock from the capacity check until the labelled
+	// container exists, so the next admission counts it.
+	unlock, err := r.admission.Lock(ctx)
+	if err != nil {
+		return "", r.interrupted(ctx, failure(CodeUnavailable, "Preview capacity could not be checked.", true, err))
+	}
+	locked := true
+	defer func() {
+		if locked {
+			unlock()
+		}
+	}()
 	if err := r.checkCapacity(ctx, t, settings.Resources.CPUMillis, settings.Resources.MemoryBytes); err != nil {
 		return "", err
 	}
@@ -212,16 +256,18 @@ func (r *Runtime) startCandidate(ctx context.Context, id requestIdentity, t Targ
 	if err != nil || inspected.Config == nil {
 		return "", failure(CodeUnavailable, "The built image could not be inspected.", true, err)
 	}
-	name := fmt.Sprintf("previa-pr%d-g%d-r%d-%d", id.PullRequestID, id.Generation, id.Revision, r.now().UnixNano())
+	name := fmt.Sprintf("previa-%s-pr%d-g%d-r%d-%d", r.instance, id.PullRequestID, id.Generation, id.Revision, r.now().UnixNano())
 	config, host, replaced := containerSpec(candidate{
 		Name: name, ImageID: image.ID, ImageUser: inspected.Config.User, Port: settings.Port, Env: env, ProxyURL: proxyURL,
 		CPUMillis: settings.Resources.CPUMillis, Memory: settings.Resources.MemoryBytes, NetworkID: networkID,
-		Labels: previewLabels(t, id, image.Ref, settings.Port, settings.HealthCheckPath, settings.Resources.CPUMillis, settings.Resources.MemoryBytes, r.now()),
+		Labels: previewLabels(r.instance, t, id, image.Ref, settings.Port, settings.HealthCheckPath, settings.Resources.CPUMillis, settings.Resources.MemoryBytes, r.now()),
 	}, r.policy)
 	if replaced {
 		logs.System("The image runs as root, so the preview runs as the unprivileged user 65532 instead.")
 	}
 	created, err := r.docker.ContainerCreate(ctx, client.ContainerCreateOptions{Name: name, Config: config, HostConfig: host})
+	unlock()
+	locked = false
 	if err != nil {
 		return "", r.interrupted(ctx, failure(CodeUnavailable, "The preview container could not be created.", true, err))
 	}
@@ -239,7 +285,7 @@ func (r *Runtime) startCandidate(ctx context.Context, id requestIdentity, t Targ
 		check = "for HTTP 200-399 from " + settings.HealthCheckPath
 	}
 	logs.System(fmt.Sprintf("Waiting up to %s for the app on port %d %s.", r.policy.StartupTimeout, settings.Port, check))
-	if err := r.waitReady(ctx, created.ID, networkName(id.PullRequestID), settings.Port, settings.HealthCheckPath); err != nil {
+	if err := r.waitReady(ctx, created.ID, r.networkName(id.PullRequestID), settings.Port, settings.HealthCheckPath); err != nil {
 		return "", err
 	}
 	r.captureOutput(ctx, created.ID, logs)

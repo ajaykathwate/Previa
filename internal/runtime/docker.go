@@ -22,9 +22,9 @@ const (
 
 // networkName is the PR's preview network. A PR has one lifetime environment,
 // so its candidates and active preview share it; nothing else joins it except
-// the egress proxy and, from Prompt 6, the router.
-func networkName(pullRequestID int64) string {
-	return "previa-pr-" + strconv.FormatInt(pullRequestID, 10)
+// the egress proxy and the router.
+func (r *Runtime) networkName(pullRequestID int64) string {
+	return "previa-" + r.instance + "-pr-" + strconv.FormatInt(pullRequestID, 10)
 }
 
 // previewNetwork returns the PR's internal network, creating it when missing,
@@ -32,12 +32,12 @@ func networkName(pullRequestID int64) string {
 // refuses a same-named network that Previa did not create or that is not
 // internal.
 func (r *Runtime) previewNetwork(ctx context.Context, id requestIdentity, t Target) (string, string, error) {
-	name := networkName(id.PullRequestID)
+	name := r.networkName(id.PullRequestID)
 	networkID := ""
 	for attempt := 0; attempt < 2 && networkID == ""; attempt++ {
 		inspected, err := r.docker.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
 		if err == nil {
-			if !dockerx.Owned(inspected.Network.Labels, dockerx.KindPreviewNetwork) || !inspected.Network.Internal {
+			if !dockerx.OwnedBy(inspected.Network.Labels, r.instance, dockerx.KindPreviewNetwork) || !inspected.Network.Internal {
 				return "", "", failure(CodeNotOwned, "A Docker network with this preview's name was not created by Previa.", false, nil)
 			}
 			networkID = inspected.Network.ID
@@ -47,7 +47,7 @@ func (r *Runtime) previewNetwork(ctx context.Context, id requestIdentity, t Targ
 			return "", "", fmt.Errorf("inspect preview network: %w", err)
 		}
 		created, err := r.docker.NetworkCreate(ctx, name, client.NetworkCreateOptions{Driver: "bridge", Internal: true, Labels: map[string]string{
-			dockerx.LabelManaged: "true", dockerx.LabelKind: dockerx.KindPreviewNetwork,
+			dockerx.LabelManaged: "true", dockerx.LabelInstance: r.instance, dockerx.LabelKind: dockerx.KindPreviewNetwork,
 			dockerx.LabelPR: strconv.FormatInt(id.PullRequestID, 10), dockerx.LabelBaseRepo: strconv.FormatInt(t.BaseRepoID, 10),
 		}})
 		if cerrdefs.IsConflict(err) {
