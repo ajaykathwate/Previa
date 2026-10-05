@@ -1,0 +1,512 @@
+# Previa user guide: features, step-by-step flows and manual tests
+
+Everything a person using Previa needs: what it offers, every flow from first
+sign-in to a working preview and its removal, what each screen and message means,
+and a checklist to test it all by hand, including the edge cases. Labels in
+**bold** are exactly what the screens show. Developer setup is in
+[02](../docs/02-development-setup.md); the technical picture is in
+[tech-stack.md](tech-stack.md).
+
+## What Previa offers
+
+- **A live preview for every pull request.** Previa builds the pull request's exact
+  commit with its `Dockerfile`, runs it in an isolated container and serves it at
+  its own HTTPS address, so reviewers can use the change instead of reading it.
+- **One stable address per pull request** (`https://pr-<number>-<repo id>-<token>.<preview domain>`),
+  kept across rebuilds and reopenings.
+- **You decide when it builds**: **Manual** (only when you click) or **Automatic**
+  (five quiet minutes after the latest push).
+- **Feedback where your team works**: one comment on the pull request that keeps
+  itself up to date, and a check run per build.
+- **Live build logs** in the browser, with secrets hidden.
+- **Safe by default**: previews cannot reach your infrastructure; forks never get
+  your secrets; a failed rebuild never replaces a working preview.
+- **Tidies up after itself**: previews are removed when the pull request closes or
+  merges, when you tear them down, after 48 hours without a new build (by default),
+  or when GitHub access is removed.
+- **Repository secrets**: values your previews need (sandbox API keys), stored
+  encrypted and never shown again.
+
+## The journey at a glance
+
+```mermaid
+---
+title: "From sign-in to a preview and back"
+---
+flowchart TD
+    A["Home: Get started with GitHub"] --> B["Overview"]
+    B --> C["Repositories: Install on a repo"]
+    C --> D["GitHub: choose repositories,<br/>authorize the App"]
+    D --> E["Repository card appears<br/>(Available)"]
+    E --> F["Repository page: pull requests<br/>(Sync Pull Requests)"]
+    F --> G{"Build mode?"}
+    G -->|"Manual (default)"| H["Pull request page:<br/>Build latest commit"]
+    G -->|Automatic| I["Push a commit:<br/>build starts after 5 quiet minutes"]
+    H --> J["Queued, then Running<br/>(Build logs stream live)"]
+    I --> J
+    J -->|healthy| K["Preview Running at its HTTPS address<br/>PR comment: Ready + check run"]
+    J -->|fails| L["Failed with a reason<br/>Retry build"]
+    L --> J
+    K --> M["Rebuild preview / new commits"]
+    M --> J
+    K --> N{"Removed by"}
+    N -->|you| O["Tear down preview (confirm)"]
+    N -->|GitHub| P["PR closed or merged"]
+    N -->|time| Q["Expired after 48 h"]
+    O --> R["Preview removed;<br/>address kept for the next build"]
+    P --> R
+    Q --> R
+
+    %% Notes
+    %% - Builds need a worker with builds configured (GitHub App, Docker, preview domain).
+    %% - Every build reads the pull request fresh from GitHub first.
+```
+
+A build request moves through these states (shown on the pull request page and on
+**Builds**):
+
+```mermaid
+---
+title: "Build request states"
+---
+stateDiagram-v2
+    [*] --> NotRequested
+    NotRequested: Not requested
+    NotRequested --> Waiting: Automatic push
+    NotRequested --> Queued: Build latest commit
+    Waiting: Waiting (five quiet minutes)
+    Waiting --> Waiting: another push resets the timer
+    Waiting --> Queued: quiet period over, or Build now
+    Queued --> Running: a build slot is free
+    Queued --> Queued: Waiting for capacity, disk space or Builds paused
+    Running --> Succeeded: preview healthy and routed
+    Running --> Failed: build or start failed
+    Failed --> Queued: Retry build
+    Succeeded --> Queued: Rebuild preview
+    Queued --> Superseded: newer commit or PR closed
+    Running --> Superseded: newer commit or PR closed
+    Waiting --> Cancelled: switched to Manual
+    Queued --> Cancelled: Tear down preview
+    note right of Failed
+        A failed build never replaces
+        the preview already serving.
+    end note
+    note right of Succeeded
+        Expires 48 h after this publication
+        unless a newer one is published.
+    end note
+```
+
+---
+
+## 0. Before you start
+
+You need:
+
+1. A running Previa: the dashboard (server) and a worker
+   ([02](../docs/02-development-setup.md)). For previews the worker also needs the
+   GitHub App, Docker and a preview domain with its router.
+2. A GitHub account that owns (or administers) the repositories you want to preview.
+3. In each repository: a `Dockerfile` and a `.previewrc.yaml` at the root (step 5).
+
+**Previews on your own machine without a domain** (for trying everything locally):
+
+1. In `.env`, set `PREVIEW_BASE_DOMAIN=preview.localtest.me` (every
+   `*.localtest.me` name points at your own computer) and
+   `ROUTER_DYNAMIC_DIR` to an existing directory on the Linux filesystem, for
+   example `~/.local/share/previa/router`.
+2. Router settings for `make router-up`: `ACME_EMAIL=you@example.com`,
+   `ACME_DNS_PROVIDER=cloudflare`, `ACME_DNS_CREDENTIAL_VARIABLE=CF_DNS_API_TOKEN`,
+   `ACME_DNS_CREDENTIAL_FILE` = a file containing any text (`chmod 600` it), and
+   `ACME_CA_SERVER=https://127.0.0.1:1/directory` so no certificate is requested.
+3. `make egress-image`, `make router-up`, then restart `make run-worker`. Its log
+   says `River worker started execution=true`.
+4. Previews open at `https://pr-…preview.localtest.me`; the browser warns about
+   the certificate (Traefik's default one). Accept it for testing only.
+
+Automatic builds and live webhook updates also need GitHub to reach your
+dashboard: a tunnel (for example Cloudflare Tunnel or ngrok) to `localhost:8080`,
+set as the App's webhook URL with `/webhooks/github`. Without it, use **Sync Pull
+Requests** and Manual builds.
+
+## 1. Sign in
+
+1. Open the dashboard and click **Get started with GitHub**.
+2. Authorize Previa on GitHub (first time only).
+3. You land on **Overview**, signed in as your GitHub user.
+
+What you see on **Overview**: counts of linked installations, repositories and
+access; delivery counts (**Waiting or queued**, **Building**, **Live previews**,
+**Failed requests**); the pipeline stages **Discover, Gate, Build, Run, Route,
+Report, Teardown**, each **Connected** or **Not running** depending on the worker;
+and **Your next steps**.
+
+## 2. Connect your repositories
+
+1. Open **Repositories** and click **Install on a repo** (later **Manage
+   connections**).
+2. On GitHub, pick the account and the repositories Previa may use.
+3. GitHub returns to Previa and asks you to authorize the App with the **same
+   account**. Previa checks you really own that installation before linking it.
+4. Your repositories appear as cards. Linking never builds anything; it starts a
+   first discovery of open pull requests.
+
+To add or remove repositories later, use **Manage connections** (GitHub's page).
+
+## 3. Find your repositories
+
+- Tabs: **Available** (default), **Unavailable** (access removed or installation
+  suspended; history kept), **All**.
+- Search filters as you type; ten per page; the page, tab and search are in the URL.
+- Click a card to open the repository.
+
+## 4. Track pull requests
+
+1. The repository page shows **Last synced**, the build mode and the pull requests.
+2. **Sync Pull Requests** fetches the open pull requests from GitHub (metadata only;
+   never builds). Clicking repeatedly while it syncs does nothing extra.
+3. With webhooks, new commits, closes and mergeability changes appear by themselves;
+   the green **Live** dot means the page is receiving updates.
+4. Tabs **Open**, **Closed**, **Merged**, **All**; search by title, number, author
+   or branch.
+5. Each open pull request shows a state:
+
+   | State | Meaning | Can it build? |
+   | --- | --- | --- |
+   | **Open** | GitHub says it can merge | Yes |
+   | **Checking** | GitHub is still computing mergeability | Not yet; wait or sync again |
+   | **Conflicts** | It conflicts with its base branch | No; resolve and push |
+   | **Refresh required** | Two observations arrived at the same instant | Sync again |
+
+6. Click a pull request to open its page: three panels, **Latest observed commit**,
+   **Current build request** and **Deployed preview**, plus **Build logs** and
+   **View on GitHub**.
+
+## 5. Prepare a repository for previews
+
+At the repository root (on the commit you want to preview):
+
+1. A `Dockerfile` that builds and starts your app.
+2. A `.previewrc.yaml`, for example:
+
+   ```yaml
+   port: 3000                 # the port your app listens on inside the container
+   health_check_path: /health # optional; without it Previa waits for the port to accept connections
+   resource_tier: standard    # small (0.5 CPU, 512 MiB), standard (1 CPU, 1 GiB) or large (2 CPU, 2 GiB)
+   env:                       # optional plain settings; use Secrets for sensitive values
+     - APP_ENV=preview
+   ```
+
+   `{}` alone is valid (port 3000, `Dockerfile` at the root). The file is required:
+   without it the build fails with "The commit could not be prepared".
+3. Your app runs as a non-root user (UID 65532) with a read-only file system and a
+   writable `/tmp`; write only to `/tmp`.
+
+## 6. Choose when previews build
+
+On the repository page (pull request list only):
+
+- **Manual** (default): nothing builds until you click.
+- **Enable Automatic Builds**: a confirmation dialog explains it; confirm to turn it
+  on. Each new commit then builds after five minutes without another push. It does
+  not build pull requests that already exist.
+- Turning it off saves Manual at once and cancels automatic requests that have not
+  started; running builds and existing previews stay.
+
+## 7. Build a preview (Manual)
+
+1. Open the pull request's page.
+2. Click **Build latest commit**. Previa first reads the pull request fresh from
+   GitHub, then records one request (double clicks count once).
+3. **Current build request** shows **Queued**, then **Running**. Open **Build logs**
+   to watch the output live.
+4. When the app answers its health check, the preview goes live: **Deployed
+   preview** shows **Running**, the address, and **Expires** (48 hours later by
+   default).
+5. On GitHub, the pull request gets the Previa comment ("Previa preview: Ready" with
+   the address) and a **Previa preview** check run with a success result.
+
+If the button is missing, a sentence says why (see
+[When Previa says no](#18-when-previa-says-no)).
+
+## 8. Automatic builds
+
+1. Enable Automatic (step 6).
+2. Push a commit to an open pull request.
+3. The request shows **Waiting** with the time it becomes eligible; the comment says
+   it builds after five quiet minutes.
+4. Push again within five minutes: the timer restarts and only the newest commit
+   builds.
+5. **Build now** on the pull request page skips the wait.
+
+## 9. Retry, rebuild, build now
+
+| Button | When you see it | What it does |
+| --- | --- | --- |
+| **Build latest commit** | Nothing requested yet, or the last request was cancelled or superseded | Builds the commit GitHub reports now |
+| **Build now** | An Automatic request is waiting | Builds it without waiting |
+| **Retry build** | The current request failed | A new attempt of the same commit |
+| **Rebuild preview** | The current request succeeded | Builds the same commit again; the old preview serves until the new one is healthy |
+
+A page left open while things changed refuses an old button with **Reload and try
+again**.
+
+## 10. Open and share a preview
+
+- Click the address under **Deployed preview** (or **Open preview** on
+  **Environments**) and share it with reviewers.
+- The address never changes for that pull request.
+- **This preview serves an earlier commit than the latest one** means a newer
+  commit exists but has not been built (Manual) or is building.
+- After teardown, close or expiry, the address shows **Preview not found or
+  expired** until the next build.
+
+## 11. Feedback on the pull request (GitHub)
+
+One comment, always edited in place, titled **Previa preview: …**:
+
+| Title | Meaning |
+| --- | --- |
+| Waiting | Automatic: builds after five quiet minutes (with the time) |
+| Queued | Waiting for a worker |
+| Waiting to build | Mergeability is being checked, or the PR conflicts |
+| Waiting for capacity / Waiting for disk space / Builds paused | Waiting, not failing; starts by itself |
+| Building | The commit is building |
+| Ready | The preview is live (address and expiry) |
+| Failed | With a short reason; the earlier preview, if any, keeps serving |
+| Removing / Preview removed / Preview expired | Teardown in progress / done / by expiry |
+
+A **Previa preview** check run is added for each build request on its exact commit
+(a retry or rebuild of the same commit gets its own run).
+
+## 12. Read build logs
+
+1. Click **Build logs** on the pull request page (or **Logs** on **Builds** /
+   **Environments**).
+2. The status line says **No build requested**, **Waiting**, **Queued**, **Running**
+   or how the attempt ended.
+3. New lines appear live while it runs; the view follows the end while you are at
+   the bottom. Scroll up to stop following; **Follow output** resumes.
+4. **Earlier lines** / **Later lines** page through long logs; each line number is a
+   link.
+5. Only the current attempt is kept; a new attempt clears the page. Logs are kept
+   14 days after an attempt finishes; at most 5 MiB / 20,000 lines are stored.
+6. Secrets and credentials appear as `[redacted]`.
+
+## 13. Tear down a preview
+
+From the pull request page:
+
+1. Click **Tear down preview**.
+2. A dialog asks **Tear down this preview?**: **Cancel** (or Escape) changes
+   nothing; **Tear down preview** confirms.
+3. The preview stops serving, unfinished work is cancelled, containers are removed;
+   the comment says the preview was removed. The address stays reserved: build again
+   to bring it back.
+
+From **Environments**: each row has **Tear down** with the same dialog.
+
+Automatically: closing or merging the pull request removes its preview; reopening
+follows the build mode again.
+
+## 14. Repository secrets
+
+1. Open a repository, then the **Secrets** tab.
+2. Enter a **Name** (letters, digits and underscores, such as `STRIPE_KEY`) and a
+   **Value**, click **Save secret**. From then on only the name and the time it was
+   updated are shown.
+3. **Replace** sets a new value (the old one is never shown).
+4. **Delete** asks for confirmation in a dialog.
+
+Good to know: pull requests from **forks never receive secrets**; a secret overrides
+a same-named entry in `.previewrc.yaml`; use preview-only credentials; up to 100
+secrets per repository, 32 KiB each; values of 4 characters or more are redacted
+from logs. If the server has no encryption keys, the tab says secrets are not
+configured.
+
+## 15. Builds, Environments and Overview
+
+- **Builds**: the current or latest request of each pull request across your
+  repositories: latest and requested commit, status, why it waits or failed, the
+  eligibility time and **Logs**. It is not a history: a new request replaces the row.
+- **Environments**: each preview: status (**Publishing**, **Running**, **Failed**,
+  **Removing**), deployed commit (marked when earlier than the latest), **Open
+  preview**, **Expires**, **Logs**, **Tear down**.
+- **Overview**: totals and whether a worker provides each pipeline stage.
+
+## 16. Everyday navigation
+
+- Sidebar: **Overview**, **Repositories**, **Builds**, **Environments**, **Developer
+  tools** (development only). On phones, the menu button opens it.
+- **Ctrl K** (**⌘K** on macOS) opens a command palette to jump anywhere.
+- The sun/moon button switches light and dark themes (remembered in this browser).
+- Pages are bookmarkable; Back/Forward keep filters; everything works without
+  JavaScript (forms submit normally, dialogs still confirm).
+- Sign out: account menu, **Log out…**, confirm. Your GitHub session is unaffected.
+
+## 17. What happens automatically
+
+| Event | What Previa does |
+| --- | --- |
+| New commit, Manual | Records it; builds nothing; the page shows the deployed preview may be older |
+| New commit, Automatic | Builds after five quiet minutes; a newer commit replaces an unfinished older request |
+| PR closed or merged | Cancels unfinished work, removes the preview, updates the comment |
+| PR reopened | Follows the build mode again (Manual waits for you) |
+| 48 hours after the last publication | Removes the preview ("Preview expired"); the next build brings it back |
+| GitHub access to a repository removed, or the App suspended/uninstalled | Removes its previews; restoring access does not rebuild them |
+| Host busy or short of disk | Builds wait ("Waiting for capacity" / "Waiting for disk space") and start by themselves |
+| Operator pauses builds | Requests wait ("Builds paused"); new build clicks are refused with a message |
+| A container disappears | The preview is marked failed (its container went missing); Retry, Rebuild or a new commit brings it back |
+
+## 18. When Previa says no
+
+| Message | Why | What to do |
+| --- | --- | --- |
+| GitHub access to this repository is unavailable. | The App no longer has access | Restore access in **Manage connections** |
+| Closed and merged pull requests are not built. | The PR is closed | Reopen it on GitHub |
+| Build refused: resolve merge conflicts and push a new commit first. | **Conflicts** | Fix the conflict and push |
+| Build paused: GitHub is checking mergeability… | **Checking** | Wait or **Sync Pull Requests** |
+| Conflicting upstream observations need a fresh GitHub snapshot… | **Refresh required** | **Sync Pull Requests** |
+| No preview worker is running with builds configured… | No worker can build | Start the worker with builds configured |
+| Builds are paused by the operator… | Kill switch on | Wait; queued requests start when builds resume |
+| GitHub could not confirm the pull request right now… | GitHub outage | Try again shortly; nothing was recorded |
+| The pull request or its build changed meanwhile. Reload and try again. | The page is out of date | Reload |
+| Failure reasons (on the PR page, Builds and the comment) | "The commit could not be prepared" (download or invalid `.previewrc.yaml`), "The image build failed", "The app did not become ready", "The app exited while starting", "The build took longer than allowed", "Repository secrets could not be decrypted", "The preview could not be published" | Open **Build logs**, fix, then **Retry build** or push |
+
+---
+
+## Manual test checklist
+
+Each test: steps, then the expected result. "Worker with builds" means a worker
+whose log says `execution=true` (step 0). Use a test repository with a small
+`Dockerfile` app and `.previewrc.yaml`, and pull requests you can push to.
+
+### A. Sign-in and session
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| A1 | Open the dashboard signed out; click **Get started with GitHub**; authorize | Lands on **Overview** with your username |
+| A2 | Open `/dashboard` in a private window (signed out) | Redirected to sign in |
+| A3 | Sign out: account menu, **Log out…**, **Cancel** | Still signed in |
+| A4 | Sign out and confirm | Back on Home; `/dashboard` asks to sign in again |
+| A5 | Leave the tab idle 30 minutes, then click a link | Asked to sign in again (idle timeout) |
+| A6 | Reload `/auth/github/login` 25 times quickly | After about 20, "Too many requests. Try again shortly." (rate limit) |
+
+### B. Connecting repositories
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| B1 | **Repositories**, **Install on a repo**, choose one repository | Its card appears under **Available** |
+| B2 | Install with a different GitHub account than the one signed in | Linking is refused (the installation is not yours) |
+| B3 | On GitHub, remove the repository from the App | The card moves to **Unavailable**; its previews are removed |
+| B4 | Add it back | **Available** again; nothing rebuilds by itself |
+| B5 | Search for part of a name; switch tabs; go to page 2 (with 11+ repositories) | Results filter; URL keeps search, tab and page; Back restores them |
+
+### C. Pull requests and mergeability
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| C1 | Open a repository, **Sync Pull Requests** | Open PRs appear; **Last synced** updates; nothing builds |
+| C2 | Click **Sync Pull Requests** several times quickly | One sync runs |
+| C3 | (Webhooks) Open a new PR on GitHub | It appears without reloading (**Live** dot green) |
+| C4 | Create a PR that conflicts with its base | State **Conflicts**; no build button; the reason sentence shows |
+| C5 | Resolve the conflict and push | State becomes **Open** |
+| C6 | (Webhooks) Close a PR on GitHub, then open the **Closed** tab | It is listed as closed; it cannot build. Without webhooks, discovery lists open PRs only; housekeeping later notices closes of PRs that have previews |
+| C7 | Search by author, branch and number | Matching PRs only |
+
+### D. Manual builds (worker with builds)
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| D1 | Open an open PR, **Build latest commit** | **Queued**, then **Running**; Build logs stream; then **Deployed preview** **Running** with an address and **Expires** |
+| D2 | Open the address | Your app over HTTPS |
+| D3 | Double-click **Build latest commit** on a fresh PR | One request (one row on **Builds**, one check run) |
+| D4 | While queued, look for a second build button | None |
+| D5 | Push a new commit to that PR (Manual mode) | Nothing builds; the page notes the preview serves an earlier commit |
+| D6 | **Build latest commit** again | Builds the new commit; the address stays the same |
+| D7 | Open the PR page in two tabs; build in one, then click the old button in the other | "Reload and try again" |
+| D8 | Stop the worker; open the PR page | The button is replaced by "No preview worker is running…" |
+| D9 | Start the worker again | The button returns |
+| D10 | Remove `.previewrc.yaml` from a PR's commit and build | **Failed**: "The commit could not be prepared…"; **Retry build** appears |
+| D11 | Make the `Dockerfile` fail (`RUN exit 1`) and build | **Failed**: "The image build failed"; logs show the failing step |
+| D12 | Set `health_check_path` to a path that returns 500 | **Failed**: "The app did not become ready" (after the startup timeout) |
+| D13 | With a working preview, push a failing commit and build | The failure is shown, and the old preview still serves at the same address |
+| D14 | **Retry build** after fixing | A new attempt; new check run on the same commit |
+| D15 | **Rebuild preview** on a successful build | Rebuilds; the preview keeps serving until the new one is healthy |
+
+### E. Automatic builds (worker with builds and webhooks)
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| E1 | **Enable Automatic Builds**, then **Cancel** in the dialog | Still Manual |
+| E2 | Enable and confirm | Mode shows Automatic; existing PRs are not built |
+| E3 | Push a commit | **Waiting** with the eligible time; builds about five minutes later |
+| E4 | Push three commits a minute apart | Only the last commit builds |
+| E5 | While waiting, click **Build now** | Builds at once |
+| E6 | While waiting, switch back to Manual | The waiting request is cancelled; nothing builds |
+
+### F. Previews, expiry and teardown
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| F1 | **Tear down preview**, then **Cancel** / Escape | Nothing changes |
+| F2 | **Tear down preview** and confirm | **Removing**, then removed; the address shows "Preview not found or expired"; the comment says removed |
+| F3 | Build again | The preview returns at the same address |
+| F4 | **Environments**, **Tear down** on a row, confirm | Same as F2, back on Environments |
+| F5 | Close the PR on GitHub | The preview is removed automatically |
+| F6 | Reopen it (Manual) | Nothing builds until you click |
+| F7 | Set `ENV_TTL_HOURS=1` on the worker, build, wait over an hour | The preview expires; the comment says "Preview expired" |
+| F8 | Open an address that never existed (`https://pr-999-x-y.<preview domain>`) | "Preview not found or expired" |
+| F9 | As another GitHub user, try the first user's PR page URL | Not found (owners only) |
+
+### G. GitHub feedback
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| G1 | Build a PR and watch the PR on GitHub | One Previa comment moving through Queued, Building, Ready; a **Previa preview** check run that succeeds |
+| G2 | Fail a build | The comment says Failed with the reason; the check run fails |
+| G3 | Delete the Previa comment on GitHub, then rebuild | A new comment is created (still only one) |
+| G4 | Tear down | The comment says Preview removed; an unfinished check run is closed as stopped |
+
+### H. Secrets
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| H1 | **Secrets**, add `API_KEY` with a value | Listed by name and time only; the value is never shown |
+| H2 | **Replace** it | Time updates; still no value shown |
+| H3 | **Delete**, then **Cancel** / confirm | Kept / removed |
+| H4 | Use an invalid name (`my-key`) | Refused with a reason; the value is not shown back |
+| H5 | Build a PR whose app prints `API_KEY` when it starts | Build logs show the start-up output with `[redacted]` (secrets are given only when the container starts, never during the image build) |
+| H6 | Build a PR from a **fork** | The preview runs without the secret |
+| H7 | Start the server without `SECRETS_*` keys | The tab says secrets are not configured |
+
+### I. Build logs
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| I1 | Open Build logs during a build | Lines stream; status updates; follows the end |
+| I2 | Scroll up | Following stops; **Follow output** resumes it |
+| I3 | Switch tabs for a while, come back | Indicator shows paused while hidden, then live again |
+| I4 | Start a new attempt while the page is open | The page clears and shows the new attempt |
+| I5 | Disable JavaScript; open the log page | Lines show; **Earlier lines**, **Later lines**, **Refresh** work |
+
+### J. Navigation, accessibility and layout
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| J1 | **Ctrl K**, type "env", Enter | Opens Environments; Escape closes the palette |
+| J2 | Toggle the theme, reload | The theme stays |
+| J3 | Narrow the window to phone width | Menu button; PR rows become cards; nothing scrolls sideways |
+| J4 | Use Tab and Enter only to open a dialog and cancel it | Focus stays in the dialog; returns to the button afterwards |
+| J5 | Disable JavaScript; sync, change mode, build, tear down | All work through normal page loads |
+| J6 | Bookmark a filtered repository list; open it later | Same filters |
+
+### K. Operator behaviour you can observe
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| K1 | Stop the worker; look at **Overview** | Stages show **Not running** within about 90 seconds |
+| K2 | Start the worker with `BUILDS_PAUSED=true` | Overview says builds are paused; build buttons explain it; teardown still works |
+| K3 | Remove `BUILDS_PAUSED` and restart | Waiting requests build by themselves |
+| K4 | Open **Developer tools**, **Send a ping** (development) | "Ping queued. Job #N. Your worker will process it."; sending the same key again says an active ping already exists |
+| K5 | With `APP_ENV=production` | **Developer tools** says the queue ping is off in production |

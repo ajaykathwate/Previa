@@ -35,6 +35,7 @@ run and use Previa, the rest explain how and why it works.
 Related files outside this folder:
 
 - [README.md](../README.md): product requirements, user flow and technology choices.
+- [technical-docs/](../technical-docs/README.md): go-to references: the tech stack with every URL and dashboard, the end-user guide with a manual test checklist, and Mermaid class and database diagrams.
 - [DESIGN.md](../DESIGN.md): per-feature design and the package-by-feature layout (Section 20).
 - [AGENTS.md](../AGENTS.md) and [HANDOFF.md](../HANDOFF.md): working rules and current state for contributors and coding agents.
 - [web/tests/browser/README.md](../web/tests/browser/README.md) and [web/components/README.md](../web/components/README.md): browser tests and component provenance.

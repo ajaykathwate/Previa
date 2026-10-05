@@ -19,7 +19,9 @@ CI and releases. Live proofs against hosted GitHub, real DNS and a real host rem
 before a public rollout. See [operating the MVP](docs/21-mvp-operations.md),
 [production deployment](docs/24-production-deployment.md), the
 [release report](docs/25-release-report.md) and the [roadmap](docs/26-roadmap.md). Start with the [documentation index](docs/README.md)
-for a guided reading order.
+for a guided reading order. Quick references: [tech stack](technical-docs/tech-stack.md),
+[user guide and manual tests](technical-docs/user-guide.md), and Mermaid
+[class](technical-docs/class-diagram.md) and [database](technical-docs/database-schema-diagram.md) diagrams.
 
 This document is written for the builder (me), not an end user — every step
 explains what happens internally at that stage, not just what the user sees.

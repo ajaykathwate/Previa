@@ -1,6 +1,6 @@
 # Database schema
 
-The complete PostgreSQL schema of Previa after every migration (Goose `0001`–`0018`, River `001`–`007`), generated from a freshly migrated database, so it matches what `previa-migrate up` / `make migrate-up` create. Diagram: [database-schema.drawio](database-schema.drawio) (open it in diagrams.net or the VS Code Draw.io extension). Migrations: [`db/migrations/`](../db/migrations/); each feature's queries: `internal/<feature>/*queries.sql` (sqlc generates `internal/<feature>/dbgen`).
+The complete PostgreSQL schema of Previa after every migration (Goose `0001`–`0018`, River `001`–`007`), generated from a freshly migrated database, so it matches what `previa-migrate up` / `make migrate-up` create. The full annotated diagram, as Mermaid code to paste into [mermaid.live](https://mermaid.live), is [database-schema-diagram.md](database-schema-diagram.md). Migrations: [`db/migrations/`](../db/migrations/); each feature's queries: `internal/<feature>/*queries.sql` (sqlc generates `internal/<feature>/dbgen`).
 
 **26 tables** (19 owned by Previa, the rest by Goose, SCS and River), 234 columns, 153 constraints, 57 indexes, 7 triggers.
 
