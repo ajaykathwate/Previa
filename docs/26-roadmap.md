@@ -10,6 +10,10 @@ boundary. Run one task at a time with the shared
 instructions below. This plan does not certify the current application for
 production; the release checklist at the end does.
 
+**Prompt 13** is planned and not started. It extends the MVP so that backend and API
+repositories (an app with a database, a cache, migrations and background
+workers) preview as well as web frontends do.
+
 ## Verified starting point
 
 - Implemented: PostgreSQL/Goose, River, OAuth/SCS/CSRF, verified GitHub App linking,
@@ -210,11 +214,15 @@ for live proofs require an explicitly authorized disposable repository.
 | 10 ✅ | Real worker orchestration and completed dashboard actions | 1–9 |
 | 11 ✅ | Observability and production hardening | 10 |
 | 12 ✅ | Deployment packaging, CI and release acceptance | 1–11 |
+| 13 | Backend previews: managed PostgreSQL/Redis, setup command, worker processes, approved outbound connections | 1–12 |
 
 Prompts 1–9 exercised adapters using isolated test harnesses with normal preview
 dispatch disabled. Prompt 10 connected the complete pipeline in a controlled
 local/staging configuration ([21](21-mvp-operations.md)). Public production rollout requires the
 observed release checks in Prompt 12, including isolation, recovery and restore.
+Prompt 13 does not depend on the pending live checks; like Prompt 10, it is accepted
+on local/staging infrastructure, and it must not weaken any release check that has
+already passed.
 
 ## Prompt 1 — Fresh PR verification and safe exact-SHA source fetching
 
@@ -630,6 +638,100 @@ observed release checks in Prompt 12, including isolation, recovery and restore.
 > Stop with reviewable deployable artifacts and an evidence-based readiness
 > verdict. Production-ready is conditional on all mandatory checks actually passing.
 
+## Prompt 13 — Backend previews: managed services, setup, processes and outbound connections
+
+> Make backend and API repositories as previewable as web frontends. Today a preview
+> is one container whose only outbound route is HTTP(S) on ports 80/443 through the
+> egress proxy. An app that needs PostgreSQL, Redis, migrations, seed data or a
+> background worker therefore cannot run. Read README Sections 2.3 and 2.5, DESIGN
+> Sections 5, 9–11 and 13–18, and docs/06, 10, 11, 12, 14 and 17 before designing.
+> This task narrows README 2.5's exclusion of multi-service apps. Flag that change,
+> then update README and DESIGN consistently in the same task. Arbitrary Compose
+> files, images chosen in a PR, and buildpacks stay out of scope.
+>
+> Add platform-managed backing services that a commit declares in .previewrc.yaml.
+> Support only PostgreSQL and Redis, at versions from an operator-pinned catalog:
+> images pinned by digest in worker configuration, never chosen in PR YAML. Extend
+> the existing validator, defaults, clamping and config hash. An unknown service or
+> version fails preparation with a clear message. Each service belongs to its
+> candidate, so every build revision creates its own. Each service:
+> - is attached to that PR's internal network only, with no egress and no route;
+> - carries ownership labels and credentials generated for that candidate;
+> - has resource limits that count toward preview admission and host capacity;
+> - uses bounded storage that cannot fill the host disk.
+>
+> A failed rebuild must leave the old preview and its data serving. State plainly
+> that data does not survive a rebuild. Harden service containers the way previews
+> are hardened where the official images allow it, and document every
+> operator-controlled exception.
+>
+> Inject connection settings into the app and its processes: DATABASE_URL and the
+> PG* variables for PostgreSQL, REDIS_URL for Redis. Previa's values override YAML
+> and secrets, with a notice like the existing precedence notices. Register the
+> generated credentials with the redactor. Keep them out of job payloads, logs,
+> metrics, routine errors and plaintext storage.
+>
+> Add an optional setup command in argv form, for migrations and seed data. It runs
+> once per candidate, in a one-off container from the built image, after services are
+> ready and before the app starts. It gets the preview's hardening and a timeout, and
+> its output goes to the current build log. Its failure fails the build with its own
+> reason. Add a small, capped list of unrouted processes from the same image, such
+> as a queue worker; the candidate is healthy only while they keep running. Add an
+> optional docs path (for example /docs) that the PR comment and dashboard link to;
+> it is a path on the preview host, never an external URL.
+>
+> Readiness runs in this order. Services pass a protocol-level check (a bare TCP
+> accept is not enough), then setup runs, then processes must be running, then the
+> existing app readiness check runs. Only after all of these may the route be
+> accepted. Treat services, setup containers, processes and their storage as
+> candidate/active artifacts in these paths, through the existing
+> resource-reference and cleanup contracts rather than a second orchestrator:
+> - blue/green publication and the (generation, revision) fences;
+> - teardown and expiry;
+> - recovery, orphan inventory and pruning.
+>
+> A crash after any side effect must leave nothing owned behind.
+>
+> Add owner-approved outbound connections for apps that use an external database or
+> message broker. Each repository has a list of host:port destinations that its
+> owner manages in the dashboard: owner-scoped, CSRF-protected, with a modal
+> confirmation before removal, and never set in PR-controlled YAML. An operator
+> setting limits the allowed ports and can turn the feature off. The egress
+> component forwards only to the destinations approved for the connecting preview's
+> repository. It identifies that repository by the preview's network, never by
+> anything the preview sends. It resolves names itself and refuses private,
+> loopback, link-local, metadata and other special ranges, so DNS tricks fail. Apps
+> keep using the real hostname, so TLS verification still works. Bound connections
+> and bytes, and add metrics with bounded labels plus logs. Fork PRs get managed
+> services but no approved outbound connections, the same rule as secrets.
+>
+> Show service, setup and process state on the PR page, in the build log and in the
+> PR comment. If something is unavailable (for example, no service catalog is
+> configured), label it rather than hiding it. Extend .env.example, the config
+> loaders and migrations (only where needed), and update docs/02 and the user guide.
+> In technical-docs, update the user guide, manual checklist, tech stack, database
+> schema and Mermaid diagrams. Add a backend previews document in its reading-order
+> slot, with .previewrc.yaml examples for common backend stacks.
+>
+> Test with a real backend fixture: an HTTP API that uses PostgreSQL and Redis, has a
+> migration-and-seed setup command and one queue worker. Run it in make test-e2e on
+> real Docker, BuildKit and Traefik and prove that:
+> - it builds, becomes ready and serves over HTTPS;
+> - a rebuild gets a fresh database;
+> - a failed migration keeps the old preview serving;
+> - teardown and crash recovery leave no owned containers, volumes or networks;
+> - services cannot reach the internet, the host, the control plane or other
+>   previews, and other previews cannot reach the services;
+> - approved destinations work, while unapproved, private and DNS-rebinding
+>   destinations fail;
+> - fork PRs get no outbound connections.
+>
+> Add unit, PostgreSQL and browser tests for the config, the approval list and the
+> new UI. Stop when the backend fixture previews end to end and the limits are
+> documented. Do not add arbitrary Compose, custom service images, data that
+> persists across rebuilds, database copies from production, or non-HTTP ingress
+> (gRPC or raw TCP).
+
 ## Release acceptance checklist
 
 The final report must give evidence for every item, using isolated resources and
@@ -664,6 +766,8 @@ an authorized disposable GitHub repository for external writes:
 
 MVP exclusions remain unchanged: no multi-service Compose apps, buildpacks,
 granular team roles, custom per-repository domains, horizontal workers or permanent
-build-history archive. This plan introduces no implemented architecture/theme
+build-history archive. Prompt 13 narrows only the first exclusion. It adds
+platform-managed PostgreSQL and Redis and processes from the same image, but still
+no arbitrary Compose. This plan introduces no implemented architecture/theme
 change; routing/socket tensions must be resolved against the approved decisions
 and documented during their implementation.

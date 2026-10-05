@@ -7,7 +7,9 @@ Last updated: 2026-10-05
   03 user guide, 06-14 features, 21 MVP operations, 22 observability/hardening,
   23 incident runbook, 24 production deployment, 25 release report, 26 roadmap).
   A new doc takes its reading-order slot and later numbers shift (links, labels, H1s).
-- docs/26-roadmap.md: Prompts 1-12 done. docs/25-release-report.md answers the
+- docs/26-roadmap.md: Prompts 1-12 done. Prompt 13 (backend previews: managed
+  PostgreSQL/Redis, setup command, worker processes, owner-approved outbound
+  connections) is planned, not started. docs/25-release-report.md answers the
   release checklist: ready for staging; production needs the pending live checks.
 - Backend features flat under internal/<feature>; construction in internal/app;
   presentation in web/ with view models and no backend imports. Keep the "signal"

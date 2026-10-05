@@ -30,7 +30,7 @@ run and use Previa, the rest explain how and why it works.
 | 23 | [Incident runbook](23-incident-runbook.md) | What to do for each alert: outages, backlogs, failures, disk, backups, certificates, key rotation. |
 | 24 | [Production deployment](24-production-deployment.md) | Release images, host setup, GitHub and DNS, staged certificates, backups and restore, upgrades and rollback, CI and releases, the smoke test. |
 | 25 | [Release report](25-release-report.md) | Evidence for each release acceptance item: what passed, how, and what is still pending. |
-| 26 | [Roadmap](26-roadmap.md) | Prompts 1–12 and the release checklist. |
+| 26 | [Roadmap](26-roadmap.md) | Prompts 1–12, the planned Prompt 13 (backend previews) and the release checklist. |
 
 Related files outside this folder:
 
