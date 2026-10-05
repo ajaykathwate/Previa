@@ -9,7 +9,8 @@ Last updated: 2026-10-05
   A new doc takes its reading-order slot and later numbers shift (links, labels, H1s).
 - docs/26-roadmap.md: Prompts 1-12 done. Prompt 13 (backend previews: managed
   PostgreSQL/Redis, setup command, worker processes, owner-approved outbound
-  connections) is planned, not started. docs/25-release-report.md answers the
+  connections) and Prompt 14 (detect missed uninstall/suspend/repository-removal
+  webhooks by reconciliation) are planned, not started. docs/25-release-report.md answers the
   release checklist: ready for staging; production needs the pending live checks.
 - Backend features flat under internal/<feature>; construction in internal/app;
   presentation in web/ with view models and no backend imports. Keep the "signal"

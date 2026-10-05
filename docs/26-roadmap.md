@@ -10,9 +10,12 @@ boundary. Run one task at a time with the shared
 instructions below. This plan does not certify the current application for
 production; the release checklist at the end does.
 
-**Prompt 13** is planned and not started. It extends the MVP so that backend and API
-repositories (an app with a database, a cache, migrations and background
-workers) preview as well as web frontends do.
+**Prompts 13 and 14** are planned and not started:
+- **Prompt 13** extends the MVP so that backend and API repositories (an app with a
+  database, a cache, migrations and background workers) preview as well as web
+  frontends do.
+- **Prompt 14** closes a gap: Previa misses an uninstall, a suspension or a
+  repository removal whose webhook never arrived.
 
 ## Verified starting point
 
@@ -215,14 +218,15 @@ for live proofs require an explicitly authorized disposable repository.
 | 11 ✅ | Observability and production hardening | 10 |
 | 12 ✅ | Deployment packaging, CI and release acceptance | 1–11 |
 | 13 | Backend previews: managed PostgreSQL/Redis, setup command, worker processes, approved outbound connections | 1–12 |
+| 14 | Detect missed App uninstalls, suspensions and repository removals | 1–12 |
 
 Prompts 1–9 exercised adapters using isolated test harnesses with normal preview
 dispatch disabled. Prompt 10 connected the complete pipeline in a controlled
 local/staging configuration ([21](21-mvp-operations.md)). Public production rollout requires the
 observed release checks in Prompt 12, including isolation, recovery and restore.
-Prompt 13 does not depend on the pending live checks; like Prompt 10, it is accepted
-on local/staging infrastructure, and it must not weaken any release check that has
-already passed.
+Prompts 13 and 14 do not depend on the pending live checks or on each other, so they
+can run in either order. Like Prompt 10, each is accepted on local/staging
+infrastructure, and neither may weaken a release check that has already passed.
 
 ## Prompt 1 — Fresh PR verification and safe exact-SHA source fetching
 
@@ -731,6 +735,94 @@ already passed.
 > documented. Do not add arbitrary Compose, custom service images, data that
 > persists across rebuilds, database copies from production, or non-HTTP ingress
 > (gRPC or raw TCP).
+
+## Prompt 14 — Detect missed App uninstalls, suspensions and repository removals
+
+> Close the gap where Previa misses a webhook that removes access. Today only signed
+> `installation` and `installation_repositories` deliveries change access. GitHub
+> does not retry a failed delivery, and the PR reconciler deliberately treats
+> `inaccessible` as no evidence. So if Previa is offline or unreachable when an owner
+> uninstalls the App, suspends it or removes a repository:
+> - the installation stays `active` locally;
+> - its previews keep serving until they expire;
+> - reinstalling fails, because the repositories still belong to the old
+>   installation and linking them returns `ErrForbidden`.
+>
+> Before designing, read:
+> - README Section 2.2;
+> - DESIGN Sections 4, 6, 14 and 15;
+> - docs/04, 05, 12, 14 and 23;
+> - `installations.ParseLifecycleEvent` and `ApplyEventTx`,
+>   `webhooks.DeliveryService.lifecycle`, `environments.Broker.RevokeTx`, the
+>   teardown sweep and `internal/housekeeping`.
+>
+> Add bounded installation reconciliation as a periodic housekeeping job with a
+> fixed interval, like the others. Register it only when the worker has the GitHub
+> App configured, and keep it running while builds are paused, like teardown. Use
+> App (JWT) authentication, which keeps working after an installation is gone.
+> - For each installation that is active or suspended locally, read GitHub's view of
+>   it. A 404 for that exact installation ID means it was deleted. A set
+>   `suspended_at` means it is suspended.
+> - With an installation token, compare the complete, fully paginated repository
+>   listing with the repositories that are accessible locally. A repository missing
+>   from a complete listing has lost access.
+> - Reconciliation may only remove access. Restoring access (an unsuspend, or added
+>   repositories) stays with signed events and verified linking, as today.
+>
+> Apply every confirmed change through the same path a signed webhook uses, in one
+> short transaction: the lifecycle mutation, `RevokeTx` teardown requests,
+> `cleanup_pending` and the sweep wake-up. Never add a second revocation path. Read
+> the installation revision before any GitHub IO, and apply the change only if the
+> revision is unchanged, so a concurrent or later webhook wins. Respect the existing
+> timestamp fences and removal tombstones. A webhook redelivered after
+> reconciliation must be a no-op. Teardown still needs no GitHub access, and restored
+> access still never rebuilds.
+>
+> Fail safe. Only an authoritative answer about that exact installation counts:
+> - Outages, timeouts, 5xx responses, rate limits and partial listings change
+>   nothing; the job retries later.
+> - A 401, or an unexpected App identity, means Previa's own credentials are wrong.
+>   Check `GET /app` against `GITHUB_APP_ID` first. In that case, stop the pass,
+>   revoke nothing, log it and alert.
+> - Add a circuit breaker. A pass that would revoke every known installation, or more
+>   than a small bound, stops and alerts instead, so a misconfiguration cannot tear
+>   down every preview.
+>
+> Detect faster on demand. When creating an installation token reports that the
+> installation is gone or suspended (in builds, discovery, reporting or the PR
+> reconciler), record the signal and wake the reconciler for that installation.
+> Never revoke directly from the request path.
+>
+> Fix reinstalling. When linking finds a repository held by the same owner's old
+> installation that is still active locally, check the old installation with GitHub.
+> If GitHub confirms it was deleted, apply the deletion as above and continue
+> linking. Otherwise keep refusing. Never move one user's installation or history to
+> another user.
+>
+> Add metrics with bounded labels for reconciliation outcomes (`deleted`,
+> `suspended`, `repository_removed`, `unchanged`, `error`, `circuit_open`). Alert
+> whenever reconciliation finds a change, because that means a webhook delivery
+> failed. Add a runbook entry for webhook delivery outages. Update:
+> - docs/04, 05, 12 and 14, and docs/02 if configuration changes;
+> - technical-docs: user guide section 19 and its checklist, and the tech stack;
+> - the database schema and its Mermaid diagram, if the schema changes.
+>
+> Test with a fake GitHub over TLS:
+> - deletion, suspension and repository removal with the webhook dropped;
+> - outages, 5xx responses, rate limits, partial pagination, a 401 and a wrong App
+>   ID, all of which change nothing;
+> - the circuit breaker;
+> - a webhook racing a reconciliation pass (the webhook wins);
+> - a webhook redelivered after reconciliation (a no-op);
+> - detection when an installation token cannot be created;
+> - reinstalling after a missed deletion (linking succeeds for the same owner and is
+>   refused for another user);
+> - teardown without GitHub access, and no rebuild after access returns.
+>
+> Add a phase to make test-e2e that drops the uninstall webhook and proves the
+> preview is removed and reinstalling works. Stop when reconciliation is enabled and
+> documented. Do not restore access from reconciliation, rewrite PR comments that
+> Previa can no longer reach, or add a separate revocation state machine.
 
 ## Release acceptance checklist
 
