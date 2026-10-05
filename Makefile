@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e router-up router-down route-sync housekeeping-dry-run lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -163,6 +163,34 @@ router-down:
 lint: assets generate
 	$(GO) vet ./...
 	$(TOOLS) golangci-lint run
+
+# Known vulnerabilities reachable from Previa's code (Go and its modules).
+vuln:
+	$(TOOLS) govulncheck ./...
+
+# Release images from the multi-stage Dockerfile (server, worker, egress).
+PREVIA_VERSION ?= dev
+release-images:
+	@set -eu; for target in server worker egress; do \
+		docker build --target "$$target" --build-arg VERSION=$(PREVIA_VERSION) -t "previa-$$target:$(PREVIA_VERSION)" .; \
+	done
+
+# The production Compose stack on this machine with release images: health,
+# HTTPS through the router, hardening, metrics, restarts, backup and restore.
+prod-smoke:
+	PREVIA_VERSION=$(PREVIA_VERSION) $(CURDIR)/deploy/production/smoke.sh
+
+# Alert rules, their unit tests, the Prometheus configuration and every
+# Grafana query, checked with the pinned promtool (needs Docker).
+PROMETHEUS_IMAGE = prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+observability-check:
+	@set -eu; previa_dir=$$(mktemp -d); trap 'rm -rf "$$previa_dir"' EXIT; \
+	chmod 755 "$$previa_dir"; python3 deploy/observability/dashboard-rules.py deploy/observability/grafana/dashboards/previa.json > "$$previa_dir/dashboard-rules.yml"; chmod 644 "$$previa_dir/dashboard-rules.yml"; \
+	docker run --rm --entrypoint promtool -v "$$PWD/deploy/observability:/w:ro" -w /w $(PROMETHEUS_IMAGE) check rules alerts.yml; \
+	docker run --rm --entrypoint promtool -v "$$PWD/deploy/observability:/w:ro" -w /w $(PROMETHEUS_IMAGE) test rules alerts_test.yml; \
+	docker run --rm --entrypoint promtool -v "$$PWD/deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+		-v "$$PWD/deploy/observability/alerts.yml:/etc/prometheus/alerts.yml:ro" $(PROMETHEUS_IMAGE) check config /etc/prometheus/prometheus.yml; \
+	docker run --rm --entrypoint promtool -v "$$previa_dir:/d:ro" $(PROMETHEUS_IMAGE) check rules /d/dashboard-rules.yml
 
 run-server: assets generate
 	@$(load_run_env) exec $(GO) run ./cmd/server

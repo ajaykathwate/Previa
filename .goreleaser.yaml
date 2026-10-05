@@ -1,0 +1,77 @@
+# GoReleaser: versioned binaries, archives, checksums and SBOMs for a tag
+# (.github/workflows/release.yml). Images are built from the Dockerfile by
+# the same workflow. Releases are drafts until a maintainer publishes them.
+version: 2
+project_name: previa
+
+before:
+  hooks:
+    # Templates and CSS are generated, then embedded in the binaries.
+    - sh deploy/install-tailwind.sh bin/tailwindcss-v4.1.18
+    - bin/tailwindcss-v4.1.18 -i web/styles/app.css -o web/static/css/app.css --minify
+    - go tool -modfile=tools/go.mod templ generate -path web
+
+builds:
+  - &build
+    id: server
+    main: ./cmd/server
+    binary: previa-server
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/ajaykathwatee/previa/internal/platform/version.Version={{ .Tag }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+  - <<: *build
+    id: worker
+    main: ./cmd/worker
+    binary: previa-worker
+  - <<: *build
+    id: migrate
+    main: ./cmd/migrate
+    binary: previa-migrate
+  - <<: *build
+    id: route-sync
+    main: ./cmd/route-sync
+    binary: previa-route-sync
+  - <<: *build
+    id: housekeeping
+    main: ./cmd/housekeeping
+    binary: previa-housekeeping
+  - <<: *build
+    id: secrets-reencrypt
+    main: ./cmd/secrets-reencrypt
+    binary: previa-secrets-reencrypt
+  - <<: *build
+    id: egress
+    main: ./cmd/egress
+    binary: previa-egress
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - docs/**/*
+      - deploy/production/**/*
+      - deploy/observability/**/*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  use: github
+  sort: asc
+
+release:
+  # Actions sets GITHUB_REPOSITORY_OWNER; the default is the module's owner.
+  github:
+    owner: '{{ envOrDefault "GITHUB_REPOSITORY_OWNER" "ajaykathwatee" }}'
+    name: previa
+  draft: true
+  prerelease: auto

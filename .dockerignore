@@ -1,0 +1,22 @@
+# The release build context: sources only. Generated files are rebuilt in the
+# image; secrets and local state never enter it.
+.git
+.github
+.idea
+.vscode
+bin
+dist
+tmp
+coverage
+**/*_templ.go
+**/*_templ.txt
+web/static/css/app.css
+web/static/css/app.css.*
+web/tests/browser/node_modules
+web/tests/browser/artifacts
+.env
+.env.*
+!.env.example
+**/*.pem
+**/*.key
+deploy/traefik/*credential*

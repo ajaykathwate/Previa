@@ -1,0 +1,198 @@
+# Previa alert rules. Each alert names its runbook section in
+# docs/23-incident-runbook.md. Thresholds suit one host with the default
+# settings; tune them with the operator's own baseline. Tested by
+# alerts_test.yml (promtool test rules).
+groups:
+  - name: previa-availability
+    rules:
+      - alert: PreviaServerDown
+        expr: up{job="previa-server"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: The Previa server is not answering its internal metrics endpoint.
+          runbook: docs/23-incident-runbook.md#server-or-worker-down
+
+      - alert: PreviaWorkerDown
+        expr: up{job="previa-worker"} == 0 or max(previa_workers_live) == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: No worker is running; builds, teardown, cleanup and reports wait.
+          runbook: docs/23-incident-runbook.md#server-or-worker-down
+
+      - alert: PreviaBuildsUnavailable
+        expr: max(previa_worker_capability{capability="execution"}) == 0 and max(previa_worker_capability{capability="paused"}) == 0 and max(previa_workers_live) > 0
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: Workers run but none can build (missing App, Docker or preview domain settings).
+          runbook: docs/23-incident-runbook.md#builds-unavailable
+
+      - alert: PreviaBuildsPaused
+        expr: max(previa_worker_capability{capability="paused"}) == 1
+        for: 1h
+        labels: {severity: info}
+        annotations:
+          summary: Builds have been paused with BUILDS_PAUSED for over an hour.
+          runbook: docs/23-incident-runbook.md#execution-kill-switch
+
+      - alert: PreviaStateUnreadable
+        expr: increase(previa_state_refresh_failures_total[10m]) > 3
+        labels: {severity: warning}
+        annotations:
+          summary: The server cannot read queue and environment state from PostgreSQL.
+          runbook: docs/23-incident-runbook.md#database-unavailable
+
+  - name: previa-pipeline
+    rules:
+      - alert: PreviaQueueWaitHigh
+        expr: max by (queue) (previa_queue_oldest_available_seconds{queue!="build"}) > 600
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Jobs on {{ $labels.queue }} have waited over ten minutes to start."
+          runbook: docs/23-incident-runbook.md#queue-backlog
+
+      - alert: PreviaBuildQueueWaitHigh
+        expr: max(previa_queue_oldest_available_seconds{queue="build"}) > 1800
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: A build has waited over thirty minutes for a build worker.
+          runbook: docs/23-incident-runbook.md#queue-backlog
+
+      - alert: PreviaBuildFailureSpike
+        expr: |
+          sum(increase(previa_builds_total{outcome="failed"}[1h]))
+            / clamp_min(sum(increase(previa_builds_total{outcome=~"succeeded|failed"}[1h])), 1) > 0.5
+          and sum(increase(previa_builds_total{outcome=~"succeeded|failed"}[1h])) >= 5
+        labels: {severity: warning}
+        annotations:
+          summary: More than half of the last hour's builds failed.
+          runbook: docs/23-incident-runbook.md#build-failures
+
+      - alert: PreviaPreviewsNotBecomingReady
+        expr: sum(increase(previa_builds_total{outcome="failed",code=~"unhealthy|crashed"}[1h])) >= 5
+        labels: {severity: warning}
+        annotations:
+          summary: Several previews in the last hour never became ready.
+          runbook: docs/23-incident-runbook.md#build-failures
+
+      - alert: PreviaJobsFailing
+        expr: sum by (kind) (increase(previa_jobs_total{outcome="failed"}[30m])) > 10
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.kind }} jobs keep failing."
+          runbook: docs/23-incident-runbook.md#queue-backlog
+
+      - alert: PreviaOperationsFailed
+        expr: sum by (kind) (previa_operations{state="failed"}) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.kind }} operations failed within the last day."
+          runbook: docs/23-incident-runbook.md#pending-operations
+
+      - alert: PreviaCleanupBacklog
+        expr: sum(previa_operations{kind="cleanup_artifact",state=~"pending|retryable"}) > 25
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: Container, image and network cleanup is falling behind.
+          runbook: docs/23-incident-runbook.md#pending-operations
+
+      - alert: PreviaReconcilerMassDeletion
+        expr: sum(increase(previa_housekeeping_actions_total{action=~"orphans|unknown_removed"}[30m])) > 20
+        labels: {severity: critical}
+        annotations:
+          summary: Housekeeping removed an unexpectedly large number of resources.
+          runbook: docs/23-incident-runbook.md#unexpected-deletions
+
+      - alert: PreviaWebhookFailures
+        expr: sum(increase(previa_webhook_deliveries_total{outcome=~"failed|invalid_signature"}[15m])) > 5
+        labels: {severity: warning}
+        annotations:
+          summary: GitHub webhook deliveries are failing or carry bad signatures.
+          runbook: docs/23-incident-runbook.md#github-outage-or-rate-limits
+
+      - alert: PreviaHTTPErrors
+        expr: |
+          sum(rate(previa_http_requests_total{status="5xx"}[10m])) / sum(rate(previa_http_requests_total[10m])) > 0.05
+          and sum(rate(previa_http_requests_total[10m])) > 0.1
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: Over five percent of dashboard requests fail.
+          runbook: docs/23-incident-runbook.md#database-unavailable
+
+  - name: previa-capacity
+    rules:
+      - alert: PreviaDiskLow
+        expr: min(previa_build_disk_free_bytes) < 20 * 1024 * 1024 * 1024
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: The Docker host has under 20 GiB free at the last build.
+          runbook: docs/23-incident-runbook.md#disk-exhaustion
+
+      - alert: PreviaBuildsWaitingForDisk
+        expr: sum(previa_build_requests{waiting="disk"}) > 0
+        for: 15m
+        labels: {severity: critical}
+        annotations:
+          summary: Builds have waited for disk space for fifteen minutes.
+          runbook: docs/23-incident-runbook.md#disk-exhaustion
+
+      - alert: PreviaBuildsWaitingForCapacity
+        expr: sum(previa_build_requests{waiting="capacity"}) > 0
+        for: 30m
+        labels: {severity: info}
+        annotations:
+          summary: Builds have waited for capacity for thirty minutes.
+          runbook: docs/23-incident-runbook.md#queue-backlog
+
+      - alert: PreviaGitHubRateLimitLow
+        expr: min(previa_github_rate_limit_remaining{resource="core"}) < 500
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: The GitHub App is close to its API rate limit.
+          runbook: docs/23-incident-runbook.md#github-outage-or-rate-limits
+
+      - alert: PreviaGitHubRateLimited
+        expr: increase(previa_github_rate_limited_total[15m]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: GitHub refused requests for rate limits; work waits for GitHub's delay.
+          runbook: docs/23-incident-runbook.md#github-outage-or-rate-limits
+
+  - name: previa-recovery
+    rules:
+      - alert: PreviaBackupStale
+        expr: time() - max(previa_backup_last_success_timestamp_seconds) > 26 * 3600
+        labels: {severity: critical}
+        annotations:
+          summary: No successful database backup in over a day.
+          runbook: docs/23-incident-runbook.md#backup-failed
+
+      - alert: PreviaBackupNeverRecorded
+        expr: absent(previa_backup_last_success_timestamp_seconds) and on() max(up{job="previa-server"}) == 1
+        for: 26h
+        labels: {severity: warning}
+        annotations:
+          summary: The server has never seen a successful backup (BACKUP_STATUS_FILE).
+          runbook: docs/23-incident-runbook.md#backup-failed
+
+      - alert: PreviaCertificateExpiringSoon
+        expr: min(traefik_tls_certs_not_after) - time() < 14 * 86400
+        labels: {severity: warning}
+        annotations:
+          summary: A TLS certificate expires within two weeks; renewal is failing.
+          runbook: docs/23-incident-runbook.md#certificate-renewal
+
+      - alert: PreviaCertificateExpiring
+        expr: min(traefik_tls_certs_not_after) - time() < 3 * 86400
+        labels: {severity: critical}
+        annotations:
+          summary: A TLS certificate expires within three days.
+          runbook: docs/23-incident-runbook.md#certificate-renewal

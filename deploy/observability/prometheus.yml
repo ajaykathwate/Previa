@@ -1,0 +1,27 @@
+# Prometheus for one Previa host (docs/22-observability-and-hardening.md).
+# Targets are the internal listeners on the Compose network; none is
+# published on the host. Alerting rules are in alerts.yml.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# Uncomment and point at your Alertmanager to deliver alerts
+# (docs/23-incident-runbook.md lists what each alert means).
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: previa-server
+    static_configs:
+      - targets: ["server:9090"]
+  - job_name: previa-worker
+    static_configs:
+      - targets: ["worker:9091"]
+  - job_name: traefik
+    static_configs:
+      - targets: ["router:8082"]

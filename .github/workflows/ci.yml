@@ -1,0 +1,164 @@
+# Continuous integration (docs/24-production-deployment.md#ci-and-releases).
+# Pull requests, including from forks, run with a read-only token and no
+# secrets. The privileged real-Docker suites run only for code already in
+# this repository (pushes and same-repository pull requests).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+  DATABASE_URL: postgres://previa:previa@localhost:5432/previa?sslmode=disable
+  TEST_DATABASE_URL: postgres://previa:previa@localhost:5432/previa?sslmode=disable
+
+jobs:
+  checks:
+    name: Generate, build, lint, vulnerabilities, tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17.11-alpine
+        env:
+          POSTGRES_USER: previa
+          POSTGRES_PASSWORD: previa
+          POSTGRES_DB: previa
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U previa -d previa"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Modules are tidy
+        run: |
+          go mod tidy
+          go mod tidy -modfile=tools/go.mod
+          git diff --exit-code -- go.mod go.sum tools/go.mod tools/go.sum
+      - name: Generated code is current
+        run: |
+          make generate
+          git diff --exit-code -- ':(glob)internal/**/dbgen/*.go'
+      - name: Build
+        run: make build
+      - name: Vet and lint
+        run: make lint
+      - name: Known vulnerabilities
+        run: make vuln
+      - name: Migrate PostgreSQL
+        run: make migrate-up
+      - name: Tests (race detector, PostgreSQL and River integration)
+        run: go test -race -count=1 ./...
+      - name: Alert rules, Prometheus configuration and dashboard queries
+        run: make observability-check
+
+  browser:
+    name: Browser regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Playwright and Chromium
+        run: |
+          make browser-install
+          npm exec --prefix web/tests/browser -- playwright install-deps chromium
+      - name: Browser tests
+        run: make test-browser
+
+  images:
+    name: Release images build and scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Build server, worker and egress images
+        run: |
+          for target in server worker egress; do
+            docker buildx build --load --target "$target" --build-arg VERSION=ci-${{ github.sha }} -t "previa-$target:ci" .
+          done
+      - name: Scan for fixable HIGH and CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: image
+          image-ref: previa-worker:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Scan the server image
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: image
+          image-ref: previa-server:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-setup-trivy: true
+
+  real-docker:
+    name: Real Docker, BuildKit, Traefik and end-to-end suites
+    # Untrusted fork code never gets the runner's Docker daemon.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17.11-alpine
+        env:
+          POSTGRES_USER: previa
+          POSTGRES_PASSWORD: previa
+          POSTGRES_DB: previa
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U previa -d previa"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Egress image
+        run: make egress-image
+      - name: Image builds
+        run: make test-builder
+      - name: Hardened previews
+        run: make test-runtime
+      - name: HTTPS routing and teardown
+        run: make test-routing
+      - name: Housekeeping
+        run: make test-housekeeping
+      - name: Whole pipeline
+        run: make test-e2e
+      - name: Production stack smoke test
+        run: |
+          sudo apt-get install -y age
+          make release-images PREVIA_VERSION=ci
+          make prod-smoke PREVIA_VERSION=ci

@@ -1,0 +1,22 @@
+# Local staging smoke test of the production stack (deploy/production/smoke.sh).
+# Only what a laptop cannot provide changes: ports move to 18080/18443 and
+# Grafana to 13000, the router keeps its production configuration but its
+# ACME server is unreachable (certificates are Traefik's default; issuance is
+# proven by make test-routing), the router has its own name, and the GitHub
+# App is off (no key), so the worker runs without builds.
+services:
+  router:
+    container_name: previa-smoke-router
+    ports: !override
+      - "127.0.0.1:18080:80"
+      - "127.0.0.1:18443:443"
+  server:
+    environment:
+      GITHUB_APP_PRIVATE_KEY_PATH: ""
+  worker:
+    environment:
+      GITHUB_APP_PRIVATE_KEY_PATH: ""
+      ROUTER_CONTAINER: previa-smoke-router
+  grafana:
+    ports: !override
+      - "127.0.0.1:13000:3000"

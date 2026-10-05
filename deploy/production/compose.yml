@@ -1,0 +1,291 @@
+# Previa on one host: PostgreSQL, the migration step, the server, the worker,
+# the router and (profile "observability") Prometheus and Grafana.
+# docs/24-production-deployment.md walks through it; run it as
+#
+#   docker compose -f deploy/production/compose.yml --env-file /etc/previa/previa.env up -d
+#
+# Decisions kept from the design: the server and previews get no Docker
+# socket (only the worker has it); routes come from the file the worker
+# writes, never from Docker labels; internal listeners (/livez, /readyz,
+# /metrics) stay on the control network and are never published; the DNS
+# token and the GitHub App key are files, not environment values.
+name: previa
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "20m", max-file: "5"}
+
+x-previa-image: &server-image ${PREVIA_SERVER_IMAGE:-previa-server}:${PREVIA_VERSION:?set PREVIA_VERSION}
+# Settings for the server, the worker and the migration step (mode 600).
+x-env-file: &env-file ${PREVIA_ENV_FILE:-/etc/previa/previa.env}
+
+services:
+  postgres:
+    image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: previa
+      POSTGRES_DB: previa
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    networks: [control]
+    shm_size: 256m
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U previa -d previa"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    deploy:
+      resources:
+        limits: {cpus: "2", memory: 2g}
+        reservations: {memory: 512m}
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+  # Applies the schema the images were built with, then exits. The server and
+  # the worker start only after it succeeded.
+  migrate:
+    <<: *hardened
+    image: *server-image
+    restart: "no"
+    entrypoint: ["/usr/local/bin/previa-migrate"]
+    command: ["up"]
+    env_file: [*env-file]
+    healthcheck: {disable: true}
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [control]
+
+  server:
+    <<: *hardened
+    image: *server-image
+    build: {context: ../.., target: server, args: {VERSION: "${PREVIA_VERSION}"}}
+    env_file: [*env-file]
+    environment:
+      APP_ENV: production
+      HTTP_ADDR: 0.0.0.0:8080
+      INTERNAL_ADDR: 0.0.0.0:9090
+      TRUSTED_PROXIES: 172.31.250.10
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github_app_key
+      BACKUP_STATUS_FILE: /var/lib/previa/backup/last-success
+    secrets: [github_app_key]
+    volumes:
+      - ${PREVIA_BACKUP_STATUS_DIR:-/var/lib/previa/backup}:/var/lib/previa/backup:ro
+    tmpfs: [/tmp]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    networks:
+      control: {ipv4_address: 172.31.250.20}
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 512m}
+        reservations: {memory: 128m}
+
+  # The only service with the Docker socket: it builds images, runs previews
+  # and their egress proxy, and drives the router. Its group is the socket's
+  # (DOCKER_GID); that access is root-equivalent on the host by design.
+  worker:
+    <<: *hardened
+    image: ${PREVIA_WORKER_IMAGE:-previa-worker}:${PREVIA_VERSION:?set PREVIA_VERSION}
+    build: {context: ../.., target: worker, args: {VERSION: "${PREVIA_VERSION}"}}
+    env_file: [*env-file]
+    environment:
+      APP_ENV: production
+      WORKER_INTERNAL_ADDR: 0.0.0.0:9091
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github_app_key
+      SOURCE_WORKSPACE_ROOT: /var/lib/previa/sources
+      ROUTER_DYNAMIC_DIR: /var/lib/previa/router
+      ROUTER_CONTAINER: previa-router
+      EGRESS_IMAGE: ${PREVIA_EGRESS_IMAGE:-previa-egress}:${PREVIA_VERSION}
+      # The kill switch; restore.sh starts the worker paused.
+      BUILDS_PAUSED: ${BUILDS_PAUSED:-false}
+    group_add: ["${DOCKER_GID:?set DOCKER_GID to the group of /var/run/docker.sock}"]
+    secrets: [github_app_key]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - sources:/var/lib/previa/sources
+      - ${PREVIA_ROUTER_DIR:-/var/lib/previa/router}:/var/lib/previa/router
+    tmpfs: [/tmp]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      router: {condition: service_healthy}
+    networks: [control]
+    # Running builds get 30 seconds to finish, then are cancelled and resume
+    # on the next start; leave room for that and the cleanup after it.
+    stop_grace_period: 60s
+    deploy:
+      resources:
+        limits: {cpus: "2", memory: 1g}
+        reservations: {memory: 256m}
+
+  router:
+    image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
+    container_name: previa-router
+    restart: unless-stopped
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --log.level=INFO
+      - --accesslog=false
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --providers.providersthrottleduration=250ms
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.aliasheadersstrategy=delete
+      - --entrypoints.websecure.http.tls.certresolver=preview
+      - --entrypoints.websecure.http.tls.domains[0].main=*.${PREVIEW_BASE_DOMAIN:?set PREVIEW_BASE_DOMAIN}
+      - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=60s
+      - --entrypoints.websecure.transport.respondingtimeouts.idletimeout=180s
+      # The worker reads the API through docker exec; Prometheus reads
+      # metrics on the control network only (previews cannot reach it).
+      - --entrypoints.traefik.address=127.0.0.1:8080
+      - --entrypoints.metrics.address=172.31.250.10:8082
+      - --api=true
+      - --api.insecure=true
+      - --api.dashboard=false
+      - --ping=true
+      - --ping.entrypoint=traefik
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entrypoint=metrics
+      - --certificatesresolvers.preview.acme.email=${ACME_EMAIL:?set ACME_EMAIL}
+      - --certificatesresolvers.preview.acme.storage=/acme/acme.json
+      - --certificatesresolvers.preview.acme.caserver=${ACME_CA_SERVER:-https://acme-staging-v02.api.letsencrypt.org/directory}
+      - --certificatesresolvers.preview.acme.dnschallenge.provider=${ACME_DNS_PROVIDER:?set ACME_DNS_PROVIDER}
+      - --certificatesresolvers.preview.acme.dnschallenge.resolvers=${ACME_DNS_RESOLVERS:-1.1.1.1:53,8.8.8.8:53}
+      # The dashboard's own certificate uses TLS-ALPN-01, so its domain needs
+      # no DNS token (it is often a different zone from the previews').
+      - --certificatesresolvers.dashboard.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.dashboard.acme.storage=/acme/dashboard.json
+      - --certificatesresolvers.dashboard.acme.caserver=${ACME_CA_SERVER:-https://acme-staging-v02.api.letsencrypt.org/directory}
+      - --certificatesresolvers.dashboard.acme.tlschallenge=true
+    environment:
+      - ${ACME_DNS_CREDENTIAL_VARIABLE:?set ACME_DNS_CREDENTIAL_VARIABLE}_FILE=/run/secrets/dns_credential
+    secrets: [dns_credential]
+    depends_on:
+      router-config: {condition: service_completed_successfully}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${PREVIA_ROUTER_DIR:-/var/lib/previa/router}:/etc/traefik/dynamic:ro
+      - acme:/acme
+    networks:
+      control: {ipv4_address: 172.31.250.10}
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping", "--ping.entrypoint=traefik", "--entrypoints.traefik.address=127.0.0.1:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 512m}
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+  # Writes the dashboard's route next to the worker's preview routes on every
+  # start (the router watches the whole directory; the worker only ever
+  # writes previa-routes.yml). Same pinned image as the router, no network.
+  router-config:
+    image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
+    restart: "no"
+    network_mode: none
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 022
+        cat > /dynamic/.previa-dashboard.yml.tmp <<'ROUTE'
+        http:
+          routers:
+            previa-dashboard:
+              rule: "Host(`${PREVIA_DASHBOARD_HOST:?set PREVIA_DASHBOARD_HOST to APP_BASE_URL's host}`)"
+              entryPoints: [websecure]
+              service: previa-dashboard
+              priority: 1000
+              tls:
+                certResolver: dashboard
+          services:
+            previa-dashboard:
+              loadBalancer:
+                servers:
+                  - url: "http://172.31.250.20:8080"
+        ROUTE
+        mv /dynamic/.previa-dashboard.yml.tmp /dynamic/previa-dashboard.yml
+    volumes:
+      - ${PREVIA_ROUTER_DIR:-/var/lib/previa/router}:/dynamic
+
+  # Built (or pulled) with the release; the worker starts it, never Compose.
+  egress:
+    image: ${PREVIA_EGRESS_IMAGE:-previa-egress}:${PREVIA_VERSION}
+    build: {context: ../.., target: egress, args: {VERSION: "${PREVIA_VERSION}"}}
+    profiles: [images]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+    profiles: [observability]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ../observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus:/prometheus
+    networks: [control]
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 1g}
+
+  grafana:
+    image: grafana/grafana:12.1.1@sha256:a1701c2180249361737a99a01bc770db39381640e4d631825d38ff4535efa47d
+    profiles: [observability]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    # Loopback only: reach it through an SSH tunnel.
+    ports: ["127.0.0.1:3000:3000"]
+    networks: [control]
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 512m}
+
+secrets:
+  github_app_key:
+    file: ${GITHUB_APP_PRIVATE_KEY_FILE:-/etc/previa/github-app.pem}
+  dns_credential:
+    file: ${ACME_DNS_CREDENTIAL_FILE:-/etc/previa/dns-credential}
+
+networks:
+  control:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
+
+volumes:
+  postgres:
+  sources:
+  acme:
+  prometheus:
+  grafana:
