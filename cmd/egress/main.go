@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/platform/egress"
+	"github.com/ajaykathwatee/previa/internal/platform/logging"
 )
 
 func main() {
@@ -55,7 +56,10 @@ func serve(args []string) {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
 	listen := flags.String("listen", ":"+egress.Port, "address to listen on")
 	_ = flags.Parse(args)
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger, err := logging.New(os.Stdout, os.Getenv("LOG_LEVEL"))
+	if err != nil {
+		logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	}
 	server := &http.Server{
 		Addr:              *listen,
 		Handler:           egress.NewProxy(logger),

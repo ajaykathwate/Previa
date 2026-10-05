@@ -62,6 +62,8 @@ templ Index(username string, csrfToken string, summary Summary) {
 					@components.InfoIcon()
 					if summary.Workers.Execution {
 						A running worker builds, publishes and reports previews. Nothing on this page is simulated.
+					} else if summary.Workers.Paused {
+						Builds are paused by the operator. Teardown, cleanup and reports keep running; queued requests start when builds resume.
 					} else {
 						No running worker can build yet: it needs the GitHub App, Docker and a preview domain (see the setup guide). Requests wait until one starts.
 					}

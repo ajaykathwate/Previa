@@ -32,3 +32,22 @@ func TestHomeUsesLayout(t *testing.T) {
 		t.Fatal("public home exposes authenticated workspace actions")
 	}
 }
+
+type signedIn struct{}
+
+func (signedIn) Username(context.Context) (string, bool) { return "owner", true }
+func (signedIn) CSRFToken(context.Context) string        { return "token" }
+
+func TestDeveloperToolsOnlyOutsideProduction(t *testing.T) {
+	pass := func(next http.Handler) http.Handler { return next }
+	for _, enabled := range []bool{true, false} {
+		r := chi.NewRouter()
+		MountWithSummary(r, signedIn{}, pass, Options{DeveloperTools: enabled})
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/developer-tools", nil))
+		hasForm := strings.Contains(w.Body.String(), "data-queue-form")
+		if w.Code != http.StatusOK || hasForm != enabled || strings.Contains(w.Body.String(), "off in production") == enabled {
+			t.Fatalf("developer tools enabled=%v: %d form=%v", enabled, w.Code, hasForm)
+		}
+	}
+}

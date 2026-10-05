@@ -34,7 +34,11 @@ var phaseTitle = map[Phase]string{
 // an unchanged state renders identically and costs no GitHub write.
 func CommentContent(v View) string {
 	var b strings.Builder
-	b.WriteString("### Previa preview: " + phaseTitle[v.Phase] + "\n\n")
+	title := phaseTitle[v.Phase]
+	if v.Phase == PhaseCapacity {
+		title = environments.WaitingTitle(v.Waiting) // capacity, disk space or paused builds
+	}
+	b.WriteString("### Previa preview: " + title + "\n\n")
 	short := func(sha string) string { return "`" + sha[:min(7, len(sha))] + "`" }
 	switch v.Phase {
 	case PhaseReady:

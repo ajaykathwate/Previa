@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,6 +22,10 @@ type Capabilities struct {
 	Reporting    bool `json:"reporting"`    // PR comments and check runs
 	Housekeeping bool `json:"housekeeping"` // recovery, expiry, cleanup, pruning
 	Discovery    bool `json:"discovery"`    // PR discovery and mergeability
+	// Paused: the operator stopped new builds (BUILDS_PAUSED). A paused
+	// worker reports Execution false; together, Paused is true only when no
+	// live worker can build.
+	Paused bool `json:"paused"`
 }
 
 const (
@@ -38,6 +43,7 @@ type Heartbeat struct {
 	logger *slog.Logger
 	done   chan struct{}
 	exited chan struct{}
+	last   atomic.Int64 // Unix nanoseconds of the last recorded heartbeat
 }
 
 // Start records caps for this process and refreshes them every Interval.
@@ -60,17 +66,30 @@ func Start(ctx context.Context, pool *pgxpool.Pool, caps Capabilities, logger *s
 func (h *Heartbeat) beat(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if _, err := h.pool.Exec(ctx, `INSERT INTO worker_capabilities (worker_id, execution, routing, reporting, housekeeping, discovery)
-		VALUES ($1, $2, $3, $4, $5, $6)
+	if _, err := h.pool.Exec(ctx, `INSERT INTO worker_capabilities (worker_id, execution, routing, reporting, housekeeping, discovery, paused)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (worker_id) DO UPDATE SET seen_at = clock_timestamp()`,
-		h.id, h.caps.Execution, h.caps.Routing, h.caps.Reporting, h.caps.Housekeeping, h.caps.Discovery); err != nil {
+		h.id, h.caps.Execution, h.caps.Routing, h.caps.Reporting, h.caps.Housekeeping, h.caps.Discovery, h.caps.Paused); err != nil {
 		return fmt.Errorf("record worker capabilities: %w", err)
 	}
 	if _, err := h.pool.Exec(ctx, "DELETE FROM worker_capabilities WHERE seen_at < clock_timestamp() - $1::bigint * interval '1 second'", int64(forget/time.Second)); err != nil {
 		return fmt.Errorf("forget old workers: %w", err)
 	}
+	h.last.Store(time.Now().UnixNano())
 	return nil
 }
+
+// Fresh fails when the server would no longer count this worker: its last
+// heartbeat is older than Stale.
+func (h *Heartbeat) Fresh() error {
+	if age := time.Since(time.Unix(0, h.last.Load())); age > Stale {
+		return fmt.Errorf("no heartbeat recorded for %s", age.Round(time.Second))
+	}
+	return nil
+}
+
+// Capabilities are what this worker announced.
+func (h *Heartbeat) Capabilities() Capabilities { return h.caps }
 
 func (h *Heartbeat) run(ctx context.Context) {
 	defer close(h.exited)
@@ -108,13 +127,22 @@ func NewReader(pool *pgxpool.Pool) *Reader { return &Reader{pool: pool} }
 
 // Current combines the capabilities of every worker seen within Stale.
 func (r *Reader) Current(ctx context.Context) (Capabilities, error) {
+	c, _, err := r.Live(ctx)
+	return c, err
+}
+
+// Live is Current plus how many workers are live.
+func (r *Reader) Live(ctx context.Context) (Capabilities, int64, error) {
 	var c Capabilities
+	var live int64
 	err := r.pool.QueryRow(ctx, `SELECT COALESCE(bool_or(execution), false), COALESCE(bool_or(routing), false),
-		COALESCE(bool_or(reporting), false), COALESCE(bool_or(housekeeping), false), COALESCE(bool_or(discovery), false)
+		COALESCE(bool_or(reporting), false), COALESCE(bool_or(housekeeping), false), COALESCE(bool_or(discovery), false),
+		COALESCE(bool_or(paused), false), count(*)
 		FROM worker_capabilities WHERE seen_at >= clock_timestamp() - $1::bigint * interval '1 second'`, int64(Stale/time.Second)).
-		Scan(&c.Execution, &c.Routing, &c.Reporting, &c.Housekeeping, &c.Discovery)
+		Scan(&c.Execution, &c.Routing, &c.Reporting, &c.Housekeeping, &c.Discovery, &c.Paused, &live)
 	if err != nil {
-		return Capabilities{}, fmt.Errorf("read worker capabilities: %w", err)
+		return Capabilities{}, 0, fmt.Errorf("read worker capabilities: %w", err)
 	}
-	return c, nil
+	c.Paused = c.Paused && !c.Execution
+	return c, live, nil
 }

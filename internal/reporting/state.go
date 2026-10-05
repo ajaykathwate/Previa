@@ -51,7 +51,7 @@ type Intent struct {
 	HeadSHA     string
 	State       string // pending, queued, running, succeeded, failed, cancelled, superseded
 	AvailableAt time.Time
-	Waiting     string // "capacity" or "disk" while this request waits; empty otherwise
+	Waiting     string // "capacity", "disk" or "paused" while this request waits; empty otherwise
 }
 
 // Environment is the PR's lifetime environment.
@@ -75,7 +75,7 @@ type View struct {
 	LogsURL    string    // only when a log page exists and the dashboard URL is known
 	Failure    string    // safe sentence for a failed request
 	Blocked    string    // why a requested build cannot start
-	Waiting    string    // "capacity" or "disk" while the request waits for it
+	Waiting    string    // "capacity", "disk" or "paused" while the request waits
 	Conflicts  bool      // blocked by merge conflicts (no build will run)
 	EligibleAt time.Time // when an Automatic request becomes eligible
 	ExpiresAt  time.Time // when the live preview expires; zero when it does not

@@ -13,7 +13,11 @@ import (
 
 const activatePendingEnvironment = `-- name: ActivatePendingEnvironment :one
 WITH locked AS MATERIALIZED (
-    SELECT e.id, e.container_id, e.image_tag
+    SELECT e.id, e.container_id, e.image_tag,
+        -- When the request could first build (after Automatic's quiet period):
+        -- the start of its request-to-preview latency.
+        (SELECT b.available_at FROM build_intents b
+         WHERE b.pull_request_id = pr.id AND b.revision = $2) AS eligible_at
     FROM environments e
     JOIN pull_requests pr ON pr.id = e.pull_request_id
     WHERE e.pull_request_id = $4
@@ -52,7 +56,8 @@ RETURNING locked.container_id AS previous_container_id,
           locked.image_tag AS previous_image_tag,
           e.container_id AS active_container_id,
           e.image_tag AS active_image_tag,
-          e.head_sha AS active_head_sha
+          e.head_sha AS active_head_sha,
+          locked.eligible_at::timestamptz AS eligible_at
 `
 
 type ActivatePendingEnvironmentParams struct {
@@ -68,6 +73,7 @@ type ActivatePendingEnvironmentRow struct {
 	ActiveContainerID   pgtype.Text
 	ActiveImageTag      pgtype.Text
 	ActiveHeadSha       pgtype.Text
+	EligibleAt          pgtype.Timestamptz
 }
 
 func (q *Queries) ActivatePendingEnvironment(ctx context.Context, arg ActivatePendingEnvironmentParams) (ActivatePendingEnvironmentRow, error) {
@@ -84,6 +90,7 @@ func (q *Queries) ActivatePendingEnvironment(ctx context.Context, arg ActivatePe
 		&i.ActiveContainerID,
 		&i.ActiveImageTag,
 		&i.ActiveHeadSha,
+		&i.EligibleAt,
 	)
 	return i, err
 }

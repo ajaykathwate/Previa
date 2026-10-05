@@ -25,6 +25,7 @@ sql:
       - internal/environments/route_queries.sql
       - internal/environments/teardown_queries.sql
       - internal/environments/report_queries.sql
+      - internal/environments/stats_queries.sql
     gen:
       go:
         package: dbgen

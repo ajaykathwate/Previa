@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/housekeeping/dbgen"
+	"github.com/ajaykathwatee/previa/internal/platform/metrics"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -112,7 +113,10 @@ func (h *Housekeeper) Register(cfg *river.Config) {
 // Recover runs one recovery pass and, when a build waits for disk space, an
 // emergency prune (at most every EmergencyPruneEvery).
 func (h *Housekeeper) Recover(ctx context.Context) error {
-	_, err := h.Recovery.RunOnce(ctx)
+	pass, err := h.Recovery.RunOnce(ctx)
+	metrics.Housekeeping("recovery", "wakeups", pass.Wakeups)
+	metrics.Housekeeping("recovery", "operations", pass.Operations)
+	metrics.Housekeeping("recovery", "teardowns", pass.Teardowns)
 	if h.Prune == nil {
 		return err
 	}
@@ -130,7 +134,8 @@ func (h *Housekeeper) Recover(ctx context.Context) error {
 		return err
 	}
 	h.logger.WarnContext(ctx, "builds wait for disk space; pruning now", "waiting", waiting)
-	_, pruneErr := h.Prune.RunOnce(ctx, true)
+	prune, pruneErr := h.Prune.RunOnce(ctx, true)
+	h.Prune.count(prune)
 	return errors.Join(err, pruneErr)
 }
 
@@ -151,7 +156,12 @@ type resourcesWorker struct {
 
 func (*resourcesWorker) Timeout(*river.Job[ResourcesArgs]) time.Duration { return 5 * time.Minute }
 func (w *resourcesWorker) Work(ctx context.Context, _ *river.Job[ResourcesArgs]) error {
-	_, err := w.h.Resources.RunOnce(ctx)
+	pass, err := w.h.Resources.RunOnce(ctx)
+	metrics.Housekeeping("resources", "missing", len(pass.Missing))
+	if !w.h.Resources.dryRun { // a dry run only reports what it would delete
+		metrics.Housekeeping("resources", "orphans", len(pass.Orphans))
+		metrics.Housekeeping("resources", "unknown_removed", len(pass.Removed))
+	}
 	return err
 }
 
@@ -164,7 +174,12 @@ func (*pullRequestsWorker) Timeout(*river.Job[PullRequestsArgs]) time.Duration {
 	return 5 * time.Minute
 }
 func (w *pullRequestsWorker) Work(ctx context.Context, _ *river.Job[PullRequestsArgs]) error {
-	_, err := w.h.PullRequests.RunOnce(ctx)
+	pass, err := w.h.PullRequests.RunOnce(ctx)
+	confirmed := 0
+	for _, n := range pass.Outcomes {
+		confirmed += n
+	}
+	metrics.Housekeeping("pull_requests", "confirmed", confirmed)
 	return err
 }
 
@@ -175,7 +190,8 @@ type expiryWorker struct {
 
 func (*expiryWorker) Timeout(*river.Job[ExpiryArgs]) time.Duration { return 2 * time.Minute }
 func (w *expiryWorker) Work(ctx context.Context, _ *river.Job[ExpiryArgs]) error {
-	_, err := w.h.Expiry.RunOnce(ctx)
+	pass, err := w.h.Expiry.RunOnce(ctx)
+	metrics.Housekeeping("expiry", "expired", pass.Expired) // zero in a dry run
 	return err
 }
 
@@ -186,6 +202,7 @@ type pruneWorker struct {
 
 func (*pruneWorker) Timeout(*river.Job[PruneArgs]) time.Duration { return 15 * time.Minute }
 func (w *pruneWorker) Work(ctx context.Context, job *river.Job[PruneArgs]) error {
-	_, err := w.h.Prune.RunOnce(ctx, job.Args.Emergency)
+	pass, err := w.h.Prune.RunOnce(ctx, job.Args.Emergency)
+	w.h.Prune.count(pass)
 	return err
 }

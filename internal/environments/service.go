@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/platform/metrics"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
 )
 
@@ -60,6 +61,7 @@ type Service struct {
 	logger       *slog.Logger
 	buildTimeout time.Duration
 	now          func() time.Time
+	paused       bool
 }
 
 func NewService(repo *Repository, runtime Runtime, logger *slog.Logger, buildTimeout time.Duration, clocks ...func() time.Time) (*Service, error) {
@@ -94,6 +96,15 @@ var ErrInterrupted = errors.New("the worker stopped during the build; it runs ag
 // it; a request that cannot start waits queued instead of failing.
 func (s *Service) WithHeadroom(h Headroom) *Service {
 	s.headroom = h
+	return s
+}
+
+// Paused is the execution kill switch (BUILDS_PAUSED): no build is admitted
+// and no GitHub or Docker call is made for one; requests wait with reason
+// paused and run once a worker starts unpaused. Teardown and every other
+// operation are unaffected.
+func (s *Service) Paused() *Service {
+	s.paused = true
 	return s
 }
 
@@ -178,6 +189,10 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	if before.PendingGeneration == request.Generation && before.PendingRevision == request.Revision && before.PendingArtifact.ContainerID != "" && before.PendingArtifact.ImageTag != "" {
 		return s.cleanup(ctx, request)
 	}
+	if s.paused {
+		metrics.BuildWaited(WaitPaused)
+		return errors.Join(&WaitingError{Reason: WaitPaused, Err: errors.New("builds are paused")}, s.repo.markWaiting(ctx, request, WaitPaused))
+	}
 	if s.verifier != nil {
 		// Fresh from GitHub, outside every lock: a new commit, a close or lost
 		// access recorded now supersedes this request before any work.
@@ -196,6 +211,7 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	if s.headroom != nil && before.Revision == request.Revision {
 		if err := s.headroom.Admit(ctx, request); err != nil {
 			if reason := waitingReason(err); reason != "" {
+				metrics.BuildWaited(reason)
 				return errors.Join(&WaitingError{Reason: reason, Err: err}, s.repo.markWaiting(ctx, request, reason))
 			}
 			return err
@@ -208,10 +224,12 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	if !allowed {
 		return s.superseded(ctx, request)
 	}
+	started := s.now()
 	buildCtx, cancel := context.WithTimeout(ctx, s.buildTimeout)
 	artifact, buildErr := s.runtime.Build(buildCtx, request, attempt)
 	cancel()
 	if buildErr != nil && ctx.Err() != nil {
+		metrics.BuildFinished("interrupted", "", s.now().Sub(started))
 		// The worker is shutting down: this is no failure of the request. It
 		// keeps its slot and runs again when a worker starts.
 		completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), queue.CompletionGrace)
@@ -222,6 +240,7 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	if reason := waitingReason(buildErr); reason != "" {
 		// Not a failure: the admitted request keeps its slot and its place,
 		// and is retried once capacity or disk frees up.
+		metrics.BuildWaited(reason)
 		completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), queue.CompletionGrace)
 		defer completeCancel()
 		s.finishLogs(completeCtx, request, attempt)
@@ -250,7 +269,13 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 		return errors.Join(err, s.cleanup(completeCtx, request))
 	}
 	if !applied {
+		metrics.BuildFinished("superseded", "", s.now().Sub(started))
 		return s.superseded(completeCtx, request)
+	}
+	if result.Status == "failed" {
+		metrics.BuildFinished("failed", result.ErrorCode, s.now().Sub(started))
+	} else {
+		metrics.BuildFinished("succeeded", "", s.now().Sub(started))
 	}
 	cleanupErr := s.cleanup(completeCtx, request)
 	if buildErr != nil {

@@ -19,6 +19,8 @@ beforeEach(async () => {
   page = await context.newPage();
   errors = [];
   page.on('pageerror', error => errors.push(error.message));
+  // Content-Security-Policy violations are console errors, not page errors.
+  page.on('console', message => { if (message.type() === 'error' && /Content Security Policy|Refused to/.test(message.text())) errors.push(message.text()); });
 });
 afterEach(async t => {
   try {

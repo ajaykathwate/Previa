@@ -19,9 +19,10 @@ type UserSession interface {
 type SummaryReader func(context.Context, int64) (dashboardpages.Summary, error)
 
 type handler struct {
-	users   UserSession
-	summary SummaryReader
-	userID  func(context.Context) (int64, int64, bool)
+	users    UserSession
+	summary  SummaryReader
+	userID   func(context.Context) (int64, int64, bool)
+	devTools bool
 }
 
 func (h *handler) home(w http.ResponseWriter, r *http.Request) {
@@ -51,5 +52,5 @@ func (h *handler) protected(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) tools(w http.ResponseWriter, r *http.Request) {
 	username, _ := h.users.Username(r.Context())
-	templ.Handler(dashboardpages.Tools(username, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
+	templ.Handler(dashboardpages.Tools(username, h.users.CSRFToken(r.Context()), h.devTools)).ServeHTTP(w, r)
 }

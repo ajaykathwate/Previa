@@ -153,3 +153,43 @@ func TestAdmissionReadsThePRFreshFromGitHub(t *testing.T) {
 		t.Fatal("a confirmed request did not build")
 	}
 }
+
+// TestPausedBuildsWaitWithoutTouchingGitHubOrDocker: the kill switch defers
+// every build before any external call, records why, and lets the same
+// request run once builds resume.
+func TestPausedBuildsWaitWithoutTouchingGitHubOrDocker(t *testing.T) {
+	f := newFixture(t)
+	f.repo.WithReports()
+	a := f.prEvent(t, 81, "sha-a")
+	verifier := &scriptedVerifier{snapshot: func(env.Request) env.UpstreamSnapshot {
+		return env.UpstreamSnapshot{PullRequestID: a.PullRequestID, Generation: a.Generation, HeadSHA: a.HeadSHA}
+	}}
+	r := newGatedRuntime()
+	paused := newCapacityService(t, f, r).WithVerifier(verifier).Paused()
+	var waiting *env.WaitingError
+	if err := paused.Build(t.Context(), a); !errors.As(err, &waiting) || waiting.Reason != env.WaitPaused {
+		t.Fatalf("a paused build: %v", err)
+	}
+	if verifier.calls != 0 {
+		t.Fatal("a paused build read GitHub")
+	}
+	select {
+	case <-r.started:
+		t.Fatal("a paused build reached the runtime")
+	default:
+	}
+	if state, reason := f.intentState(t, a.PullRequestID); state == "running" || reason != env.WaitPaused {
+		t.Fatalf("paused request is %s/%q", state, reason)
+	}
+	// Resuming is a worker start without the switch: the same request builds.
+	resumed := newCapacityService(t, f, r).WithVerifier(verifier)
+	if err := resumed.Build(t.Context(), a); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-r.started; got != a.PullRequestID {
+		t.Fatal("the resumed request did not build")
+	}
+	if state, reason := f.intentState(t, a.PullRequestID); state != "running" || reason != "" {
+		t.Fatalf("resumed request is %s/%q", state, reason)
+	}
+}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ajaykathwatee/previa/internal/builds"
 	"github.com/ajaykathwatee/previa/internal/housekeeping/dbgen"
+	"github.com/ajaykathwatee/previa/internal/platform/metrics"
 	"github.com/ajaykathwatee/previa/internal/source"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -63,6 +64,16 @@ type PrunePass struct {
 	Workspaces int   // leftover workspaces removed (or that would be)
 	Caches     int   // caches removed (or that would be)
 	CacheBytes int64 // their size
+}
+
+// count records what a pass deleted; a dry run deletes nothing.
+func (p *Prune) count(pass PrunePass) {
+	if p.settings.DryRun {
+		return
+	}
+	metrics.Housekeeping("prune", "images", pass.Images)
+	metrics.Housekeeping("prune", "workspaces", pass.Workspaces)
+	metrics.Housekeeping("prune", "caches", pass.Caches)
 }
 
 func (p *Prune) RunOnce(ctx context.Context, emergency bool) (PrunePass, error) {

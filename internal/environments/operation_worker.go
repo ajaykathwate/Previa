@@ -10,6 +10,7 @@ import (
 
 	"github.com/ajaykathwatee/previa/internal/environments/dbgen"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
+	"github.com/ajaykathwatee/previa/internal/platform/metrics"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
@@ -330,7 +331,8 @@ func (r *Repository) completeOperation(ctx context.Context, op Operation, owner 
 	case ReportStatus:
 		return r.completeReport(ctx, op, owner)
 	}
-	return database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
+	var published time.Time // the activated request's eligibility, once committed
+	err := database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
 		authorized := true
 		if op.Kind != CleanupArtifact && op.Payload.Request.State == "open" {
@@ -383,6 +385,9 @@ func (r *Repository) completeOperation(ctx context.Context, op Operation, owner 
 				}
 				return fmt.Errorf("activate pending environment: %w", err)
 			}
+			if active.EligibleAt.Valid {
+				published = active.EligibleAt.Time
+			}
 			for _, previous := range []Artifact{
 				{ContainerID: active.PreviousContainerID.String, ImageTag: active.PreviousImageTag.String},
 				op.Payload.PreviousPending,
@@ -408,6 +413,10 @@ func (r *Repository) completeOperation(ctx context.Context, op Operation, owner 
 		}
 		return requireOperationTransition(op.ID, "succeeded", affected)
 	})
+	if err == nil && !published.IsZero() {
+		metrics.PreviewPublished(time.Since(published))
+	}
+	return err
 }
 
 // completeRemoval records a converged route removal. It never needs GitHub

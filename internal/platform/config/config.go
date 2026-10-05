@@ -15,6 +15,8 @@ import (
 // Configuration contains secrets and must not be logged.
 type SharedConfig struct {
 	DatabaseURL string `envconfig:"DATABASE_URL" required:"true"`
+	// ApplicationName labels this process's connections (set by the caller).
+	ApplicationName string `ignored:"true"`
 }
 
 // SecretsConfig is the repository-secret keyring: versioned AES-256 keys and the
@@ -65,6 +67,14 @@ func LoadSecretsMaintenance() (SecretsMaintenanceConfig, error) {
 type ServerConfig struct {
 	SharedConfig
 	SecretsConfig
+	EnvironmentConfig
+	// InternalAddr serves /livez, /readyz and /metrics; never publish it.
+	InternalAddr string `envconfig:"INTERNAL_ADDR" default:"127.0.0.1:9090"`
+	// TrustedProxies may set X-Forwarded-For/-Host (the router, in production).
+	TrustedProxies string `envconfig:"TRUSTED_PROXIES"`
+	// BackupStatusFile is written by the backup script after each successful
+	// backup; its modification time becomes a metric.
+	BackupStatusFile        string `envconfig:"BACKUP_STATUS_FILE"`
 	AppBaseURL              string `envconfig:"APP_BASE_URL" default:"http://localhost:8080"`
 	HTTPAddr                string `envconfig:"HTTP_ADDR" default:"127.0.0.1:8080"`
 	GitHubOAuthClientID     string `envconfig:"GITHUB_OAUTH_CLIENT_ID" required:"true"`
@@ -84,6 +94,7 @@ type ServerConfig struct {
 type WorkerConfig struct {
 	SharedConfig
 	SecretsConfig
+	EnvironmentConfig
 	ExecutionConfig
 	RoutingConfig
 	HousekeepingConfig
@@ -91,6 +102,11 @@ type WorkerConfig struct {
 	GitHubAppPrivateKeyPath string        `envconfig:"GITHUB_APP_PRIVATE_KEY_PATH"`
 	MaxConcurrentBuilds     int           `envconfig:"MAX_CONCURRENT_BUILDS" required:"true"`
 	BuildTimeout            time.Duration `envconfig:"BUILD_TIMEOUT" default:"12m"`
+	// InternalAddr serves /livez, /readyz and /metrics; never publish it.
+	InternalAddr string `envconfig:"WORKER_INTERNAL_ADDR" default:"127.0.0.1:9091"`
+	// BuildsPaused is the execution kill switch: no new build starts, while
+	// teardown, cleanup, routing, reports and housekeeping keep running.
+	BuildsPaused bool `envconfig:"BUILDS_PAUSED"`
 }
 
 // LoadShared reads database/queue connection settings, including for migrations.
@@ -126,9 +142,20 @@ func LoadWorker() (WorkerConfig, error) {
 	if err := cfg.SharedConfig.validate(); err != nil {
 		return WorkerConfig{}, fmt.Errorf("validate worker configuration: %w", err)
 	}
+	if err := cfg.EnvironmentConfig.check(); err != nil {
+		return WorkerConfig{}, err
+	}
+	if err := checkListenAddress("WORKER_INTERNAL_ADDR", cfg.InternalAddr); err != nil {
+		return WorkerConfig{}, err
+	}
 	if cfg.GitHubAppID != 0 || cfg.GitHubAppPrivateKeyPath != "" {
 		if cfg.GitHubAppID <= 0 || strings.TrimSpace(cfg.GitHubAppPrivateKeyPath) == "" {
 			return WorkerConfig{}, errors.New("GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH must be configured together for PR discovery")
+		}
+		if cfg.Production() {
+			if err := CheckPrivateFile("GITHUB_APP_PRIVATE_KEY_PATH", cfg.GitHubAppPrivateKeyPath); err != nil {
+				return WorkerConfig{}, err
+			}
 		}
 	}
 	if err := cfg.SecretsConfig.validate(); err != nil {
@@ -171,12 +198,29 @@ func (c ServerConfig) validate() error {
 	if err := c.SharedConfig.validate(); err != nil {
 		return err
 	}
+	if err := c.check(); err != nil {
+		return err
+	}
+	if err := checkListenAddress("INTERNAL_ADDR", c.InternalAddr); err != nil {
+		return err
+	}
+	if _, err := ParseTrustedProxies(c.TrustedProxies); err != nil {
+		return err
+	}
 	base, err := url.Parse(c.AppBaseURL)
 	if err != nil || base == nil || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" || (base.Path != "" && base.Path != "/") || (base.Scheme != "http" && base.Scheme != "https") {
 		return errors.New("APP_BASE_URL must be an HTTP(S) origin without credentials, query, or path")
 	}
 	if base.Scheme == "http" && base.Hostname() != "localhost" && base.Hostname() != "127.0.0.1" && base.Hostname() != "::1" {
 		return errors.New("APP_BASE_URL must use HTTPS except on localhost")
+	}
+	if c.Production() {
+		if base.Scheme != "https" {
+			return errors.New("APP_BASE_URL must use HTTPS when APP_ENV=production")
+		}
+		if strings.TrimSpace(c.GitHubWebhookSecret) == "" {
+			return errors.New("GITHUB_WEBHOOK_SECRET is required when APP_ENV=production")
+		}
 	}
 	if base.Port() != "" {
 		port, err := strconv.Atoi(base.Port())
@@ -219,6 +263,11 @@ func (c ServerConfig) validate() error {
 			valid := char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || char == '-'
 			if !valid {
 				return errors.New("GITHUB_APP_SLUG must contain lowercase letters, digits or hyphens")
+			}
+		}
+		if c.Production() {
+			if err := CheckPrivateFile("GITHUB_APP_PRIVATE_KEY_PATH", c.GitHubAppPrivateKeyPath); err != nil {
+				return err
 			}
 		}
 	}

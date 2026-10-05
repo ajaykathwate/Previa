@@ -42,6 +42,10 @@ type fakeGitHub struct {
 	comments map[int64]string
 	checks   map[int64]*fakeRun
 	nextID   int64
+	// reportsDown makes comment and check-run calls fail with 502 (a partial
+	// GitHub outage); rejected counts them.
+	reportsDown bool
+	rejected    int
 }
 
 type fakeRun struct {
@@ -100,6 +104,19 @@ func (f *fakeGitHub) push(commit string, files map[string]string) {
 	defer f.mu.Unlock()
 	f.head, f.updated = commit, time.Now().UTC().Truncate(time.Second)
 	f.archives[commit] = out.Bytes()
+}
+
+// setReportsDown starts or ends an outage of GitHub's comment and check-run API.
+func (f *fakeGitHub) setReportsDown(down bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reportsDown = down
+}
+
+func (f *fakeGitHub) rejectedReports() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rejected
 }
 
 func (f *fakeGitHub) livingComment() string {
@@ -163,6 +180,11 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"performed_via_github_app": map[string]any{"id": e2eAppID, "slug": e2eSlug}}
 	}
 	path := r.URL.Path
+	if f.reportsDown && (strings.Contains(path, "/comments") || strings.Contains(path, "/check-runs")) {
+		f.rejected++
+		write(http.StatusBadGateway, map[string]any{"message": "Server Error"})
+		return
+	}
 	switch {
 	case path == "/repositories/"+strconv.Itoa(e2eRepoID):
 		write(200, map[string]any{"id": e2eRepoID, "name": e2eRepo, "owner": map[string]any{"login": e2eOwner}})

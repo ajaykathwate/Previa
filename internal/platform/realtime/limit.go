@@ -1,6 +1,10 @@
 package realtime
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/ajaykathwatee/previa/internal/platform/metrics"
+)
 
 // Limiter caps concurrent streams overall and per key (for example per user),
 // so open connections cannot exhaust the server.
@@ -26,9 +30,11 @@ func (l *Limiter) Acquire(key string) (release func(), ok bool) {
 	}
 	l.open++
 	l.byKey[key]++
+	closed := metrics.StreamOpened()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
+			closed()
 			l.mu.Lock()
 			defer l.mu.Unlock()
 			l.open--

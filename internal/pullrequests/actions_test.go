@@ -22,10 +22,10 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-type fixedCapabilities struct{ execution bool }
+type fixedCapabilities struct{ execution, paused bool }
 
 func (c *fixedCapabilities) Current(context.Context) (workers.Capabilities, error) {
-	return workers.Capabilities{Execution: c.execution, Discovery: true}, nil
+	return workers.Capabilities{Execution: c.execution, Discovery: true, Paused: c.paused}, nil
 }
 
 // actionsHarness is the PR workspace with build and teardown actions, signed
@@ -153,6 +153,15 @@ func TestBuildIsUnavailableWithoutAWorkerThatCanBuild(t *testing.T) {
 	}
 	if h.n(t, "SELECT count(*) FROM build_intents") != 0 || h.upstream.calls != 0 {
 		t.Fatal("a refused build recorded intent or read GitHub")
+	}
+	// Paused by the operator: the same refusal, with the reason.
+	h.caps.paused = true
+	if values, body := h.form(t); values != nil || !strings.Contains(body, "Builds are paused by the operator") {
+		t.Fatal("a paused server did not say builds are paused")
+	}
+	w = h.request(t, "POST", detailPath+"/build", "csrf_token="+url.QueryEscape(token)+"&action=build&expected_revision=0&request_key=abcdefghijklmnop5678")
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "paused") || h.n(t, "SELECT count(*) FROM build_intents") != 0 {
+		t.Fatalf("build while paused: %d %s", w.Code, w.Body.String())
 	}
 }
 

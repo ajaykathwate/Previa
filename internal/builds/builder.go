@@ -14,6 +14,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 	"github.com/ajaykathwatee/previa/internal/platform/egress"
+	"github.com/ajaykathwatee/previa/internal/platform/metrics"
 	buildkit "github.com/moby/buildkit/client"
 	"github.com/moby/moby/client"
 	"github.com/tonistiigi/fsutil"
@@ -162,6 +163,7 @@ func (b *Builder) Build(ctx context.Context, job Job) (Image, error) {
 	if err != nil {
 		return Image{}, b.interrupted(ctx, err, failure(CodeBuilderUnavailable, "The builder could not measure free disk space.", true, err))
 	}
+	metrics.BuildDiskFree(free)
 	// Every other running build may still grow to its disk budget; count that
 	// as already used. Builders exist before they measure, so two builds
 	// starting together each count the other.

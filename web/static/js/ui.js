@@ -91,6 +91,9 @@
     if (!document.querySelector('.app-shell') || !HTMLScriptElement.supports?.('speculationrules')) return;
     const rules = document.createElement('script');
     rules.type = 'speculationrules';
+    // The page's Content-Security-Policy admits inline rules by its nonce.
+    const nonce = document.querySelector('script[data-theme-boot]')?.nonce;
+    if (nonce) rules.nonce = nonce;
     rules.textContent = JSON.stringify({prefetch: [{
       source: 'document',
       where: {and: [

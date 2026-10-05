@@ -23,6 +23,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/dashboard"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	pr "github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/routing"
@@ -42,10 +43,12 @@ func TestBrowserRegression(t *testing.T) {
 	if os.Getenv("RUN_BROWSER_TESTS") != "1" {
 		t.Skip("run make test-browser to enable browser regressions")
 	}
-	router := chi.NewRouter()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// The production router's middleware, so every scenario runs under the
+	// real Content-Security-Policy (violations fail the test).
+	router := httpx.NewRouter(logger)
 	server := httptest.NewUnstartedServer(router)
 	origin := "http://" + server.Listener.Addr().String()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	store := memstore.New()
 	t.Cleanup(store.StopCleanup)
 	sessions := auth.NewSessionManager(store, false, logger)

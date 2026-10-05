@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,13 +43,19 @@ func pool(t *testing.T) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	t.Cleanup(p.Close)
-	data, err := os.ReadFile("../../../db/migrations/0017_worker_capabilities.sql")
+	files, err := filepath.Glob("../../../db/migrations/*.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	up, _, _ := strings.Cut(string(data), "-- +goose Down")
-	if _, err := p.Exec(t.Context(), up); err != nil {
-		t.Fatal(err)
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		up, _, _ := strings.Cut(string(data), "-- +goose Down")
+		if _, err := p.Exec(t.Context(), up); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
 	}
 	return p
 }
@@ -86,5 +93,33 @@ func TestCapabilitiesComeFromLiveWorkersOnly(t *testing.T) {
 	}
 	if c, _ := reader.Current(t.Context()); c != (Capabilities{}) {
 		t.Fatalf("stopped workers still count: %+v", c)
+	}
+}
+
+func TestPausedWorkersSayWhyNothingBuilds(t *testing.T) {
+	p := pool(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reader := NewReader(p)
+	paused, err := Start(t.Context(), p, Capabilities{Routing: true, Reporting: true, Housekeeping: true, Discovery: true, Paused: true}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, live, err := reader.Live(t.Context())
+	if err != nil || live != 1 || c.Execution || !c.Paused || !c.Housekeeping {
+		t.Fatalf("paused worker: %+v live=%d %v", c, live, err)
+	}
+	// Another worker that can build means builds are not paused overall.
+	executor, err := Start(t.Context(), p, Capabilities{Execution: true}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, live, _ := reader.Live(t.Context()); !c.Execution || c.Paused || live != 2 {
+		t.Fatalf("with a building worker: %+v live=%d", c, live)
+	}
+	if err := executor.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := paused.Stop(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }

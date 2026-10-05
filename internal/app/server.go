@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
+	"github.com/ajaykathwatee/previa/internal/platform/version"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/routing"
@@ -33,18 +35,32 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const (
+	webhookPath        = "/webhooks/github"
+	webhookConcurrency = 32
+	maxFormBytes       = 256 << 10 // the largest form is a 32 KiB secret value
+)
+
+// signInPaths are reachable without a session or start one; each client may
+// call them about once every two seconds after a burst of twenty.
+var signInPaths = []string{"/auth/github/login", "/auth/github/callback", "/installations/start", "/installations/callback", "/installations/authorize/callback"}
+
 // RunServer loads configuration, checks the database, and serves HTTP until canceled.
 func RunServer(ctx context.Context, logger *slog.Logger) error {
 	cfg, err := config.LoadServer()
 	if err != nil {
 		return fmt.Errorf("configure server: %w", err)
 	}
+	cfg.ApplicationName = "previa-server"
 	pool, err := database.NewPool(ctx, cfg.SharedConfig)
 	if err != nil {
 		return fmt.Errorf("initialize server database: %w", err)
 	}
 	defer pool.Close()
-	logger.Info("database health check passed")
+	if err := database.CheckSchema(ctx, pool); err != nil {
+		return err
+	}
+	logger.Info("database health check passed", "version", version.Version, "schema", database.SchemaVersion, "environment", cfg.AppEnv)
 	store := pgxstore.New(pool)
 	defer store.StopCleanup()
 	sessions := auth.NewSessionManager(store, strings.HasPrefix(strings.ToLower(cfg.AppBaseURL), "https://"), logger)
@@ -100,10 +116,27 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		return dashboardpages.Summary{
 			Installations: summary.Installations, Repositories: summary.Repositories, Available: summary.Available,
 			Waiting: delivery.Waiting, Building: delivery.Building, Failed: delivery.Failed, Live: delivery.Live,
-			Workers: dashboardpages.Workers{Discovery: caps.Discovery, Execution: caps.Execution, Reporting: caps.Reporting, Housekeeping: caps.Housekeeping},
+			Workers: dashboardpages.Workers{Discovery: caps.Discovery, Execution: caps.Execution, Reporting: caps.Reporting, Housekeeping: caps.Housekeeping, Paused: caps.Paused},
 		}, nil
 	}
-	router := httpx.NewRouter(logger)
+	appURL, err := url.Parse(cfg.AppBaseURL)
+	if err != nil {
+		return fmt.Errorf("parse APP_BASE_URL: %w", err)
+	}
+	proxies, err := config.ParseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return err
+	}
+	// Ingress controls (docs/22-observability-and-hardening.md): only the
+	// dashboard's host is served, except signed webhooks that may arrive
+	// through a tunnel; bodies are capped (webhooks cap their own); sign-in
+	// and installation callbacks are rate limited per client.
+	router := httpx.New(logger, httpx.Options{
+		AppHost: appURL.Host, HostExempt: []string{webhookPath},
+		Secure: appURL.Scheme == "https", TrustedProxies: proxies,
+		MaxBodyBytes: maxFormBytes, BodyExempt: []string{webhookPath},
+	})
+	router.Use(httpx.RateLimit(signInPaths, 2*time.Second, 20))
 	router.Handle("/static/*", web.StaticHandler())
 	// The router sends unknown and removed preview hosts here. Public and
 	// outside the session group: it reads and sets no cookie.
@@ -112,7 +145,9 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		logger.Warn("previews share the dashboard's registrable domain; a separate domain isolates them fully", "preview_base_domain", cfg.PreviewBaseDomain)
 	}
 	deliveries := webhooks.NewDeliveryService(pool, coordinator, invalidate, syncService)
-	router.Post("/webhooks/github", webhooks.NewHandler(cfg.GitHubWebhookSecret, deliveries, logger).ServeHTTP)
+	// A bounded number of deliveries run at once; the rest get 503 before
+	// anything is recorded, so redelivery and deduplication work as usual.
+	router.Post(webhookPath, httpx.LimitConcurrency(webhookConcurrency, webhooks.NewHandler(cfg.GitHubWebhookSecret, deliveries, logger)).ServeHTTP)
 	policyStore := installations.NewRepository(pool)
 	if appClient != nil {
 		policyStore.WithReports(coordinator) // a switch to Manual updates cancelled PRs' reports
@@ -153,12 +188,17 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	router.Group(func(r chi.Router) {
 		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
 		authHandler.Mount(r)
-		dashboard.MountWithSummary(r, authHandler, auth.RequireUser, summaryReader, authHandler.UserIDs)
+		// Queue diagnostics are for development; production does not serve them.
+		dashboard.MountWithSummary(r, authHandler, auth.RequireUser, dashboard.Options{
+			Summary: summaryReader, Identity: authHandler.UserIDs, DeveloperTools: !cfg.Production(),
+		})
 		installationHandler.Mount(r, auth.RequireUser)
 		prs.Mount(r, auth.RequireUser)
 		secretHandler.Mount(r, auth.RequireUser)
 		logHandler.Mount(r, auth.RequireUser)
-		dashboard.MountPing(r, pings, auth.RequireUser, logger)
+		if !cfg.Production() {
+			dashboard.MountPing(r, pings, auth.RequireUser, logger)
+		}
 	})
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -167,11 +207,25 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    64 << 10,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
 	// Event streams outlive WriteTimeout by design; closing the hub ends them so
 	// graceful shutdown does not wait for browsers to disconnect.
 	server.RegisterOnShutdown(hub.Close)
+	registerServerState(pool, environmentRepo, capabilities, cfg.BackupStatusFile, logger)
+	stopInternal, err := httpx.ServeInternal(cfg.InternalAddr, httpx.Internal([]httpx.Check{
+		{Name: "database", Run: func(ctx context.Context) error { return database.HealthCheck(ctx, pool) }},
+		{Name: "schema", Run: func(ctx context.Context) error { return database.CheckSchema(ctx, pool) }},
+	}, func() map[string]any { return map[string]any{"version": version.Version} }), logger)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = stopInternal(ctx)
+	}()
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		return fmt.Errorf("listen for HTTP: %w", err)

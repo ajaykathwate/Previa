@@ -20,6 +20,13 @@ func NewPool(ctx context.Context, cfg config.SharedConfig) (*pgxpool.Pool, error
 	if err != nil {
 		return nil, fmt.Errorf("parse database pool configuration: %w", err)
 	}
+	// Bounded connects; a name in pg_stat_activity unless the URL sets one.
+	if poolConfig.ConnConfig.ConnectTimeout == 0 {
+		poolConfig.ConnConfig.ConnectTimeout = 10 * time.Second
+	}
+	if poolConfig.ConnConfig.RuntimeParams["application_name"] == "" && cfg.ApplicationName != "" {
+		poolConfig.ConnConfig.RuntimeParams["application_name"] = cfg.ApplicationName
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("create database pool: %w", err)

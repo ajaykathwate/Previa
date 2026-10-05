@@ -11,7 +11,7 @@ type Summary struct {
 }
 
 // Workers says which pipeline stages a running worker provides.
-type Workers struct{ Discovery, Execution, Reporting, Housekeeping bool }
+type Workers struct{ Discovery, Execution, Reporting, Housekeeping, Paused bool }
 
 // Unavailable counts linked repositories whose access or installation is inactive.
 func (s Summary) Unavailable() int64 { return max(0, s.Repositories-s.Available) }

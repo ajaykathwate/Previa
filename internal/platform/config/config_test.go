@@ -24,6 +24,7 @@ func validEnvironment(t *testing.T) {
 	}
 	// Routing is opt-in; a developer's own settings must not leak into tests.
 	unsetEnvironment(t, "PREVIEW_BASE_DOMAIN", "ROUTER_DYNAMIC_DIR")
+	unsetEnvironment(t, "APP_ENV", "INTERNAL_ADDR", "WORKER_INTERNAL_ADDR", "TRUSTED_PROXIES", "BUILDS_PAUSED", "BACKUP_STATUS_FILE")
 }
 
 func unsetEnvironment(t *testing.T, keys ...string) {

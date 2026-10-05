@@ -43,7 +43,7 @@ func NewApp(appID int64, privateKeyPath string) (*Client, error) {
 		return nil, errors.New("read GitHub App private key failed")
 	}
 	defer clear(key)
-	app, err := ghinstallation.NewAppsTransport(http.DefaultTransport, appID, key)
+	app, err := ghinstallation.NewAppsTransport(baseTransport, appID, key)
 	if err != nil {
 		return nil, errors.New("GitHub App private key must be a valid RSA PEM key")
 	}
@@ -89,7 +89,7 @@ func (c *Client) InstallationClient(id int64) (*github.Client, error) {
 		// installation its own copy rather than sharing those mutable fields.
 		app := *c.app
 		transport = ghinstallation.NewFromAppsTransport(&app, id)
-		transport.Client = &http.Client{Transport: http.DefaultTransport, Timeout: 10 * time.Second}
+		transport.Client = &http.Client{Transport: baseTransport, Timeout: 10 * time.Second}
 		c.installations[id] = transport
 	}
 	c.mu.Unlock()

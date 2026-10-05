@@ -7,15 +7,21 @@ package environments
 // WaitingTitle and WaitingMessage describe a request waiting for capacity or
 // disk space. Nothing is promised about when or in what order it starts.
 func WaitingTitle(reason string) string {
-	if reason == WaitDisk {
+	switch reason {
+	case WaitDisk:
 		return "Waiting for disk space"
+	case WaitPaused:
+		return "Builds paused"
 	}
 	return "Waiting for capacity"
 }
 
 func WaitingMessage(reason string) string {
-	if reason == WaitDisk {
+	switch reason {
+	case WaitDisk:
 		return "The build host is short of disk space. Previa frees space and starts this build automatically once there is enough."
+	case WaitPaused:
+		return "The operator paused new builds on this server. This build starts automatically when builds resume."
 	}
 	return "Builds or previews already use this host's capacity. This build starts automatically once some frees up."
 }

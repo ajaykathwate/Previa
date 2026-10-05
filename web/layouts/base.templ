@@ -12,10 +12,12 @@ templ Document(title string) {
 			<meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)"/>
 			<meta name="theme-color" content="#0a0c0f" media="(prefers-color-scheme: dark)"/>
 			<title>{ title } | Previa</title>
-			<script data-theme-boot>
+			<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'/>
+			<script nonce={ templ.GetNonce(ctx) } data-theme-boot>
 				(function(){
 					try{var t=localStorage.getItem("previa-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}
 					var s=document.createElement("style");
+					var n=document.currentScript&&document.currentScript.nonce;if(n)s.nonce=n;
 					s.textContent="@media (prefers-reduced-motion: no-preference){@view-transition{navigation:auto}"+"}";
 					document.head.appendChild(s);
 					function quiet(v){if(!v)return;var n=function(){};v.ready.catch(n);v.finished.catch(n);v.updateCallbackDone.catch(n);}

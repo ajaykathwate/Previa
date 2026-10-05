@@ -17,6 +17,7 @@ import (
 const (
 	WaitCapacity = "capacity" // every build slot, or the preview budget, is in use
 	WaitDisk     = "disk"     // the build host is short of disk space
+	WaitPaused   = "paused"   // the operator paused new builds (BUILDS_PAUSED)
 )
 
 // WaitingError is a build request that cannot proceed for lack of capacity.

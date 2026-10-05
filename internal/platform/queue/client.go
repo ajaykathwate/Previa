@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // NewProducer creates an insert-only client; the HTTP server never executes jobs.
@@ -43,6 +44,9 @@ func workerConfig(cfg config.WorkerConfig, logger *slog.Logger, workers *river.W
 			PingQueue: {MaxWorkers: cfg.MaxConcurrentBuilds},
 		},
 		Workers: workers,
+		// Every job's logs are correlated and its wait, run time and outcome
+		// measured (observe.go).
+		Middleware: []rivertype.Middleware{&observeJobs{}},
 		// The scan floor is not a blanket rescue deadline: River also consults
 		// each registered worker's Timeout before rescuing that job kind.
 		JobTimeout:           PingTimeout,

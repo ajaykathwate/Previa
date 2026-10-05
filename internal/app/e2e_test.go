@@ -45,6 +45,7 @@ const (
 	e2eCommit2 = "2222222222222222222222222222222222222222"
 	e2eCommit3 = "3333333333333333333333333333333333333333"
 	e2eCommit4 = "4444444444444444444444444444444444444444"
+	e2eCommit5 = "5555555555555555555555555555555555555555"
 	e2eMarker  = "previa-e2e-v1"
 )
 
@@ -221,6 +222,39 @@ func TestRealEndToEnd(t *testing.T) {
 		}
 		return "", nil
 	})
+
+	// Failure injection: GitHub's comment and check-run API fails while a
+	// fixed commit builds. Publication never waits for GitHub; the report
+	// catches up once GitHub answers again.
+	marker5 := "previa-e2e-" + e2eCommit5[:4]
+	github.push(e2eCommit5, e2eApp(marker5))
+	if _, err := events.ProcessPR(ctx, webhooks.PREvent{RepoID: repoID, Number: e2ePRNumber, HeadSHA: e2eCommit5, Action: "synchronize", MergeableState: "clean"}); err != nil {
+		t.Fatal(err)
+	}
+	github.setReportsDown(true)
+	request(environments.BuildLatest, "e2e-build-request-0003")
+	e2eWait(t, ctx, "the build to publish during a GitHub outage", 10*time.Minute, func() (string, error) {
+		body, err := router.get(host)
+		if err == nil && body != marker5 {
+			err = fmt.Errorf("still serving %q", body)
+		}
+		return body, err
+	})
+	if github.rejectedReports() == 0 {
+		t.Fatal("the outage rejected no report: the injection did not happen")
+	}
+	if run := github.run(e2eCommit5, 3); run != nil {
+		t.Fatal("a check run was created during the outage")
+	}
+	github.setReportsDown(false)
+	e2eWait(t, ctx, "the report to catch up after the outage", 8*time.Minute, func() (string, error) {
+		comment, run := github.livingComment(), github.run(e2eCommit5, 3)
+		if !strings.Contains(comment, "Previa preview: Ready") || run == nil || run.Conclusion != "success" || github.commentCount() != 1 {
+			return "", errors.New("not reported yet")
+		}
+		return "", nil
+	})
+	t.Logf("GitHub outage: %d report calls rejected; the preview published anyway and the report caught up", github.rejectedReports())
 
 	// The owner tears the preview down: route first, then containers.
 	if started, err := serverRepo.RequestTeardown(ctx, pr, environments.TeardownRequested); err != nil || !started {

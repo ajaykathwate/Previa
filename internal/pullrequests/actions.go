@@ -61,6 +61,8 @@ func (h *Handler) WithActions(a Actions) *Handler {
 
 const noWorker = "No preview worker is running with builds configured (the GitHub App, Docker and a preview domain). Start one, then try again."
 
+const buildsPaused = "Builds are paused by the operator. Requests already queued start when builds resume; try again then."
+
 // executionAvailable reports whether a worker can build now, and why not.
 func (h *Handler) executionAvailable(ctx context.Context) (bool, string, error) {
 	if h.actions == nil {
@@ -71,6 +73,9 @@ func (h *Handler) executionAvailable(ctx context.Context) (bool, string, error) 
 		return false, "", err
 	}
 	if !caps.Execution {
+		if caps.Paused {
+			return false, buildsPaused, nil
+		}
 		return false, noWorker, nil
 	}
 	return true, "", nil

@@ -11,7 +11,9 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 	"github.com/ajaykathwatee/previa/internal/platform/githubapp"
+	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
+	"github.com/ajaykathwatee/previa/internal/platform/version"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/jackc/pgx/v5"
 	"github.com/moby/moby/client"
@@ -31,12 +33,16 @@ func RunWorker(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("configure worker: %w", err)
 	}
+	cfg.ApplicationName = "previa-worker"
 	pool, err := database.NewPool(ctx, cfg.SharedConfig)
 	if err != nil {
 		return fmt.Errorf("initialize worker database: %w", err)
 	}
 	defer pool.Close()
-	logger.Info("database health check passed")
+	if err := database.CheckSchema(ctx, pool); err != nil {
+		return err
+	}
+	logger.Info("database health check passed", "version", version.Version, "schema", database.SchemaVersion, "environment", cfg.AppEnv)
 	producer, err := queue.NewProducer(pool, logger)
 	if err != nil {
 		return err
@@ -81,7 +87,31 @@ func RunWorker(ctx context.Context, logger *slog.Logger) error {
 	for _, reason := range p.unavailable {
 		logger.Warn("capability unavailable", "reason", reason)
 	}
-	logger.Info("River worker started", "execution", p.capabilities.Execution, "reporting", p.capabilities.Reporting,
+	checks := append([]httpx.Check{
+		{Name: "database", Run: func(ctx context.Context) error { return database.HealthCheck(ctx, pool) }},
+		{Name: "schema", Run: func(ctx context.Context) error { return database.CheckSchema(ctx, pool) }},
+		{Name: "river", Run: func(context.Context) error {
+			select {
+			case <-riverClient.Stopped():
+				return errors.New("stopped")
+			default:
+				return nil
+			}
+		}},
+		{Name: "heartbeat", Run: func(context.Context) error { return heartbeat.Fresh() }},
+	}, p.checks...)
+	stopInternal, err := httpx.ServeInternal(cfg.InternalAddr, httpx.Internal(checks, func() map[string]any {
+		return map[string]any{"capabilities": heartbeat.Capabilities(), "version": version.Version}
+	}), logger)
+	if err != nil {
+		return errors.Join(err, heartbeat.Stop(context.Background()), stopRiver(riverClient, logger))
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = stopInternal(ctx)
+	}()
+	logger.Info("River worker started", "execution", p.capabilities.Execution, "paused", p.capabilities.Paused, "reporting", p.capabilities.Reporting,
 		"housekeeping", p.capabilities.Housekeeping, "discovery", p.capabilities.Discovery, "build_workers", cfg.MaxConcurrentBuilds)
 	var stopped error
 	select {

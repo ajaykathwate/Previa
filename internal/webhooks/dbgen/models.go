@@ -261,4 +261,5 @@ type WorkerCapability struct {
 	Discovery    bool
 	StartedAt    pgtype.Timestamptz
 	SeenAt       pgtype.Timestamptz
+	Paused       bool
 }

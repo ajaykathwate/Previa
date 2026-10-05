@@ -15,6 +15,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/egress"
+	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/repoconfig"
@@ -76,7 +77,8 @@ type pipeline struct {
 	capabilities workers.Capabilities
 	register     []func(*river.Config)
 	startup      []func(context.Context) error
-	unavailable  []string // why capabilities are off, for the startup log
+	unavailable  []string      // why capabilities are off, for the startup log
+	checks       []httpx.Check // readiness of the dependencies it uses
 }
 
 // buildPipeline composes discovery, execution (source → config → image →
@@ -246,6 +248,18 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 	}
 	p.addDiscovery(sync)
 	p.capabilities.Execution, p.capabilities.Routing, p.capabilities.Reporting, p.capabilities.Housekeeping = true, true, true, true
+	if cfg.BuildsPaused {
+		// The kill switch: everything stays registered so teardown, cleanup,
+		// routing, reports and housekeeping keep working; builds wait.
+		service.Paused()
+		p.capabilities.Execution, p.capabilities.Paused = false, true
+		p.unavailable = append(p.unavailable, "BUILDS_PAUSED is set: new builds wait; teardown, cleanup, routing, reports and housekeeping continue")
+	}
+	docker := in.docker
+	p.checks = append(p.checks, httpx.Check{Name: "docker", Run: func(ctx context.Context) error {
+		_, err := docker.Ping(ctx, client.PingOptions{})
+		return err
+	}})
 	p.register = append(p.register, func(rc *river.Config) {
 		environments.RegisterWorkers(rc.Workers, service, broker)
 		river.AddWorker(rc.Workers, operationWorker)

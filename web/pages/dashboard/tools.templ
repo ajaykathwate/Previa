@@ -7,7 +7,7 @@ import (
 	"github.com/ajaykathwatee/previa/web/layouts"
 )
 
-templ Tools(username string, csrfToken string) {
+templ Tools(username string, csrfToken string, enabled bool) {
 	@layouts.App("Developer tools", username, csrfToken, components.NavTools) {
 		<header class="page-header">
 			<div class="page-header-text">
@@ -16,6 +16,12 @@ templ Tools(username string, csrfToken string) {
 				<p>Local diagnostics for the control plane. Nothing here creates a preview or touches GitHub.</p>
 			</div>
 		</header>
+		if !enabled {
+			<section class="panel developer-tools-off" aria-labelledby="tools-off-title">
+				<h2 id="tools-off-title">Queue ping is off in production</h2>
+				<p>This server runs with <code>APP_ENV=production</code>, so it does not offer diagnostics that write to the queue. Operators check health on the internal <code>/readyz</code> and <code>/metrics</code> endpoints instead.</p>
+			</section>
+		} else {
 		<section id="queue-check" tabindex="-1" class="developer-tools" aria-labelledby="tools-title">
 			<details class="tools-disclosure panel" open>
 				<summary>
@@ -59,5 +65,6 @@ templ Tools(username string, csrfToken string) {
 				</div>
 			</details>
 		</section>
+		}
 	}
 }
