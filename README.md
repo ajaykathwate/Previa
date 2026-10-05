@@ -8,10 +8,12 @@ defaults to **Manual**: its owner requests a build for a specific PR. Owners can
 enable **Automatic**, which builds the latest commit after a five-minute quiet
 period. Previews are torn down when the PR closes or merges.
 
-Manual/Automatic policy, durable build intent and scheduling are implemented;
-building and serving previews is not connected yet. See
-[build policy and build intent](docs/11-build-policy-and-intents.md) and the
-[roadmap](docs/17-roadmap.md). Start with the [documentation index](docs/README.md)
+Manual/Automatic policy, durable build intent and scheduling are implemented, and
+so are isolated builds, hardened previews, fenced HTTPS routing and durable teardown,
+each verified against real Docker and Traefik; connecting them into the worker is
+the next step. See
+[build policy and build intent](docs/13-build-policy-and-intents.md) and the
+[roadmap](docs/19-roadmap.md). Start with the [documentation index](docs/README.md)
 for a guided reading order.
 
 This document is written for the builder (me), not an end user — every step
@@ -155,9 +157,12 @@ platform-owned and cannot be set through this YAML.
    resource limits applied (CPU/memory caps) and the declared port exposed
    internally (not directly to the internet).
 10. The worker registers this container with the **router** — a mapping of
-    `pr-42.yourpreviewdomain.com` → this container's internal address/port.
+    the PR's stable hostname (for example `pr-42-k2j4ld-7xq9m2fa.yourpreviewdomain.com`)
+    → this container's internal address/port. Previa's route controller accepts the
+    mapping behind a generation fence and writes it to the router's configuration
+    ([docs/11-routing-and-https.md](docs/11-routing-and-https.md)).
 11. The worker calls the GitHub API (using the installation token) to post a
-    comment on the PR: "✅ Preview ready: https://pr-42.yourpreviewdomain.com".
+    comment on the PR: "✅ Preview ready: https://pr-42-k2j4ld-7xq9m2fa.yourpreviewdomain.com".
 12. If any step from 7-9 fails, the worker instead posts a comment showing the
     failure (and ideally build logs, or a link to them).
 
@@ -343,7 +348,11 @@ This section was chosen purely on the project's technical needs: event-driven, I
 | Wildcard TLS | Yes (DNS-01) | Yes (DNS-01, simplest config) | Manual (certbot) | You build it |
 | Gap risk on redeploy | Low | Low | Higher | Depends on your implementation |
 
-**Verdict: Traefik.** Container labels make routing declarative, so the "register with the router" step mostly disappears.
+**Verdict: Traefik.** Routes come from its file provider, written by Previa's route
+controller rather than from container labels: labels are fixed at container creation
+and cannot be fenced by PR generation, and the Docker provider would need the Docker
+socket in Traefik. The controller materializes a fenced route table that only moves
+forward ([docs/11-routing-and-https.md](docs/11-routing-and-https.md)).
 
 **Job queue**
 
@@ -435,7 +444,7 @@ This section was chosen purely on the project's technical needs: event-driven, I
   /github        # App auth, API client, webhook handling
   /jobs          # River job definitions (build, rebuild, teardown, expire)
   /runtime       # Runtime interface + Docker implementation
-  /router        # Traefik label generation, subdomain allocation
+  /routing       # route controller (Traefik file provider), subdomain allocation
   /store         # sqlc-generated queries, migrations
   /web           # templ components, handlers, SSE
   /config        # config loading, .previewrc.yaml parsing
@@ -485,8 +494,8 @@ production dispatch and UI wiring remain unbuilt. Repeated Build requests coales
 failure or Rebuild after success creates a new revision without bumping PR
 generation. Switching to Manual cancels unstarted Automatic intent; running work
 may finish if still current. No historical builds archive is introduced. See
-[11-build-policy-and-intents.md](docs/11-build-policy-and-intents.md) for request semantics and
-[12-build-scheduling.md](docs/12-build-scheduling.md) for atomic admission, wake-up
+[13-build-policy-and-intents.md](docs/13-build-policy-and-intents.md) for request semantics and
+[14-build-scheduling.md](docs/14-build-scheduling.md) for atomic admission, wake-up
 uniqueness, revision fencing and remaining production integration.
 
 A unique constraint on (repo_id, number) for `pull_requests` and on `subdomain` for `environments` prevents duplicate environments when webhooks arrive twice.
@@ -508,7 +517,7 @@ This system runs other people's code on your machine, so isolation is a core req
 - Runtime: gVisor (`runsc`) as the Docker runtime for a large isolation upgrade at low cost (optional `PREVIEW_OCI_RUNTIME`; Docker's runc by default)
 - Never run builds for fork PRs with secrets available; consider requiring maintainer approval for PRs from forks
 - Current implementation: previews run as an unprivileged user with a read-only root, no capabilities and `no-new-privileges` on their own internal network; outbound traffic reaches public addresses only through the egress proxy; probes from a running preview confirm Postgres, the host, metadata and other previews are unreachable. They share the host kernel (see [docs/10-preview-runtime.md](docs/10-preview-runtime.md))
-- Docker socket: only the worker touches it; never mount it into a preview container
+- Docker socket: only the worker touches it; never mount it into a preview container. The router (Traefik) has no socket either: its routes come from the worker's file and the worker attaches it to preview networks
 - Builds: each runs in a fresh rootless BuildKit container with CPU/memory/PID limits on a private network whose only exit is an egress proxy that reaches public addresses only (see [docs/09-image-builds.md](docs/09-image-builds.md))
 
 ### 4.7 Secrets handling
@@ -526,12 +535,12 @@ includes settings for features that are not built yet.
 - `DATABASE_URL`
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
-- `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`)
+- `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`; server and worker), `ROUTER_DYNAMIC_DIR`, `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS` (worker; route controller)
 - `SESSION_SECRET`, `SECRETS_ENCRYPTION_KEYS`, `SECRETS_ACTIVE_KEY_VERSION` (versioned keyring for repository secrets)
 - `MAX_CONCURRENT_BUILDS`, `ENV_TTL_HOURS`
 - `BUILD_TIMEOUT`, `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS`, `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK`, `BUILDKIT_IMAGE` (worker; isolated image builds)
 - `EGRESS_IMAGE`, `PREVIEW_ALLOW_ROOT`, `PREVIEW_WRITABLE_ROOTFS`, `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT`, `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY`, `PREVIEW_OCI_RUNTIME` (worker; hardened previews and the shared egress proxy)
-- `DNS_PROVIDER_API_TOKEN` (for Traefik's wildcard cert challenge)
+- `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE`, `ACME_CA_SERVER` (router; Traefik's wildcard certificate over DNS-01, staging by default, the DNS token read from a protected file instead of the originally planned `DNS_PROVIDER_API_TOKEN` variable)
 
 ### 4.9 Infrastructure and deployment
 

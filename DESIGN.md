@@ -153,7 +153,7 @@ High. Two credential types, a private key to protect, short-lived tokens to mana
 - **Linking installer to user** relies on the browser redirect; the webhook alone does not say which dashboard user did it, so the two events are matched by installation ID.
 - **Verified linking (approved refinement):** do not trust the redirect's installation ID alone. Use expiring, one-use, session-bound state, then a separate GitHub App user authorization flow. Verify its numeric user identity against dashboard sign-in and verify installation access through GitHub before linking. Keep dashboard OAuth credentials separate from App client credentials; discard the App user token after verification.
 - **Persistence:** owner may be NULL until a verified redirect; unlinked records are hidden. Store status, numeric repository IDs and access flags without deleting history. A callback captures installation revision before GitHub calls and verifies it under a row lock in its final short transaction; lifecycle calls bump revision. Existing ownership cannot be reassigned. Same-owner reinstall can retain repository history only after the old installation is inactive.
-- **Current implementation:** verified redirect linking, token caching, signed lifecycle webhooks and ordering tombstones are implemented. Suspension, deletion and repository removal revoke access and record durable `cleanup_pending`; with no cleanup adapter yet, nothing is reported as cleaned up and no runtime teardown is claimed. See `docs/04-github-sign-in-and-app.md` for configuration, real testing and lifecycle rules.
+- **Current implementation:** verified redirect linking, token caching, signed lifecycle webhooks and ordering tombstones are implemented. Suspension, deletion and repository removal revoke access, record durable `cleanup_pending` and, in the same transaction, request teardown of every affected PR; the teardown sweep starts those teardowns without GitHub access and clears the marker only when nothing remains ([12-teardown-and-cleanup.md](docs/12-teardown-and-cleanup.md)). See `docs/04-github-sign-in-and-app.md` for configuration, real testing and lifecycle rules.
 
 
 ---
@@ -224,7 +224,7 @@ Medium. Small code, high consequence: authenticity, idempotency and ordering all
   [05-webhooks-and-pr-discovery.md](docs/05-webhooks-and-pr-discovery.md).
 - **Out-of-order delivery:** jobs carry the head SHA; a job whose SHA is no longer the latest for that PR is discarded on start (see feature 13).
 - **Fork PRs:** detect them from the payload and apply the fork policy from feature 10 and 16.
-- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. Real runtime integration remains unbuilt. See [11-build-policy-and-intents.md](docs/11-build-policy-and-intents.md); see [12-build-scheduling.md](docs/12-build-scheduling.md) for parsed-event coordination and production dispatch boundaries.
+- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. Real runtime integration remains unbuilt. See [13-build-policy-and-intents.md](docs/13-build-policy-and-intents.md); see [14-build-scheduling.md](docs/14-build-scheduling.md) for parsed-event coordination and production dispatch boundaries.
 
 ---
 
@@ -345,34 +345,38 @@ High. This is the security-critical feature.
 - **Crash loops:** a container that keeps restarting is stopped after a small number of restarts and marked failed.
 - **Noisy neighbours:** limits keep one preview from starving others; a per-repo cap on concurrent previews bounds total load.
 - **gVisor** raises the isolation bar substantially and is a low-cost upgrade path if kernel-level escape risk matters.
-- **Current implementation:** `internal/runtime` implements `environments.Runtime`: it rechecks that the request is still current and accessible, builds through `internal/builds`, rechecks again, decides secrets (`secrets.Provider`; none for forks or unknown heads), and starts a candidate on the PR's own internal network `previa-pr-<id>`, shared only with the egress proxy (and the router from Prompt 6). Candidates run as UID 65532 when the image would run as root, with a read-only root and a bounded `/tmp` tmpfs (server-wide operator opt-outs only), no capabilities, `no-new-privileges`, IPv6 disabled, clamped tier CPU/memory, a PID limit, half CPU weight, a raised OOM score, capped logs and on-failure restarts (3, then a crash loop). Outbound traffic goes only through `previa-egress` (public addresses, ports 80/443). Readiness is probed from inside the egress container (HTTP 200-399 on `health_check_path`, else TCP), within `PREVIEW_STARTUP_TIMEOUT`. Admission keeps previews within 60% of Docker memory, 75% of CPUs and 10 per repository. Inventory and removal verify ownership labels. gVisor is optional via `PREVIEW_OCI_RUNTIME`. Maintainer approval for forks is not implemented (forks run without secrets). The worker does not dispatch it yet. See [10-preview-runtime.md](docs/10-preview-runtime.md).
+- **Current implementation:** `internal/runtime` implements `environments.Runtime`: it rechecks that the request is still current and accessible, builds through `internal/builds`, rechecks again, decides secrets (`secrets.Provider`; none for forks or unknown heads), and starts a candidate on the PR's own internal network `previa-pr-<id>`, shared only with the egress proxy and, once published, the router. Candidates run as UID 65532 when the image would run as root, with a read-only root and a bounded `/tmp` tmpfs (server-wide operator opt-outs only), no capabilities, `no-new-privileges`, IPv6 disabled, clamped tier CPU/memory, a PID limit, half CPU weight, a raised OOM score, capped logs and on-failure restarts (3, then a crash loop). Outbound traffic goes only through `previa-egress` (public addresses, ports 80/443). Readiness is probed from inside the egress container (HTTP 200-399 on `health_check_path`, else TCP), within `PREVIEW_STARTUP_TIMEOUT`. Admission keeps previews within 60% of Docker memory, 75% of CPUs and 10 per repository. Inventory and removal verify ownership labels, including the PR (`RemoveResource`, used by cleanup operations: graceful stop, then force; images never forced; idle networks); `Endpoint` re-checks a candidate right before it is routed. gVisor is optional via `PREVIEW_OCI_RUNTIME`. Maintainer approval for forks is not implemented (forks run without secrets). The worker does not dispatch it yet. See [10-preview-runtime.md](docs/10-preview-runtime.md).
 
 ---
 
 ## 11. Dynamic routing, subdomains and TLS
 
 ### Requirement
-Give each PR a stable public URL (for example `pr-42-reponame.preview.yourdomain.com`), route requests to the correct container, and serve HTTPS, all updating automatically as environments come and go.
+Give each PR a stable public URL (for example `pr-42-k2j4ld-7xq9m2fa.preview.yourdomain.com`), route requests to the correct container, and serve HTTPS, all updating automatically as environments come and go.
 
 ### Complexity
 High. Correctness under churn and certificate handling are the hard parts.
 
 ### Tech stack (feature-specific)
-- Traefik v3 with the Docker provider, wildcard certificate via Let's Encrypt DNS-01, a wildcard DNS record.
+- Traefik v3 with the **file provider**, fed by Previa's route controller; wildcard certificate via Let's Encrypt DNS-01 (staging first); a wildcard DNS record.
 
 ### Technical implementation
-1. **Subdomain allocation:** derive the hostname from repo and PR number, sanitized to valid DNS label characters and length; store it with a uniqueness constraint. It stays the same across rebuilds of the same PR.
-2. **Routing by labels:** when the container is created, attach labels declaring the host rule and internal port. Traefik watches Docker events and updates its routing table live, with no reload.
-3. **TLS:** one wildcard certificate covers every preview subdomain, obtained via DNS-01 challenge with the DNS provider's API token. No per-PR certificate issuance, which avoids rate limits and delays.
-4. **Traffic gating:** a container gets routing labels or a healthy status only once it passes its health check, so users never hit a half-started app.
-5. **Unknown subdomains** route to a friendly "environment not found or expired" page rather than a raw error.
-6. **On teardown**, removing the container removes its route automatically.
+1. **Subdomain allocation:** when a PR's first build is admitted, its lifetime environment is provisioned with the label `pr-<number>-<GitHub repository ID in base 36>-<8 random characters>`: DNS-safe, unique (database constraint), immutable across renames, unguessable for private repositories, and never reassigned. It stays the same across rebuilds, teardown and reopening.
+2. **Route controller (not labels):** an `activate_route` operation verifies the candidate (this PR, generation, revision and image; running; ready now), attaches the router to the PR's network, and accepts the route in PostgreSQL only if the PR still wants exactly that request and the route version is newer in (generation, revision) order. Removals are kept as tombstones. The controller renders the whole accepted table into one file Traefik watches; the file is replaced atomically and only when its version moves forward, so the router never steps back to an older table.
+3. **TLS:** one wildcard certificate covers every preview subdomain, obtained via DNS-01 with the DNS provider's token read from a protected file; `acme.json` lives on a persistent volume. No per-PR certificate issuance, which avoids rate limits and delays.
+4. **Traffic gating and convergence:** only verified, accepted candidates are written. A version counts as served once Traefik's loopback-only API shows it; only then do older artifacts retire.
+5. **Unknown and removed subdomains** are redirected to the dashboard's friendly, public "Preview not found or expired" page rather than a raw error.
+6. **On teardown**, a route removal is accepted and confirmed before any container is removed (feature 14).
 
 ### Design decisions and edge cases
+- **File provider over Docker labels (changed from the original design):** labels are fixed at container creation, so every candidate would be routed before it was accepted, and they cannot be fenced by (generation, revision); the Docker provider would also need the Docker socket in Traefik. With the file provider Traefik has no socket at all, and the worker, which already holds it, attaches networks and reads the API.
+- **Guarantee and limit:** older versions can never replace newer ones and removed routes never return; the router's view may lag (about a second) but never moves backwards. Strict per-request freshness is not promised: Traefik has no compare-and-set, so the fence is in PostgreSQL and in the file's version, not on the traffic path.
 - **Wildcard cert over per-host certs:** faster first request and no rate-limit exposure.
 - **Stable URLs across rebuilds** so reviewers' bookmarks and links in comments stay valid.
-- **Subdomain takeover risk:** stale DNS is not an issue with a wildcard record, but a released subdomain must not be reassignable in a way that exposes old data; containers are fully removed on teardown.
-- **Security headers and access:** MVP previews are public by URL obscurity; optional access control (login required) is a documented upgrade.
+- **Subdomain takeover risk:** stale DNS is not an issue with a wildcard record, and hostnames are never reassigned; containers are fully removed on teardown.
+- **Origins:** the dashboard may not be the preview domain or below it; a separate registrable domain is recommended, and dashboard cookies are `__Host-` prefixed over HTTPS.
+- **Security headers and access:** MVP previews are public by URL obscurity (now real, through the random hostname part); optional access control (login required) is a documented upgrade.
+- **Current implementation:** `internal/routing` (controller, rendering, forward-only file, Traefik adapter, hostnames, unavailable page), the fence in `internal/environments`, `deploy/traefik/compose.yml` and `cmd/route-sync`, verified with real Traefik, Pebble-issued certificates and real previews by `make test-routing`. See [11-routing-and-https.md](docs/11-routing-and-https.md).
 
 ---
 
@@ -427,40 +431,49 @@ High. Concurrency and zero-gap swapping.
 - **Latest wins:** intermediate commits may never deploy; only the newest matters.
 - **Orphan protection:** any container labeled for this PR but not referenced by the current record is removed by the reconciler.
 - **Manual freshness:** a new commit fences an older in-flight result but does not authorize its successor in Manual mode. An already deployed healthy preview stays available and the UI distinguishes its deployed SHA from the latest PR SHA.
-- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [11-build-policy-and-intents.md](docs/11-build-policy-and-intents.md). Scheduling propagates revision through jobs, results and publication; [12-build-scheduling.md](docs/12-build-scheduling.md) records exact SQL and integration limits.
+- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [13-build-policy-and-intents.md](docs/13-build-policy-and-intents.md). Scheduling propagates revision through jobs, results and publication; [14-build-scheduling.md](docs/14-build-scheduling.md) records exact SQL and integration limits.
 
-Implementation status and the proposed durable publication boundary are kept
-separate: see [the current generation-ordering implementation](docs/14-generation-ordering.md)
-and [the durable publication design](docs/13-durable-publication-design.md). The target
-design moves external routing/reporting calls out of the transaction while retaining
-generation fencing and recovery across crashes.
+Implementation status and the durable publication boundary are kept separate: see
+[the current generation-ordering implementation](docs/16-generation-ordering.md) and
+[the durable publication design](docs/15-durable-publication-design.md). External
+routing and reporting calls run outside transactions with generation fencing and
+recovery across crashes. The swap itself is implemented by the route controller
+([11-routing-and-https.md](docs/11-routing-and-https.md)): the new candidate is verified
+and accepted behind the fence, the router is confirmed to serve it, and only then is
+the environment recorded running and the old container retired; a candidate that
+fails before publication leaves the old preview serving and the environment `failed`.
+Workers are connected in Prompt 10.
 
 ---
 
 ## 14. Teardown on PR close
 
 ### Requirement
-When a PR is closed or merged, remove everything created for it: container, route, image, temporary files, and update the PR comment. Leaks cost money and widen the attack surface.
+When a PR is closed or merged, or GitHub access to it is revoked, remove everything created for it: container, route, image, temporary resources, and update the PR comment. Leaks cost money and widen the attack surface.
 
 ### Complexity
 Medium.
 
 ### Tech stack (feature-specific)
-- River teardown job, Docker API, Traefik (automatic route removal).
+- River teardown job and the durable operation outbox, Docker API, the route controller (feature 11).
 
 ### Technical implementation
-1. `closed` webhook marks the environment `tearing_down` and enqueues a teardown job.
-2. Stop the container gracefully with a timeout, then force remove.
-3. Remove per-environment resources: container, image tag (shared layers stay cached), any volumes.
-4. Delete stored non-audit data: env secrets scoped to this environment, temporary directories.
-5. Mark the environment `torn_down` and edit the comment ("Preview removed").
+1. `closed` webhook advances the PR's generation and records teardown work; installation suspension/deletion and repository removal record a teardown request (and a new generation) for each affected PR in the same transaction. The environment becomes `tearing_down` and hands its artifacts to a durable route-removal operation.
+2. The route removal is accepted behind the route fence and confirmed by the router before anything is removed.
+3. Stop each container gracefully with a timeout, then force remove; then remove its exclusively owned image tag (never forced, shared layers stay cached), build leftovers and the PR's preview network.
+4. Repository secrets are kept (they are repository-level); no environment-scoped copy exists outside the removed container. Build logs follow their retention.
+5. Mark the environment `torn_down` once the route removal converged; cleanup operations stay visible until Docker is clean. Edit the comment ("Preview removed", feature 12).
 6. Reopening records a new generation and follows repository policy: Manual waits
-   for an owner request; Automatic schedules after the five-minute quiet period.
+   for an owner request; Automatic schedules after the five-minute quiet period. The
+   PR row and its lifetime environment (and hostname) are kept.
 
 ### Design decisions and edge cases
-- **Idempotent teardown:** every step tolerates the resource already being gone.
+- **Idempotent teardown:** every step tolerates the resource already being gone, verified by labels for the exact recorded ID; a retried or duplicate teardown starts once.
+- **No GitHub needed:** teardown, route removal and cleanup never need an installation token, so revoked access cannot strand a preview.
+- **Never remove the replacement:** a late teardown after a reopen cannot remove the newer route (tombstone ordering) or its artifacts (reference checks).
 - **Missed webhook:** if the `closed` event is lost, the reconciler (feature 15) catches it by comparing with GitHub's actual PR state.
 - **Logs retention:** build logs may be kept for a short period after teardown for debugging, then deleted.
+- **Current implementation:** see [12-teardown-and-cleanup.md](docs/12-teardown-and-cleanup.md); verified with real Docker and Traefik by `make test-routing`. Workers, the periodic sweep and the dashboard teardown action are connected in Prompts 9–10.
 
 ---
 
@@ -561,7 +574,7 @@ Committed changes stream to open repository/PR pages as Server-Sent Events
 (PostgreSQL triggers -> NOTIFY -> one LISTEN session per server -> in-process hub
 -> per-repository stream). Events are invalidation signals with resumable cursors;
 pages refetch through ordinary authorized GETs, defer while search is focused or a
-policy modal is open, and send nothing while idle. See docs/15-realtime-updates.md;
+policy modal is open, and send nothing while idle. See docs/17-realtime-updates.md;
 build-log streaming reuses the same SSE writer with its own sequence replay. Current build/logs and deployed
 preview controls remain dependent on the execution adapters. Builds is
 a cross-repository view of current/latest work; Environments is a deployment view,
@@ -762,7 +775,7 @@ preview/
 ├── cmd/
 │   ├── server/main.go              # thin: load config, call app.RunServer
 │   ├── worker/main.go              # thin: load config, call app.RunWorker
-│   ├── river-migrate/  secrets-reencrypt/   # maintenance commands run through Make
+│   ├── river-migrate/  secrets-reencrypt/  route-sync/   # maintenance commands run through Make
 │   └── egress/main.go              # previa-egress: proxy and prober, in its own container
 │
 ├── internal/
@@ -798,7 +811,9 @@ preview/
 │   │   ├── service.go              # RequestBuild, RequestTeardown, MarkRunning...
 │   │   ├── repository.go
 │   │   ├── jobs.go                 # build / rebuild / teardown River jobs
-│   │   ├── handler.go  routes.go   # dashboard actions (teardown now)
+│   │   ├── routes.go               # route fence: accept, remove, served, protection
+│   │   ├── teardown.go             # teardown requests, revocation, the teardown sweep
+│   │   ├── handler.go              # dashboard actions (teardown, Prompt 10)
 │   │   ├── queries.sql  dbgen/
 │   │
 │   ├── pullrequests/               # FEATURE: PR observations, discovery and workspace
@@ -827,11 +842,15 @@ preview/
 │   │   ├── target.go  queries.sql  # access, freshness and fork recheck
 │   │   ├── hardening.go            # user, read-only fs, caps, limits, network
 │   │   ├── capacity.go  health.go  # admission; wait-until-healthy, observed health
-│   │   ├── docker.go  inventory.go # preview network, output, owner-verified removal
+│   │   ├── docker.go  inventory.go # preview network, output, inventory
+│   │   ├── endpoint.go  cleanup.go # pre-publication check; owner-verified cleanup executor
 │   │
-│   ├── routing/                    # FEATURE: subdomains + Traefik labels
-│   │   ├── subdomain.go            # sanitize, allocate, uniqueness
-│   │   ├── labels.go               # build Traefik labels for a container
+│   ├── routing/                    # FEATURE: hostnames, route controller, Traefik
+│   │   ├── hostname.go             # stable DNS-safe labels per lifetime environment
+│   │   ├── controller.go           # verify, accept behind the fence, publish, confirm
+│   │   ├── render.go  file.go      # Traefik dynamic config; forward-only route table file
+│   │   ├── traefik.go              # router network attachment, loopback API via Docker
+│   │   ├── unavailable.go          # page for unknown and removed preview hosts
 │   │
 │   ├── reporting/                  # FEATURE: PR comments + check runs
 │   │   ├── reporter.go             # Reporter interface used by other features
@@ -888,7 +907,8 @@ preview/
 │   │   ├── repositories/           # paginated, filtered repository page
 │   │   ├── pullrequests/           # repository/PR detail and shared current activity
 │   │   ├── builds/                 # current build intent page
-│   │   └── environments/           # persisted deployment state page
+│   │   ├── environments/           # persisted deployment state page
+│   │   └── routing/                # "preview not found or expired" (public)
 │   ├── components/                 # local, reusable UI; no backend imports
 │   ├── styles/                     # Tailwind entry CSS and theme tokens
 │   └── static/                     # local HTMX, generated CSS, browser assets
@@ -896,7 +916,7 @@ preview/
 ├── deploy/
 │   ├── docker-compose.yml
 │   ├── egress/Dockerfile           # previa-egress image (make egress-image)
-│   ├── traefik/                    # static + dynamic config
+│   ├── traefik/compose.yml         # the router (static flags; routes come from the worker's file)
 │   └── setup.sh
 │
 ├── docs/                           # README.md, DESIGN.md, ADRs
@@ -973,7 +993,7 @@ Shared palette/font tokens live in `web/styles/theme.css`; `site.css` composes
 base, home, workspace, confirmation and motion styles into the same compiled asset.
 Optional `web/tests/browser` regression tooling uses pinned Playwright v1.58.2 and
 Node.js 20+ only for development; the application has no Node.js runtime dependency.
-See `docs/16-ui-architecture.md` for the implemented presentation boundary.
+See `docs/18-ui-architecture.md` for the implemented presentation boundary.
 
 ### sqlc and migrations in a feature-based layout
 

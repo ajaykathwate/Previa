@@ -44,16 +44,17 @@ All three only *observe* state; none of them authorizes a build. The screens are
   `merged`. Comments/reviews neither authorize builds nor reset quiet periods.
 - Unlinked/inaccessible repositories are acknowledged without exposing or creating
   another user's PR state. Currently open PRs can later be discovered through sync.
-- Installation revocation sets durable `cleanup_pending`. No absent runtime adapter
-  is reported as successful teardown. A later cleanup reconciler must examine
-  current access/resource ownership before clearing this marker.
+- Installation revocation sets durable `cleanup_pending` and requests teardown of the
+  affected PRs in the same transaction (new generation, superseded build request,
+  sweep wake-up). The teardown sweep clears the marker only after examining current
+  access, unfinished work and Docker resources ([12](12-teardown-and-cleanup.md)).
 
 ## Source ordering and generations
 
 - A unique receipt is transport acceptance; it is distinct from applying a fresh
   PR state. Older source observations are acknowledged and ignored.
 - Fresh applicable webhook observations advance PR generation once and compose
-  with the scheduling coordinator ([12](12-build-scheduling.md)). Duplicate
+  with the scheduling coordinator ([14](14-build-scheduling.md)). Duplicate
   receipts advance nothing.
 - Equal-time conflicting heads retain the existing head, mark `needs_refresh`,
   advance generation and supersede active intent, preventing guessed state from
@@ -182,7 +183,7 @@ replaces the saved signal, so a push resets the status to Checking.
   status, with runtime admission checking it under the same lock as the generation.
   The dashboard shows the reason; direct Build POSTs return 409.
 - Committed changes reach open pages through database triggers and Server-Sent
-  Events ([15](15-realtime-updates.md)); the browser refetches saved data and never
+  Events ([17](17-realtime-updates.md)); the browser refetches saved data and never
   calls GitHub.
 
 ## Verification status

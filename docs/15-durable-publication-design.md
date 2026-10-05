@@ -1,24 +1,24 @@
-# 13 · Design: durable, generation-fenced publication
+# 15 · Design: durable, generation-fenced publication
 
 This document records the architecture decision for safely publishing preview
 environment changes when PostgreSQL, River, Docker, the routing layer, and GitHub
 can fail independently. It covers only that consistency problem. Product
 requirements remain in [README.md](../README.md), feature implementation details
 remain in [DESIGN.md](../DESIGN.md), and the current generation implementation and
-tests are in [14-generation-ordering.md](14-generation-ordering.md).
+tests are in [16-generation-ordering.md](16-generation-ordering.md).
 
 ## Decision
 
 Build authorization follows the
-[Manual/Automatic policy](11-build-policy-and-intents.md). Policy, current intent
+[Manual/Automatic policy](13-build-policy-and-intents.md). Policy, current intent
 and scheduling are implemented behind tested interfaces; production runtime
 dispatch remains unconnected. PR observation is distinct from authorized work: Manual waits for an owner
 request; Automatic persists a five-minute trailing deadline. The publication
 protocol below applies only to authorized builds. Generation fencing remains
 independent of scheduling mode; close/merge still requests immediate teardown.
 Build intent adds an independent request revision for same-generation
-Retry/Rebuild ([11](11-build-policy-and-intents.md)); scheduling carries it into
-operation keys/payloads, finalization, reporting and cleanup ([12](12-build-scheduling.md)).
+Retry/Rebuild ([13](13-build-policy-and-intents.md)); scheduling carries it into
+operation keys/payloads, finalization, reporting and cleanup ([14](14-build-scheduling.md)).
 All version/fencing/idempotency references below apply to the ordered tuple
 `(generation, revision)`: generation dominates; revision distinguishes deliberate
 requests for the same observed commit. Generation-only examples below describe
@@ -64,18 +64,20 @@ The repository now has the database-only foundation for the target lifecycle:
    counts, availability time, and expiring leases.
 5. `OperationWorker` claims an operation in a short transaction, calls an
    `OperationExecutor` with no database transaction open, then finalizes the result
-   in another short generation-checked transaction. External adapters are still
-   absent; in particular route executors must implement the generation-fencing
-   contract before they can be connected.
-6. `Reconciler` recovers due operation wake-ups and schedules cleanup for
-   unreferenced resources returned by a resource inventory interface. No production
-   inventory, route inspection, or periodic runner is wired yet.
+   in another short generation-checked transaction. The route controller
+   (`internal/routing`, option 2 below) executes activations and removals; the
+   runtime's cleanup executor removes containers, images and networks after
+   verifying their labels ([11](11-routing-and-https.md), [12](12-teardown-and-cleanup.md)).
+   GitHub reporting is Prompt 8.
+6. `Reconciler` recovers due operation wake-ups, schedules cleanup for unreferenced
+   resources from the real Docker inventory and, with `WithRoutes`, rewrites the
+   router's configuration from the accepted route table. No periodic runner is wired
+   yet (Prompts 9–10).
 
 This removes the long-held PR lock and makes accepted external intent durable. It
 does not claim exactly-once execution or an atomic PostgreSQL/external commit. Those
-properties come from idempotent adapters, external fencing, and reconciliation;
-the interfaces and database state machine are ready, but those real-system guarantees
-are not validated until the adapters exist.
+properties come from idempotent adapters, external fencing, and reconciliation,
+which are now validated against real Docker and Traefik by `make test-routing`.
 
 ## Required guarantees
 
@@ -226,6 +228,25 @@ superseded and the latest generation remains queued for activation. Do not retir
 the prior container until the replacement's active state is committed and route
 convergence is confirmed.
 
+**Selected and implemented: option 2** ([11](11-routing-and-https.md)). Traefik's
+Docker provider cannot fence (labels are fixed at creation, so every candidate
+would be routed before acceptance) and would need the Docker socket, so DESIGN §11
+changed to Traefik's file provider fed by Previa's route controller:
+
+- `environment_routes` stores the accepted `(generation, revision)` per lifetime
+  environment, moved only forward, with removals kept as tombstones. Acceptance is
+  conditional on the PR still wanting exactly that request (activation) or on no
+  newer version existing (removal), in one transaction under the PR scope locks, and
+  bumps a single `route_table` counter so versions follow commit order.
+- The controller renders the whole accepted table into one file whose version only
+  moves forward (host lock, atomic replace). Traefik's view is that file.
+- A version is served once Traefik's loopback API shows it; then older artifacts may
+  retire. Cleanup keeps the accepted, served and every unconfirmed target.
+- Limit, stated plainly: requests can reach the previous target for about a second
+  after acceptance (file watch and reload), and nothing is served while Traefik is
+  down or its file is missing. Strict per-request freshness would need a fenced
+  traffic path; it is not claimed.
+
 ### GitHub reporting worker
 
 GitHub comments/checks are separate durable operations, never part of the route
@@ -361,10 +382,14 @@ and deterministic fakes:
   error codes. Build failure reports are emitted only on the terminal River attempt;
   intermediate attempts do not publish a final failure.
 - Executor contracts define idempotency, route generation fencing, and resource
-  cleanup. No concrete Docker, router, or GitHub executor is selected.
-- `Reconciler` can recover due operation wake-ups and schedule removal of
-  unreferenced resources from an inventory interface. It is bounded and restart
-  safe at the durable-operation boundary, but is not wired to a production timer.
+  cleanup; `Executors` routes each kind to its adapter, and a kind without one stays
+  retryable (`executor_unavailable`) instead of being treated as done.
+- Route removal and cleanup are retried until they succeed (River exhaustion leaves
+  them retryable; rescheduling re-arms a failed cleanup). A terminal activation
+  failure fails the attempt, keeps the active preview and cleans the candidate.
+- `Reconciler` can recover due operation wake-ups, schedule removal of unreferenced
+  resources from an inventory, and rewrite the router's file. It is bounded and
+  restart safe at the durable-operation boundary, but is not wired to a timer.
 - Integration coverage proves generation/outbox behavior, latest generation wins,
   PR close defeats an in-flight build, cleanup retries, operation retry/finalize,
   and a blocked external call does not block a concurrent PR event.
@@ -376,31 +401,27 @@ The existing event-generation transaction, captured River arguments, job handoff
 atomic SQL fence, and generation-order tests remain. `Repository.Apply` no longer
 calls a publisher inside the environment-result transaction.
 
-## What must be implemented with the build/runtime/routing features
+## Adapter work: done and remaining
 
-These parts depend on real adapter capabilities and cannot be honestly completed
-with database-only fakes:
+Implemented and verified against real systems:
 
-- **Docker/build integration:** deterministic PR/generation labels; resumable or
-  discoverable partial builds; candidate startup and health checks; safe cleanup;
-  cancellation and resource limits.
-- **Routing integration:** a generation-fenced route controller or provider with
-  specified compare-and-set/serialization behavior, route convergence checks, and
-  a clear definition of when the old container can be removed. Validate whether
-  the chosen Traefik integration can provide the desired strictness; otherwise use
-  an authoritative routing layer whose target table supports generation fencing.
-- **GitHub reporting:** stable comment/check identity, per-generation status rules,
-  API rate-limit/backoff handling, and safe retries after an ambiguous response.
-- **Crash recovery against actual systems:** prove reconciliation can list real
-  Docker resources and inspect the actual route target after process restart.
-- **End-to-end cutover and close tests:** build A, request B or close during each
-  publication step, inject process/provider failures, and verify that the latest
-  generation wins and obsolete resources are eventually removed.
+- **Docker/build integration:** deterministic PR/generation/revision labels,
+  discoverable partial builds, candidate startup and health checks, owner-verified
+  cleanup, cancellation and resource limits ([09](09-image-builds.md),
+  [10](10-preview-runtime.md), [12](12-teardown-and-cleanup.md)).
+- **Routing integration:** the fenced route controller above, convergence checks and
+  the rule for retiring old containers ([11](11-routing-and-https.md)).
+- **Crash recovery against actual systems:** a restarted controller rewrites the
+  file from PostgreSQL and resumes interrupted operations; a restarted Traefik reloads
+  routes and its certificate; cleanup resumes after a crash between a removal and its
+  record.
+- **End-to-end cutover and close tests:** swaps, failed swaps, late stale activations
+  and removals, same-generation Rebuild, close during publication and close while
+  building, against real Traefik, previews and PostgreSQL (`make test-routing`).
 
-Do not connect a real runtime until the selected adapters implement these
-contracts. The short-transaction outbox boundary exists; route fencing semantics
-still need to be selected and validated with the actual routing design before
-production use.
+Remaining: **GitHub reporting** (stable comment/check identity, per-generation
+rules, rate limits, ambiguous retries; Prompt 8), the periodic reconciler and sweep
+(Prompt 9) and worker wiring (Prompt 10).
 
 ## Guarantees and explicit limits
 
@@ -408,8 +429,9 @@ The design does not claim exactly-once external execution. It uses at-least-once
 delivery plus idempotent operations, durable intent, generation fencing, and
 reconciliation. It guarantees that an obsolete generation cannot become the
 committed active database state and that accepted work is not forgotten after
-process crashes. With a generation-aware route controller, it also prevents older
-route commands from replacing a newer accepted route generation.
+process crashes. With the generation-aware route controller it also prevents older
+route versions from replacing a newer accepted one, and removed routes from coming
+back; the router's materialized view only moves forward.
 
 During an external outage, database desired state and a materialized external view
 may temporarily differ. Reporting may lag, and a route provider may take time to
@@ -422,7 +444,7 @@ traffic path; an ordinary asynchronous config push is not enough.
 ## Related code and documents
 
 - Current implementation and its SQL/test evidence: `internal/environments/`,
-  `internal/webhooks/`, and [14-generation-ordering.md](14-generation-ordering.md).
+  `internal/webhooks/`, and [16-generation-ordering.md](16-generation-ordering.md).
 - Product workflow and original queue/rebuild/teardown requirements:
   [DESIGN.md Sections 7, 13, 14, and 15](../DESIGN.md).
 - Process/configuration, build timeouts, and local database setup:

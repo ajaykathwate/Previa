@@ -1,4 +1,4 @@
-# 17 · Roadmap: remaining MVP work
+# 19 · Roadmap: remaining MVP work
 
 What is left before Previa can build and serve real previews, as **12 sequential
 tasks**. Each task is written as a self-contained prompt (for a developer or a coding
@@ -34,21 +34,42 @@ production; the release checklist at the end does.
   a fresh access/fork recheck, readiness from the proxy container, crash-loop
   detection, host-derived capacity, owner-verified inventory and removal), verified
   with `make test-runtime` ([10](10-preview-runtime.md)). Not yet called by the worker.
+- **Prompt 6 done:** `internal/routing` (owner decisions: Traefik's file provider fed
+  by a route controller instead of Docker labels, DESIGN §11 updated; hostnames
+  `pr-<n>-<repo id>-<token>`; Pebble for the TLS proof; unknown hosts redirected to a
+  dashboard page). Route versions are accepted behind a PostgreSQL (generation,
+  revision) fence with removal tombstones, materialized into a forward-only file,
+  confirmed through Traefik's loopback API before old artifacts retire; environments
+  are provisioned with their hostname at admission; wildcard DNS-01 with staging
+  default, secret-file credentials and persistent ACME storage
+  (`deploy/traefik/compose.yml`, `make router-up`, `cmd/route-sync`); `__Host-`
+  cookies and origin checks. Verified with `make test-routing`
+  ([11](11-routing-and-https.md)). Let's Encrypt staging/live issuance is pending a
+  domain and DNS token.
+- **Prompt 7 done:** teardown for close, revocation (requested in the lifecycle
+  transaction, started by `TeardownSweeper`) and future local requests through the
+  existing teardown/outbox contracts; access-free locks; route removal before
+  owner-verified cleanup (graceful stop, unforced images, idle networks); removal and
+  cleanup retried until done; idempotent retries; old teardowns never remove a
+  reopened PR's replacement. Verified with real Docker/Traefik in `make test-routing`
+  ([12](12-teardown-and-cleanup.md)). Workers and the periodic sweep are registered
+  in Prompts 9–10.
 - Implemented: signed/deduplicated webhook ingress, bounded open-only PR discovery,
   tracked close/merge retention, bounded mergeability checks and build refusal for
   Checking/Conflicts ([05](05-webhooks-and-pr-discovery.md)).
 - Implemented: live dashboard updates over SSE from PostgreSQL triggers through
-  `internal/platform/realtime` ([15](15-realtime-updates.md)); reuse it for live logs.
+  `internal/platform/realtime` ([17](17-realtime-updates.md)); reuse it for live logs.
 - Implemented: repository/PR pages, owner policy controls and current Builds/
   Environments views. The approved presentation and no-JavaScript flows exist.
 - Existing environment code provides tested admission, generation/revision fences,
   candidate/active artifacts, outbox, cleanup and reconciliation contracts.
   Extend those contracts rather than create a second orchestration system.
 - Production worker wiring currently registers ping, build-log retention and
-  App-configured discovery/mergeability jobs. Routing, reporting and periodic
-  housekeeping need real adapters; verification, source preparation, the secrets
-  provider, the log store, the image builder and the preview runtime exist but are not
-  wired into execution yet.
+  App-configured discovery/mergeability jobs. Reporting and periodic housekeeping
+  need real adapters; verification, source preparation, the secrets provider, the log
+  store, the image builder, the preview runtime, the route controller, the cleanup
+  executor and the teardown sweep exist but are not wired into execution yet. The
+  worker validates routing settings when `PREVIEW_BASE_DOMAIN` is set.
   The manual Build endpoint returns unavailable; it authorizes no execution.
 - Live hosted GitHub PR/mergeability proof remains pending. Local fixtures and a
   real local Git conflict are evidence, but do not prove hosted webhook delivery.
@@ -65,10 +86,10 @@ README's older illustrative tree. Keep backend files flat within each feature,
 presentation in web/, and construction in internal/app. Use small consumer-owned
 interfaces; do not create global handler/store layers or speculative frameworks.
 
-Preserve [11-build-policy-and-intents.md](11-build-policy-and-intents.md),
-[12-build-scheduling.md](12-build-scheduling.md),
-[13-durable-publication-design.md](13-durable-publication-design.md) and
-[14-generation-ordering.md](14-generation-ordering.md). Every executable
+Preserve [13-build-policy-and-intents.md](13-build-policy-and-intents.md),
+[14-build-scheduling.md](14-build-scheduling.md),
+[15-durable-publication-design.md](15-durable-publication-design.md) and
+[16-generation-ordering.md](16-generation-ordering.md). Every executable
 request and external artifact/operation carries PR identity, exact SHA and the
 ordered (generation, revision) fence. Same-SHA Retry/Rebuild changes revision.
 Observation/discovery/reconciliation alone never authorizes a Manual build.
@@ -82,7 +103,7 @@ ambiguous external success and process crashes. Persist cleanup/outbox intent;
 never substitute a no-op adapter or claim missing-resource cleanup succeeded
 without checking it. Credentials stay out of job payloads, URLs, logs and errors.
 
-Preserve the "signal" theme and UI patterns in [16-ui-architecture.md](16-ui-architecture.md),
+Preserve the "signal" theme and UI patterns in [18-ui-architecture.md](18-ui-architecture.md),
 accessible modal confirmations, CSRF, scoped queries, useful links, bounded lists,
 focus-preserving HTMX and ordinary GET/form fallbacks. Show actual work and
 deployed state separately. One lifetime environment/current intent per PR;
@@ -116,8 +137,8 @@ for live proofs require an explicitly authorized disposable repository.
 | 3 ✅ | Bounded, redacted current-build logs and SSE | 2 |
 | 4 ✅ | Isolated BuildKit image builder | 1–3 |
 | 5 ✅ | Hardened Docker candidates and readiness | 1–4 |
-| 6 | Stable HTTPS routes and fenced blue/green publication | 5, existing outbox |
-| 7 | Durable teardown, revocation and resource cleanup | 5–6 |
+| 6 ✅ | Stable HTTPS routes and fenced blue/green publication | 5, existing outbox |
+| 7 ✅ | Durable teardown, revocation and resource cleanup | 5–6 |
 | 8 | GitHub living comment and exact-SHA checks | 3, 6–7 |
 | 9 | Recovery, expiry, reconciliation and capacity | 4–8 |
 | 10 | Real worker orchestration and completed dashboard actions | 1–9 |
@@ -298,7 +319,7 @@ observed release checks in Prompt 12, including isolation, recovery and restore.
 ## Prompt 6 — Stable HTTPS routing and fenced blue/green publication
 
 > Implement DESIGN Sections 11 and 13 and the route boundary in
-> docs/13-durable-publication-design.md. Read existing operation leases, candidate/
+> docs/15-durable-publication-design.md. Read existing operation leases, candidate/
 > active artifacts and finalization SQL before adding internal/routing adapters.
 > Preserve Traefik v3; do not replace the router or add a second orchestrator.
 >
@@ -535,7 +556,7 @@ observed release checks in Prompt 12, including isolation, recovery and restore.
 > Add a repeatable real-adapter end-to-end suite with cleanup and failure injection.
 >
 > Execute the release checklist below where prerequisites and authorization
-> exist. Write docs/18-production-deployment.md and a release report with
+> exist. Write docs/20-production-deployment.md and a release report with
 > exact commands, environment/version evidence, passed/failed/skipped checks and
 > outstanding inputs. Update setup/handoff links. Missing domain, DNS token,
 > disposable GitHub repo/write authorization or VPS access stays a specific

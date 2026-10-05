@@ -141,8 +141,10 @@ The setup redirect's `installation_id` is never trusted on its own
   history kept), suspend hides access, unsuspend restores it, deletion is terminal
   for that installation ID. Permission acceptance and lifecycle changes evict the
   cached token.
-- Suspension, deletion and repository removal record durable `cleanup_pending`.
-  No cleanup adapter exists yet, so nothing is reported as cleaned up.
+- Suspension, deletion and repository removal record durable `cleanup_pending` and,
+  in the same transaction, a teardown request for each affected PR with a live
+  preview or unfinished build. Teardown and cleanup never need the App's token
+  ([12](12-teardown-and-cleanup.md)).
 - Installation tokens are cached per installation (via `ghinstallation` v2.18.0,
   refreshed a minute before expiry) behind a mutex-protected transport.
 

@@ -94,10 +94,19 @@ repository's PR list, never on PR details.
   or Escape leaves it off. Turning it off saves Manual immediately and cancels
   unstarted automatic work, but keeps running work and existing previews.
 - Closing or merging a PR supersedes outstanding work and records teardown intent
-  in either mode.
+  in either mode. Suspending or uninstalling the GitHub App, or removing a repository
+  from it, tears down that repository's previews too; restoring access does not
+  rebuild them by itself.
 
-**Build latest commit is disabled.** It needs exact-SHA source fetching, image
-builds, isolated containers, routing and cleanup first ([17-roadmap.md](17-roadmap.md)).
+**Build latest commit is disabled.** Source fetching, image builds, isolated previews,
+HTTPS routing and cleanup exist and are verified on their own; the worker connects
+them in a later step ([19-roadmap.md](19-roadmap.md)).
+
+**Preview addresses.** Each PR will get one HTTPS address for its whole life, such as
+`https://pr-42-k2j4ld-7xq9m2fa.preview.example.com`, kept across rebuilds, teardown and
+reopening. Opening the address of a preview that does not exist (never published,
+closed, torn down, expired or revoked) shows **Preview not found or expired** on the
+dashboard's site.
 Direct POSTs are refused too: HTTP 409 with the reason for Checking, Conflicts or
 Refresh required PRs, otherwise HTTP 503 "not available yet". No intent is created.
 

@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 13**, **River 007**. After pulling changes, run
+Current schema: **Goose 14**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker.
 
 ## 1. Prerequisites
@@ -66,6 +66,12 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT` | worker | Optional; defaults `256MiB`, `512`, `120s`. | Preview `/tmp` size, process limit and readiness deadline. |
 | `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY` | worker | Optional; empty budgets use 60% of Docker memory and 75% of its CPUs; `10`. | What all previews may use together, and per repository. |
 | `PREVIEW_OCI_RUNTIME` | worker | Optional, e.g. `runsc` where gVisor is installed. | Docker runtime for previews. |
+| `PREVIEW_BASE_DOMAIN` | server, worker | Optional, e.g. `preview.example.com`; not the dashboard's host or a parent of it. | Preview hostnames below it ([11](11-routing-and-https.md)); turns routing on in the worker. |
+| `APP_BASE_URL` | worker (when routing) | The dashboard origin, as on the server. | Unknown preview hosts are redirected to its `/previews/unavailable`. |
+| `ROUTER_DYNAMIC_DIR` | worker (when routing) | An existing directory on a Linux filesystem, shared with the router. | Where the route controller writes Traefik's route table. |
+| `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS` | worker | Optional; defaults `previa-router`, `websecure`, `127.0.0.1:8080` (must be loopback). | The router container, its HTTPS entry point and its in-container API. |
+| `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE` | router (`make router-up`) | Your ACME contact, lego provider (e.g. `cloudflare`), its credential variable (e.g. `CF_DNS_API_TOKEN`) and a `chmod 600` file holding the token. | Wildcard certificate over DNS-01; read by `deploy/traefik/compose.yml`, not by Go. |
+| `ACME_CA_SERVER`, `ACME_DNS_RESOLVERS` | router | Optional; Let's Encrypt **staging** and public resolvers. | Switch to production only after staging issued a certificate. |
 
 - Sign-in needs real OAuth values; placeholders start the server but cannot log in.
 - The five server App settings are all-or-nothing. Omit them all to run with
@@ -78,13 +84,20 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 - The `BUILD*` settings have working defaults. The worker validates them at start
   (an invalid value stops it with the variable's name) but does not build images yet;
   `make test-builder` uses them, and build execution will from Prompt 10.
+- Routing is off until `PREVIEW_BASE_DOMAIN` is set. Then the worker requires
+  `APP_BASE_URL` and an existing `ROUTER_DYNAMIC_DIR`, and both processes refuse a
+  dashboard host equal to or below the preview domain (the server also warns when they
+  share a registrable domain). Nothing routes until execution is wired (Prompt 10).
+- Over HTTPS the dashboard's session and OAuth state cookies are named
+  `__Host-previa_session` and `__Host-previa_oauth_state`; switching `APP_BASE_URL`
+  between HTTP and HTTPS signs everyone out once.
 
 ### How configuration is loaded
 
 | Command | Loads `.env`? |
 | --- | --- |
 | `make run-server`, `make run-worker`, `make dev` | Yes; already-exported variables take precedence. Restart Air after editing `.env`. |
-| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime` | Yes; falls back to `.env.example` for migrations if `.env` is absent. |
+| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime`, `test-routing`, `router-up`, `router-down`, `route-sync` | Yes; falls back to `.env.example` for migrations if `.env` is absent. `test-routing` uses `DATABASE_URL` as `TEST_DATABASE_URL` unless that is exported. |
 | Direct `go run`, manual Goose commands | No; run `set -a; . ./.env; set +a` once per terminal. |
 | `make build`, `make lint`, `make generate` | No configuration needed. |
 | `make test` | Database tests need an explicitly exported `TEST_DATABASE_URL`. |
@@ -124,6 +137,7 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0011 | Realtime triggers that raise `NOTIFY previa_events` after commits. |
 | 0012 | Repository secrets: `key_version`, `updated_at`, name and ciphertext-size checks. |
 | 0013 | Current-build log streams (attempt `epoch`, counters), line `epoch`/`kind`, line-size check and a log realtime trigger. |
+| 0014 | Route controller state (`environment_routes`, `route_table`), local teardown requests on PRs, `environments.teardown_generation`, a DNS-label check on hostnames and nullable `expires_at`. Fails if an existing hostname is not a lowercase DNS label. |
 
 Optional check that live updates are wired:
 
@@ -222,6 +236,45 @@ withholding, network probes logged as `probe: … blocked` except
 opt-outs, capacity refusals and refusal to remove objects Previa did not create.
 Preview networks (`previa-pr-<id>`) and images are removed by the tests; only
 `previa-egress` stays running.
+
+### Real routing, publication and teardown check (optional)
+
+Needs Docker, internet access the first time (Traefik, Pebble and alpine images), the
+egress image and PostgreSQL. It creates and drops its own schema; no domain, DNS
+token or GitHub access is used: a local Pebble ACME server issues the wildcard
+certificate over DNS-01.
+
+```sh
+make test-routing         # about 5 minutes
+```
+
+**Expected:** every `TestRealRouting…` test passes and the first logs
+`HTTPS: https://pr-…preview.test served by a Pebble-issued wildcard certificate
+[*.preview.test]`. Afterwards only `previa-egress` remains; the test router, Pebble,
+networks, volume, schema and images are removed. Set `TEST_ROUTING_LOG=1` for the
+worker-side logs.
+
+### The router (optional, needs a domain)
+
+With a domain whose wildcard record points at this host, a DNS provider token in a
+`chmod 600` file and the `PREVIEW_BASE_DOMAIN`, `ROUTER_DYNAMIC_DIR` and `ACME_*`
+settings in `.env`:
+
+```sh
+make router-up            # checks settings, writes the route table, starts Traefik
+docker logs -f previa-router
+curl -v https://anything.$PREVIEW_BASE_DOMAIN/   # staging issuer; redirect to the unavailable page
+make router-down
+```
+
+**Expected:** `Routes: … holds route table version N`, then within a minute a Let's
+Encrypt **staging** wildcard certificate and a 302 to
+`APP_BASE_URL/previews/unavailable`. `make router-up` first runs `make route-sync`,
+which writes the accepted route table from PostgreSQL (the worker's route controller
+does the same once execution is wired); Traefik requests the certificate only once a
+router uses it, and the table's fallback router does. Switch `ACME_CA_SERVER` to
+production and remove the `previa-router_acme` volume only after staging works
+([11](11-routing-and-https.md)).
 
 ### Browser regression checks (optional)
 
@@ -342,7 +395,7 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
 - **Stylesheet missing after a manual build:** run `make assets` before compiling;
   the server embeds assets at build time.
 - **Live indicator never turns green:** apply migrations 0011 and 0013, and make sure
-  any proxy in front of the server does not buffer `text/event-stream` ([15](15-realtime-updates.md)).
+  any proxy in front of the server does not buffer `text/event-stream` ([17](17-realtime-updates.md)).
 - **Builder errors:** `egress proxy image … is not available` means run
   `make egress-image`. `builder did not become ready` usually means user
   namespaces are disabled or Docker is too old for rootless BuildKit. `disk_low`

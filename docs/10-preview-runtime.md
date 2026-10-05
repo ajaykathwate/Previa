@@ -5,8 +5,9 @@ preview container that nothing routes to yet**. It implements
 `environments.Runtime` by composing source preparation ([06](06-source-and-configuration.md)),
 the image builder ([09](09-image-builds.md)) and repository secrets
 ([07](07-repository-secrets.md)); every lifecycle transaction stays in
-`internal/environments`. The router (Prompt 6) and worker dispatch (Prompt 10) come
-later; until then the runtime runs only in tests.
+`internal/environments`. The route controller ([11](11-routing-and-https.md)) publishes
+its candidates and its cleanup executor removes them ([12](12-teardown-and-cleanup.md));
+worker dispatch comes in Prompt 10, and until then the runtime runs only in tests.
 
 ## Decisions
 
@@ -40,8 +41,8 @@ later; until then the runtime runs only in tests.
 7. **Capture** the app's last 200 lines (64 KiB) of output into the log, redacted.
    On any failure, also remove the candidate.
 
-The result is `environments.Artifact{ContainerID, ImageTag}`; publication (Prompt 6)
-decides whether it becomes active.
+The result is `environments.Artifact{ContainerID, ImageTag}`; publication
+([11](11-routing-and-https.md)) decides whether it becomes active.
 
 ## Isolation, concretely
 
@@ -51,7 +52,7 @@ decides whether it becomes active.
 | Filesystem | Read-only root; `/tmp` tmpfs (`nosuid,nodev`, 256 MiB, counted against memory). `PREVIEW_WRITABLE_ROOTFS=true` makes root writable (server-wide; disk writes are then unbounded). |
 | Privileges | Never privileged; every capability dropped; `no-new-privileges`; Docker's default seccomp and AppArmor profiles. Low ports work without a capability (`ip_unprivileged_port_start=0`). |
 | Host access | No host paths, Docker socket, devices or published ports. |
-| Network | Only `previa-pr-<id>`, an internal network shared with nothing but the egress proxy (and, from Prompt 6, the router). No gateway, no route to the host, Docker's other networks, other previews or metadata. IPv6 disabled in the container. |
+| Network | Only `previa-pr-<id>`, an internal network shared with nothing but the egress proxy and, once a version is published, the router. No gateway, no route to the host, Docker's other networks, other previews or metadata. IPv6 disabled in the container. |
 | Egress | `HTTP_PROXY`/`HTTPS_PROXY` (and `NODE_USE_ENV_PROXY=1`) point at the proxy; Previa's values override YAML and secrets. The proxy resolves names itself and refuses private, loopback, link-local, metadata and other special ranges, so DNS tricks fail too. |
 | Resources | The repository's tier, clamped to platform ceilings (small 0.5 CPU/512 MiB, standard 1/1 GiB, large 2/2 GiB); no swap; 512 processes; CPU weight 512 (half the default); OOM score adjustment 500; logs capped at 2 × 10 MB. |
 | Crashes | Restart on failure at most 3 times; then it stays stopped and counts as a crash loop. |
@@ -105,24 +106,34 @@ the budget by at most the number of concurrent builds.
 ## Inventory and removal
 
 - Every candidate carries labels: PR, generation, revision, commit, repository IDs,
-  environment ID, image reference, port, CPU and memory limits, start time. No
-  routing labels exist until Prompt 6.
+  environment ID, image reference, port, readiness path (when HTTP), CPU and memory
+  limits, start time. The router reads none of them; routes come from the route
+  controller.
+- `Runtime.Endpoint` re-checks a candidate right before it is routed: this PR's
+  preview of exactly that generation, revision and image, running, and ready now (up
+  to 5 probes a second apart from the egress container). A missing, foreign, stopped
+  or unready candidate is refused permanently and never routed.
 - `Runtime.Resources(pr)` lists the PR's previews paired with their images, images no
-  container uses, and builder containers left by crashed builds. The environments
-  cleanup contract schedules removal of everything not active, pending or protected.
-- `RemoveContainer` and `RemoveImage` verify Previa's labels first and refuse anything
-  else (`not_owned`); an object that is already gone counts as removed. Images are
-  removed without force, so one still used by a container is kept and retried.
-- Preview networks live as long as the PR's environment and are removed at teardown
-  (Prompt 7).
+  container uses, builder containers and build networks left by crashed builds, and
+  the PR's preview network once no preview uses it. The environments cleanup
+  contract schedules removal of everything not referenced.
+- `Runtime.RemoveResource` (the cleanup executor) inspects each object first and
+  refuses anything whose labels do not name Previa and the resource's PR
+  (`not_owned`); an object already gone counts as removed. Containers are stopped
+  gracefully (10-second stop timeout) and then removed by force; images are removed
+  without force after their container (`in_use` otherwise, retried); networks once no
+  preview or builder uses them, after the router and egress proxy are disconnected.
 
-## The router's path (Prompt 6)
+## The router's path
 
-The router will join each `previa-pr-<id>` network, as the egress proxy does, and
-reach the preview on its labelled port. The control plane (server, worker, Postgres)
-never joins preview networks, so the path into previews never becomes a path out of
-them. Prompt 6 must expose only the router's public entrypoints on those networks
-(not its API or dashboard).
+The router joins each `previa-pr-<id>` network when the PR's first version is
+published, as the egress proxy does, and dials the preview by container name on its
+port. The control plane (server, worker, Postgres) never joins preview networks, so
+the path into previews never becomes a path out of them. The router has no Docker
+socket, and its API listens only on loopback inside its container. A preview can
+reach the router's public entry points, and through them other previews' public URLs,
+exactly as anyone on the internet can; the direct container-to-container path between
+previews stays blocked ([11](11-routing-and-https.md)).
 
 ## Configuration
 

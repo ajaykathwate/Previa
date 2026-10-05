@@ -1,11 +1,11 @@
-# 14 · Generation ordering and fencing (implementation)
+# 16 · Generation ordering and fencing (implementation)
 
 How the code guarantees that a newer commit, a close or a deliberate rebuild always
 beats older work, even when jobs retry, overlap or finish late. This is the
-implementation of the decision in [13](13-durable-publication-design.md); the
+implementation of the decision in [15](15-durable-publication-design.md); the
 request revision it carries alongside generation comes from
-[11](11-build-policy-and-intents.md), and admission/handoff from
-[12](12-build-scheduling.md).
+[13](13-build-policy-and-intents.md), and admission/handoff from
+[14](14-build-scheduling.md).
 
 **Status:** generation and revision fencing, guarded results and the database/River
 publication outbox are implemented in `internal/environments` and tested with real
@@ -85,13 +85,23 @@ locking the PR would not protect against a concurrently updated desired state.
 
 Zero returned rows for an outdated generation means superseded: no environment
 write and no publication intent. A missing active environment for a still-current
-request is an error; provisioning is a prerequisite, not silently created here.
-For successful builds, the transaction stores a pending candidate and inserts the
-route operation and River wake-up atomically. It does not set that candidate active
-until an external operation succeeds and a second short guarded transaction
-finalizes it. `OperationWorker` invokes its executor between those transactions,
-without a PR row lock. The executor contract requires idempotency and route
-generation fencing; those external guarantees await real adapters.
+request is an error; admission provisions it (with its hostname) when the
+repository has a hostname allocator ([11](11-routing-and-https.md)), and it is never
+silently created here. For successful builds, the transaction stores a pending
+candidate and inserts the route operation and River wake-up atomically. It does not
+set that candidate active until the route controller's operation succeeds and a
+second short guarded transaction finalizes it. `OperationWorker` invokes its
+executor between those transactions, without a PR row lock. The route controller
+enforces the same fence again when it accepts a route version: in one transaction
+it requires the PR to still want exactly `(generation, revision)`, and the route
+version only moves forward ([11](11-routing-and-https.md)).
+
+A teardown (`result_status = torn_down`) takes a third branch: the PR is closed or
+merged, or a local teardown was requested at this generation (revocation now, owner
+requests and expiry later), with revision 0. It locks the PR scope without requiring
+GitHub access, hands the environment's active and pending artifacts to the
+route-removal operation, and records the teardown's generation; a retried teardown
+of the same generation starts nothing new ([12](12-teardown-and-cleanup.md)).
 
 ## Why close and newer commits win
 
@@ -104,6 +114,13 @@ generation fencing; those external guarantees await real adapters.
   skips building. Cleanup can still discover artifacts left by a prior attempt.
 - A failed current rebuild records failure while preserving the previous container,
   image, and deployed SHA. A durable report operation is created separately.
+- A candidate that fails just before publication (stopped, unready, foreign) fails
+  the activation permanently: the previous preview keeps serving, the environment
+  records the failed attempt and the candidate is cleaned up.
+- A close or revocation removes the route with a tombstone at its generation. A late
+  activation of any earlier generation is refused by that tombstone; a reopened PR's
+  later activation is newer and wins, and the late removal of the old route then
+  finds a newer route and is superseded without touching it.
 
 ## Uniqueness without dropping the latest request
 
@@ -134,21 +151,29 @@ after a worker loses its claim.
 the durable cleanup operation worker invokes its executor outside transactions.
 The intended adapter behavior is:
 
-1. Locks the PR briefly to read the currently referenced active and pending artifacts.
+1. Locks the PR briefly to read the currently referenced artifacts: active and
+   pending, those held by unfinished route operations (failed ones protect nothing),
+   and every target the router serves or may still serve (accepted, served and
+   unconfirmed route targets). Resources of the current request are skipped while
+   its build runs, unless that build scheduled the cleanup.
 2. Finds resources labeled with this PR and a generation at or below the obsolete
    current request version, including partial builds/images left by previous attempts.
    Resource references and version bounds now include request revision.
 3. Preserves the referenced preview and all resources from newer generations.
-4. Persists cleanup work transactionally. The operation worker removes each
-   obsolete container, then its owned image, outside the transaction. Missing
-   resources must be treated as already removed by the adapter. Images need
-   generation-specific tags.
-5. Retryable cleanup errors remain durably represented with bounded exponential
-   backoff; terminal errors are stored as safe codes for operator visibility.
+4. Persists cleanup work transactionally. The runtime's cleanup executor removes each
+   obsolete container (graceful stop, then force), then its owned image (never
+   forced), then idle networks, outside the transaction, after verifying each
+   object's labels name this PR. An object already gone counts as removed. Images
+   have generation- and revision-specific tags.
+5. Cleanup is retried until it succeeds: running out of River attempts leaves it
+   retryable, and scheduling the same resource again re-arms a failed one. Permanent
+   refusals (`not_owned`) are stored as safe codes for operator visibility.
 
 The durable operation row survives River job retention. The bounded reconciler can
-re-enqueue due operations and inventory PR-owned resources, but it is not yet wired
-to a production timer or real runtime adapter.
+re-enqueue due operations, inventory PR-owned resources (now the real Docker
+inventory) and rewrite the router's file, but it is not yet wired to a timer.
+Duplicate enqueues of one operation compare payloads by JSON value, since
+PostgreSQL returns JSONB in its own normalized form.
 
 ## Timeouts and rescue
 

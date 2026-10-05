@@ -1,6 +1,6 @@
-# 12 · Build scheduling and worker handoff
+# 14 · Build scheduling and worker handoff
 
-How an authorized intent ([11](11-build-policy-and-intents.md)) becomes executable
+How an authorized intent ([13](13-build-policy-and-intents.md)) becomes executable
 work: durable deadlines, River wake-ups, atomic admission, one build per PR, handoff
 to the next request and crash recovery. Everything here is implemented and tested
 with real PostgreSQL and River; what is missing is the real build/runtime adapters.
@@ -37,7 +37,7 @@ production execution is not supported.
   Each relevant event advances observed generation and replaces the request/deadline.
   Changing mode alone does not schedule existing PRs.
 - `Broker.RequestBuild` resolves owner access/current SHA, applies the
-  Build/Retry/Rebuild contract ([11](11-build-policy-and-intents.md)), and inserts its
+  Build/Retry/Rebuild contract ([13](13-build-policy-and-intents.md)), and inserts its
   wake-up in the same transaction.
   Manual override is immediate. The low-level `IntentService.Request` remains a
   persistence API; future browser handlers must use the coordinator rather than
@@ -123,7 +123,9 @@ Docker log adapter is enabled here.
 
 Migration 9 adds unconditional environment uniqueness by PR. The existing row and
 subdomain survive rebuild, teardown and reopen; fixture tests exercise this lifecycle.
-Initial environment provisioning still belongs to the later execution integration.
+Admission now provisions the environment, allocating its hostname once, inside the
+claim transaction when the repository is constructed with a hostname allocator
+([11](11-routing-and-https.md)); production wiring passes `routing.NewLabel` (Prompt 10).
 
 ## Completion, handoff and recovery
 
@@ -147,7 +149,11 @@ restart begins at the first page while durable rows remain the source of truth.
 A closed PR's `teardown_completed_generation` records executable teardown handoff
 completion, **not proof of external route removal**. Route removal still requires
 its durable operation finalization/recovery. A no-environment close is safe to
-complete without creating a preview record.
+complete without creating a preview record. The marker is recorded even when GitHub
+access was revoked meanwhile, since teardown needs none. A local teardown of an open
+PR (revocation; owner requests and expiry later) is recorded with
+`teardown_requested_generation` and started by its own transaction or the teardown
+sweep rather than by a teardown job ([12](12-teardown-and-cleanup.md)).
 
 No production periodic runner is added. Future app construction must schedule
 coordination and existing operation/resource reconciliation with bounded batches.
@@ -204,4 +210,4 @@ observation/request changes, same-generation stale success/failure/publication,
 generation-zero finalization, real River wake-up processing and PR uniqueness,
 future handoff deadlines, success/terminal-failure handoff and close-during-build
 cleanup. Real source/build/runtime/router/reporting adapters are the next step
-([17-roadmap.md](17-roadmap.md)).
+([19-roadmap.md](19-roadmap.md)).
