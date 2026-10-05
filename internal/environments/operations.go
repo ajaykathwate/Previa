@@ -159,7 +159,7 @@ func (b *OperationBroker) EnqueueTx(ctx context.Context, tx pgx.Tx, spec Operati
 		if err != nil {
 			return 0, fmt.Errorf("read existing environment operation: %w", err)
 		}
-		if op.PullRequestID != spec.Request.PullRequestID || op.Generation != spec.Request.Generation || op.Revision != spec.Request.Revision || op.Kind != string(spec.Kind) || string(op.Payload) != string(payload) {
+		if op.PullRequestID != spec.Request.PullRequestID || op.Generation != spec.Request.Generation || op.Revision != spec.Request.Revision || op.Kind != string(spec.Kind) || !sameJSON(op.Payload, payload) {
 			return 0, errors.New("environment operation idempotency key conflicts with different work")
 		}
 	}
@@ -216,4 +216,17 @@ func operationFromRow(row dbgen.EnvironmentOperation) (Operation, error) {
 		op.LastErrorCode = row.LastErrorCode.String
 	}
 	return op, nil
+}
+
+// sameJSON compares JSON documents by value. PostgreSQL returns JSONB in its
+// own normalized form, so stored and freshly encoded bytes differ in spacing
+// and key order even when they describe the same operation.
+func sameJSON(a, b []byte) bool {
+	var left, right any
+	if json.Unmarshal(a, &left) != nil || json.Unmarshal(b, &right) != nil {
+		return false
+	}
+	normalizedLeft, errLeft := json.Marshal(left)
+	normalizedRight, errRight := json.Marshal(right)
+	return errLeft == nil && errRight == nil && string(normalizedLeft) == string(normalizedRight)
 }
