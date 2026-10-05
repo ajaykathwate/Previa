@@ -3,7 +3,7 @@
 Everything that happens between "this PR may be built" and "here is a directory to
 build": confirm the PR with GitHub right now, download exactly that commit, unpack
 it without trusting it, and read `.previewrc.yaml` from the same tree. None of this
-builds or runs code; image builds start in the next phase ([19-roadmap.md](19-roadmap.md)).
+builds or runs code; image builds start in the next phase ([21-roadmap.md](21-roadmap.md)).
 
 The PR author controls everything in the archive, including the config file, so
 all of it is treated as hostile input: identity is verified, paths are confined,
@@ -157,7 +157,7 @@ publication when no HTTP endpoint is declared.
 Only one YAML mapping/document is supported. Unknown/duplicate keys, tags, anchors,
 aliases, merges and complex keys are rejected. Numeric resource objects, build mode
 and Automatic debounce settings are not allowed in repository YAML. Build policy
-is owner-controlled platform data; see [13](13-build-policy-and-intents.md).
+is owner-controlled platform data; see [15](15-build-policy-and-intents.md).
 
 ### Resource tiers and ceilings
 

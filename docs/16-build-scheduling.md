@@ -1,6 +1,6 @@
-# 14 · Build scheduling and worker handoff
+# 16 · Build scheduling and worker handoff
 
-How an authorized intent ([13](13-build-policy-and-intents.md)) becomes executable
+How an authorized intent ([15](15-build-policy-and-intents.md)) becomes executable
 work: durable deadlines, River wake-ups, atomic admission, one build per PR, handoff
 to the next request and crash recovery. Everything here is implemented and tested
 with real PostgreSQL and River; what is missing is the real build/runtime adapters.
@@ -37,7 +37,7 @@ production execution is not supported.
   Each relevant event advances observed generation and replaces the request/deadline.
   Changing mode alone does not schedule existing PRs.
 - `Broker.RequestBuild` resolves owner access/current SHA, applies the
-  Build/Retry/Rebuild contract ([13](13-build-policy-and-intents.md)), and inserts its
+  Build/Retry/Rebuild contract ([15](15-build-policy-and-intents.md)), and inserts its
   wake-up in the same transaction.
   Manual override is immediate. The low-level `IntentService.Request` remains a
   persistence API; future browser handlers must use the coordinator rather than
@@ -121,6 +121,14 @@ Already-published/pending-candidate replays return before admission and preserve
 The future log writer must fence appends by the current request; no streaming or
 Docker log adapter is enabled here.
 
+With `Repository.WithBuildSlots(MAX_CONCURRENT_BUILDS)` the claim also takes a
+global advisory lock and counts running requests of other PRs; when every slot is
+taken, nothing is claimed, the request notes `waiting_reason = 'capacity'` and the
+build job is snoozed (30 seconds doubling to 5 minutes, no attempt spent). A
+`Headroom` (the runtime) can refuse the same way before the claim, and a capacity or
+disk refusal after it keeps the running request and its slot while it waits
+([14](14-housekeeping-and-capacity.md)).
+
 Migration 9 adds unconditional environment uniqueness by PR. The existing row and
 subdomain survive rebuild, teardown and reopen; fixture tests exercise this lifecycle.
 Admission now provisions the environment, allocating its hostname once, inside the
@@ -155,10 +163,10 @@ PR (revocation; owner requests and expiry later) is recorded with
 `teardown_requested_generation` and started by its own transaction or the teardown
 sweep rather than by a teardown job ([12](12-teardown-and-cleanup.md)).
 
-No production periodic runner is added. Future app construction must schedule
-coordination and existing operation/resource reconciliation with bounded batches.
-Recovery can resume an authorized running request after exhausted crash rescue;
-actual adapters must make replay safe and discover partial resources.
+Housekeeping's recovery job runs `RecoverScheduling` every minute and at startup
+with bounded batches ([14](14-housekeeping-and-capacity.md)); it resumes an
+authorized running request after exhausted crash rescue (tested), and adapters make
+the replay safe (images are reused, partial resources are inventoried).
 
 ## Same-generation retries and publication fencing
 
@@ -209,5 +217,5 @@ duplicate requests, mode/access revocation, recovery, atomic rollback, concurren
 observation/request changes, same-generation stale success/failure/publication,
 generation-zero finalization, real River wake-up processing and PR uniqueness,
 future handoff deadlines, success/terminal-failure handoff and close-during-build
-cleanup. Real source/build/runtime/router/reporting adapters are the next step
-([19-roadmap.md](19-roadmap.md)).
+cleanup. The source, build, runtime, router and reporting adapters exist and are
+connected to these workers in Prompt 10 ([21-roadmap.md](21-roadmap.md)).

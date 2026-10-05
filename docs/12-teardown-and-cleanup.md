@@ -5,9 +5,9 @@ withdraws its preview's route and removes every Docker object it created for tha
 PR, durably and without GitHub. This document covers the triggers, the states, the
 order of removal, what is kept, how revocation works, why an old teardown can never
 remove a newer preview, and how each step resumes after a crash. It extends the
-existing teardown job, outbox and cleanup contracts ([15](15-durable-publication-design.md),
-[16](16-generation-ordering.md)); there is no second teardown queue. Workers are
-registered in Prompt 10 ([19](19-roadmap.md)); until then this runs in tests.
+existing teardown job, outbox and cleanup contracts ([17](17-durable-publication-design.md),
+[18](18-generation-ordering.md)); there is no second teardown queue. Workers are
+registered in Prompt 10 ([21](21-roadmap.md)); until then this runs in tests.
 
 ## Decisions
 
@@ -25,7 +25,7 @@ registered in Prompt 10 ([19](19-roadmap.md)); until then this runs in tests.
 ```
 close/merge webhook ──► teardown job ──► Service.Teardown ─┐
 revocation webhook ──► teardown requests (same tx) ──► sweep ┤   one short transaction, no external call:
-owner request / expiry (Prompts 10, 9) ──► RequestTeardown ─┘   environment ─► tearing_down at generation g;
+owner request / expiry (Prompt 10, [14](14-housekeeping-and-capacity.md)) ─► RequestTeardown ─┘   environment ─► tearing_down at generation g;
                                                                 its active and pending artifacts move into
                                                                 remove_route(g, 0) in the outbox
 remove_route ──► route controller: tombstone (g, 0) unless a newer route exists;
@@ -125,11 +125,11 @@ in [10](10-preview-runtime.md)). Build logs follow their retention ([08](08-buil
 
 ## Not yet
 
-- Workers and the periodic sweep and reconciler are registered in Prompts 9–10.
-- Build cache volumes of revoked repositories and source-workspace crash leftovers
-  are pruned by housekeeping (Prompt 9). Workspaces are already released after every
-  build.
-- The "Preview removed" PR comment is Prompt 8; dashboard teardown is Prompt 10
+- Workers, and the periodic sweep and reconciler (now housekeeping jobs,
+  [14](14-housekeeping-and-capacity.md)), are registered in Prompt 10. Build caches of
+  revoked repositories and source-workspace leftovers are pruned by housekeeping.
+- The "Preview removed" PR comment is rendered by the reporter ([13](13-pr-feedback.md))
+  once it is registered in Prompt 10; dashboard teardown is Prompt 10
   (it will call `Repository.RequestTeardown` after its ownership check).
 
 ## Verified

@@ -1,4 +1,4 @@
-# 17 · Realtime updates (Server-Sent Events)
+# 19 · Realtime updates (Server-Sent Events)
 
 Open repository and PR pages update when committed state changes, without
 polling. This document explains the pipeline and how to extend it.

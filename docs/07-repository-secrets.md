@@ -6,7 +6,7 @@ without leaking it into logs. This document covers how values are stored, who
 receives them, how keys rotate and what redaction can and cannot do. The preview
 runtime ([10](10-preview-runtime.md)) calls the worker contract below after a fresh
 access and fork recheck; the worker starts previews from Prompt 10
-([19-roadmap.md](19-roadmap.md)).
+([21-roadmap.md](21-roadmap.md)).
 
 ## Decisions
 

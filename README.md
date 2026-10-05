@@ -12,8 +12,8 @@ Manual/Automatic policy, durable build intent and scheduling are implemented, an
 so are isolated builds, hardened previews, fenced HTTPS routing and durable teardown,
 each verified against real Docker and Traefik; connecting them into the worker is
 the next step. See
-[build policy and build intent](docs/13-build-policy-and-intents.md) and the
-[roadmap](docs/19-roadmap.md). Start with the [documentation index](docs/README.md)
+[build policy and build intent](docs/15-build-policy-and-intents.md) and the
+[roadmap](docs/21-roadmap.md). Start with the [documentation index](docs/README.md)
 for a guided reading order.
 
 This document is written for the builder (me), not an end user — every step
@@ -494,8 +494,8 @@ production dispatch and UI wiring remain unbuilt. Repeated Build requests coales
 failure or Rebuild after success creates a new revision without bumping PR
 generation. Switching to Manual cancels unstarted Automatic intent; running work
 may finish if still current. No historical builds archive is introduced. See
-[13-build-policy-and-intents.md](docs/13-build-policy-and-intents.md) for request semantics and
-[14-build-scheduling.md](docs/14-build-scheduling.md) for atomic admission, wake-up
+[15-build-policy-and-intents.md](docs/15-build-policy-and-intents.md) for request semantics and
+[16-build-scheduling.md](docs/16-build-scheduling.md) for atomic admission, wake-up
 uniqueness, revision fencing and remaining production integration.
 
 A unique constraint on (repo_id, number) for `pull_requests` and on `subdomain` for `environments` prevents duplicate environments when webhooks arrive twice.
@@ -537,7 +537,7 @@ includes settings for features that are not built yet.
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
 - `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`; server and worker), `ROUTER_DYNAMIC_DIR`, `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS` (worker; route controller)
 - `SESSION_SECRET`, `SECRETS_ENCRYPTION_KEYS`, `SECRETS_ACTIVE_KEY_VERSION` (versioned keyring for repository secrets)
-- `MAX_CONCURRENT_BUILDS`, `ENV_TTL_HOURS`
+- `MAX_CONCURRENT_BUILDS` (builds at once across all workers), `ENV_TTL_HOURS` (preview lifetime after its latest publication), `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE`, `BUILD_CACHE_BUDGET` (worker; housekeeping and capacity, see [docs/14-housekeeping-and-capacity.md](docs/14-housekeeping-and-capacity.md))
 - `BUILD_TIMEOUT`, `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS`, `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK`, `BUILDKIT_IMAGE` (worker; isolated image builds)
 - `EGRESS_IMAGE`, `PREVIEW_ALLOW_ROOT`, `PREVIEW_WRITABLE_ROOTFS`, `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT`, `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY`, `PREVIEW_OCI_RUNTIME` (worker; hardened previews and the shared egress proxy)
 - `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE`, `ACME_CA_SERVER` (router; Traefik's wildcard certificate over DNS-01, staging by default, the DNS token read from a protected file instead of the originally planned `DNS_PROVIDER_API_TOKEN` variable)

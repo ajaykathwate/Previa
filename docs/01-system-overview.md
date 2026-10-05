@@ -25,10 +25,11 @@ per-feature design lives in [DESIGN.md](../DESIGN.md).
 | Preview runtime: hardened unrouted candidates, secrets after recheck, readiness, capacity, cleanup | Implemented and verified on real Docker (`make test-runtime`); not yet called by the worker |
 | Stable HTTPS hostnames, fenced route controller, Traefik wildcard TLS, unavailable page | Implemented and verified with real Traefik, Pebble-issued certificates and previews (`make test-routing`); Let's Encrypt staging/live needs a domain; not yet called by the worker |
 | Teardown on close and revocation, owner-verified cleanup, teardown sweep | Implemented and verified on real Docker and Traefik (`make test-routing`); workers registered in Prompt 10 |
-| PR comments and checks, expiry, periodic housekeeping | **Not built** (placeholder packages only) |
+| PR feedback: one living comment and exact-commit check runs, rendered from persisted state | Implemented and tested against PostgreSQL and a fake GitHub, with an opt-in live proof (`make test-reporting`); registered with the worker in Prompt 10 |
+| Housekeeping: recovery, expiry, orphan cleanup with grace periods, PR reconciliation, pruning; build slots and atomic preview capacity | Implemented and tested against PostgreSQL, River and real Docker (`make test-housekeeping`, `make test-runtime`); dry-run diagnostics (`make housekeeping-dry-run`); registered with the worker in Prompt 10 |
 
 The **Build latest commit** action is deliberately disabled and its endpoint refuses
-work. Nothing deploys a preview yet. [19-roadmap.md](19-roadmap.md) lists the
+work. Nothing deploys a preview yet. [21-roadmap.md](21-roadmap.md) lists the
 remaining work in order.
 
 ## Architecture
@@ -82,9 +83,10 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | `internal/routing` | Stable hostnames, the route controller (Traefik file provider), forward-only route table file, router control through Docker, the unavailable page. |
 | `internal/dashboard` | Home, overview, session and developer-tools pages; queue ping. |
 | `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub, SSE, stream limiter), `dockerx` (Docker client, shared labels), `egress` (the egress proxy, readiness probe and its container). |
-| `internal/{reporting,housekeeping}` | Placeholders for unbuilt features (`doc.go` only). |
+| `internal/reporting` | PR feedback: state derivation, comment and check run rendering, the GitHub adapter and the leased reporter ([13](13-pr-feedback.md)). |
+| `internal/housekeeping` | Startup and periodic River jobs: recovery, resource inventory with grace periods, PR reconciliation, expiry, pruning, dry runs ([14](14-housekeeping-and-capacity.md)). |
 | `web/` | `pages/<feature>`, `layouts`, `components`, `styles` (Tailwind), `static` (HTMX, compiled CSS, `ui.js`), browser tests. |
-| `db/migrations` | Goose migrations 0001–0014; sqlc generates typed queries into each feature's `dbgen/`. |
+| `db/migrations` | Goose migrations 0001–0016; sqlc generates typed queries into each feature's `dbgen/`. |
 | `deploy/egress` | Dockerfile for the egress proxy and prober image (`make egress-image`). |
 | `deploy/traefik` | The router's Compose file (`make router-up`): file provider, loopback API, staging ACME, secret-file DNS credential. |
 | `tools/go.mod` | Pinned dev tools: templ, sqlc, Goose, Air, golangci-lint. |
@@ -101,6 +103,8 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | `build_intents` | One current authorized build request per PR, with `revision`. |
 | `environments`, `environment_operations` | One lifetime preview per PR (hostname, active and pending artifacts, teardown generation) and the durable publication outbox. |
 | `environment_routes`, `route_table` | The route controller's accepted and served version per environment (removals kept as tombstones) and the counter that orders versions. |
+| `platform_instance`, `pr_reconciliations` | This database's identity for the Docker objects it creates; when housekeeping last confirmed each live PR with GitHub. |
+| `pull_request_reports` | PR feedback per PR: wanted and reported report versions, content digests, the current check run (commit, revision, ID), the reporter lease and the last error category. The living comment's ID stays on `pull_requests`. |
 | `env_secrets` | Repository secrets: nonce ‖ AES-256-GCM ciphertext bound to repository, name and key version. |
 | `build_log_streams` | One row per environment for the current build attempt: `epoch`, generation/revision, state, line and byte counts, truncation and loss counters. |
 | `build_logs` | That attempt's lines (`epoch`, `sequence`, `kind`); replaced on admission, pruned after 14 days. |
@@ -123,6 +127,9 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | Archive by exact SHA through the base repository, credential-free download | No fork access needed; the token never follows a redirect; the archive declares its commit. | Large repositories pay the full archive download each build. |
 | Repository secrets withheld from forks, secrets override YAML | Fork authors control the code; owner values must beat contributor-editable YAML. | Fork previews run without secrets. |
 | Outbox/saga for publication | PostgreSQL cannot commit atomically with Docker, Traefik and GitHub. | Eventual convergence; adapters must be idempotent and fenced. |
+| Every Docker object labelled and named with its database's instance | Housekeeping and capacity never touch another database's objects on a shared host. | Objects created before migration 16 are invisible to housekeeping. |
+| Capacity full means waiting, not failing | A busy host delays previews; nothing fails or spends retry attempts. | Requests are retried with backoff, not in strict order. |
+| PR feedback rendered from current state, one reporter per PR | Late or duplicate reports cannot restore an older state; no duplicate comments. | GitHub has no compare-and-set, so a stale write can be visible briefly until the next report replaces it. |
 | SSE invalidation instead of polling | Idle pages send nothing; changes arrive within moments; reuses Postgres. | One long-lived connection per open page; proxies must not buffer. |
 | Current-attempt logs with an admission epoch | The useful log is the current one; an epoch fences stale writers and browser cursors even on same-revision retries. | No build history; a failed attempt's log disappears when the next one starts. |
 | A fresh rootless BuildKit container per build, behind an egress proxy | Limits cover every step, builds cannot touch each other, and nothing internal is reachable. | A few seconds of startup per build; builder needs relaxed outer seccomp/AppArmor (steps keep BuildKit's). |
@@ -139,12 +146,12 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
   ([05](05-webhooks-and-pr-discovery.md)).
 - **Stale work finishing late.** Every job captures the PR generation and request
   revision; result writes lock the PR row and refuse anything not current
-  ([16](16-generation-ordering.md)).
+  ([18](18-generation-ordering.md)).
 - **Same-commit retries.** Rebuilding an unchanged SHA advances the intent revision,
-  so old operations cannot collide with new ones ([13](13-build-policy-and-intents.md)).
+  so old operations cannot collide with new ones ([15](15-build-policy-and-intents.md)).
 - **No transactions across systems.** Desired state commits in PostgreSQL with a
   durable operation row; external calls run outside transactions and a reconciler
-  repairs partial failures ([15](15-durable-publication-design.md)).
+  repairs partial failures ([17](17-durable-publication-design.md)).
 - **Long locks versus slow IO.** GitHub/Docker calls never run while a row lock or
   transaction is open; revisions are captured before IO and rechecked after.
 - **Asynchronous mergeability.** Unknown results trigger a bounded, fenced recheck
@@ -175,7 +182,7 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
   after the router confirms the newer version ([11](11-routing-and-https.md)).
 - **Live UI without missed updates.** SSE streams carry resumable cursors; the page
   cursor is read before page state, so a commit in between is replayed
-  ([17](17-realtime-updates.md)).
+  ([19](19-realtime-updates.md)).
 
 ## Glossary
 

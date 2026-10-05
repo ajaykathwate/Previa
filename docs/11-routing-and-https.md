@@ -5,7 +5,7 @@ publishes healthy candidates from the preview runtime ([10](10-preview-runtime.m
 through Traefik v3. This document explains the hostname scheme, why routes come from
 a fenced controller instead of Docker labels, how a version becomes served, what is
 guaranteed and what is not, TLS, origin separation and the unknown-host page. The
-worker does not dispatch real work yet (Prompt 10, [19](19-roadmap.md)); everything
+worker does not dispatch real work yet (Prompt 10, [21](21-roadmap.md)); everything
 below runs in the tests listed at the end.
 
 ## Decisions
@@ -13,7 +13,7 @@ below runs in the tests listed at the end.
 | Decision | Choice | Why |
 | --- | --- | --- |
 | Route source | **Traefik's file provider fed by Previa's route controller**, not the Docker provider (owner decision; DESIGN §11 updated) | Docker labels are fixed when a container is created, so every candidate would be routed before it was accepted, and labels cannot be fenced by (generation, revision). The file provider also means Traefik needs no Docker socket. |
-| Fence | PostgreSQL row per lifetime environment, moved only forward in (generation, revision) order; removals are kept as tombstones | The durable publication decision's option 2 ([15](15-durable-publication-design.md)): one logical controller, accepted version stored durably, conditional on the PR's current state. |
+| Fence | PostgreSQL row per lifetime environment, moved only forward in (generation, revision) order; removals are kept as tombstones | The durable publication decision's option 2 ([17](17-durable-publication-design.md)): one logical controller, accepted version stored durably, conditional on the PR's current state. |
 | Hostname | `pr-<number>-<GitHub repo ID, base 36>-<8 random chars>.<PREVIEW_BASE_DOMAIN>`, allocated once per lifetime environment (owner decision) | The repository ID is immutable (renames and same-named repositories never collide); the random part keeps private repositories' previews unguessable, which "public by URL obscurity" needs. |
 | Certificates | One wildcard certificate per preview domain, Let's Encrypt **staging by default**, DNS-01 through Traefik's ACME client (lego) | No per-preview issuance or rate limits; staging first proves DNS credentials without risking production limits. |
 | TLS proof here | A local Pebble ACME server with its DNS test server (owner decision) | No domain or DNS token is available in this environment; staging and live issuance stay an explicit pending gate. |
@@ -209,8 +209,13 @@ builds are covered by `make test-builder`). It verified:
 | Close, reopen, late removal of the pre-close route | refused; the reopened PR's route kept; pre-close artifacts removed |
 | Close while an activation waits for confirmation | removal wins; activation superseded; everything removed |
 | Controller crash after acceptance | restarted controller rewrites the file; the operation resumes and finishes |
-| Traefik restart | routes reloaded from the file; same certificate serial |
+| Traefik restart | routes reloaded from the file; the certificate from `acme.json` (same serial), no new issuance |
 | Routes file deleted | routes dropped (404) until `Sync` rewrites it |
+
+Traefik renews at start any certificate it thinks is near expiry, judged by
+`certificatesduration` (default 90 days, matching Let's Encrypt). Pebble issues
+six-day certificates, so the test router sets 144 hours; a CA with other lifetimes
+needs the matching value, or every router restart re-issues.
 
 Unit tests cover hostnames, rendering (including that routers carry no TLS block and
 the fallback rule only matches subdomains), the forward-only file under concurrency,

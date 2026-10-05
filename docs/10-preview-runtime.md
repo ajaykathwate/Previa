@@ -32,11 +32,16 @@ worker dispatch comes in Prompt 10, and until then the runtime runs only in test
    unknown or deleted head, or anything GitHub marks as a fork gets **no secrets**
    (none are even decrypted); a same-repository PR gets them, overriding YAML entries.
    Any decryption failure stops the start: no container runs with partial secrets.
-4. **Admit.** Refuse (retryable `capacity`) if the PR's repository already runs 10
-   previews or the new limits would exceed the host budget.
-5. **Network.** The PR's lifetime network `previa-pr-<id>` (internal, created once)
-   gets the egress proxy attached. A same-named network Previa did not create is
-   refused.
+4. **Admit.** Under a PostgreSQL advisory lock held until the container exists,
+   refuse (retryable `capacity`) if 10 other PRs of the repository already have
+   previews, or the new limits plus every running, restarting or created preview
+   (the active one and its candidate both count during a swap) would exceed the host
+   budget. The request then waits for capacity instead of failing
+   ([14](14-housekeeping-and-capacity.md)); before admission, `Admit` refuses early
+   when not even the smallest preview would fit.
+5. **Network.** The PR's lifetime network `previa-<instance>-pr-<id>` (internal,
+   created once) gets the egress proxy attached. A same-named network this instance
+   did not create is refused.
 6. **Create and start** the hardened container, then **wait for readiness**.
 7. **Capture** the app's last 200 lines (64 KiB) of output into the log, redacted.
    On any failure, also remove the candidate.

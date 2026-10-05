@@ -18,7 +18,7 @@ injected secrets. Nothing writes sample output.
 | Limits (Balanced) | 5 MiB and 20,000 lines per attempt, 8 KiB per line, kept 14 days after the attempt finishes | Bounds database growth while keeping full logs for normal builds (owner decision). |
 | Redaction | Before anything is stored or streamed, using [07](07-repository-secrets.md)'s streaming redactor | A value must never reach the database, the page or the stream. |
 | Build impact | Writes never block a build; if storage falls behind, the excess is dropped, counted and marked | Logs are for diagnosis; they must not stall or fail the build they describe. |
-| Live updates | Server-Sent Events with the log's own cursor; the realtime hub only wakes the stream ([17](17-realtime-updates.md)) | Lossless resume and replacement detection need log positions, not hub positions. |
+| Live updates | Server-Sent Events with the log's own cursor; the realtime hub only wakes the stream ([19](19-realtime-updates.md)) | Lossless resume and replacement detection need log positions, not hub positions. |
 
 ## Storage and attempts
 

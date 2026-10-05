@@ -100,13 +100,21 @@ repository's PR list, never on PR details.
 
 **Build latest commit is disabled.** Source fetching, image builds, isolated previews,
 HTTPS routing and cleanup exist and are verified on their own; the worker connects
-them in a later step ([19-roadmap.md](19-roadmap.md)).
+them in a later step ([21-roadmap.md](21-roadmap.md)).
 
 **Preview addresses.** Each PR will get one HTTPS address for its whole life, such as
 `https://pr-42-k2j4ld-7xq9m2fa.preview.example.com`, kept across rebuilds, teardown and
 reopening. Opening the address of a preview that does not exist (never published,
 closed, torn down, expired or revoked) shows **Preview not found or expired** on the
 dashboard's site.
+
+**On the pull request** (once the worker runs it, [13](13-pr-feedback.md)), Previa keeps
+one comment up to date and adds a check run per build request: queued, waiting for
+capacity or disk space, building, ready (with the address and when it expires,
+48 hours after the latest publication by default), failed with a short reason,
+removed or expired. An expired preview comes back at the same address with the next
+commit on an Automatic repository, or when you request a build
+([14](14-housekeeping-and-capacity.md)).
 Direct POSTs are refused too: HTTP 409 with the reason for Checking, Conflicts or
 Refresh required PRs, otherwise HTTP 503 "not available yet". No intent is created.
 

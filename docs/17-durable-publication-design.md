@@ -1,24 +1,24 @@
-# 15 · Design: durable, generation-fenced publication
+# 17 · Design: durable, generation-fenced publication
 
 This document records the architecture decision for safely publishing preview
 environment changes when PostgreSQL, River, Docker, the routing layer, and GitHub
 can fail independently. It covers only that consistency problem. Product
 requirements remain in [README.md](../README.md), feature implementation details
 remain in [DESIGN.md](../DESIGN.md), and the current generation implementation and
-tests are in [16-generation-ordering.md](16-generation-ordering.md).
+tests are in [18-generation-ordering.md](18-generation-ordering.md).
 
 ## Decision
 
 Build authorization follows the
-[Manual/Automatic policy](13-build-policy-and-intents.md). Policy, current intent
+[Manual/Automatic policy](15-build-policy-and-intents.md). Policy, current intent
 and scheduling are implemented behind tested interfaces; production runtime
 dispatch remains unconnected. PR observation is distinct from authorized work: Manual waits for an owner
 request; Automatic persists a five-minute trailing deadline. The publication
 protocol below applies only to authorized builds. Generation fencing remains
 independent of scheduling mode; close/merge still requests immediate teardown.
 Build intent adds an independent request revision for same-generation
-Retry/Rebuild ([13](13-build-policy-and-intents.md)); scheduling carries it into
-operation keys/payloads, finalization, reporting and cleanup ([14](14-build-scheduling.md)).
+Retry/Rebuild ([15](15-build-policy-and-intents.md)); scheduling carries it into
+operation keys/payloads, finalization, reporting and cleanup ([16](16-build-scheduling.md)).
 All version/fencing/idempotency references below apply to the ordered tuple
 `(generation, revision)`: generation dominates; revision distinguishes deliberate
 requests for the same observed commit. Generation-only examples below describe
@@ -68,7 +68,9 @@ The repository now has the database-only foundation for the target lifecycle:
    (`internal/routing`, option 2 below) executes activations and removals; the
    runtime's cleanup executor removes containers, images and networks after
    verifying their labels ([11](11-routing-and-https.md), [12](12-teardown-and-cleanup.md)).
-   GitHub reporting is Prompt 8.
+   The reporter (`internal/reporting`) executes report operations: it renders the PR's
+   current state into one living comment and per-request check runs
+   ([13](13-pr-feedback.md)).
 6. `Reconciler` recovers due operation wake-ups, schedules cleanup for unreferenced
    resources from the real Docker inventory and, with `WithRoutes`, rewrites the
    router's configuration from the accepted route table. No periodic runner is wired
@@ -261,6 +263,13 @@ Reporting is eventually consistent. A GitHub outage can leave the PR page behind
 the database temporarily; the durable outbox makes the desired report recoverable.
 Do not claim atomicity between a GitHub API call and PostgreSQL.
 
+**Implemented (Prompt 8).** Rather than confirming each report's generation, every
+report operation renders the PR's current persisted state, under a per-PR lease, so
+an obsolete operation simply writes (or skips) the latest state. The comment's
+stored ID plus a stable marker, and each check run's external ID, are the stable
+identities that make a retried create safe. Details and limits:
+[13](13-pr-feedback.md).
+
 ### Cleanup worker and reconciler
 
 Cleanup is also durable work. It removes only resources tagged to the PR and an
@@ -379,8 +388,8 @@ and deterministic fakes:
 - `OperationWorker` leases work, applies per-kind timeouts and capped exponential
   retry delay, calls the executor outside a DB transaction, and finalizes with a
   short guarded transaction. Terminal failures remain in PostgreSQL with safe
-  error codes. Build failure reports are emitted only on the terminal River attempt;
-  intermediate attempts do not publish a final failure.
+  error codes. A build failure is reported as final only after the terminal River
+  attempt marks the request failed; intermediate attempts still read as building.
 - Executor contracts define idempotency, route generation fencing, and resource
   cleanup; `Executors` routes each kind to its adapter, and a kind without one stays
   retryable (`executor_unavailable`) instead of being treated as done.
@@ -418,10 +427,15 @@ Implemented and verified against real systems:
 - **End-to-end cutover and close tests:** swaps, failed swaps, late stale activations
   and removals, same-generation Rebuild, close during publication and close while
   building, against real Traefik, previews and PostgreSQL (`make test-routing`).
+- **GitHub reporting:** stable comment and check run identity, latest-state rendering
+  instead of per-generation rules, rate limits, ambiguous creates and the per-PR lease
+  ([13](13-pr-feedback.md)).
 
-Remaining: **GitHub reporting** (stable comment/check identity, per-generation
-rules, rate limits, ambiguous retries; Prompt 8), the periodic reconciler and sweep
-(Prompt 9) and worker wiring (Prompt 10).
+- **Periodic recovery and reconciliation:** startup and periodic housekeeping jobs
+  recover wake-ups, leases, sweeps and route drift, inventory Docker objects with a
+  grace period and confirm live PRs with GitHub ([14](14-housekeeping-and-capacity.md)).
+
+Remaining: worker wiring (Prompt 10).
 
 ## Guarantees and explicit limits
 
@@ -444,7 +458,7 @@ traffic path; an ordinary asynchronous config push is not enough.
 ## Related code and documents
 
 - Current implementation and its SQL/test evidence: `internal/environments/`,
-  `internal/webhooks/`, and [16-generation-ordering.md](16-generation-ordering.md).
+  `internal/webhooks/`, and [18-generation-ordering.md](18-generation-ordering.md).
 - Product workflow and original queue/rebuild/teardown requirements:
   [DESIGN.md Sections 7, 13, 14, and 15](../DESIGN.md).
 - Process/configuration, build timeouts, and local database setup:

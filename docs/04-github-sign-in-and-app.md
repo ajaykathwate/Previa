@@ -86,8 +86,10 @@ the PostgreSQL test covers persisted sessions across restarts.
    user authorization, distinct from the OAuth App callback).
 5. Leave **Request user authorization (OAuth) during installation** unchecked;
    Previa starts it explicitly after verifying the setup redirect.
-6. Repository permissions: **Contents: read**, **Pull requests: write** (PR
-   comments), **Checks: write**; GitHub adds **Metadata: read**.
+6. Repository permissions: **Contents: read** (source archives), **Pull requests:
+   write** (the living PR comment), **Checks: write** (exact-commit check runs);
+   GitHub adds **Metadata: read**. See [13](13-pr-feedback.md#required-github-app-permissions)
+   for what each is used for and what happens if one is withdrawn.
 7. Webhooks: enable, set a secret and a public HTTPS URL ending in
    `/webhooks/github`, subscribe to **Pull request** ([05](05-webhooks-and-pr-discovery.md#enable-github-deliveries-locally)).
 8. Register, then copy the **App ID**, **Client ID** and slug (`github.com/apps/<slug>`),

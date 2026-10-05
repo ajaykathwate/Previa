@@ -1,17 +1,18 @@
-# 16 · Generation ordering and fencing (implementation)
+# 18 · Generation ordering and fencing (implementation)
 
 How the code guarantees that a newer commit, a close or a deliberate rebuild always
 beats older work, even when jobs retry, overlap or finish late. This is the
-implementation of the decision in [15](15-durable-publication-design.md); the
+implementation of the decision in [17](17-durable-publication-design.md); the
 request revision it carries alongside generation comes from
-[13](13-build-policy-and-intents.md), and admission/handoff from
-[14](14-build-scheduling.md).
+[15](15-build-policy-and-intents.md), and admission/handoff from
+[16](16-build-scheduling.md).
 
 **Status:** generation and revision fencing, guarded results and the database/River
 publication outbox are implemented in `internal/environments` and tested with real
 PostgreSQL and River plus simulated runtime/publication adapters. Docker, routing,
-GitHub reporting and a production reconciliation timer are not connected, so these
-tests prove database behaviour, not real deployments. Migration 9 keeps one
+GitHub reporting ([13](13-pr-feedback.md)) and a production reconciliation timer are
+not connected to the worker, so these tests prove database behaviour, not real
+deployments. Migration 9 keeps one
 environment row per PR for its whole life; admission clears the previous build's
 logs only after its checks pass.
 
@@ -137,8 +138,8 @@ together. A racing event is processed either before this handoff or after it, wh
 it can enqueue against the completed row. Terminal worker failures use the pinned
 River driver's conditional discarded-state transition with the same handoff;
 ordinary retryable errors retain River's backoff. Exhausted crash recovery still
-uses the bounded `Broker.RecoverScheduling` contract to recreate wake-ups; a
-production periodic runner remains future integration.
+uses the bounded `Broker.RecoverScheduling` contract to recreate wake-ups, run
+every minute by housekeeping ([14](14-housekeeping-and-capacity.md)).
 
 The tests deliberately run A and B concurrently through the service to verify the
 guard independently of River uniqueness. Production admission ordinarily serializes

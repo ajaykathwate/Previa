@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 14**, **River 007**. After pulling changes, run
+Current schema: **Goose 16**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker.
 
 ## 1. Prerequisites
@@ -52,7 +52,7 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | `APP_BASE_URL` | server | `http://localhost:8080` | OAuth redirects, CSRF origin checks, cookie security. |
 | `GITHUB_OAUTH_CLIENT_ID` / `_SECRET` | server | From a GitHub **OAuth App** ([04](04-github-sign-in-and-app.md)). | Dashboard sign-in. |
 | `SESSION_SECRET` | server | `openssl rand -hex 32` | Signs OAuth state; at least 32 characters. |
-| `MAX_CONCURRENT_BUILDS` | worker | `2` | Ping worker concurrency per process. |
+| `MAX_CONCURRENT_BUILDS` | worker | `2` | Ping worker concurrency per process, and builds running at once across all workers once execution is wired ([14](14-housekeeping-and-capacity.md)). |
 | `BUILD_TIMEOUT` | worker | `12m` (max `24h`) | Build execution budget plus a one-minute grace. |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | server, worker | From a GitHub **App** ([04](04-github-sign-in-and-app.md)). | App JWTs; the worker needs only these two for discovery. |
 | `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | server | Same GitHub App. | Installation page and verified linking. |
@@ -66,6 +66,9 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT` | worker | Optional; defaults `256MiB`, `512`, `120s`. | Preview `/tmp` size, process limit and readiness deadline. |
 | `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY` | worker | Optional; empty budgets use 60% of Docker memory and 75% of its CPUs; `10`. | What all previews may use together, and per repository. |
 | `PREVIEW_OCI_RUNTIME` | worker | Optional, e.g. `runsc` where gVisor is installed. | Docker runtime for previews. |
+| `ENV_TTL_HOURS` | worker | Optional; default `48`, `0` never expires. | Preview lifetime after its latest publication ([14](14-housekeeping-and-capacity.md)). |
+| `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE` | worker | Optional; defaults `false`, `15m`. | Log housekeeping deletions without making them; the minimum age of an orphan. |
+| `BUILD_CACHE_BUDGET` | worker | Optional; default `40GiB`. | All build caches together; the oldest unused ones are pruned first. |
 | `PREVIEW_BASE_DOMAIN` | server, worker | Optional, e.g. `preview.example.com`; not the dashboard's host or a parent of it. | Preview hostnames below it ([11](11-routing-and-https.md)); turns routing on in the worker. |
 | `APP_BASE_URL` | worker (when routing) | The dashboard origin, as on the server. | Unknown preview hosts are redirected to its `/previews/unavailable`. |
 | `ROUTER_DYNAMIC_DIR` | worker (when routing) | An existing directory on a Linux filesystem, shared with the router. | Where the route controller writes Traefik's route table. |
@@ -81,6 +84,9 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 - The two `SECRETS_*` values go together. Without them, the Secrets tab explains that
   secrets are not configured; a malformed keyring stops the server with a message
   that never shows key material. Restart the server after changing them.
+- The housekeeping settings (`ENV_TTL_HOURS`, `HOUSEKEEPING_*`, `BUILD_CACHE_BUDGET`)
+  are validated at worker start; housekeeping runs once the worker registers it
+  (Prompt 10). `make housekeeping-dry-run` uses them today.
 - The `BUILD*` settings have working defaults. The worker validates them at start
   (an invalid value stops it with the variable's name) but does not build images yet;
   `make test-builder` uses them, and build execution will from Prompt 10.
@@ -97,7 +103,7 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | Command | Loads `.env`? |
 | --- | --- |
 | `make run-server`, `make run-worker`, `make dev` | Yes; already-exported variables take precedence. Restart Air after editing `.env`. |
-| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime`, `test-routing`, `router-up`, `router-down`, `route-sync` | Yes; falls back to `.env.example` for migrations if `.env` is absent. `test-routing` uses `DATABASE_URL` as `TEST_DATABASE_URL` unless that is exported. |
+| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `test-reporting`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime`, `test-routing`, `test-housekeeping`, `housekeeping-dry-run`, `router-up`, `router-down`, `route-sync` | Yes; falls back to `.env.example` for migrations if `.env` is absent. `test-runtime`, `test-routing`, `test-housekeeping` and `test-reporting` use `DATABASE_URL` as `TEST_DATABASE_URL` unless that is exported (they create and drop their own schemas). |
 | Direct `go run`, manual Goose commands | No; run `set -a; . ./.env; set +a` once per terminal. |
 | `make build`, `make lint`, `make generate` | No configuration needed. |
 | `make test` | Database tests need an explicitly exported `TEST_DATABASE_URL`. |
@@ -138,6 +144,8 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0012 | Repository secrets: `key_version`, `updated_at`, name and ciphertext-size checks. |
 | 0013 | Current-build log streams (attempt `epoch`, counters), line `epoch`/`kind`, line-size check and a log realtime trigger. |
 | 0014 | Route controller state (`environment_routes`, `route_table`), local teardown requests on PRs, `environments.teardown_generation`, a DNS-label check on hostnames and nullable `expires_at`. Fails if an existing hostname is not a lowercase DNS label. |
+| 0015 | PR feedback state (`pull_request_reports`: wanted/reported report versions, digests, current check run, reporter lease, last error category) and `environments.last_error_code`. |
+| 0016 | This database's instance identity (`platform_instance`), waiting notes on build requests (`waiting_revision`, `waiting_reason`) and `pr_reconciliations`. |
 
 Optional check that live updates are wired:
 
@@ -198,6 +206,36 @@ TEST_GITHUB_INSTALLATION_ID=<1st> TEST_GITHUB_REPO_ID=<2nd> TEST_GITHUB_PR_NUMBE
 commit and extracted safely, then either the parsed config hash or a configuration
 outcome such as `missing_file` when the repository has no `.previewrc.yaml`.
 
+### Live PR feedback proof (optional)
+
+Writes to GitHub, so run it only on a **disposable PR you are authorized to write
+to**, in a repository where the App is installed with the permissions from
+[04](04-github-sign-in-and-app.md). Put the PR's numeric identity in `.env` (or export
+it), next to the App ID and key path:
+
+```dotenv
+TEST_GITHUB_INSTALLATION_ID=<installation id>
+TEST_GITHUB_REPO_ID=<numeric repository id>
+TEST_GITHUB_PR_NUMBER=<open PR number>
+```
+
+```sh
+make test-reporting
+```
+
+**Expected:** `PASS` for `TestRealReportingOnADisposablePR` in about half a minute,
+with log lines such as `created living comment …`, `created check run … (revision
+1)`, `recreated living comment … after deletion of …` and finally `cleanup: deleted
+comment …`. Only comment and check run IDs are logged. The PR must be open and must
+not already have a Previa comment (the test stops if it does). Afterwards the PR has
+no Previa comment; its head commit keeps three completed check runs named
+"Previa preview (live proof)" because GitHub cannot delete check runs. If the test
+is interrupted before its cleanup, delete the Previa comment on the PR by hand; an
+unfinished run can be completed by running the proof again on the same commit after
+deleting the comment. The database part uses a throwaway schema and leaves nothing
+behind. Without the three variables the target stops with a message; with
+`TEST_REPORTING` unset the test skips.
+
 ### Real image builder check (optional)
 
 Needs Docker and internet access (Docker pulls the pinned BuildKit image; builds
@@ -221,9 +259,9 @@ docker volume ls -q --filter label=io.previa.kind=build-cache | xargs -r docker 
 
 ### Real preview runtime check (optional)
 
-Same prerequisites as the builder check (it builds tiny `alpine` apps first). No
-database or GitHub access is used; secrets come from an in-memory store sealed with a
-throwaway key.
+Same prerequisites as the builder check (it builds tiny `alpine` apps first), plus
+PostgreSQL for the admission-lock test, which uses a throwaway schema. No GitHub
+access is used; secrets come from an in-memory store sealed with a throwaway key.
 
 ```sh
 make test-runtime         # about 3 minutes
@@ -233,9 +271,38 @@ make test-runtime         # about 3 minutes
 (UID 65532, read-only root, no capabilities, no IPv6, redacted secret), fork secret
 withholding, network probes logged as `probe: … blocked` except
 `proxied-public REACHED`, unhealthy/crashing/cancelled starts cleaned up, operator
-opt-outs, capacity refusals and refusal to remove objects Previa did not create.
-Preview networks (`previa-pr-<id>`) and images are removed by the tests; only
-`previa-egress` stays running.
+opt-outs, capacity refusals, two candidates racing for room for one (exactly one
+starts) and refusal to remove objects Previa (or another Previa instance) did not
+create. Preview networks (`previa-<instance>-pr-<id>`) and images are removed by
+the tests; only `previa-egress` stays running.
+
+### Real housekeeping check (optional)
+
+Needs Docker, the egress image and PostgreSQL; uses a throwaway schema and never
+touches objects of your development database (another instance).
+
+```sh
+make test-housekeeping    # about 30 seconds
+```
+
+**Expected:** `TestRealHousekeepingRemovesOnlyThisInstancesOrphans` (young objects
+kept, a dry run removing nothing, then the orphan and an unknown PR's container
+removed while the serving preview and another instance's container stay) and
+`TestRealHousekeepingPrunesUnderDiskPressure` (nothing pruned until a build waits
+for disk, then an unavailable repository's cache and an untagged image go and a
+cache in use stays) pass. Afterwards only `previa-egress` remains.
+
+### Housekeeping dry run (optional)
+
+```sh
+make housekeeping-dry-run                    # or WORKSPACES=/abs/dir make housekeeping-dry-run
+```
+
+Runs one inventory, expiry and prune pass against your configured database and
+Docker as a dry run and changes nothing. Needs migration 16. **Expected:** log lines
+for each object it would remove, then `Dry run for instance <id> (nothing was
+changed):` and counts of orphans, unknown PRs' objects, expired previews, untagged
+images, workspaces and build caches.
 
 ### Real routing, publication and teardown check (optional)
 
@@ -395,7 +462,7 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
 - **Stylesheet missing after a manual build:** run `make assets` before compiling;
   the server embeds assets at build time.
 - **Live indicator never turns green:** apply migrations 0011 and 0013, and make sure
-  any proxy in front of the server does not buffer `text/event-stream` ([17](17-realtime-updates.md)).
+  any proxy in front of the server does not buffer `text/event-stream` ([19](19-realtime-updates.md)).
 - **Builder errors:** `egress proxy image … is not available` means run
   `make egress-image`. `builder did not become ready` usually means user
   namespaces are disabled or Docker is too old for rootless BuildKit. `disk_low`

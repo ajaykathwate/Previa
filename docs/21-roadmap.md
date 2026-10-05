@@ -1,4 +1,4 @@
-# 19 · Roadmap: remaining MVP work
+# 21 · Roadmap: remaining MVP work
 
 What is left before Previa can build and serve real previews, as **12 sequential
 tasks**. Each task is written as a self-contained prompt (for a developer or a coding
@@ -54,21 +54,43 @@ production; the release checklist at the end does.
   reopened PR's replacement. Verified with real Docker/Traefik in `make test-routing`
   ([12](12-teardown-and-cleanup.md)). Workers and the periodic sweep are registered
   in Prompts 9–10.
+- **Prompt 8 done:** `internal/reporting` renders each PR's persisted state into one
+  living comment (stored ID, App-owned marker, bounded discovery for deleted comments
+  and ambiguous creates) and one check run per (head SHA, revision) with a stable
+  external ID. Every reportable change records a report version and a durable
+  `report_status` operation in its own transaction; one leased reporter per PR writes
+  the latest state, so stale or duplicate reports cannot remain final. Rate limits,
+  permission changes and safe error categories are handled; deployments never wait
+  for GitHub. Off until Prompt 10 enables `WithReports` and registers the reporter
+  ([13](13-pr-feedback.md)). The hosted proof (`make test-reporting`) needs an
+  authorized disposable PR.
+- **Prompt 9 done:** `internal/housekeeping` startup and periodic River jobs (owner
+  decisions: `ENV_TTL_HOURS` lifetime from the latest publication, deletion only
+  after a 15-minute grace period with `HOUSEKEEPING_DRY_RUN`, PR reconciliation of
+  live-work PRs every 15 minutes, wait-and-retry when capacity is full). Recovery of
+  wake-ups, leases, exhausted builds, sweeps and route drift; expiry as a teardown
+  request (no rebuild loops); orphan inventory with grace periods, unknown PRs and a
+  vanished active preview; pruning of untagged images, workspaces and caches within
+  `BUILD_CACHE_BUDGET`; global build slots, atomic preview admission counting old
+  active plus candidate, a disk check across running builds; `make
+  housekeeping-dry-run`. Every Docker object now carries its database's instance
+  (migration 0016). Verified with PostgreSQL/River tests and `make test-housekeeping`
+  / `make test-runtime` on real Docker ([14](14-housekeeping-and-capacity.md)).
 - Implemented: signed/deduplicated webhook ingress, bounded open-only PR discovery,
   tracked close/merge retention, bounded mergeability checks and build refusal for
   Checking/Conflicts ([05](05-webhooks-and-pr-discovery.md)).
 - Implemented: live dashboard updates over SSE from PostgreSQL triggers through
-  `internal/platform/realtime` ([17](17-realtime-updates.md)); reuse it for live logs.
+  `internal/platform/realtime` ([19](19-realtime-updates.md)); reuse it for live logs.
 - Implemented: repository/PR pages, owner policy controls and current Builds/
   Environments views. The approved presentation and no-JavaScript flows exist.
 - Existing environment code provides tested admission, generation/revision fences,
   candidate/active artifacts, outbox, cleanup and reconciliation contracts.
   Extend those contracts rather than create a second orchestration system.
 - Production worker wiring currently registers ping, build-log retention and
-  App-configured discovery/mergeability jobs. Reporting and periodic housekeeping
-  need real adapters; verification, source preparation, the secrets provider, the log
-  store, the image builder, the preview runtime, the route controller, the cleanup
-  executor and the teardown sweep exist but are not wired into execution yet. The
+  App-configured discovery/mergeability jobs. Verification, source preparation, the
+  secrets provider, the log store, the image builder, the preview runtime, the route
+  controller, the cleanup executor, the teardown sweep, the PR reporter and
+  housekeeping exist but are not wired into execution yet. The
   worker validates routing settings when `PREVIEW_BASE_DOMAIN` is set.
   The manual Build endpoint returns unavailable; it authorizes no execution.
 - Live hosted GitHub PR/mergeability proof remains pending. Local fixtures and a
@@ -86,10 +108,10 @@ README's older illustrative tree. Keep backend files flat within each feature,
 presentation in web/, and construction in internal/app. Use small consumer-owned
 interfaces; do not create global handler/store layers or speculative frameworks.
 
-Preserve [13-build-policy-and-intents.md](13-build-policy-and-intents.md),
-[14-build-scheduling.md](14-build-scheduling.md),
-[15-durable-publication-design.md](15-durable-publication-design.md) and
-[16-generation-ordering.md](16-generation-ordering.md). Every executable
+Preserve [15-build-policy-and-intents.md](15-build-policy-and-intents.md),
+[16-build-scheduling.md](16-build-scheduling.md),
+[17-durable-publication-design.md](17-durable-publication-design.md) and
+[18-generation-ordering.md](18-generation-ordering.md). Every executable
 request and external artifact/operation carries PR identity, exact SHA and the
 ordered (generation, revision) fence. Same-SHA Retry/Rebuild changes revision.
 Observation/discovery/reconciliation alone never authorizes a Manual build.
@@ -103,7 +125,7 @@ ambiguous external success and process crashes. Persist cleanup/outbox intent;
 never substitute a no-op adapter or claim missing-resource cleanup succeeded
 without checking it. Credentials stay out of job payloads, URLs, logs and errors.
 
-Preserve the "signal" theme and UI patterns in [18-ui-architecture.md](18-ui-architecture.md),
+Preserve the "signal" theme and UI patterns in [20-ui-architecture.md](20-ui-architecture.md),
 accessible modal confirmations, CSRF, scoped queries, useful links, bounded lists,
 focus-preserving HTMX and ordinary GET/form fallbacks. Show actual work and
 deployed state separately. One lifetime environment/current intent per PR;
@@ -139,8 +161,8 @@ for live proofs require an explicitly authorized disposable repository.
 | 5 ✅ | Hardened Docker candidates and readiness | 1–4 |
 | 6 ✅ | Stable HTTPS routes and fenced blue/green publication | 5, existing outbox |
 | 7 ✅ | Durable teardown, revocation and resource cleanup | 5–6 |
-| 8 | GitHub living comment and exact-SHA checks | 3, 6–7 |
-| 9 | Recovery, expiry, reconciliation and capacity | 4–8 |
+| 8 ✅ | GitHub living comment and exact-SHA checks | 3, 6–7 |
+| 9 ✅ | Recovery, expiry, reconciliation and capacity | 4–8 |
 | 10 | Real worker orchestration and completed dashboard actions | 1–9 |
 | 11 | Observability and production hardening | 10 |
 | 12 | Deployment packaging, CI and release acceptance | 1–11 |
@@ -319,7 +341,7 @@ observed release checks in Prompt 12, including isolation, recovery and restore.
 ## Prompt 6 — Stable HTTPS routing and fenced blue/green publication
 
 > Implement DESIGN Sections 11 and 13 and the route boundary in
-> docs/15-durable-publication-design.md. Read existing operation leases, candidate/
+> docs/17-durable-publication-design.md. Read existing operation leases, candidate/
 > active artifacts and finalization SQL before adding internal/routing adapters.
 > Preserve Traefik v3; do not replace the router or add a second orchestrator.
 >
@@ -556,9 +578,9 @@ observed release checks in Prompt 12, including isolation, recovery and restore.
 > Add a repeatable real-adapter end-to-end suite with cleanup and failure injection.
 >
 > Execute the release checklist below where prerequisites and authorization
-> exist. Write docs/20-production-deployment.md and a release report with
-> exact commands, environment/version evidence, passed/failed/skipped checks and
-> outstanding inputs. Update setup/handoff links. Missing domain, DNS token,
+> exist. Write a production deployment document (in its reading-order slot) and
+> a release report with exact commands, environment/version evidence,
+> passed/failed/skipped checks and outstanding inputs. Update setup/handoff links. Missing domain, DNS token,
 > disposable GitHub repo/write authorization or VPS access stays a specific
 > pending gate; do not fabricate successful verification or silently deploy.
 > Stop with reviewable deployable artifacts and an evidence-based readiness

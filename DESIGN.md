@@ -224,7 +224,7 @@ Medium. Small code, high consequence: authenticity, idempotency and ordering all
   [05-webhooks-and-pr-discovery.md](docs/05-webhooks-and-pr-discovery.md).
 - **Out-of-order delivery:** jobs carry the head SHA; a job whose SHA is no longer the latest for that PR is discarded on start (see feature 13).
 - **Fork PRs:** detect them from the payload and apply the fork policy from feature 10 and 16.
-- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. Real runtime integration remains unbuilt. See [13-build-policy-and-intents.md](docs/13-build-policy-and-intents.md); see [14-build-scheduling.md](docs/14-build-scheduling.md) for parsed-event coordination and production dispatch boundaries.
+- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. Real runtime integration remains unbuilt. See [15-build-policy-and-intents.md](docs/15-build-policy-and-intents.md); see [16-build-scheduling.md](docs/16-build-scheduling.md) for parsed-event coordination and production dispatch boundaries.
 
 ---
 
@@ -392,17 +392,20 @@ Medium. Simple API calls, but rate limits, race conditions and idempotency matte
 - `go-github` with installation tokens: issue comments API and Checks API.
 
 ### Technical implementation
-1. On first job for a PR, create a comment and store its ID on the pull request row.
-2. Every later state change **edits** that comment rather than creating a new one; if the stored comment was deleted by a human, detect the not-found response and create a fresh one.
-3. In parallel, create a **check run** for the head SHA with statuses queued, in progress, completed (success or failure), and a details link to the build logs page.
-4. Comment content: current status, preview URL when ready, commit SHA it reflects, and a short failure summary with a link to logs when applicable.
-5. Updates are debounced so a rapid series of transitions does not exceed GitHub's rate limits; final state is always written.
-6. Failures to update GitHub never fail the deployment itself; they are retried separately.
+1. **Report work is durable and transactional:** every reportable change (observation, build request, queueing, admission, build result, route activation or its failure, teardown start, confirmed removal) bumps the PR's `wanted_version` in `pull_request_reports` and inserts a `report_status` outbox operation in the same transaction. PRs without preview work (no build request, environment or living comment) are not reported.
+2. **Latest-state sync:** the reporter (`environments.OperationExecutor`) renders the PR's *current* persisted state, not the event that queued it, so late, duplicate or reordered operations cannot restore an older state. Content digests skip unchanged writes, and queued operations for one PR collapse into one update.
+3. **One living comment:** its ID is stored on the PR; the body carries a stable marker and the report version. A deleted comment, or a create whose ID was never saved, is recovered by bounded discovery of this App's marker comment (5 pages of 100) before anything new is created.
+4. **Check runs per build request:** one per (head SHA, request revision) with external ID `previa:pr:<id>:<sha>:r<revision>`, so a same-commit Retry/Rebuild gets its own run; a superseded or interrupted open run is completed as cancelled, finished runs are kept. Details link to the owner-authenticated build-log page.
+5. **Comment content:** state, the commit it describes, the deployed commit and URL of a still-serving older preview, a fixed sentence for the failure category, fork-secret notice, and links only to a published preview and an existing log page. Ready requires the route to be confirmed.
+6. **Serialization:** one reporter per PR through a lease in PostgreSQL; progress is recorded only while the lease is held. Failures to update GitHub never fail the deployment; reports retry independently, honouring GitHub's rate-limit delays.
 
 ### Design decisions and edge cases
 - **Comment plus check run:** the comment is human friendly; the check run integrates with branch protection and the merge box.
-- **Stale updates:** an update for an older SHA must not overwrite a newer one; every write compares the SHA it represents against the latest.
-- **Rate limiting:** installation tokens have their own budget; respect and back off on rate-limit responses.
+- **Stale updates (changed from the original design):** instead of comparing SHAs on each write, every write renders the latest state and is serialized per PR; the comment's version marker prevents overwriting a newer comment. GitHub has no compare-and-set, so a write by a reporter paused past its lease can appear briefly, but the report for the newer change always follows and replaces it.
+- **Debouncing (changed from the original design):** no timer; collapsing queued reports and skipping unchanged content give the same effect, and the final state is always written.
+- **First report (owner decision):** once a PR has preview work, not on every observed PR.
+- **Rate limiting and permissions:** primary and secondary limits are retried after GitHub's own delay; 403/404 on the repository records `inaccessible` and writes nothing; a refused comment or check write is recorded and does not block the other.
+- **Current implementation:** `internal/reporting` (state, render, GitHub adapter, reporter) and `internal/environments/reports.go`, migration 0015, tested against PostgreSQL and a fake GitHub, with an opt-in live proof (`make test-reporting`). Registered with the worker in Prompt 10. See [13-pr-feedback.md](docs/13-pr-feedback.md).
 
 ---
 
@@ -431,11 +434,11 @@ High. Concurrency and zero-gap swapping.
 - **Latest wins:** intermediate commits may never deploy; only the newest matters.
 - **Orphan protection:** any container labeled for this PR but not referenced by the current record is removed by the reconciler.
 - **Manual freshness:** a new commit fences an older in-flight result but does not authorize its successor in Manual mode. An already deployed healthy preview stays available and the UI distinguishes its deployed SHA from the latest PR SHA.
-- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [13-build-policy-and-intents.md](docs/13-build-policy-and-intents.md). Scheduling propagates revision through jobs, results and publication; [14-build-scheduling.md](docs/14-build-scheduling.md) records exact SQL and integration limits.
+- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [15-build-policy-and-intents.md](docs/15-build-policy-and-intents.md). Scheduling propagates revision through jobs, results and publication; [16-build-scheduling.md](docs/16-build-scheduling.md) records exact SQL and integration limits.
 
 Implementation status and the durable publication boundary are kept separate: see
-[the current generation-ordering implementation](docs/16-generation-ordering.md) and
-[the durable publication design](docs/15-durable-publication-design.md). External
+[the current generation-ordering implementation](docs/18-generation-ordering.md) and
+[the durable publication design](docs/17-durable-publication-design.md). External
 routing and reporting calls run outside transactions with generation fencing and
 recovery across crashes. The swap itself is implemented by the route controller
 ([11-routing-and-https.md](docs/11-routing-and-https.md)): the new candidate is verified
@@ -489,19 +492,23 @@ High. Reconciliation logic is subtle, and getting it wrong can delete live envir
 - River periodic jobs, Docker API listing by labels, GitHub API for PR state.
 
 ### Technical implementation
-1. **Expiry job (hourly):** find environments past their maximum age or inactivity limit, tear them down, and comment that they expired and will redeploy on the next push.
-2. **Reconciliation job (every few minutes):** list all containers carrying the platform's labels and compare with database records.
-   - Container with no matching record: orphan, remove it (after a grace period so a just-created container is not killed mid-creation).
-   - Record marked running with no container: mark failed or redeploy.
-   - Environment whose PR is actually closed on GitHub: enqueue teardown.
-3. **Prune job (daily and on disk-pressure threshold):** remove dangling images, old build cache beyond a size budget, and stale temporary directories.
-4. **Stuck-state detection:** environments in `building` or `tearing_down` longer than a timeout are flagged and retried.
-5. All decisions are made from labels and database state, never from names alone.
+1. **Expiry job (every 10 minutes):** previews whose `expires_at` (set at each publication to now plus `ENV_TTL_HOURS`; unchanged by failed attempts; cleared by teardown) has passed are torn down through a local teardown request with reason `expired`, which supersedes the build request; the PR comment says the preview expired and how to bring it back. PRs whose current request is still pending, queued or running are left until it publishes.
+2. **Resource reconciliation (every 5 minutes):** this instance's Docker objects (filtered by the instance label every object carries) are compared with the active, pending, route-protected and operation-held artifacts.
+   - Unreferenced objects older than the grace period: durable cleanup operations (containers, then images, then networks); objects of PRs the database no longer has are removed directly after verifying their labels.
+   - An active preview whose container no longer exists: the environment is recorded as failed (`preview_missing`) without a deployed preview and the PR is reported; nothing is rebuilt without a new request.
+3. **PR reconciliation (every 15 minutes):** open PRs with live work are confirmed with GitHub through the fenced upstream verification, at most 10 per pass and each at most every 15 minutes; a recorded close leads to the usual teardown.
+4. **Recovery (every minute and at startup):** lost wake-ups for due, queued and running requests and for closed PRs awaiting teardown, lost operation wake-ups and expired leases, unstarted revocation teardowns, and route-file drift.
+5. **Prune job (hourly, and at once when a build waits for disk):** untagged images, source workspaces older than any build may run, caches of repositories that can no longer be built, then the oldest unused caches beyond `BUILD_CACHE_BUDGET` (half of it under disk pressure).
+6. **Capacity:** global build slots (`MAX_CONCURRENT_BUILDS`) counted atomically at admission; preview CPU, memory and per-repository limits checked under a PostgreSQL advisory lock until the candidate exists, counting the old active preview and the candidate during swaps and freeing capacity only when a container is removed; a disk check counting other running builds. A request that cannot run waits ("Waiting for capacity") and is retried with backoff instead of failing.
+7. All decisions are made from labels and database state, never from names alone.
 
 ### Design decisions and edge cases
-- **Grace periods** prevent races between creation and cleanup.
-- **Dry-run mode** for the reconciler during development, logging what it would delete before it is trusted to delete.
-- **Disk exhaustion is the most likely real outage;** it gets a metric, an alert threshold and an emergency prune path.
+- **Grace periods** (`HOUSEKEEPING_GRACE`, 15 minutes) prevent races between creation and cleanup.
+- **Dry-run mode** (`HOUSEKEEPING_DRY_RUN`, and `make housekeeping-dry-run`) logs every deletion it would make; cleanup is planned in a rolled-back transaction.
+- **Instance identity (added during implementation):** every Docker object is labelled and named with its database's instance (`platform_instance`), so two databases on one Docker host (a test schema next to a development one) never touch each other's objects when PR IDs coincide.
+- **Recovery never authorizes:** re-dispatched work passes the usual policy, deadline, generation and mergeability checks; an expired preview is never rebuilt by recovery.
+- **Disk exhaustion is the most likely real outage;** a build short of disk waits and triggers an emergency prune. Metrics and alerts are Prompt 11.
+- **Current implementation:** `internal/housekeeping` (recovery, resources, PR reconciliation, expiry, prune, River jobs) with capacity in `internal/environments` (build slots, waiting), `internal/runtime` (admission lock, headroom) and `internal/builds` (disk check, caches), migration 0016. Registered with the worker in Prompt 10. See [14-housekeeping-and-capacity.md](docs/14-housekeeping-and-capacity.md).
 
 ---
 
@@ -574,7 +581,7 @@ Committed changes stream to open repository/PR pages as Server-Sent Events
 (PostgreSQL triggers -> NOTIFY -> one LISTEN session per server -> in-process hub
 -> per-repository stream). Events are invalidation signals with resumable cursors;
 pages refetch through ordinary authorized GETs, defer while search is focused or a
-policy modal is open, and send nothing while idle. See docs/17-realtime-updates.md;
+policy modal is open, and send nothing while idle. See docs/19-realtime-updates.md;
 build-log streaming reuses the same SSE writer with its own sequence replay. Current build/logs and deployed
 preview controls remain dependent on the execution adapters. Builds is
 a cross-repository view of current/latest work; Environments is a deployment view,
@@ -853,10 +860,10 @@ preview/
 │   │   ├── unavailable.go          # page for unknown and removed preview hosts
 │   │
 │   ├── reporting/                  # FEATURE: PR comments + check runs
-│   │   ├── reporter.go             # Reporter interface used by other features
-│   │   ├── comment.go              # create-or-edit the living comment
-│   │   ├── checkrun.go
-│   │   ├── render.go               # comment text per status
+│   │   ├── reporter.go             # leased report executor: living comment, check runs
+│   │   ├── state.go                # persisted truth -> what GitHub should show
+│   │   ├── render.go               # comment text, marker, version, digests
+│   │   ├── github.go               # go-github adapter, error classification
 │   │
 │   ├── secrets/                    # FEATURE: encrypted env vars for previewed apps
 │   │   ├── handler.go  service.go  repository.go
@@ -874,9 +881,11 @@ preview/
 │   │   ├── queries.sql  dbgen/
 │   │
 │   ├── housekeeping/               # FEATURE: expiry, reconcile, prune
-│   │   ├── expire.go
-│   │   ├── reconcile.go            # containers vs DB vs actual GitHub PR state
-│   │   ├── prune.go                # images, build cache, temp dirs
+│   │   ├── expiry.go
+│   │   ├── recovery.go             # lost wake-ups, leases, sweeps, route drift
+│   │   ├── resources.go            # Docker objects vs DB (with environments.Reconciler)
+│   │   ├── pullrequests.go         # live PRs vs actual GitHub PR state
+│   │   ├── prune.go                # images, build caches, source workspaces
 │   │   ├── jobs.go                 # periodic River jobs
 │   │
 │   ├── dashboard/                  # FEATURE: pages that compose other features
@@ -993,7 +1002,7 @@ Shared palette/font tokens live in `web/styles/theme.css`; `site.css` composes
 base, home, workspace, confirmation and motion styles into the same compiled asset.
 Optional `web/tests/browser` regression tooling uses pinned Playwright v1.58.2 and
 Node.js 20+ only for development; the application has no Node.js runtime dependency.
-See `docs/18-ui-architecture.md` for the implemented presentation boundary.
+See `docs/20-ui-architecture.md` for the implemented presentation boundary.
 
 ### sqlc and migrations in a feature-based layout
 

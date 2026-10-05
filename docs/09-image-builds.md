@@ -6,7 +6,7 @@ author, so a build is untrusted code execution. This document describes how each
 is isolated, bounded and cleaned up, what was verified, and what remains a limit.
 The builder is tested against a real Docker Engine. The preview runtime
 ([10](10-preview-runtime.md)) builds with it and starts containers from its images;
-the worker does not dispatch builds until Prompt 10 ([19](19-roadmap.md)).
+the worker does not dispatch builds until Prompt 10 ([21](21-roadmap.md)).
 
 ## Decisions
 
@@ -102,8 +102,16 @@ takes an address range from Docker's default pools until it is removed.
   into the environments cleanup contract.
 - A builder holding a cache volume longer than `BUILD_TIMEOUT` + 15 minutes belongs
   to a crashed worker; the next build of that scope removes it. Cache volumes
-  (`previa-buildcache-r<base>-h<head>`) are trimmed by BuildKit's GC to a quarter of
-  the disk budget; deleting unused ones is housekeeping (Prompt 9).
+  (`previa-buildcache-<instance>-r<base>-h<head>`) are trimmed by BuildKit's GC to a
+  quarter of the disk budget; housekeeping removes those of repositories that can no
+  longer be built and the oldest unused ones beyond `BUILD_CACHE_BUDGET`, and untagged
+  images ([14](14-housekeeping-and-capacity.md)).
+- Every object carries this database's instance (`io.previa.instance`) in its labels
+  and names (`previa/<instance>-pr-<n>:…` images, `previa-builder-<instance>-…`), and
+  the builder only reuses or removes objects of its own instance.
+- Before building, the builder requires `BUILD_MIN_FREE_DISK` free plus
+  `BUILD_DISK_BUDGET` for every other running build of its instance; a shortage
+  (`disk_low`) makes the request wait for disk space rather than fail.
 - Failures are typed (`builds.Error`): `invalid_job`, `builder_unavailable` and
   `disk_low` (retryable), `build_failed`, `timeout`, `cancelled`, `disk_budget`,
   `image_too_large`, `superseded`. Messages are safe to show the PR owner; the log
