@@ -47,7 +47,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, h.stateCookie("", -1))
 	state := r.URL.Query().Get("state")
 	expected := h.sessions.PopString(r.Context(), "oauth_state")
-	cookie, err := r.Cookie(stateCookieName)
+	cookie, err := r.Cookie(h.stateCookieName())
 	if err != nil || !h.validState(cookie.Value, state) || expected == "" || !hmac.Equal([]byte(expected), []byte(state)) {
 		h.fail(w, r, http.StatusBadRequest, "Sign-in could not be verified. Please start again.")
 		return

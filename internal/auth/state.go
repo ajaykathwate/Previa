@@ -11,7 +11,12 @@ import (
 	"time"
 )
 
-const stateCookieName = "previa_oauth_state"
+const (
+	stateCookieName = "previa_oauth_state"
+	// Over HTTPS the state cookie is __Host- prefixed (which requires path /),
+	// so a preview on a sibling subdomain cannot plant OAuth state.
+	secureStateCookieName = "__Host-previa_oauth_state"
+)
 const stateLifetime = 10 * time.Minute
 
 func randomToken() string { return rand.Text() + rand.Text() }
@@ -41,9 +46,20 @@ func (h *Handler) validState(cookie, state string) bool {
 	return hmac.Equal(sig, mac.Sum(nil))
 }
 
+func (h *Handler) stateCookieName() string {
+	if h.secure {
+		return secureStateCookieName
+	}
+	return stateCookieName
+}
+
 func (h *Handler) stateCookie(value string, maxAge int) *http.Cookie {
+	path := "/auth/github"
+	if h.secure {
+		path = "/"
+	}
 	return &http.Cookie{
-		Name: stateCookieName, Value: value, Path: "/auth/github",
+		Name: h.stateCookieName(), Value: value, Path: path,
 		HttpOnly: true, Secure: h.secure, SameSite: http.SameSiteLaxMode,
 		MaxAge: maxAge,
 	}

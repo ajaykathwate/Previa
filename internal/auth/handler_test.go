@@ -307,14 +307,14 @@ func TestHTTPSCookieFlagsAndCallbackReplay(t *testing.T) {
 	h.secure = true
 	sessions.Cookie.Secure = true
 	state := b.loginState()
-	if !b.cookies[stateCookieName].Secure || !b.cookies["previa_session"].Secure {
-		t.Fatal("HTTPS cookies missing Secure flag")
+	if !b.cookies[secureStateCookieName].Secure || b.cookies[secureStateCookieName].Path != "/" || !b.cookies["previa_session"].Secure {
+		t.Fatal("HTTPS cookies missing Secure flag or __Host- requirements")
 	}
-	signed := *b.cookies[stateCookieName]
+	signed := *b.cookies[secureStateCookieName]
 	if w := b.request(http.MethodGet, "/auth/github/callback?code=valid&state="+state, ""); w.Code != 303 {
 		t.Fatal("initial callback failed")
 	}
-	b.cookies[stateCookieName] = &signed
+	b.cookies[secureStateCookieName] = &signed
 	if w := b.request(http.MethodGet, "/auth/github/callback?code=valid&state="+state, ""); w.Code != 400 || provider.calls != 1 {
 		t.Fatal("replayed state was exchanged again")
 	}
@@ -366,5 +366,16 @@ func TestExpiredSessionHTMXRedirectsWholeDocument(t *testing.T) {
 	response := browser.request(http.MethodGet, "/dashboard", "", map[string]string{"HX-Request": "true"})
 	if response.Code != http.StatusUnauthorized || response.Header().Get("HX-Redirect") != "/auth/github/login" || response.Header().Get("Location") != "" {
 		t.Fatal("expired HTMX session must navigate the full document", response.Code, response.Header())
+	}
+}
+
+func TestHTTPSSessionCookieIsHostOnly(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if name := NewSessionManager(memstore.NewWithCleanupInterval(0), true, logger).Cookie.Name; name != "__Host-previa_session" {
+		t.Fatalf("HTTPS session cookie %q", name)
+	}
+	plain := NewSessionManager(memstore.NewWithCleanupInterval(0), false, logger).Cookie
+	if plain.Name != "previa_session" || plain.Domain != "" || plain.Path != "/" {
+		t.Fatalf("local session cookie %+v", plain)
 	}
 }

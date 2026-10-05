@@ -16,6 +16,11 @@ func NewSessionManager(store scs.Store, secure bool, logger *slog.Logger) *scs.S
 	s.Lifetime = 24 * time.Hour
 	s.IdleTimeout = 30 * time.Minute
 	s.Cookie.Name = "previa_session"
+	if secure {
+		// Browsers refuse a __Host- cookie from any other host, so a preview on a
+		// sibling subdomain cannot plant a session for the dashboard.
+		s.Cookie.Name = "__Host-previa_session"
+	}
 	s.Cookie.Path = "/"
 	s.Cookie.HttpOnly = true
 	s.Cookie.Secure = secure
