@@ -140,9 +140,9 @@ func containerSpec(c candidate, p Policy) (*container.Config, *container.HostCon
 }
 
 // previewLabels identifies a candidate for inventory, ownership checks,
-// capacity accounting and, later, the router.
-func previewLabels(t Target, request requestIdentity, imageRef string, port int, cpuMillis, memory int64, now time.Time) map[string]string {
-	return map[string]string{
+// capacity accounting and the router's pre-publication check.
+func previewLabels(t Target, request requestIdentity, imageRef string, port int, healthPath string, cpuMillis, memory int64, now time.Time) map[string]string {
+	labels := map[string]string{
 		dockerx.LabelManaged: "true", dockerx.LabelKind: dockerx.KindPreview,
 		dockerx.LabelPR: strconv.FormatInt(request.PullRequestID, 10), dockerx.LabelGeneration: strconv.FormatInt(request.Generation, 10),
 		dockerx.LabelRevision: strconv.FormatInt(request.Revision, 10), dockerx.LabelSHA: request.HeadSHA,
@@ -151,6 +151,10 @@ func previewLabels(t Target, request requestIdentity, imageRef string, port int,
 		dockerx.LabelPort: strconv.Itoa(port), dockerx.LabelCPUMillis: strconv.FormatInt(cpuMillis, 10),
 		dockerx.LabelMemory: strconv.FormatInt(memory, 10), dockerx.LabelStarted: now.UTC().Format(time.RFC3339),
 	}
+	if healthPath != "" {
+		labels[dockerx.LabelHealthPath] = healthPath
+	}
+	return labels
 }
 
 // requestIdentity is the admitted request and attempt a candidate belongs to.

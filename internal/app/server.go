@@ -22,6 +22,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/webhooks"
 	"github.com/ajaykathwatee/previa/web"
@@ -72,6 +73,12 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	}
 	router := httpx.NewRouter(logger)
 	router.Handle("/static/*", web.StaticHandler())
+	// The router sends unknown and removed preview hosts here. Public and
+	// outside the session group: it reads and sets no cookie.
+	router.Get(routing.UnavailablePath, routing.UnavailablePage)
+	if cfg.PreviewBaseDomain != "" && config.PreviewSameSite(cfg.PreviewBaseDomain, cfg.AppBaseURL) {
+		logger.Warn("previews share the dashboard's registrable domain; a separate domain isolates them fully", "preview_base_domain", cfg.PreviewBaseDomain)
+	}
 	deliveries := webhooks.NewDeliveryService(pool, coordinator, invalidate, syncService)
 	router.Post("/webhooks/github", webhooks.NewHandler(cfg.GitHubWebhookSecret, deliveries, logger).ServeHTTP)
 	policy, err := installations.NewBuildPolicyService(installations.NewRepository(pool))

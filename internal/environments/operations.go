@@ -108,6 +108,12 @@ func operationQueue(kind OperationKind) string {
 
 func (kind OperationKind) valid() bool { return operationQueue(kind) != "" }
 
+// retriedUntilDone reports whether an operation kind is idempotent and must
+// eventually happen, so exhausting River attempts leaves it retryable.
+func (kind OperationKind) retriedUntilDone() bool {
+	return kind == RemoveRoute || kind == CleanupArtifact
+}
+
 type operationInserter interface {
 	InsertTx(context.Context, pgx.Tx, river.JobArgs, *river.InsertOpts) (*rivertype.JobInsertResult, error)
 }
@@ -164,6 +170,13 @@ func (b *OperationBroker) EnqueueTx(ctx context.Context, tx pgx.Tx, spec Operati
 		}
 	}
 	id := op.ID
+	if !created && spec.Kind == CleanupArtifact && OperationState(op.State) == OperationFailed {
+		// Scheduling the same resource again retries a cleanup that failed.
+		if _, err := q.RearmCleanupOperation(ctx, id); err != nil {
+			return 0, fmt.Errorf("rearm failed cleanup operation: %w", err)
+		}
+		op.State = string(OperationPending)
+	}
 	if !created && OperationState(op.State) != OperationPending && OperationState(op.State) != OperationRetryable && OperationState(op.State) != OperationRunning {
 		return id, nil
 	}

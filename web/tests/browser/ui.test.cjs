@@ -67,6 +67,24 @@ test('public home and protected dashboard access', async () => {
   assert.equal(new URL(page.url()).hash, '#workflow');
 });
 
+test('preview unavailable page is an uncached cookie-free 404 in both themes', async () => {
+  for (const scheme of ['light', 'dark']) {
+    await page.emulateMedia({colorScheme: scheme});
+    const response = await page.goto(`${origin}/previews/unavailable`);
+    assert.equal(response.status(), 404);
+    const headers = await response.allHeaders();
+    assert.equal(headers['set-cookie'], undefined);
+    assert.equal(headers['cache-control'], 'no-store');
+    await page.getByRole('heading', {name: 'Preview not found or expired', level: 1}).waitFor();
+    await assertNoOverflow();
+  }
+  assert.equal((await context.cookies()).length, 0);
+  await page.setViewportSize({width: 390, height: 844});
+  await assertNoOverflow();
+  await page.getByRole('link', {name: 'Go to Previa', exact: true}).click();
+  await page.waitForURL(`${origin}/`);
+});
+
 test('responsive dashboard sticky navigation and honest placeholders', async () => {
   await login();
   await page.goto(`${origin}/repositories`);

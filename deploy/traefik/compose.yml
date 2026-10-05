@@ -1,0 +1,67 @@
+# Previa's router: Traefik v3 with a wildcard certificate obtained over DNS-01.
+# Start it with `make router-up`, which checks the settings below first.
+#
+# - Routes come only from the file the worker's route controller writes to
+#   ROUTER_DYNAMIC_DIR. Traefik has no Docker provider and no Docker socket.
+# - The API listens on 127.0.0.1 inside this container only (not published,
+#   not on any network). The worker reads it with docker exec.
+# - ACME_CA_SERVER defaults to Let's Encrypt staging. Switch to production
+#   only after a staging certificate was issued (docs/11-routing-and-https.md).
+# - The DNS provider credential is a Docker secret file, not an environment
+#   value, and acme.json lives on a persistent volume with mode 600.
+name: previa-router
+
+services:
+  router:
+    image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
+    container_name: ${ROUTER_CONTAINER:-previa-router}
+    restart: unless-stopped
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --log.level=INFO
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --providers.providersthrottleduration=250ms
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.aliasheadersstrategy=delete
+      - --entrypoints.websecure.http.tls.certresolver=preview
+      - --entrypoints.websecure.http.tls.domains[0].main=*.${PREVIEW_BASE_DOMAIN:-preview.invalid}
+      - --entrypoints.traefik.address=127.0.0.1:8080
+      - --api=true
+      - --api.insecure=true
+      - --api.dashboard=false
+      - --ping=true
+      - --ping.entrypoint=traefik
+      - --certificatesresolvers.preview.acme.email=${ACME_EMAIL:-}
+      - --certificatesresolvers.preview.acme.storage=/acme/acme.json
+      - --certificatesresolvers.preview.acme.caserver=${ACME_CA_SERVER:-https://acme-staging-v02.api.letsencrypt.org/directory}
+      - --certificatesresolvers.preview.acme.dnschallenge.provider=${ACME_DNS_PROVIDER:-}
+      - --certificatesresolvers.preview.acme.dnschallenge.resolvers=${ACME_DNS_RESOLVERS:-1.1.1.1:53,8.8.8.8:53}
+    environment:
+      # lego reads <VARIABLE>_FILE, so the token itself is never in the
+      # container's environment (docker inspect shows only the path).
+      - ${ACME_DNS_CREDENTIAL_VARIABLE:-ACME_DNS_CREDENTIAL}_FILE=/run/secrets/dns_credential
+    secrets:
+      - dns_credential
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${ROUTER_DYNAMIC_DIR:-/nonexistent}:/etc/traefik/dynamic:ro
+      - acme:/acme
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping", "--ping.entrypoint=traefik", "--entrypoints.traefik.address=127.0.0.1:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+secrets:
+  dns_credential:
+    file: ${ACME_DNS_CREDENTIAL_FILE:-/nonexistent}
+
+volumes:
+  acme:

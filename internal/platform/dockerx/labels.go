@@ -15,6 +15,7 @@ const (
 	LabelEnvironment = "io.previa.environment-id"
 	LabelImage       = "io.previa.image"        // a preview's image reference
 	LabelPort        = "io.previa.port"         // a preview's container port
+	LabelHealthPath  = "io.previa.health-path"  // a preview's readiness path; absent for a TCP check
 	LabelCPUMillis   = "io.previa.cpu-millis"   // a preview's CPU limit
 	LabelMemory      = "io.previa.memory-bytes" // a preview's memory limit
 	LabelStarted     = "io.previa.started-at"

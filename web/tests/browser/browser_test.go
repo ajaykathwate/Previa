@@ -25,6 +25,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	pr "github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/web"
 	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
@@ -49,6 +50,8 @@ func TestBrowserRegression(t *testing.T) {
 	sessions := auth.NewSessionManager(store, false, logger)
 	handler := auth.NewHandler(config.ServerConfig{AppBaseURL: origin, SessionSecret: strings.Repeat("fixture-only-", 4)}, sessions, fixtureUsers{}, fixtureProvider{origin: origin}, logger)
 	router.Handle("/static/*", web.StaticHandler())
+	// The router's destination for unknown preview hosts: public, no session.
+	router.Get(routing.UnavailablePath, routing.UnavailablePage)
 	// Live updates use the real hub and SSE stream. Fixture sync progress advances
 	// on a server-side timeline and publishes each step, like the database triggers.
 	hub := realtime.NewHub()

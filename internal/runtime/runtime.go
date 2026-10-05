@@ -216,7 +216,7 @@ func (r *Runtime) startCandidate(ctx context.Context, id requestIdentity, t Targ
 	config, host, replaced := containerSpec(candidate{
 		Name: name, ImageID: image.ID, ImageUser: inspected.Config.User, Port: settings.Port, Env: env, ProxyURL: proxyURL,
 		CPUMillis: settings.Resources.CPUMillis, Memory: settings.Resources.MemoryBytes, NetworkID: networkID,
-		Labels: previewLabels(t, id, image.Ref, settings.Port, settings.Resources.CPUMillis, settings.Resources.MemoryBytes, r.now()),
+		Labels: previewLabels(t, id, image.Ref, settings.Port, settings.HealthCheckPath, settings.Resources.CPUMillis, settings.Resources.MemoryBytes, r.now()),
 	}, r.policy)
 	if replaced {
 		logs.System("The image runs as root, so the preview runs as the unprivileged user 65532 instead.")

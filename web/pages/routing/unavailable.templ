@@ -1,0 +1,28 @@
+package routing
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/button"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+// Unavailable is where the router sends preview hostnames that have no live
+// preview: never published, removed when the pull request closed, torn down,
+// expired, or revoked with repository access. It shows nothing about which.
+templ Unavailable() {
+	@layouts.Base("Preview unavailable") {
+		<section class="standalone-card panel" aria-labelledby="preview-unavailable-title">
+			<span class="standalone-icon" aria-hidden="true">
+				@components.AlertIcon()
+			</span>
+			<span class="eyebrow">Preview</span>
+			<h1 id="preview-unavailable-title">Preview not found or expired</h1>
+			<p class="standalone-copy">Nothing is published at the address you opened. A preview is removed when its pull request closes or merges, when it is torn down or expires, and when repository access is revoked. Its address stays reserved, so a later build of the same pull request appears there again.</p>
+			<div class="standalone-actions">
+				@button.Button(button.Props{Href: "/"}) {
+					Go to Previa
+				}
+			</div>
+		</section>
+	}
+}

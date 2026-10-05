@@ -672,6 +672,7 @@ html:has(.app-shell), body:has(.app-shell) { height: 100%; overflow: hidden; }
 }
 .standalone-card h1 { margin: 6px 0 16px; font-size: 26px; font-weight: 660; letter-spacing: -.03em; }
 .standalone-alert { margin-bottom: 22px; border-color: var(--danger-line); background: var(--danger-soft); }
+.standalone-copy { margin: 0 0 22px; color: var(--muted-foreground); line-height: 1.6; }
 .standalone-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 
 /* Responsive shell */

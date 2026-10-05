@@ -76,12 +76,15 @@ type ServerConfig struct {
 	GitHubAppPrivateKeyPath string `envconfig:"GITHUB_APP_PRIVATE_KEY_PATH"`
 	GitHubAppClientID       string `envconfig:"GITHUB_APP_CLIENT_ID"`
 	GitHubAppClientSecret   string `envconfig:"GITHUB_APP_CLIENT_SECRET"`
+	// PreviewBaseDomain, when set, must keep previews off the dashboard's host.
+	PreviewBaseDomain string `envconfig:"PREVIEW_BASE_DOMAIN"`
 }
 
 // WorkerConfig contains only settings used to execute queued jobs.
 type WorkerConfig struct {
 	SharedConfig
 	ExecutionConfig
+	RoutingConfig
 	GitHubAppID             int64         `envconfig:"GITHUB_APP_ID"`
 	GitHubAppPrivateKeyPath string        `envconfig:"GITHUB_APP_PRIVATE_KEY_PATH"`
 	MaxConcurrentBuilds     int           `envconfig:"MAX_CONCURRENT_BUILDS" required:"true"`
@@ -132,8 +135,11 @@ func LoadWorker() (WorkerConfig, error) {
 	if cfg.BuildTimeout <= 0 || cfg.BuildTimeout > 24*time.Hour {
 		return WorkerConfig{}, errors.New("BUILD_TIMEOUT must be greater than zero and at most 24h")
 	}
-	if err := cfg.check(); err != nil {
+	if err := cfg.ExecutionConfig.check(); err != nil {
 		return WorkerConfig{}, fmt.Errorf("validate execution configuration: %w", err)
+	}
+	if err := cfg.RoutingConfig.check(); err != nil {
+		return WorkerConfig{}, fmt.Errorf("validate routing configuration: %w", err)
 	}
 	return cfg, nil
 }
@@ -183,6 +189,11 @@ func (c ServerConfig) validate() error {
 	}
 	if err := c.SecretsConfig.validate(); err != nil {
 		return err
+	}
+	if strings.TrimSpace(c.PreviewBaseDomain) != "" {
+		if err := CheckPreviewDomain(c.PreviewBaseDomain, c.AppBaseURL); err != nil {
+			return err
+		}
 	}
 	if c.GitHubAppID != 0 || c.GitHubAppSlug != "" || c.GitHubAppPrivateKeyPath != "" || c.GitHubAppClientID != "" || c.GitHubAppClientSecret != "" {
 		if c.GitHubAppID <= 0 {

@@ -82,6 +82,7 @@ type Environment struct {
 	PendingHeadSha     pgtype.Text
 	AppliedRevision    int64
 	PendingRevision    pgtype.Int8
+	TeardownGeneration pgtype.Int8
 }
 
 type EnvironmentOperation struct {
@@ -101,6 +102,28 @@ type EnvironmentOperation struct {
 	UpdatedAt      pgtype.Timestamptz
 	CompletedAt    pgtype.Timestamptz
 	Revision       int64
+}
+
+type EnvironmentRoute struct {
+	EnvironmentID      int64
+	PullRequestID      int64
+	Generation         int64
+	Revision           int64
+	State              string
+	ContainerID        pgtype.Text
+	ImageTag           pgtype.Text
+	Backend            pgtype.Text
+	Port               pgtype.Int4
+	NetworkID          pgtype.Text
+	TableVersion       int64
+	OperationID        pgtype.Int8
+	AcceptedAt         pgtype.Timestamptz
+	ServedGeneration   pgtype.Int8
+	ServedRevision     pgtype.Int8
+	ServedContainerID  pgtype.Text
+	ServedImageTag     pgtype.Text
+	ServedAt           pgtype.Timestamptz
+	UnconfirmedTargets []byte
 }
 
 type Installation struct {
@@ -155,6 +178,8 @@ type PullRequest struct {
 	Mergeable                   pgtype.Bool
 	MergeableState              string
 	BuildStatus                 string
+	TeardownRequestedGeneration int64
+	TeardownReason              pgtype.Text
 }
 
 type Repo struct {
@@ -167,6 +192,11 @@ type Repo struct {
 	Accessible         bool
 	BuildMode          string
 	ObservationVersion int64
+}
+
+type RouteTable struct {
+	Singleton bool
+	Version   int64
 }
 
 type Session struct {

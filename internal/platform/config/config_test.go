@@ -22,6 +22,8 @@ func validEnvironment(t *testing.T) {
 	} {
 		t.Setenv(key, value)
 	}
+	// Routing is opt-in; a developer's own settings must not leak into tests.
+	unsetEnvironment(t, "PREVIEW_BASE_DOMAIN", "ROUTER_DYNAMIC_DIR")
 }
 
 func unsetEnvironment(t *testing.T, keys ...string) {
@@ -54,7 +56,8 @@ func TestLoadServer(t *testing.T) {
 
 func TestLoadWorkerWithoutServerOrFutureSettings(t *testing.T) {
 	validEnvironment(t)
-	unrelated := []string{"APP_BASE_URL", "HTTP_ADDR", "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "SESSION_SECRET", "GITHUB_WEBHOOK_SECRET", "PREVIEW_BASE_DOMAIN", "SECRETS_ENCRYPTION_KEY", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN"}
+	// APP_BASE_URL matters to the worker only once PREVIEW_BASE_DOMAIN configures routing.
+	unrelated := []string{"APP_BASE_URL", "HTTP_ADDR", "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "SESSION_SECRET", "GITHUB_WEBHOOK_SECRET", "SECRETS_ENCRYPTION_KEY", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN"}
 	unsetEnvironment(t, unrelated...)
 	unsetEnvironment(t, "BUILD_TIMEOUT")
 	cfg, err := LoadWorker()
@@ -74,7 +77,7 @@ func TestLoadWorkerWithoutServerOrFutureSettings(t *testing.T) {
 
 func TestLoadServerIgnoresFutureSettings(t *testing.T) {
 	validEnvironment(t)
-	for _, key := range []string{"GITHUB_WEBHOOK_SECRET", "PREVIEW_BASE_DOMAIN", "SECRETS_ENCRYPTION_KEY", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN"} {
+	for _, key := range []string{"GITHUB_WEBHOOK_SECRET", "SECRETS_ENCRYPTION_KEY", "ENV_TTL_HOURS", "DNS_PROVIDER_API_TOKEN", "ROUTER_DYNAMIC_DIR", "ACME_EMAIL"} {
 		t.Setenv(key, "invalid")
 	}
 	if _, err := LoadServer(); err != nil {

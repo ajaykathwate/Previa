@@ -13,7 +13,8 @@ import (
 
 // Resources lists everything Docker holds for a PR, including leftovers of
 // crashed attempts: preview containers with their images, images no
-// container uses, and builder containers. Ownership comes from labels set at
+// container uses, builder containers, build networks, and the PR's preview
+// network once no preview uses it. Ownership comes from labels set at
 // creation. Build caches are per source repository and pruned by housekeeping.
 func (r *Runtime) Resources(ctx context.Context, pullRequestID int64) ([]environments.Resource, error) {
 	filter := client.Filters{}.Add("label", dockerx.LabelManaged+"=true", dockerx.LabelPR+"="+strconv.FormatInt(pullRequestID, 10))
@@ -23,13 +24,31 @@ func (r *Runtime) Resources(ctx context.Context, pullRequestID int64) ([]environ
 	}
 	var found []environments.Resource
 	used := map[string]bool{}
+	previews := false
 	for _, c := range containers.Items {
 		switch c.Labels[dockerx.LabelKind] {
 		case dockerx.KindPreview:
+			previews = true
 			used[c.Labels[dockerx.LabelImage]] = true
 			found = append(found, resource(pullRequestID, c.Labels, environments.Artifact{ContainerID: c.ID, ImageTag: c.Labels[dockerx.LabelImage]}))
 		case dockerx.KindBuilder:
 			found = append(found, resource(pullRequestID, c.Labels, environments.Artifact{ContainerID: c.ID}))
+		}
+	}
+	networks, err := r.docker.NetworkList(ctx, client.NetworkListOptions{Filters: filter})
+	if err != nil {
+		return nil, fmt.Errorf("list preview networks: %w", err)
+	}
+	for _, n := range networks.Items {
+		switch n.Labels[dockerx.LabelKind] {
+		case dockerx.KindBuildNetwork:
+			network := resource(pullRequestID, n.Labels, environments.Artifact{})
+			network.Network = n.ID
+			found = append(found, network)
+		case dockerx.KindPreviewNetwork:
+			if !previews {
+				found = append(found, environments.Resource{PullRequestID: pullRequestID, Network: n.ID})
+			}
 		}
 	}
 	images, err := r.docker.ImageList(ctx, client.ImageListOptions{Filters: filter})

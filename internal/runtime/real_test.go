@@ -334,13 +334,16 @@ func TestRealRuntimeStartsAHardenedHealthyCandidate(t *testing.T) {
 	if err != nil || len(resources) != 1 || resources[0].Artifact != artifact || resources[0].Revision != 1 {
 		t.Fatalf("inventory: %+v %v", resources, err)
 	}
-	for range 2 { // Removal is idempotent.
-		if err := r.RemoveContainer(t.Context(), artifact.ContainerID); err != nil {
+	// Removal is idempotent and owner-verified; the PR's preview network goes
+	// with its last preview.
+	resource := environments.Resource{PullRequestID: target.PullRequestID, Generation: 1, Revision: 1, Artifact: artifact}
+	for range 2 {
+		if err := r.RemoveResource(t.Context(), resource); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.RemoveImage(t.Context(), artifact.ImageTag); err != nil {
-			t.Fatal(err)
-		}
+	}
+	if _, err := f.docker.NetworkInspect(t.Context(), networkName(target.PullRequestID), client.NetworkInspectOptions{}); !cerrdefs.IsNotFound(err) {
+		t.Fatalf("idle preview network kept: %v", err)
 	}
 	if health, err := r.Health(t.Context(), artifact.ContainerID); err != nil || health.State != "missing" {
 		t.Fatalf("after removal: %+v %v", health, err)

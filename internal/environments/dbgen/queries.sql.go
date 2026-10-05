@@ -83,6 +83,9 @@ WITH current_request AS MATERIALIZED (
     WHERE pr.id = $7 AND pr.generation = $2
       AND pr.head_sha = $6
       AND ((pr.state IN ('closed','merged') AND $3::bigint = 0)
+        -- A local teardown (revocation, owner request, expiry) of an open PR.
+        OR (pr.teardown_requested_generation = pr.generation
+          AND $3::bigint = 0 AND $1::text = 'torn_down')
         OR (pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND EXISTS (
           SELECT 1 FROM build_intents b WHERE b.pull_request_id = pr.id
             AND b.generation = pr.generation AND b.head_sha = pr.head_sha
@@ -91,7 +94,7 @@ WITH current_request AS MATERIALIZED (
         )))
     FOR UPDATE
 ), previous AS MATERIALIZED (
-    SELECT e.id, e.pull_request_id, e.container_id, e.image_tag, e.subdomain, e.status, e.created_at, e.last_active_at, e.expires_at, e.applied_generation, e.head_sha, e.pending_container_id, e.pending_image_tag, e.pending_generation, e.pending_head_sha, e.applied_revision, e.pending_revision FROM environments e
+    SELECT e.id, e.pull_request_id, e.container_id, e.image_tag, e.subdomain, e.status, e.created_at, e.last_active_at, e.expires_at, e.applied_generation, e.head_sha, e.pending_container_id, e.pending_image_tag, e.pending_generation, e.pending_head_sha, e.applied_revision, e.pending_revision, e.teardown_generation FROM environments e
     JOIN current_request p ON p.id = e.pull_request_id
     FOR UPDATE OF e
 )
@@ -104,6 +107,16 @@ SET status = CASE $1::text
         THEN $2::bigint ELSE e.applied_generation END,
     applied_revision = CASE WHEN $1::text = 'failed'
         THEN $3::bigint ELSE e.applied_revision END,
+    -- Teardown hands the active artifact to the route-removal operation; the
+    -- route row and that operation protect it until the removal converges.
+    container_id = CASE WHEN $1::text = 'torn_down'
+        THEN NULL ELSE e.container_id END,
+    image_tag = CASE WHEN $1::text = 'torn_down'
+        THEN NULL ELSE e.image_tag END,
+    head_sha = CASE WHEN $1::text = 'torn_down'
+        THEN NULL ELSE e.head_sha END,
+    teardown_generation = CASE WHEN $1::text = 'torn_down'
+        THEN $2::bigint ELSE e.teardown_generation END,
     pending_revision = CASE WHEN $1::text = 'running'
         THEN $3::bigint
         WHEN $1::text = 'failed' THEN e.pending_revision ELSE NULL END,
@@ -270,13 +283,11 @@ WITH locked AS MATERIALIZED (
     SELECT e.id, e.container_id, e.image_tag,
            e.pending_container_id, e.pending_image_tag
     FROM environments e
-    JOIN pull_requests pr ON pr.id = e.pull_request_id
     WHERE e.pull_request_id = $3
-      AND pr.generation = $1
-      AND pr.state IN ('closed', 'merged')
       AND $2::bigint = 0
       AND e.status = 'tearing_down'
-    FOR UPDATE OF pr, e
+      AND e.teardown_generation = $1
+    FOR UPDATE OF e
 )
 UPDATE environments e
 SET status = 'torn_down',
@@ -309,6 +320,9 @@ type FinalizePendingTeardownRow struct {
 	PendingImageTag    pgtype.Text
 }
 
+// Completes the teardown this route removal belongs to, once the removal
+// converged. A newer teardown or a newer publication owns the environment
+// otherwise, and is left alone; the PR itself may have moved on (reopened).
 func (q *Queries) FinalizePendingTeardown(ctx context.Context, arg FinalizePendingTeardownParams) (FinalizePendingTeardownRow, error) {
 	row := q.db.QueryRow(ctx, finalizePendingTeardown, arg.ExpectedGeneration, arg.ExpectedRevision, arg.PrID)
 	var i FinalizePendingTeardownRow
@@ -429,10 +443,13 @@ const listProtectingOperationPayloads = `-- name: ListProtectingOperationPayload
 SELECT o.payload FROM environment_operations o JOIN pull_requests pr ON pr.id = o.pull_request_id
 WHERE o.pull_request_id = $1
   AND ((o.state = 'running' AND o.lease_expires_at > now()) OR (o.generation = pr.generation
-    AND (pr.state <> 'open' OR EXISTS (SELECT 1 FROM build_intents b WHERE b.pull_request_id = pr.id
+    AND (pr.state <> 'open' OR pr.teardown_requested_generation = pr.generation
+      OR EXISTS (SELECT 1 FROM build_intents b WHERE b.pull_request_id = pr.id
       AND b.revision = o.revision AND b.state IN ('running','succeeded')))))
   AND o.kind IN ('activate_route', 'remove_route')
-  AND o.state IN ('pending', 'running', 'retryable', 'failed')
+  -- A failed route operation protects nothing: whatever the router may serve
+  -- is protected by the route row itself.
+  AND o.state IN ('pending', 'running', 'retryable')
 ORDER BY o.id
 `
 
@@ -643,7 +660,8 @@ func (q *Queries) MarkOperationSuperseded(ctx context.Context, arg MarkOperation
 
 const readEnvironment = `-- name: ReadEnvironment :one
 SELECT container_id, image_tag, head_sha, status, applied_generation,
-       pending_container_id, pending_image_tag, pending_generation, pending_head_sha, applied_revision, pending_revision
+       pending_container_id, pending_image_tag, pending_generation, pending_head_sha, applied_revision, pending_revision,
+       teardown_generation
 FROM environments WHERE pull_request_id = $1 ORDER BY id DESC LIMIT 1
 `
 
@@ -659,6 +677,7 @@ type ReadEnvironmentRow struct {
 	PendingHeadSha     pgtype.Text
 	AppliedRevision    int64
 	PendingRevision    pgtype.Int8
+	TeardownGeneration pgtype.Int8
 }
 
 func (q *Queries) ReadEnvironment(ctx context.Context, pullRequestID int64) (ReadEnvironmentRow, error) {
@@ -676,6 +695,7 @@ func (q *Queries) ReadEnvironment(ctx context.Context, pullRequestID int64) (Rea
 		&i.PendingHeadSha,
 		&i.AppliedRevision,
 		&i.PendingRevision,
+		&i.TeardownGeneration,
 	)
 	return i, err
 }
@@ -707,6 +727,22 @@ func (q *Queries) ReadRequest(ctx context.Context, id int64) (ReadRequestRow, er
 		&i.NeedsRefresh,
 	)
 	return i, err
+}
+
+const rearmCleanupOperation = `-- name: RearmCleanupOperation :execrows
+UPDATE environment_operations
+SET state = 'pending', available_at = now(), updated_at = now(), completed_at = NULL
+WHERE id = $1 AND kind = 'cleanup_artifact' AND state = 'failed'
+`
+
+// Cleanup is idempotent: a cleanup that failed is retried when the same
+// resource is scheduled again, rather than being left behind forever.
+func (q *Queries) RearmCleanupOperation(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, rearmCleanupOperation, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const releaseExpiredOperationLease = `-- name: ReleaseExpiredOperationLease :execrows

@@ -57,7 +57,8 @@ func (q *Queries) ClearBuildLogs(ctx context.Context, pullRequestID int64) error
 
 const completeTeardownRequest = `-- name: CompleteTeardownRequest :execrows
 UPDATE pull_requests SET teardown_completed_generation = generation
-WHERE id = $1 AND generation = $2 AND state IN ('closed','merged')
+WHERE id = $1 AND generation = $2
+  AND (state IN ('closed','merged') OR teardown_requested_generation = generation)
 `
 
 type CompleteTeardownRequestParams struct {

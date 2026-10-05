@@ -3,6 +3,8 @@ package runtime
 import (
 	"errors"
 	"fmt"
+
+	"github.com/ajaykathwatee/previa/internal/environments"
 )
 
 // Failure codes. Messages are safe to show the PR owner; causes stay in Err
@@ -20,6 +22,8 @@ const (
 	CodeCancelled    = "cancelled"
 	CodeUnavailable  = "runtime_unavailable" // Docker or the egress gateway failed
 	CodeNotOwned     = "not_owned"           // removal refused: not a Previa object
+	CodeMissing      = "missing"             // the candidate no longer exists
+	CodeInUse        = "in_use"              // still used by a container; removal retries later
 )
 
 // Error is a classified runtime failure.
@@ -50,4 +54,17 @@ func CodeOf(err error) string {
 		return e.Code
 	}
 	return ""
+}
+
+// AsOperationFailure gives a runtime failure the stable code and permanence a
+// durable operation records; other errors stay retryable.
+func AsOperationFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	var e *Error
+	if errors.As(err, &e) {
+		return &environments.OperationFailure{Code: e.Code, Permanent: !e.Retryable, Err: err}
+	}
+	return &environments.OperationFailure{Code: CodeUnavailable, Err: err}
 }

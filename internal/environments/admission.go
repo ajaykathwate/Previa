@@ -37,6 +37,11 @@ func (r *Repository) claimBuild(ctx context.Context, request Request, now time.T
 			return fmt.Errorf("claim authorized build intent: %w", e)
 		}
 		allowed = affected == 1
+		if allowed && r.hostnames != nil {
+			if e := r.provisionTx(ctx, q, request.PullRequestID); e != nil {
+				return e
+			}
+		}
 		if allowed {
 			// Open the new attempt's log stream and clear the previous attempt only
 			// after admission, in the same transaction. Rejected/stale jobs must
@@ -98,4 +103,34 @@ func currentOperationRequest(ctx context.Context, q *dbgen.Queries, request Requ
 		return false, fmt.Errorf("check operation access: %w", err)
 	}
 	return i.Generation == request.Generation && i.Revision == request.Revision && i.HeadSha == request.HeadSHA && (i.State == "running" || i.State == "succeeded" || (i.State == "failed" && kind == ReportStatus)), nil
+}
+
+// provisionTx creates the PR's lifetime environment on its first admitted
+// build. The hostname is allocated here, once: rebuilds, failures, teardown and
+// reopening keep it, and the unique constraint means it is never reassigned.
+func (r *Repository) provisionTx(ctx context.Context, q *dbgen.Queries, pullRequestID int64) error {
+	target, err := q.ReadProvisioningTarget(ctx, pullRequestID)
+	if err != nil {
+		return fmt.Errorf("read environment provisioning target: %w", err)
+	}
+	if target.Provisioned {
+		return nil
+	}
+	if !target.GithubRepoID.Valid {
+		return errors.New("repository has no GitHub identity for a preview hostname")
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		label, err := r.hostnames(target.Number, target.GithubRepoID.Int64)
+		if err != nil {
+			return fmt.Errorf("allocate preview hostname: %w", err)
+		}
+		inserted, err := q.ProvisionEnvironment(ctx, dbgen.ProvisionEnvironmentParams{PullRequestID: pullRequestID, Subdomain: label})
+		if err != nil {
+			return fmt.Errorf("provision environment: %w", err)
+		}
+		if inserted == 1 {
+			return nil
+		}
+	}
+	return errors.New("could not allocate a unique preview hostname")
 }

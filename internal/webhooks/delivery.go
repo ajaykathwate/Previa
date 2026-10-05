@@ -19,9 +19,16 @@ type metadataScheduler interface {
 	pullrequests.MergeabilityRefresher
 }
 
+// revoker requests teardown of revoked repositories' pull requests inside the
+// lifecycle transaction; environments.Broker implements it.
+type revoker interface {
+	RevokeTx(ctx context.Context, tx pgx.Tx, githubInstallationID int64, allRepositories bool, githubRepoIDs []int64) (int, error)
+}
+
 type DeliveryService struct {
 	pool          *pgxpool.Pool
 	observer      pullrequests.Observer
+	revoker       revoker
 	installations *installations.Repository
 	invalidate    func(int64)
 	refresher     pullrequests.MergeabilityRefresher
@@ -29,6 +36,10 @@ type DeliveryService struct {
 
 func NewDeliveryService(pool *pgxpool.Pool, observer pullrequests.Observer, invalidate func(int64), syncs ...metadataScheduler) *DeliveryService {
 	s := &DeliveryService{pool: pool, observer: observer, installations: installations.NewRepository(pool), invalidate: invalidate}
+	// The coordinator that observes PR events also records revocation teardowns.
+	if r, ok := observer.(revoker); ok {
+		s.revoker = r
+	}
 	if len(syncs) > 0 {
 		s.refresher = syncs[0]
 		s.installations = installations.NewRepository(pool, syncs[0])
@@ -152,6 +163,16 @@ func (s *DeliveryService) lifecycle(ctx context.Context, tx pgx.Tx, event any, s
 	}
 	if err := s.installations.ApplyEventTx(ctx, tx, change); err != nil {
 		return err
+	}
+	if revoke && s.revoker != nil {
+		// Suspension and deletion revoke every repository; removal, the listed ones.
+		removed := make([]int64, 0, len(change.Removed))
+		for _, repo := range change.Removed {
+			removed = append(removed, repo.ID)
+		}
+		if _, err := s.revoker.RevokeTx(ctx, tx, change.ID, change.Cleanup, removed); err != nil {
+			return err
+		}
 	}
 	_, err = tx.Exec(ctx, `UPDATE installations SET source_updated_at=GREATEST(source_updated_at,$2),cleanup_pending=cleanup_pending OR $3 WHERE github_installation_id=$1`, change.ID, stamp, revoke)
 	return err

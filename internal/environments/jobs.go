@@ -139,6 +139,12 @@ func finishJob[T river.JobArgs](ctx context.Context, broker *Broker, request Req
 				return fmt.Errorf("complete PR job: %w", err)
 			}
 		}
+		// A started teardown is recorded whatever the access: it needs none.
+		if request.State != "open" && workErr == nil {
+			if _, err := q.CompleteTeardownRequest(ctx, dbgen.CompleteTeardownRequestParams{ID: request.PullRequestID, Generation: request.Generation}); err != nil {
+				return fmt.Errorf("complete teardown intent: %w", err)
+			}
+		}
 		if accessErr != nil {
 			return nil
 		}
@@ -149,10 +155,6 @@ func finishJob[T river.JobArgs](ctx context.Context, broker *Broker, request Req
 			}
 			if _, err := q.FinishBuildIntent(ctx, dbgen.FinishBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, NextState: next}); err != nil {
 				return fmt.Errorf("finish build intent: %w", err)
-			}
-		} else if workErr == nil {
-			if _, err := q.CompleteTeardownRequest(ctx, dbgen.CompleteTeardownRequestParams{ID: request.PullRequestID, Generation: request.Generation}); err != nil {
-				return fmt.Errorf("complete teardown intent: %w", err)
 			}
 		}
 		current, err := readLockedIntent(ctx, q, request.PullRequestID)

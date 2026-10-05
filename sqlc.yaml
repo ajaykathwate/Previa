@@ -22,6 +22,8 @@ sql:
       - internal/environments/queries.sql
       - internal/environments/intent_queries.sql
       - internal/environments/scheduling_queries.sql
+      - internal/environments/route_queries.sql
+      - internal/environments/teardown_queries.sql
     gen:
       go:
         package: dbgen

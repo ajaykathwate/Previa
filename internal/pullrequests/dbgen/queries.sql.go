@@ -287,7 +287,7 @@ func (q *Queries) InvalidateObservedIntent(ctx context.Context, arg InvalidateOb
 }
 
 const listPRs = `-- name: ListPRs :many
-SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status,coalesce(b.state,'Not requested') AS build_state
+SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason,coalesce(b.state,'Not requested') AS build_state
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 WHERE r.id=$1 AND i.owner_user_id=$2 AND ($3::text='all' OR p.state=$3)
@@ -324,6 +324,8 @@ type ListPRsRow struct {
 	Mergeable                   pgtype.Bool
 	MergeableState              string
 	BuildStatus                 string
+	TeardownRequestedGeneration int64
+	TeardownReason              pgtype.Text
 	BuildState                  string
 }
 
@@ -363,6 +365,8 @@ func (q *Queries) ListPRs(ctx context.Context, arg ListPRsParams) ([]ListPRsRow,
 			&i.Mergeable,
 			&i.MergeableState,
 			&i.BuildStatus,
+			&i.TeardownRequestedGeneration,
+			&i.TeardownReason,
 			&i.BuildState,
 		); err != nil {
 			return nil, err
@@ -401,7 +405,7 @@ func (q *Queries) LockInstallation(ctx context.Context, id int64) (LockInstallat
 }
 
 const lockPR = `-- name: LockPR :one
-SELECT id, repo_id, number, head_sha, state, github_comment_id, created_at, generation, teardown_completed_generation, title, author, head_branch, html_url, head_repo_id, is_fork, source_updated_at, needs_refresh, mergeable, mergeable_state, build_status FROM pull_requests WHERE repo_id=$1 AND number=$2 FOR UPDATE
+SELECT id, repo_id, number, head_sha, state, github_comment_id, created_at, generation, teardown_completed_generation, title, author, head_branch, html_url, head_repo_id, is_fork, source_updated_at, needs_refresh, mergeable, mergeable_state, build_status, teardown_requested_generation, teardown_reason FROM pull_requests WHERE repo_id=$1 AND number=$2 FOR UPDATE
 `
 
 type LockPRParams struct {
@@ -433,6 +437,8 @@ func (q *Queries) LockPR(ctx context.Context, arg LockPRParams) (PullRequest, er
 		&i.Mergeable,
 		&i.MergeableState,
 		&i.BuildStatus,
+		&i.TeardownRequestedGeneration,
+		&i.TeardownReason,
 	)
 	return i, err
 }
@@ -502,7 +508,7 @@ func (q *Queries) MarkSyncing(ctx context.Context, arg MarkSyncingParams) error 
 }
 
 const ownedPR = `-- name: OwnedPR :one
-SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status,(r.accessible AND i.status='active') AS available,coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
+SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason,(r.accessible AND i.status='active') AS available,coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
  b.available_at,b.revision AS request_revision,coalesce(e.status,'Not deployed') AS environment_status,
  coalesce(e.head_sha,'') AS deployed_sha
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
@@ -538,6 +544,8 @@ type OwnedPRRow struct {
 	Mergeable                   pgtype.Bool
 	MergeableState              string
 	BuildStatus                 string
+	TeardownRequestedGeneration int64
+	TeardownReason              pgtype.Text
 	Available                   pgtype.Bool
 	BuildState                  string
 	RequestedSha                string
@@ -571,6 +579,8 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 		&i.Mergeable,
 		&i.MergeableState,
 		&i.BuildStatus,
+		&i.TeardownRequestedGeneration,
+		&i.TeardownReason,
 		&i.Available,
 		&i.BuildState,
 		&i.RequestedSha,

@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source secrets-reencrypt egress-image test-builder test-runtime lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source secrets-reencrypt egress-image test-builder test-runtime test-routing router-up router-down route-sync lint run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -100,6 +100,34 @@ test-builder: egress-image
 # handling, secrets withholding, network denial, capacity and cleanup.
 test-runtime: egress-image
 	@$(load_run_env) TEST_RUNTIME=1 $(GO) test -count=1 -v -timeout 30m -run '^TestRealRuntime' ./internal/runtime
+
+# Opt-in real routing, publication and teardown: Traefik with a wildcard
+# certificate from a local Pebble ACME server over DNS-01, real previews,
+# swaps, removals, revocation and cleanup against a throwaway database schema.
+test-routing: egress-image
+	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
+	TEST_ROUTING=1 $(GO) test -count=1 -v -timeout 30m -run '^TestRealRouting' ./internal/routing
+
+# The router (Traefik) for local/staging use. Reads routing and ACME settings
+# from .env; the DNS credential stays in its own mode-600 file.
+router-up:
+	@$(load_run_env) for v in PREVIEW_BASE_DOMAIN ROUTER_DYNAMIC_DIR ACME_EMAIL ACME_DNS_PROVIDER ACME_DNS_CREDENTIAL_VARIABLE ACME_DNS_CREDENTIAL_FILE; do \
+		eval "val=\$${$$v:-}"; [ -n "$$val" ] || { echo "Set $$v in .env (see docs/11-routing-and-https.md)" >&2; exit 1; }; \
+	done; \
+	case "$$ROUTER_DYNAMIC_DIR" in /mnt/*) echo 'ROUTER_DYNAMIC_DIR must be on a Linux filesystem: Traefik cannot watch /mnt/ paths' >&2; exit 1;; esac; \
+	[ -f "$$ACME_DNS_CREDENTIAL_FILE" ] || { echo 'ACME_DNS_CREDENTIAL_FILE does not exist' >&2; exit 1; }; \
+	[ "$$(stat -c %a "$$ACME_DNS_CREDENTIAL_FILE")" = 600 ] || { echo 'chmod 600 the DNS credential file first' >&2; exit 1; }; \
+	mkdir -p "$$ROUTER_DYNAMIC_DIR"; chmod 750 "$$ROUTER_DYNAMIC_DIR"; \
+	$(GO) run ./cmd/route-sync; \
+	docker compose -f deploy/traefik/compose.yml up -d
+
+# Writes the accepted route table from PostgreSQL to ROUTER_DYNAMIC_DIR (the
+# worker's route controller does this too once execution is wired).
+route-sync:
+	@$(load_run_env) $(GO) run ./cmd/route-sync
+
+router-down:
+	@$(load_run_env) docker compose -f deploy/traefik/compose.yml down
 
 lint: assets generate
 	$(GO) vet ./...

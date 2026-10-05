@@ -33,3 +33,6 @@ Thumbs.db
 # Optional browser test dependencies and screenshots.
 /web/tests/browser/node_modules/
 /web/tests/browser/artifacts/
+
+# Router DNS credentials, if ever placed next to the router configuration.
+/deploy/traefik/*credential*

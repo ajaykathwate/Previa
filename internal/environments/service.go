@@ -10,17 +10,16 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
 )
 
-// Runtime is the boundary for the unbuilt Docker integration. Build must return
-// an unregistered healthy container, honor cancellation, and label containers AND
-// uniquely tagged images with PR ID/generation/revision. Build and startup output
-// goes only to a log writer bound to the given Attempt, and never after Build
-// returns. Resources must also discover partial builds after process crashes.
-// Removal is idempotent (not-found succeeds).
+// Runtime is the Docker boundary the lifecycle needs; *runtime.Runtime
+// implements it. Build must return an unregistered healthy container, honor
+// cancellation, and label containers AND uniquely tagged images with PR
+// ID/generation/revision. Build and startup output goes only to a log writer
+// bound to the given Attempt, and never after Build returns. Resources must
+// also discover partial builds after process crashes. Removal happens through
+// cleanup operations and their executor, not through this interface.
 type Runtime interface {
 	Build(context.Context, Request, Attempt) (Artifact, error)
 	Resources(context.Context, int64) ([]Resource, error)
-	RemoveContainer(context.Context, string) error
-	RemoveImage(context.Context, string) error
 }
 
 // Attempt identifies one admitted execution of a request. LogEpoch changes on
@@ -39,11 +38,14 @@ type BuildLogs interface {
 	Finish(ctx context.Context, environmentID, epoch int64) error
 }
 
+// Resource is something Docker holds for a PR, attributed by its labels: a
+// container and/or image (Artifact), or a network (Network, its ID).
 type Resource struct {
 	PullRequestID int64    `json:"pull_request_id"`
 	Generation    int64    `json:"generation"`
 	Revision      int64    `json:"revision"`
 	Artifact      Artifact `json:"artifact"`
+	Network       string   `json:"network,omitempty"`
 }
 
 type Service struct {
@@ -191,6 +193,9 @@ func (s *Service) Teardown(ctx context.Context, request Request) error {
 	}
 	if before.AppliedGeneration == request.Generation && before.Status == "torn_down" {
 		return s.cleanup(ctx, request)
+	}
+	if before.Status == "tearing_down" && before.TeardownGeneration == request.Generation {
+		return s.cleanup(ctx, request) // A retry: this teardown already started.
 	}
 	if before.Status == "" || before.Status == "torn_down" {
 		return s.cleanup(ctx, request)

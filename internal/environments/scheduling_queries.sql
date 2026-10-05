@@ -47,7 +47,8 @@ WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
 
 -- name: CompleteTeardownRequest :execrows
 UPDATE pull_requests SET teardown_completed_generation = generation
-WHERE id = $1 AND generation = $2 AND state IN ('closed','merged');
+WHERE id = $1 AND generation = $2
+  AND (state IN ('closed','merged') OR teardown_requested_generation = generation);
 
 -- name: ListSchedulingCandidates :many
 SELECT pr.id FROM pull_requests pr LEFT JOIN build_intents b ON b.pull_request_id = pr.id
