@@ -373,6 +373,42 @@ configured.
 | The pull request or its build changed meanwhile. Reload and try again. | The page is out of date | Reload |
 | Failure reasons (on the PR page, Builds and the comment) | "The commit could not be prepared" (download or invalid `.previewrc.yaml`), "The image build failed", "The app did not become ready", "The app exited while starting", "The build took longer than allowed", "Repository secrets could not be decrypted", "The preview could not be published" | Open **Build logs**, fix, then **Retry build** or push |
 
+## 19. Uninstall the GitHub App or remove access
+
+On GitHub, open **Manage connections** from Previa (or **Settings → Applications →
+Installed GitHub Apps → Configure**; for an organization, its settings).
+
+| What you do on GitHub | What Previa does |
+| --- | --- |
+| **Uninstall** | Every repository of that installation moves to **Unavailable**. All their previews are removed and unfinished builds cancelled. |
+| **Suspend** | The same as uninstalling. **Unsuspend** makes the repositories available again. |
+| Remove one repository | Only that repository becomes unavailable and loses its previews. |
+
+After that:
+
+1. Removal starts as soon as GitHub's notification arrives and does not need GitHub
+   access. Preview addresses then show **Preview not found or expired**.
+2. Pull request pages show "GitHub access to this repository is unavailable." instead
+   of build buttons. Secrets can only be deleted.
+3. The Previa comment and check run on GitHub keep their last state, because Previa
+   can no longer write to the repository. A comment may still say **Ready** and link
+   to the removed preview.
+4. Previa keeps your account (you can still sign in), your repositories, pull
+   request records, build mode and encrypted secrets.
+
+**Coming back:** install the App again with the same GitHub account while signed in
+as the same Previa user. Your repositories, history and build mode return, and open
+pull requests are discovered again. Nothing rebuilds by itself: Manual waits for a
+click, and Automatic waits for the next push.
+
+**If Previa was offline when you uninstalled**, it missed GitHub's notification, and
+GitHub does not resend it on its own. Previews keep serving until they expire (48
+hours by default). Reinstalling then fails for those repositories with "This
+installation could not be linked…". To fix this, the App's owner opens the App on
+GitHub (**Developer settings → GitHub Apps → Advanced → Recent Deliveries**) and
+redelivers the failed `installation` delivery. GitHub allows this for 3 days. Previa
+then removes everything as described above.
+
 ---
 
 ## Manual test checklist
@@ -401,6 +437,9 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | B3 | On GitHub, remove the repository from the App | The card moves to **Unavailable**; its previews are removed |
 | B4 | Add it back | **Available** again; nothing rebuilds by itself |
 | B5 | Search for part of a name; switch tabs; go to page 2 (with 11+ repositories) | Results filter; URL keeps search, tab and page; Back restores them |
+| B6 | On GitHub, **Suspend** the App | All its repositories move to **Unavailable**; their previews are removed |
+| B7 | **Unsuspend** it | **Available** again; nothing rebuilds by itself |
+| B8 | **Uninstall** the App, then install it again with the same account | Previews removed and PR pages say access is unavailable; after reinstalling, repositories and build mode return and nothing rebuilds |
 
 ### C. Pull requests and mergeability
 
