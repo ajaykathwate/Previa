@@ -1,10 +1,16 @@
 # 24 · Production deployment
 
-Previa currently deploys to **one dedicated Linux VPS running Docker Engine and
-Docker Compose**. PostgreSQL, the Go HTTP server, the Go worker, Traefik,
-Prometheus and Grafana run there. The worker creates build containers and live
-preview containers on that same Docker host. Encrypted backups go to storage
-outside the VPS.
+Use **one DigitalOcean Droplet running Ubuntu 24.04, Docker Engine and Docker
+Compose**, **PostgreSQL 17 in Docker on that Droplet**, **DigitalOcean Spaces for
+encrypted off-server backups**, and **Cloudflare DNS** for the dashboard and
+preview domains. The Go server, Go worker, Traefik, Prometheus and Grafana run on
+the Droplet. The worker creates build containers and live PR preview containers
+on that same Docker host. This is the production arrangement described throughout
+this guide; infrastructure has not been provisioned by writing these instructions.
+
+Rent the Droplet once. **A new PR creates Docker containers, not a new Droplet
+or a separate VM.** The application runs unattended after SSH disconnects.
+Spaces holds backup files; the live PostgreSQL database stays on the Droplet.
 
 This follows [README §4.9](../README.md#49-infrastructure-and-deployment),
 [DESIGN](../DESIGN.md), and the actual files in `deploy/production`. It describes
@@ -22,31 +28,41 @@ step at a time and stop when a check fails.
 ## Contents
 
 - [Deployment platform and external services](#deployment-platform-and-external-services)
+- [DigitalOcean account, Droplet, firewall and SSH setup](#fresh-host-setup)
 - [What runs](#what-runs)
-- [Fresh host setup](#fresh-host-setup)
 - [First start, with staged certificates](#first-start-with-staged-certificates)
 - [Verify the deployment](#verify-the-deployment)
 - [Monitor live traffic, jobs and containers](#monitor-live-traffic-jobs-and-containers)
+- [DigitalOcean host monitoring](#configure-digitalocean-host-monitoring)
+- [DigitalOcean public uptime checks](#configure-digitalocean-uptime-for-external-https-and-certificate-checks)
 - [Backups and restore](#backups-and-restore)
+- [Droplet backups and snapshots](#step-b7--optional-digitalocean-droplet-backups-and-snapshots)
 - [Upgrades and rollback](#upgrades-and-rollback)
+- [Droplet resizing and ongoing operations](#digitalocean-capacity-billing-and-ongoing-operations)
 - [CI and releases](#ci-and-releases)
 - [Local staging smoke test](#local-staging-smoke-test)
 - [Security notes](#security-notes)
 - [Files behind these instructions](#files-behind-these-instructions)
 
+For the first deployment, complete Steps 0–6, including backup-key/Spaces setup
+B1–B3; then run Steps 7–10. B4 needs the running PostgreSQL/router and makes the
+first actual backup. Configure host/Uptime/application notifications, rehearse
+B5/B6 on isolated staging, then accept live traffic. Later releases use U1–U5
+and the rollback paths, rather than repeating the first-time certificate reset.
+
 ## Deployment platform and external services
 
 ### The deployment to use for this implementation
 
-A concrete starting arrangement is a **Hetzner Cloud VPS**, **Cloudflare DNS**,
-and a private **Amazon S3 bucket** for backups. These are operator choices, not
-provider dependencies hardcoded in Previa: a comparable Linux VPS, a DNS provider
-supported by Traefik's lego client, and an rclone-supported storage service also
-work. This guide uses that arrangement to make the setup specific.
+The selected arrangement is **DigitalOcean Droplet + Docker Compose + local
+PostgreSQL + DigitalOcean Spaces**, with Cloudflare as authoritative DNS.
+DigitalOcean supplies the Linux server and backup storage; Previa manages Docker
+previews. This preserves the single-VPS design in README/DESIGN and uses the
+existing production scripts without adding a new runtime.
 
 | Piece | Where it lives | Why it is needed |
 | --- | --- | --- |
-| VPS | A dedicated Hetzner VM, or equivalent | Provides a persistent Linux host, Docker socket, disk, private Docker networks, and public ports 80/443. |
+| VPS | One DigitalOcean Droplet dedicated to Previa | Provides a persistent Linux host, Docker socket, SSD, private Docker networks, and public ports 80/443. Dedicated to Previa means do not colocate unrelated sensitive workloads; choose shared or dedicated provider CPUs according to measured load. |
 | Production PostgreSQL | `postgres` container on the VPS; Docker volume `previa_postgres` | Stores application state, sessions, encrypted repository secrets, build logs, durable operations, and River jobs. |
 | Dashboard and API | `server` container on the VPS | Serves the UI, sign-in, repository controls, signed webhooks and live updates. |
 | Background processing | `worker` container on the VPS | Runs River queues and creates builds, previews, routes, reports and cleanup. |
@@ -54,8 +70,10 @@ work. This guide uses that arrangement to make the setup specific.
 | DNS | Cloudflare account and authoritative zones | Dashboard and wildcard preview records point to the VPS; the router uses a scoped token for DNS-01 certificate challenges. |
 | GitHub integration | Separate GitHub OAuth App and GitHub App | OAuth signs people in; the App grants repository access, receives webhooks and posts PR feedback. |
 | Release artifacts | GitHub Releases and GitHub Container Registry (GHCR) | Stores versioned binaries and the three Previa images. GitHub runners build them, then finish. |
-| Backup destination | Private S3 bucket outside the VPS | Holds encrypted database, configuration and certificate backups that survive loss of the host. |
+| Backup destination | Private DigitalOcean Spaces Standard bucket, outside the Droplet | Holds encrypted database, configuration and certificate archives through the S3-compatible API; survives loss of the Droplet. |
 | Monitoring | Prometheus and Grafana on the VPS | Scrapes metrics, evaluates alert rules and provides the Previa dashboard. |
+| Host monitoring | DigitalOcean metrics agent on the Droplet; graphs/resource alerts in the control panel | Tracks overall server CPU, memory and root-disk use, independently of Previa's application metrics. |
+| Public uptime | DigitalOcean Uptime check and configured notification | Checks HTTPS from outside the Droplet, including when monitoring containers on that Droplet are unavailable. |
 | Alert delivery | Operator-configured Alertmanager and receiver | Sends firing alerts to your email, chat or incident service; this is not supplied as a running service by the base Compose file. |
 | Backup encryption key | Private age identity in offline recovery storage | Decrypts backups during a restore; only its public recipient is needed on the VPS. |
 
@@ -65,36 +83,55 @@ Node server, Vercel, Netlify or Air. There is no Redis service for Previa's queu
 River uses the same PostgreSQL database. There is no Kubernetes cluster, remote
 BuildKit service, or production Terraform configuration in the repository.
 
-Provider setup reference: [Hetzner's server creation guide](https://docs.hetzner.com/cloud/servers/getting-started/creating-a-server/).
-Choose by CPU, RAM, disk and location rather than copying an old plan name or
-price. Account for the VPS, public IP, domains, backup storage, transfer and any
-external alert service in the operating budget.
+Provider references: [Droplets](https://docs.digitalocean.com/products/droplets/),
+[Droplet creation](https://docs.digitalocean.com/products/droplets/how-to/create/)
+and [Spaces](https://docs.digitalocean.com/products/spaces/). Choose current
+resources and location rather than copying an old SKU or price. Budget for
+Droplet compute, storage, backup storage/transfer, optional provider backups,
+uptime checks, domains and alert receivers. Containers share the rented host;
+they consume its capacity rather than creating a per-PR DigitalOcean VM bill.
 
-### Are we using Fly.io? Can its database be used?
+### Docker previews, Droplets and the deployment boundary
 
-**The supplied deployment does not use Fly.io.** It has no `fly.toml`, Fly release
-command, Fly Machines runtime adapter, or Fly deployment workflow. The worker
-uses the VPS's Docker Engine API and socket to create sibling containers and
-networks, and controls Traefik through that same daemon. Deploying the Go server
-alone with `fly launch` would leave those dependencies and the preview pipeline
-unconfigured. A deployment of the whole system on Fly would require a separately
-designed and tested runtime/networking arrangement; it is not a command-line
-substitution for this Compose stack.
+A **Droplet is the one rented Linux VM**. A **Docker image** packages the app,
+and a **Docker container** runs that image as isolated processes sharing the
+Droplet's kernel. Previa creates one serving app container per PR, plus temporary
+builders and replacement candidates. The total can briefly exceed the number
+of active PRs during builds and swaps.
 
-Fly offers [Managed Postgres](https://docs.fly.io/postgres) with managed backups
-and availability. Its documented connection path is inside the Fly organization's
-private network; external access needs the documented proxy or WireGuard setup.
-A Fly private database hostname is not automatically reachable from a Hetzner
-VPS or its Docker networks. See [Fly's connection guide](https://docs.fly.io/postgres/create-and-connect).
+The production worker controls the Droplet's Docker daemon through its socket.
+Preview containers are siblings of server/worker/PostgreSQL, not children nested
+inside the worker container. They receive separate private networks and limits;
+only Traefik publishes HTTP/HTTPS. All visits to a preview consume this Droplet's
+CPU/network resources.
 
-The Go connection configuration accepts a PostgreSQL URL, so using managed
-PostgreSQL is a possible future operational change. It is **not supported merely
-by replacing `DATABASE_URL` in the current stack**:
+Use DigitalOcean **Droplets** for this guide. App Platform, Kubernetes, a
+DigitalOcean Container Registry, load balancer and a VM per preview are not
+parts of the supplied deployment. A GitHub commit does not trigger App Platform
+deployment here. Published platform images remain in GHCR; built PR images
+remain on this Docker host. CPU/RAM growth requires resizing the host or a
+separately implemented multi-host architecture.
 
-1. Provision a compatible PostgreSQL service close to the VPS, with durable
-   connectivity, credentials and verified TLS. For Fly, establish and supervise
-   the private network connection; a developer's temporary local proxy is not a
-   production dependency you can leave unattended.
+### Why use PostgreSQL on the Droplet? What about Managed PostgreSQL?
+
+The chosen production DB is the Compose **PostgreSQL 17 service**, not a
+DigitalOcean Managed Database cluster. Compose starts it, migrations target it,
+and the shipped backup/restore scripts operate on it. DigitalOcean hosts the
+Droplet, while you maintain PostgreSQL updates, storage, backups and recovery.
+Do not create a managed database just to follow these commands.
+
+DigitalOcean also offers [Managed PostgreSQL](https://docs.digitalocean.com/products/databases/postgresql/).
+It can reduce database operations later, but adopting it needs a separately
+implemented and tested deployment change. Changing `DATABASE_URL` alone leaves
+the current Compose dependencies and scripts targeting the local DB.
+
+If choosing that future architecture, the required work is:
+
+1. Create a compatible cluster close to the Droplet, preferably using its
+   private/VPC connection. Configure database/user access and trusted sources,
+   download the provider CA, and verify TLS/hostname checks from server,
+   worker and migration containers. See [connection setup](https://docs.digitalocean.com/products/databases/postgresql/how-to/connect/)
+   and [trusted-source restrictions](https://docs.digitalocean.com/products/databases/postgresql/how-to/secure/).
 2. Verify migrations, River, connection lifetimes, advisory locks and PostgreSQL
    `LISTEN/NOTIFY` on the chosen endpoint. The server uses a dedicated LISTEN
    connection. Do not assume a transaction-pooling URL provides session semantics;
@@ -109,12 +146,38 @@ by replacing `DATABASE_URL` in the current stack**:
    `/etc/previa` and ACME state separately; a managed DB backup contains neither.
 6. Rehearse a complete restore and a rollback before switching live traffic.
 
-Those changes are not implemented by this documentation update. For the commands
-below, use the provided **PostgreSQL 17 Compose service**. PostgreSQL for each
-*previewed application* is a different matter: automatic per-PR databases,
+Those changes are not implemented by this documentation update. A Managed
+Database cluster is a separate resource, with a separate bill and recovery
+procedure; deleting/recreating the Droplet does not perform a managed-DB restore.
+For the commands below, use the provided **PostgreSQL 17 Compose service**.
+PostgreSQL for each *previewed application* is a different matter: automatic per-PR databases,
 Redis, setup commands and extra app processes remain planned features in the
 [roadmap](26-roadmap.md). Previa's own production database is never a database
 that an untrusted preview may connect to.
+
+### What to create, and where to configure it
+
+| Item | Exact configuration location | How it connects to Previa |
+| --- | --- | --- |
+| Project, Droplet, region, size and SSH public key | DigitalOcean control panel | Supplies the host; source/scripts are installed at `/opt/previa` over SSH. |
+| Cloud Firewall | DigitalOcean → Networking → Firewalls | Apply inbound SSH/80/443 rules to the Droplet. This is separate from UFW and Docker's per-PR isolation. |
+| Optional Reserved IP | DigitalOcean → Networking → Reserved IPs | If used, dashboard/wildcard DNS targets this address; reassign it deliberately during recovery. |
+| Host monitoring and resource alerts | Droplet creation option and DigitalOcean → Monitoring | Agent sends host metrics; configure actual notification recipients. |
+| External HTTPS checks | DigitalOcean → Uptime | Checks public dashboard and a maintained preview outside the host. |
+| Private backup bucket and access key | DigitalOcean → Spaces Object Storage | Root's `rclone` uploads encrypted archives using a key scoped to the bucket. |
+| Dashboard and wildcard preview records | Cloudflare authoritative zones | Both resolve to the chosen public/Reserved IPv4. |
+| DNS certificate credential | Cloudflare token settings, then `/etc/previa/dns-credential` on the Droplet | Traefik mounts it as a file for DNS-01. |
+| OAuth App and GitHub App | GitHub → Settings → Developer settings | Their IDs/secrets go in `/etc/previa/previa.env`; App PEM goes in `/etc/previa/github-app.pem`. |
+| Application/release/runtime settings | `/etc/previa/previa.env` on the Droplet | Compose reads this explicitly; there is no Droplet application-env panel to populate. |
+| Backup storage key/secret | Root's protected rclone configuration on the Droplet | Not Go application settings; retain a recovery copy separately. |
+| Backup private age identity | Offline recovery storage | Temporarily brought to a recovery host only when decrypting. |
+| User repositories' preview secrets | Previa → repository → Secrets | Encrypted in PostgreSQL; distinct from the platform's production credentials. |
+| Release environment and package access | GitHub repository Settings / Actions / Packages | Protects artifact publication; does not provision or update the Droplet. |
+
+The manual control-panel route requires no DigitalOcean API token in Previa or
+GitHub Actions. Spaces keys, your SSH private key, the Cloudflare DNS token and
+GitHub App credentials have different purposes and are not interchangeable.
+Only a future DigitalOcean API/`doctl` automation needs a scoped provider token.
 
 ## What runs
 
@@ -149,9 +212,11 @@ state/authorized work in PostgreSQL and returns; River executes the work later.
 
 ### Compose services
 
-All these services run on the **same VPS**. Images from the current Compose file
-are pinned by digest; the version names below identify them. Keep the pinned
-references in that file when following the guide.
+All these services run on the **same DigitalOcean Droplet**. Third-party
+infrastructure images in the current Compose file are pinned by digest; the
+version names below identify them. Keep those pinned references. Previa's own
+images use the selected release tag; record their resolved digests during an
+upgrade so the exact previous artifacts can be identified.
 
 | Service | Image / executable | Lifetime and responsibilities | Public exposure |
 | --- | --- | --- | --- |
@@ -225,29 +290,154 @@ configuration; changing only the subnet is insufficient.
 
 ## Fresh host setup
 
+### Step 0 — Prepare the DigitalOcean account and record deployment inputs
+
+1. Sign in to DigitalOcean, configure billing and protect account recovery.
+   Use the team/project that should own both the Droplet and Spaces bucket.
+   Create a project such as `previa-production`; use a separate staging project
+   and host for first deployment and restore drills.
+2. Have an SSH key on your administration workstation. Upload the **public**
+   key during Droplet creation; the private key stays on your workstation.
+   For a new key, use an unused output filename and a passphrase:
+
+   ```sh
+   ssh-keygen -t ed25519 -a 100 -f ~/.ssh/previa_digitalocean_ed25519 -C previa-admin
+   cat ~/.ssh/previa_digitalocean_ed25519.pub
+   ```
+
+3. Have access to the dashboard domain and a separate preview domain, their
+   registrar/Cloudflare zones, GitHub App/OAuth settings, the repository and
+   a tested release. Domains are purchased through a registrar; creating a
+   Droplet does not register a domain or configure GitHub.
+4. Record the following **non-secret** inventory in your operations notes.
+   Keep secret values separately in a password manager/recovery store:
+
+   | Input | Example / what to record |
+   | --- | --- |
+   | Project and Droplet | `previa-production`, `previa-prod-01`, actual Droplet ID |
+   | Region and resources | Actual datacenter slug, CPU class/count, RAM and disk |
+   | Public endpoint | Actual public IPv4; optional Reserved IPv4 if selected |
+   | Admin source | Your current public administration IP/CIDR for SSH rules |
+   | Dashboard | `previa.example.com` |
+   | Preview domain | `preview.example.net`; wildcard `*.preview.example.net` |
+   | Backup bucket | Globally available bucket name, represented below by `YOUR_BUCKET` |
+   | Spaces endpoint | Actual regional origin, e.g. `nyc3.digitaloceanspaces.com` |
+   | Release | Existing tested tag and exact Git commit; never assume an example tag exists |
+   | Receiver/recovery contacts | Monitored email, alert destination and recovery owner |
+
+Use the same concrete values throughout this guide. `YOUR_BUCKET`,
+`YOUR_SERVER_IP`, domain names and version examples are placeholders.
+Never substitute a Spaces URL for the database hostname.
+
 ### Step 1 — Choose the host and release
 
-Use a dedicated Debian 12 or Ubuntu 24.04 Linux host with systemd, a public IPv4
-address and persistent SSD storage. Both `linux/amd64` and `linux/arm64` Previa
-release images are built; verify the apps you preview have compatible base images.
-For the first deployment, Ubuntu 24.04 on amd64 is a straightforward choice.
+In the DigitalOcean control panel, open your production project and choose
+**Create → Droplets**. Configure the initial host using the following choices.
+Labels can change in the provider UI; the actual values/resources are what
+matter. See [DigitalOcean's creation instructions](https://docs.digitalocean.com/products/droplets/how-to/create/).
+
+| Creation choice | Value / reason |
+| --- | --- |
+| Image | Plain **Ubuntu 24.04 LTS, x86-64**. The existing setup script prepares it; an App Platform deployment or Kubernetes image is unnecessary. |
+| Region | Close to the expected operators/users and dependency endpoints. Check Spaces availability too. Keep PostgreSQL, worker and previews on this one host. |
+| CPU/RAM/disk | Meet the initial budget below. Prefer dedicated CPU for sustained CPU-heavy builds; shared CPU can suit staging/light traffic but requires measurement. |
+| SSH authentication | Select the public key from Step 0. Preserve the matching private key and console recovery access. |
+| Monitoring | Enable the metrics-agent/improved-monitoring option; verify collection later. |
+| Provider backups | Optional additional paid disk recovery. It does not replace Previa's encrypted DB backups; see B7. |
+| Hostname/tags/project | `previa-prod-01`, tags such as `previa` and `production`, project `previa-production`. Tags organize resources and can select firewall/alert targets. |
+| Public networking | Public IPv4 required for the documented DNS/HTTP path. Publish IPv6 only after verifying it end to end. |
+| Quantity | **One** Droplet. Previa creates Docker preview containers on it. |
 
 The previous 4 vCPU / 8 GiB RAM / 80 GiB disk baseline is a lower bound, not a
 promise that all defaults fit. In particular, **two default builds can each use
 4 GiB**, while previews default to a budget of 60% of host memory. PostgreSQL,
 monitoring, Docker and Linux need memory too. Explicitly budget them together.
 
-A conservative first-host example is **8 vCPU, 16 GiB RAM, 160 GiB disk**, with
-one 2 GiB build at a time and a 4 GiB total preview memory budget. These are
-starting allocations inferred from the implemented resource limits; measure your
-own Dockerfiles before raising concurrency. See the settings in Step 5.
+A conservative first-host example is **at least 8 vCPU, 16 GiB RAM and 160 GiB
+SSD**, with **one 2 GiB build at a time**, a **4 GiB preview memory budget** and
+**4 CPUs of total preview limits**. It leaves room for three standard previews
+and a standard replacement candidate if other previews do not consume that
+budget. Other tiers change the calculation. These are operator starting
+allocations, not a benchmark or promise of a specific request rate.
 
-In the provider console, create the server, attach your SSH public key, and allow
-SSH from your administration IP plus TCP 80/443 from the internet. Keep the
-provider's rescue/console access available. `setup.sh` configures UFW for standard
-OpenSSH; if you use a custom SSH port, arrange the appropriate firewall rule
-before running it. Docker's published ports have their own firewall rules, so
-also rely on the provider firewall and the narrow Compose port bindings.
+The Compose ceilings are separately 2 GiB for PostgreSQL, 512 MiB server,
+1 GiB worker, 512 MiB router, 1 GiB Prometheus and 512 MiB Grafana. Also leave
+capacity for Linux, Docker, egress, image builds, buffers and filesystem cache.
+Container memory limits are ceilings rather than a reservation of that entire
+amount. Inspect actual usage before raising `MAX_CONCURRENT_BUILDS` or preview
+budgets. The CPU/memory admission counts declared preview limits, not only
+instantaneous utilization. See Step 5.
+
+Keep Docker data on the Droplet's persistent SSD initially. Spaces is not a
+filesystem for PostgreSQL/Docker. A separately attached block-storage volume is
+optional and requires an explicit mount/data-root/backup design; the shipped
+setup does not move Docker data to it.
+
+#### Attach a DigitalOcean Cloud Firewall
+
+In **Networking → Firewalls**, create `previa-production` and apply it to this
+Droplet or its intended production tag. Use allow rules with these boundaries:
+
+| Direction | Protocol/port | Source or destination |
+| --- | --- | --- |
+| Inbound | TCP 22 | Your administration public IPv4/CIDR; add necessary administrator IPv6 only when used. |
+| Inbound | TCP 80 | Internet IPv4; IPv6 too only when that public path is configured. |
+| Inbound | TCP 443 | Same as HTTP; GitHub webhooks and reviewers must reach it. |
+| Outbound | TCP, UDP and ICMP | Allow the normal outbound defaults initially; DNS, registries, GitHub, package downloads, certificate requests and Spaces must work. |
+
+Do not add inbound DB, internal API or monitoring ports: 5432, 8080, 8082,
+9090/9091, 9093 and 3000 are not public services in this deployment.
+Confirm the firewall is actually attached. If your admin IP changes, update the
+SSH source rule through the control panel/console before expecting SSH to work.
+[Cloud Firewall setup](https://docs.digitalocean.com/products/networking/firewalls/how-to/create/)
+and [rule configuration](https://docs.digitalocean.com/products/networking/firewalls/how-to/configure-rules/).
+
+`setup.sh` also configures UFW for standard OpenSSH. If using a custom SSH port,
+arrange the matching provider/UFW rules before running it. Docker's published
+ports use its own firewall chains; keep the provider firewall and narrow Compose
+bindings. Cloud Firewall protects the Droplet boundary; it does not implement
+Previa's per-PR Docker network isolation.
+
+#### Optional: reserve the public address
+
+The Droplet's assigned public IPv4 is sufficient for the initial deployment.
+An optional **Reserved IPv4** lets you deliberately reassign the public endpoint
+to a replacement Droplet in the same datacenter. Create/assign it through
+**Networking → Reserved IPs**, record it as the chosen endpoint, and point both
+DNS records at it instead of mixing addresses. Test ports 80/443 at that address.
+This is a recovery convenience, not automatic failover or a second running host.
+[Reserved IP quickstart](https://docs.digitalocean.com/products/networking/reserved-ips/getting-started/quickstart/).
+
+#### First SSH login and the administrator account
+
+DigitalOcean's plain Ubuntu image initially exposes `root` for the selected SSH
+key; the later `ops` examples require creating that user. On your workstation:
+
+```sh
+ssh -i ~/.ssh/previa_digitalocean_ed25519 root@YOUR_SERVER_IP
+```
+
+Verify the host fingerprint using trusted console access on first connection.
+On this new Droplet, as root:
+
+```sh
+adduser ops
+usermod -aG sudo ops
+install -d -o ops -g ops -m 0700 /home/ops/.ssh
+install -o ops -g ops -m 0600 /root/.ssh/authorized_keys /home/ops/.ssh/authorized_keys
+```
+
+Before closing the root session, open a second workstation terminal and verify:
+
+```sh
+ssh -i ~/.ssh/previa_digitalocean_ed25519 ops@YOUR_SERVER_IP
+sudo -v
+```
+
+The `ops` account needs the password configured by `adduser` for `sudo`.
+Later SSH/SCP examples assume this key is selected by your SSH agent or local
+SSH configuration; add `-i ~/.ssh/previa_digitalocean_ed25519` when necessary.
+Keep the DigitalOcean console/recovery path available.
 
 Use a separate staging VPS for first deployment, restores and upgrade drills.
 Choose a release only after checking the [CI and releases](#ci-and-releases)
@@ -307,7 +497,7 @@ root so file modes, Docker and systemd commands are consistent:
 ```sh
 sudo -i
 apt-get update
-apt-get install -y git
+apt-get install -y git nano
 
 git clone https://github.com/ajaykathwate/Previa.git /opt/previa
 cd /opt/previa
@@ -443,11 +633,37 @@ additional production env files to copy.
 | `ACME_CA_SERVER` | Let's Encrypt staging initially; switch to production only after staging issuance succeeds. |
 | `ACME_DNS_RESOLVERS` | Optional; default `1.1.1.1:53,8.8.8.8:53`. Resolver reachability matters for DNS-01. |
 | `BACKUP_AGE_RECIPIENT` | Public `age1...` recipient generated on your recovery workstation, as described below. |
-| `BACKUP_REMOTE` | For the S3 example: `previa-backups:YOUR_BUCKET/production`; `previa-backups` is an rclone remote name. |
+| `BACKUP_REMOTE` | `previa-backups:YOUR_BUCKET/production`; `previa-backups` is the root-owned DigitalOcean Spaces rclone remote, `YOUR_BUCKET` is the actual bucket, and `production` is an object-key prefix. It is not an HTTPS endpoint. |
 | `BACKUP_RETENTION_DAYS` | `30` initially; choose according to your recovery requirements. |
 | `BACKUP_FAILURE_WEBHOOK` | Optional receiver URL accepting the script's JSON `text` message. This only reports backup failures; it is not the whole Prometheus alert system. |
 | `GRAFANA_ADMIN_PASSWORD` | Generated password; initial Grafana admin login. |
 | `LOG_LEVEL` | `info`; use `debug` temporarily during a diagnosed incident, then restore. |
+
+#### Credential checklist: what is generated, supplied and kept offline
+
+| Credential | Obtain it from | Production location / scope |
+| --- | --- | --- |
+| SSH private key | Your workstation's key generation | Workstation/SSH agent only; DigitalOcean and the Droplet receive the public key. |
+| Database password | `setup.sh` generates it | `POSTGRES_PASSWORD` and password portion of `DATABASE_URL` in `previa.env`. Not a Spaces password. |
+| Session secret | `setup.sh` generates it | `SESSION_SECRET` in `previa.env`. |
+| Webhook signing secret | `setup.sh` generates it | `GITHUB_WEBHOOK_SECRET` in `previa.env` and the same value in GitHub App webhook settings. |
+| OAuth client ID/secret | GitHub OAuth App | `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET` in `previa.env`. |
+| App client ID/secret and App ID | GitHub App | `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` and `GITHUB_APP_ID` in `previa.env`. |
+| App signing PEM | GitHub App private-key generation | `/etc/previa/github-app.pem`, UID 65532, mode 600. |
+| Repository-secret encryption keyring | `setup.sh` generates the initial version | `SECRETS_ENCRYPTION_KEYS` in `previa.env` and a protected offline recovery copy. |
+| DNS certificate token | Scoped Cloudflare API token | `/etc/previa/dns-credential`, root-owned, mode 600. |
+| Spaces access key and secret | DigitalOcean Spaces access-key page | Root's protected rclone config; limited access to the production backup bucket. Separate recovery copy. |
+| age public backup recipient | Recovery workstation `age-keygen` | `BACKUP_AGE_RECIPIENT` in `previa.env`; public value can remain on host. |
+| age private recovery identity | Same recovery-key generation | Offline; not needed by the nightly service. |
+| Grafana admin password | `setup.sh` generates it | `GRAFANA_ADMIN_PASSWORD` in `previa.env`; initialize/manage Grafana account separately. |
+| GHCR pull credential | Authorized GitHub package-read credential, only if images are private | Root's Docker login configuration. It is not the GitHub App token. |
+| Alert receiver secret | Selected notification service | Protected host Alertmanager config/file, if the receiver needs it. |
+
+No DigitalOcean personal API token is required for this manual deployment.
+Do not add production secrets to Droplet metadata/user-data, the Git checkout,
+GitHub issue bodies, Docker build arguments or Actions secrets just to run the
+existing workflows. Those workflows publish artifacts and use their own
+`GITHUB_TOKEN`. Application env values belong on the Droplet as above.
 
 Compose sets these application values itself; retain them unless you deliberately
 change the deployment topology:
@@ -471,7 +687,8 @@ is not a deployment with per-service secrets-manager isolation. Compose's explic
 also override values used in Compose interpolation. Use a clean administrative
 shell, edit the file deliberately, and avoid competing exported overrides.
 
-For the 8 vCPU / 16 GiB example, edit or add these entries once each:
+For the 8 vCPU / 16 GiB example, edit or add these entries once each. These
+operator settings replace the env template's two-build default:
 
 ```dotenv
 MAX_CONCURRENT_BUILDS=1
@@ -484,7 +701,7 @@ BUILD_MAX_IMAGE_SIZE=4GiB
 BUILD_MIN_FREE_DISK=15GiB
 BUILD_CACHE_BUDGET=20GiB
 PREVIEW_MEMORY_BUDGET=4GiB
-PREVIEW_CPU_BUDGET=3
+PREVIEW_CPU_BUDGET=4
 PREVIEW_MAX_PER_REPOSITORY=3
 ENV_TTL_HOURS=48
 BUILDS_PAUSED=false
@@ -796,7 +1013,7 @@ listeners and Traefik's control API are not public dashboards to expose.
 | Durable publication and teardown | `previa_operations`, `previa_environments`, operation logs | Route changes, GitHub reports and cleanup waiting/retrying independently of a build. |
 | Capacity and housekeeping | Build waiting reasons, housekeeping action counts, `previa_build_disk_free_bytes` | Admission limits, cleanup behavior, free disk **at the last build check**, not a continuous host disk monitor. |
 | GitHub and webhooks | Request/rate-limit metrics, webhook delivery outcomes, GitHub delivery screen | API failures, token/permission problems, exhausted API budget and signature failures. |
-| Backup health | `previa_backup_last_success_timestamp_seconds`, systemd status and S3 objects | Whether the entire encrypted backup and retention pass succeeded. |
+| Backup health | `previa_backup_last_success_timestamp_seconds`, systemd status and Spaces objects | Whether the entire encrypted backup and retention pass succeeded. |
 | TLS | `traefik_tls_certs_not_after`, router ACME logs, external HTTPS check | Upcoming expiry, failed renewal and public certificate acceptance. |
 | Database | `dc ps postgres`, readiness, PostgreSQL logs and read-only SQL checks | Connectivity/schema, active connections, volume disk pressure. A PostgreSQL exporter is not included. |
 
@@ -816,6 +1033,91 @@ central log storage, tracing, and external uptime checks are separate integratio
 Traefik's current production config has **access logs disabled**; `dc logs router`
 shows operational logs, not a complete visitor request log. Retain private backend
 metrics access and review series/storage growth if monitoring many preview routes.
+
+### Configure DigitalOcean host monitoring
+
+Use provider host monitoring alongside the private Prometheus/Grafana deployment:
+DigitalOcean reports the Droplet's overall resource use; Previa metrics explain
+which builds, jobs, routes and operations are waiting or failing. Selecting the
+creation-time monitoring option does not create queue/backup alerts automatically.
+
+On the Droplet, verify the selected agent:
+
+```sh
+systemctl status do-agent --no-pager
+journalctl -u do-agent --since '30 minutes ago' --no-pager
+```
+
+If absent, follow DigitalOcean's installation route. Download and inspect the
+installer on this host before running it:
+
+```sh
+curl -fsSL https://repos.insights.digitalocean.com/install.sh -o /root/previa-do-agent-install.sh
+less /root/previa-do-agent-install.sh
+bash /root/previa-do-agent-install.sh
+systemctl status do-agent --no-pager
+```
+
+Reference: [DigitalOcean metrics-agent installation](https://docs.digitalocean.com/products/monitoring/how-to/install-metrics-agent/).
+No Previa application secret or DigitalOcean API token is needed in
+`previa.env` for this control-panel/agent setup.
+
+Open the Droplet's **Insights/metrics** view and confirm recent CPU, memory and
+root-disk data. In **Monitoring**, create resource alerts for this Droplet or its
+production tag, select an actual email/notification destination, then tune
+thresholds after measuring normal use. Initial **operator examples**, not
+provider defaults or workload guarantees:
+
+| Resource alert | Example starting threshold | Response |
+| --- | --- | --- |
+| CPU utilization | Above 85% for 10 minutes | Compare running builds/previews with `docker stats`; reduce concurrency or resize after measurement. |
+| Memory utilization | Above 80% for 10 minutes | Inspect PostgreSQL, builders and previews; retain headroom for the OS and replacement candidates. |
+| Root disk utilization | Above 75% for 10 minutes | Inspect Docker images/cache, DB/log growth and backup temporary space before the build disk gate is reached. |
+| Disk utilization, urgent | Above 85% for 5 minutes | Pause new builds and follow controlled capacity recovery; do not broadly prune live objects. |
+
+Reference: [resource alert creation and notifications](https://docs.digitalocean.com/products/monitoring/how-to/manage-resource-alerts/).
+Confirm the target and recipient on each alert. If your Docker data root is
+moved to an attached volume later, root-disk monitoring alone does not establish
+that volume's free space; add its own collection/alerts.
+
+Host CPU/bandwidth graphs do not tell you which PR URL was visited or which
+River job failed. Use Traefik metrics for preview HTTP traffic, Previa metrics
+and logs for the pipeline, and `docker stats` for individual containers.
+
+### Configure DigitalOcean Uptime for external HTTPS and certificate checks
+
+After trusted production TLS is working, open **Uptime → Create Uptime Check**,
+choose **HTTPS**, enter `https://previa.example.com/`, select relevant probe
+regions and name it `previa-production-dashboard`. Confirm that this public
+unauthenticated URL actually returns 2xx; Uptime counts responses outside
+200–299 as failures. Do not expose internal `/livez`, `/readyz` or `/metrics`
+just to create this check.
+[Check creation](https://docs.digitalocean.com/products/uptime/how-to/create-checks/).
+
+In that check's status page, create separate alerts and recipients:
+
+| Alert | Example operator choice |
+| --- | --- |
+| Downtime | Notify after 2 minutes of failed checks. |
+| Latency | Notify above 2,000 ms for 5 minutes; tune after normal traffic is measured. |
+| Certificate expiry | Notify when fewer than 14 days remain. |
+
+Latency alerts do not replace downtime alerts. Set the monitored email/Slack
+destination explicitly and verify notifications with a staging check; creating
+a check alone does not configure every notification.
+[Uptime alerts](https://docs.digitalocean.com/products/uptime/how-to/create-alerts/).
+
+Add an HTTPS check for an actual maintained test-preview URL to exercise the
+preview routing path. Its app should have a stable 2xx public endpoint. Update
+or disable that check when the PR closes, the preview expires or its URL changes;
+intentional lifecycle cleanup is not a production outage. Rootless builds,
+queues and GitHub feedback still need their application alerts even when this
+URL is reachable.
+
+Uptime runs outside the Droplet and can detect its public path failing while
+local Prometheus/Grafana/Alertmanager are down. Review its current pricing and
+regional availability before enabling checks. A successful dashboard check does
+not establish that PostgreSQL, the worker and every PR preview are healthy.
 
 ### Inspect logs, containers and PostgreSQL
 
@@ -993,9 +1295,8 @@ before running it; consult the [official receiver configuration](https://prometh
    Prometheus discovers Alertmanager and that a real test rule reaches it on
    staging. Do not stop live services merely to test a notification.
 
-Add an independent external HTTPS uptime check for the dashboard and a chosen
-preview, and host resource monitoring through your provider or a separately
-configured exporter. Prometheus and Alertmanager on the same failed VPS cannot
+Use the DigitalOcean Uptime and host-monitoring steps above alongside actual
+Alertmanager delivery. Prometheus and Alertmanager on the same failed VPS cannot
 report that whole-host outage. PostgreSQL/node/container exporters and Loki are
 not currently in the supplied stack; deployment of those is an additional choice.
 
@@ -1006,10 +1307,11 @@ Use [22 · Observability](22-observability-and-hardening.md) for metric details 
 
 ### What database are we backing up, and where is it?
 
-The production database is **the `previa` database inside the VPS's `postgres`
-Compose service**, persisted in `previa_postgres`. It is not on Fly, GitHub, your
-laptop, or in the S3 bucket. S3 stores encrypted copies of a PostgreSQL logical
-backup, not a live database service.
+The production database is **the `previa` database inside the DigitalOcean
+Droplet's `postgres` Compose service**, persisted in `previa_postgres` on the
+Droplet's SSD. It is not a DigitalOcean Managed Database or a database in Spaces.
+Spaces stores encrypted copies of PostgreSQL logical backups, configuration and
+ACME archives. Uploading a dump there does not create another running database.
 
 The backup includes application tables and River's job/state tables from one
 consistent `pg_dump` snapshot. PostgreSQL continues serving while this dump runs.
@@ -1039,33 +1341,53 @@ the database. They serve different purposes. Losing either can make part of the
 restore unusable. Retain old key versions and identities while retained backups
 still require them.
 
-### Step B2 — Create a private off-host S3 bucket and storage credential
+### Step B2 — Create a private DigitalOcean Spaces bucket and access key
 
-For the concrete S3 example:
+In your DigitalOcean project, open **Spaces Object Storage → Create Bucket**:
 
-1. Create a dedicated bucket, such as `YOUR_BUCKET`, in an appropriate region.
-   Keep public access blocked. Use a `production/` prefix for this host and a
-   separate staging prefix/bucket for drills.
-2. Create a scoped IAM identity/credential for that bucket/prefix. It needs to
-   list objects, upload backups, read them for verification/restore, and delete
-   expired objects for the script's retention pass. Include the multipart/ACL
-   operations required by your rclone configuration; verify the exact policy with
-   a real upload/read/delete test. Do not grant blanket access to unrelated data.
-3. Pre-create the bucket and configure rclone's `no_check_bucket=true` if you do
-   not grant bucket-creation/check permissions. Follow the
-   [rclone S3 permissions/configuration reference](https://rclone.org/s3/#s3-permissions).
-4. Keep account recovery and a restore credential available offline. Root's
-   rclone configuration is not automatically in the `/etc/previa` archive.
-5. If using bucket versioning or object lock, define lifecycle rules for older
-   object versions too. The script deletes current named objects; that does not
-   necessarily reclaim historical versions. Object-lock policies that prevent
-   its retention deletion will cause the backup run to fail until the policy and
-   retention strategy are made compatible.
+1. Select **Standard Storage** for the documented upload/read/delete/restore
+   workflow. Choose an available region near the Droplet and record its regional
+   origin endpoint. `nyc3.digitaloceanspaces.com` below is only an example.
+   Off-Droplet storage survives host loss; an additional copy in another region
+   or provider is a separate recovery decision.
+2. Select a unique bucket name, represented here by `YOUR_BUCKET`, and the
+   production project. Keep objects and file listing private; do not add a
+   public-read policy. Leave CDN disabled for these encrypted recovery files.
+3. Create the bucket before configuring the restricted backup client. Save the
+   actual bucket name and **origin** endpoint; the CDN hostname or
+   `YOUR_BUCKET.region.digitaloceanspaces.com` is not the rclone API endpoint
+   requested below.
 
-The same script supports other [rclone S3-compatible providers](https://rclone.org/s3/)
-and other rclone remotes. An absolute `BACKUP_REMOTE=/some/directory` also works
-for a local drill, but a directory on this VPS's disk does not survive loss of
-that disk and is not an off-host production backup.
+The bucket lives outside the Droplet and is billed separately. PostgreSQL data
+files remain on the Droplet. Reference: [Spaces bucket creation](https://docs.digitalocean.com/products/spaces/how-to/create/).
+
+In **Spaces Object Storage → Access Keys → Create Access Key**, choose
+**Limited access**, select this production bucket, grant **Read/Write/Delete**
+and name the key `previa-production-backups`. Save the secret when shown; keep
+a protected recovery copy. This grants the read/upload/delete operations used
+by verification, restore and retention, without granting unrelated-bucket access.
+[Spaces access keys and permissions](https://docs.digitalocean.com/products/spaces/how-to/manage-access/).
+
+Limited keys are scoped to a bucket, not automatically to the `production/`
+prefix. Use a different bucket/key for staging if those operators should not
+access production archives. Current DigitalOcean limited-access keys cannot be
+combined with `PutBucketPolicy` bucket policies; do not paste an AWS IAM policy
+into this setup or create an AWS access key. Keep private object ACLs and test
+the actual limited key.
+
+Use `no_check_bucket=true` in rclone because the bucket already exists and this
+key need not create or enumerate all account buckets. Avoid `rclone lsd
+previa-backups:` as the permission test; list the selected bucket/prefix instead.
+
+The script deletes current backup objects after `BACKUP_RETENTION_DAYS`.
+If you enable versioning, separately manage noncurrent-version retention and
+verify storage growth. A policy that prevents the script's deletion makes its
+retention pass fail. Encryption protects archive contents, not deletion by a
+credential with delete permission; a separately controlled second copy requires
+its own backup/recovery procedure.
+
+An absolute `BACKUP_REMOTE=/some/directory` works for a local drill, but a
+directory on this Droplet's disk is not an off-server production backup.
 
 ### Step B3 — Configure rclone as the backup service's user
 
@@ -1076,16 +1398,62 @@ rclone config
 rclone config file
 ```
 
-Create a remote named **`previa-backups`**, choose the S3 backend and AWS provider,
-enter the access key/secret interactively, and set the bucket's region. Use the
-appropriate endpoint/provider if you selected another S3-compatible service.
-Choose private ACL behavior and the bucket-check policy from B2.
+In the interactive editor, select options by their names rather than copying
+version-dependent menu numbers:
+
+| rclone field | Value |
+| --- | --- |
+| Remote name | `previa-backups` |
+| Storage/backend | `s3`, the S3-compatible backend |
+| Provider | `DigitalOcean` |
+| Environment/runtime authentication | `false`; enter the selected Spaces key/secret interactively |
+| Access key / secret access key | Values created in B2; never the DigitalOcean account password/API token |
+| Region / location constraint | Leave empty for this provider; the actual region is in the endpoint |
+| Endpoint | Actual regional origin, e.g. `nyc3.digitaloceanspaces.com`; no bucket/prefix or CDN domain |
+| ACL | `private` |
+| Advanced `no_check_bucket` | `true`; pre-created bucket with a limited key |
+
+The protected config should have this shape; these credential values are
+placeholders, not usable keys:
+
+```ini
+[previa-backups]
+type = s3
+provider = DigitalOcean
+env_auth = false
+access_key_id = YOUR_SPACES_ACCESS_KEY
+secret_access_key = YOUR_SPACES_SECRET_KEY
+region =
+endpoint = nyc3.digitaloceanspaces.com
+location_constraint =
+acl = private
+no_check_bucket = true
+```
+
+Keep the actual endpoint consistent with the selected bucket region.
+[rclone's DigitalOcean configuration](https://rclone.org/s3/#digitalocean-spaces)
+documents the blank region/location constraint and regional endpoint.
 
 The default root configuration is normally
 `/root/.config/rclone/rclone.conf`; the `config file` command confirms its actual
 path. Protect it with mode 600. Configuring rclone only as your SSH user leaves
 root's systemd backup service without that remote. Do not put the storage key in
 Previa's repository secrets UI or a committed Compose file.
+
+For the normal confirmed path:
+
+```sh
+chown root:root /root/.config/rclone/rclone.conf
+chmod 600 /root/.config/rclone/rclone.conf
+rclone lsf previa-backups:YOUR_BUCKET/production
+```
+
+An empty listing before the first backup is normal. A forbidden/signature error
+is not: verify bucket scope, endpoint and credentials. The service runs without
+your interactive shell exports; a remote only configured for `ops` or through
+a temporary `RCLONE_CONFIG` export does not configure root's timer service.
+Do not enable interactive config-password prompts for an unattended service
+without separately provisioning its unlock mechanism.
 
 Set these values in `/etc/previa/previa.env`:
 
@@ -1301,10 +1669,28 @@ the original encrypted recovery set according to your retention policy.
 
 ### Step B6 — Recover configuration/certificates or replace the whole VPS
 
-For a lost host, create a new dedicated VPS and install the **chosen recovery
-release** at `/opt/previa` using Fresh host setup. Keep traffic/DNS directed to the
-new host only when its intended recovery behavior has been checked. Configure
-root's rclone access again from separately stored recovery credentials.
+For a lost host, create a new **DigitalOcean Droplet** with a plain supported OS
+and install the **chosen recovery release** at `/opt/previa` using Steps 0–3.
+This primary recovery path uses the logical Spaces archives, not an assumption
+that a provider disk snapshot contains the latest PostgreSQL state.
+
+Record the replacement's ID/IP, attach the intended Cloud Firewall, verify SSH,
+agent and disk capacity, and keep the backup timer stopped. If using a Reserved
+IP, create the replacement in the same datacenter but **do not reassign it yet**.
+Recover root's rclone access from offline credentials; this config was not in
+the default archive. The bucket and its region/endpoint stay the same even though
+the Droplet changed.
+
+Define `dc` and `probe` from Step 7 in this new root SSH session. Retrieve the
+exact matching encrypted set using B5's download step, and temporarily stage
+the offline age identity using B5's key-installation step. Do not run the first
+deployment's application startup or certificate reset during this recovery.
+
+If the old Droplet still exists, stop/isolate its server, worker and router
+before starting a replacement against the restored production identity. Two
+independent copies of the database/worker must not process and report work for
+the same production GitHub registrations. A provider outage does not prove the
+old machine can never return.
 
 Before starting app processes, retrieve/decrypt the matching archives in a
 root-only directory. Stop server, worker and router if they exist:
@@ -1363,15 +1749,106 @@ removes the old route version. Bring back monitoring with
 `dc up -d --wait` **while the file still says `BUILDS_PAUSED=true`**, and restore
 any optional monitoring override/Alertmanager service. Validate internal readiness,
 external HTTPS, GitHub delivery, repository-secret decryption and a real test
-preview. Change the dashboard/wildcard DNS records to the new public IP and
-confirm the public path; account for DNS caches and any IP-scoped credentials.
-Rebuild missing previews, resume intentionally, and make a new complete backup.
+preview. For a replacement Droplet, finish the public cutover deliberately:
+
+1. With valid restored certificates, test the new server before changing DNS,
+   from your workstation:
+
+   ```sh
+   curl --resolve previa.example.com:443:YOUR_NEW_DROPLET_IPV4 \
+     -fsS -D - -o /dev/null https://previa.example.com/
+   ```
+
+   This preserves the hostname/TLS check while selecting the new IP. If the
+   certificate is expired/missing, validate private readiness first and complete
+   production issuance after DNS reaches the new host; TLS-ALPN cannot validate
+   a new dashboard host that the public DNS still sends elsewhere.
+2. For ordinary public IPv4, change **both** Cloudflare dashboard and wildcard
+   A records to the new address. For a Reserved IPv4, reassign it to this
+   replacement through DigitalOcean Networking; DNS can retain that address.
+   Reserved-IP recovery is manual and limited to its documented datacenter.
+3. Verify `dig` from outside, normal HTTPS without `-k`, GitHub callback/webhook
+   delivery, preview routing and Uptime checks. The GitHub registrations can
+   retain their URLs when hostnames stay the same. Account for cached DNS and
+   any external allowlist that used the old outbound IP.
+4. Rebuild missing previews through authorized requests, resume deliberately and
+   take a complete new Spaces backup. Enable the timer and verify monitor/alert
+   targets reference the replacement Droplet/tag.
+5. Keep the retired host stopped while validating recovery. Preserve needed
+   evidence/backups before deleting it; inspect separately billed resources
+   such as volumes, provider backup images, snapshots and Reserved IPs.
+
+The live DB still has private hostname `postgres`; moving the Droplet does not
+require changing it into a public IP or a Spaces URL. Data after the selected
+dump is not recovered by changing DNS.
 
 Rehearse this on isolated staging infrastructure. A copied production database
 still names production installations/PRs: `BUILDS_PAUSED` does **not** mute GitHub
 reporting or teardown. Use disposable GitHub registrations/repositories and test
 domains, or an isolated drill such as the smoke harness with the App disabled;
 do not let a restore rehearsal report to real production PRs accidentally.
+
+### Step B7 — Optional DigitalOcean Droplet backups and snapshots
+
+There are three different backup/recovery objects:
+
+| Object | Contents / storage | Intended use |
+| --- | --- | --- |
+| Previa's encrypted archives | Logical PostgreSQL dump, `/etc/previa`, ACME; private Spaces bucket | The primary database/config recovery workflow in B1–B6. |
+| DigitalOcean automated Droplet backup | Provider disk image, managed in the Droplet's Backups view | An additional OS/disk recovery option with the plan's own schedule and retention. |
+| DigitalOcean manual snapshot | Disk image you deliberately capture and retain | An additional maintenance checkpoint; it is not the previous application release or continuous DB recovery. |
+
+To enable provider backups, open this Droplet's **Backups** tab, choose the
+available backup plan/schedule/retention, review its cost and enable it. Confirm
+successful provider images and their timestamps in the control panel.
+Their cadence is independent of `previa-backup.timer`. They do not upload the
+three `*.age` files to your Spaces bucket or update Previa's backup-success
+metric. [Enable Droplet backups](https://docs.digitalocean.com/products/backups/how-to/enable/).
+
+For a deliberate maintenance snapshot:
+
+1. Follow U1/U2: record the release/digests, pause builds, drain work and complete
+   a fresh encrypted Spaces backup. Record its timestamp and chosen recovery
+   release outside the Droplet.
+2. Stop the backup timer/service and stop Compose services, so the snapshot
+   does not capture active DB writes or an unexpectedly running worker:
+
+   ```sh
+   systemctl disable --now previa-backup.timer
+   systemctl stop previa-backup.service
+   dc stop
+   shutdown -h now
+   ```
+
+   This is a maintenance outage and disconnects SSH. Dynamic containers may
+   have been running until OS shutdown; a snapshot is not a guarantee that
+   their ephemeral preview state will be restored or served correctly.
+3. In the powered-off Droplet's **Snapshots** tab, create a named snapshot such
+   as `previa-before-v0.2.0-20261006`. Record its ID and source disk size.
+   [Droplet snapshot procedure](https://docs.digitalocean.com/products/snapshots/how-to/snapshot-droplets/).
+4. After capture, power the Droplet on, reconnect, redefine the `dc` helper,
+   confirm `BUILDS_PAUSED=true`, and start the stack with `dc up -d --wait`.
+   Verify routing/resources/readiness, rebuild missing previews if necessary,
+   then resume through U5. Run a fresh backup and enable the timer again.
+
+Snapshots/disk backups contain host credentials and an earlier copy of the DB.
+Restrict provider account access. Restoring one can start old services/settings
+and rewind *all* captured disk state. A live provider backup does not prove
+application-level consistency or restore of the latest DB transaction.
+
+If using a provider image during recovery, create an isolated replacement first;
+prevent outbound production integrations until the old services are stopped,
+the intended configuration/release is selected and builds are paused. Do not
+restore an arbitrary image over the healthy live Droplet as an image rollback.
+For actual DB recovery, prefer the latest completed encrypted dump and B5/B6's
+schema/keyring/route reconciliation. Test provider-image recovery separately
+before relying on it.
+
+Provider backups/snapshots do not supply WAL-based PITR for this self-hosted DB.
+Spaces in the same provider/account protects against Droplet loss, but it is not
+an independent account/provider recovery copy. Keep offline identities/account
+recovery and add a separately controlled copy if that failure scope must be
+covered.
 
 ## Upgrades and rollback
 
@@ -1677,6 +2154,12 @@ changed env values or a replaced credential mount.
 - **DNS token:** replace its protected file and recreate router during the planned
   routing interruption, preserving preview network attachments as above; verify
   issuance/renewal behavior without deleting ACME.
+- **Spaces backup key:** create a replacement limited key for the same bucket,
+  update root's `rclone config` interactively, test listing/upload/read/delete,
+  then run a full backup and verify its timestamp/artifacts. Only then retire
+  the old key in DigitalOcean and update offline recovery credentials. This
+  does not require recreating server/worker; it changes the backup client's
+  authentication. Revoke a compromised key immediately and diagnose any gap.
 - **Repository encryption keys:** add a new version, make it active on both
   server/worker, recreate them, and run the maintenance command:
 
@@ -1687,6 +2170,87 @@ changed env values or a replaced credential mount.
   Retain old key versions until re-encryption reports no current values using
   them, **and** retain a recovery copy for older backups. Take a fresh backup after
   rotation. See [07 · Repository secrets](07-repository-secrets.md).
+
+## DigitalOcean capacity, billing and ongoing operations
+
+### Resize the existing Droplet when measured demand needs it
+
+First distinguish the constraint: queue concurrency, configured preview budget,
+host CPU/RAM, disk free space and a slow Dockerfile are different bottlenecks.
+Look at DigitalOcean metrics, `docker stats`, Grafana queue/build panels and
+waiting reasons. Raising concurrency without resources can make every build
+slower or exhaust memory.
+
+For a planned resize:
+
+1. Use U1/U2 to record the release/config, pause and drain builds, and complete
+   a new encrypted Spaces backup. Retain the tested recovery path. An optional
+   pre-maintenance snapshot uses B7.
+2. Disable the backup timer while services are stopped, stop core services and
+   gracefully shut down the Droplet:
+
+   ```sh
+   systemctl disable --now previa-backup.timer
+   systemctl stop previa-backup.service
+   dc stop
+   shutdown -h now
+   ```
+
+3. In the Droplet's **Settings → Resize configuration**, or its **Actions →
+   Resize** option, choose a supported larger resource configuration. CPU/RAM-only
+   changes preserve more disk flexibility; disk increases cannot be reversed.
+   Available moves depend on its current configuration family. Plan a maintenance
+   outage rather than assuming this operation is live.
+   [DigitalOcean resize procedure](https://docs.digitalocean.com/products/droplets/how-to/resize/).
+4. Power on, reconnect, redefine the production helpers and inspect
+   `docker info`, `free -h` and `df -h /var/lib/docker`. Confirm the chosen address,
+   firewall and monitoring target. Keep `BUILDS_PAUSED=true` until checks pass.
+5. Start core services with `dc up -d --wait`. Check PostgreSQL schema, both
+   processes' readiness, router/network attachments, egress and each surviving
+   preview. Reboot does not promise automatic restart of on-failure previews;
+   rebuild unavailable previews through their authorized workflow.
+6. If increasing application capacity, deliberately edit `BUILD_MEMORY`,
+   `MAX_CONCURRENT_BUILDS`, `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET` and the
+   per-repository cap, leaving host/replacement headroom. The guide uses fixed
+   budgets: resizing alone does not change them. Validate and recreate the worker,
+   then resume through U5, take a new backup and enable the timer.
+
+A second Droplet does not automatically share this host's Docker images,
+accepted routes, preview networks or disk inventory. Do not enable a Droplet
+autoscale pool or deploy extra workers on unrelated Docker hosts as though the
+current code implements a distributed preview runtime.
+
+### Track the resources that remain billed
+
+| Resource | Why it is present / what to review |
+| --- | --- |
+| Droplet | Compute/storage allocation for the running platform and all previews. Stopping containers or powering off the Droplet is not the same as deleting its billed allocation. |
+| Spaces | Encrypted archives, retained objects/versions and relevant transfer; independently billed from the server. |
+| Provider backups/snapshots | Optional disk recovery and retained images; inspect old checkpoints after their recovery window ends. |
+| Reserved IP / attached volumes | Optional independent resources; review their allocation and current pricing when retiring a host. |
+| Uptime | Public checks and notification configuration; review its check plan. |
+| Domains / GitHub packages / notification service | Separate services with their own access and usage rules. |
+
+Use current [Droplet pricing](https://docs.digitalocean.com/products/droplets/details/pricing/),
+[Spaces pricing](https://docs.digitalocean.com/products/spaces/details/pricing/)
+and [Uptime pricing](https://docs.digitalocean.com/products/uptime/details/pricing/)
+for the selected resources/region. This guide does not assume historical free
+tiers or quote a fixed monthly total. Creating another Docker preview draws from
+the existing Droplet; its storage/traffic still contributes to usage.
+
+### Maintain the host and prove recovery
+
+Keep Ubuntu, Docker, pinned infrastructure images and Previa releases maintained.
+Use a tested maintenance window for kernel/Docker restarts, with a backup and
+the reboot checks above. Test rootless BuildKit and isolation on staging after
+relevant kernel/runtime updates.
+
+Review failed jobs, disk/cache growth, active preview lifetimes, certificate
+renewal, complete backup timestamps and alert recipients routinely. Rehearse a
+Spaces restore on a separate isolated Droplet and record the actual recovery
+time/data-loss window. Keep operator SSH/account recovery and offline encryption
+identities current. Compose restart policies do not provide automatic failover
+when this single server fails.
 
 ## CI and releases
 
@@ -1708,6 +2272,11 @@ The tag-driven `Release` workflow does **not** depend on a successful `CI`
 workflow, and creating a tag is not a substitute for running CI on its exact
 commit. There is no workflow that SSHes into the VPS, changes its env file,
 executes its Compose commands, or automatically restores a failed rollout.
+
+DigitalOcean's role here is hosting the Droplet and Spaces bucket. There is no
+App Platform repository integration or provider deploy button managing this
+Compose application. A reboot restarts/reconciles the installed stack; it does
+not fetch the latest GitHub commit. The operator chooses and applies releases.
 
 ### Set up GitHub before the first release
 
@@ -1828,6 +2397,16 @@ Put any future SSH/deployment token into that deployment environment's protected
 secrets, with host identity verification and scoped access. That future token is
 different from the built-in `GITHUB_TOKEN` and from Previa's GitHub App key.
 Until such a workflow is implemented/tested, every production rollout is manual.
+
+For a future SSH deployment to this Droplet, the environment would normally hold
+the production host/user, a dedicated deployment SSH private key and verified
+SSH host-key/known-hosts data; a private GHCR pull credential is separate.
+DigitalOcean API access is only needed if the workflow actually provisions or
+changes provider resources. Do not give the application a provider token simply
+to run Docker, and do not assume hosted GitHub runners can reach an SSH rule
+restricted to your workstation IP. The runner's authorized network path and the
+deployment account's Docker/root privileges need explicit implementation.
+These are design requirements, not secrets consumed by the current workflows.
 
 ## Local staging smoke test
 
