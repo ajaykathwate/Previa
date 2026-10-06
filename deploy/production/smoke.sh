@@ -94,7 +94,7 @@ started=$(date +%s)
 check "stack starts and every health check passes" "${compose[@]}" up -d --wait --wait-timeout 180
 echo "     started in $(($(date +%s) - started))s"
 check "migrations ran once and exited cleanly" test "$(docker inspect --format '{{.State.ExitCode}}' "${PROJECT}-migrate-1")" = 0
-check "schema is at the release's migration" test "$(psql "SELECT max(version_id) FROM goose_db_version WHERE is_applied")" = 18
+check "schema is at the release's migration" test "$(psql "SELECT max(version_id) FROM goose_db_version WHERE is_applied")" = 19
 check "the route file is written from the accepted table" \
 	"${compose[@]}" run --rm --no-deps --entrypoint /usr/local/bin/previa-route-sync worker
 
@@ -157,7 +157,7 @@ for image in server worker egress; do docker tag "previa-$image:$VERSION" "previ
 image_of() { docker inspect --format '{{.Config.Image}}' "$("${compose[@]}" ps -q "$1")"; }
 check "upgrade: the stack rolls to the new tag" env PREVIA_VERSION="$VERSION-next" "${compose[@]}" up -d --wait --wait-timeout 180
 check "upgrade: server and worker run the new images" test "$(image_of server) $(image_of worker)" = "previa-server:$VERSION-next previa-worker:$VERSION-next"
-check "upgrade: migrations ran again and changed nothing" test "$(psql "SELECT max(version_id) FROM goose_db_version WHERE is_applied")" = 18
+check "upgrade: migrations ran again and changed nothing" test "$(psql "SELECT max(version_id) FROM goose_db_version WHERE is_applied")" = 19
 check "rollback: the stack returns to the previous tag" "${compose[@]}" up -d --wait --wait-timeout 180
 check "rollback: server and worker run the previous images" test "$(image_of server) $(image_of worker)" = "previa-server:$VERSION previa-worker:$VERSION"
 for image in server worker egress; do docker rmi -f "previa-$image:$VERSION-next" >/dev/null; done
@@ -197,7 +197,7 @@ if command -v age >/dev/null && command -v age-keygen >/dev/null; then
 		old_started=$(date +%s)
 		check "an older-schema backup restores and migrates to this release" \
 			env "${drill_env[@]}" "$HERE/restore.sh" --identity "$work/age-key.txt" --yes "$work/old.dump.age"
-		check "the restored schema is current" test "$(psql "SELECT max(version_id) FROM goose_db_version WHERE is_applied")" = 18
+		check "the restored schema is current" test "$(psql "SELECT max(version_id) FROM goose_db_version WHERE is_applied")" = 19
 		check "the server is ready on the upgraded data" bash -c "docker run --rm --network ${PROJECT}_control $CURL_IMAGE -fsS http://server:9090/readyz | grep -q '\"status\":\"ready\"'"
 		echo "     older-schema restore and upgrade took $(($(date +%s) - old_started))s"
 	fi

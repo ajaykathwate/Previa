@@ -45,10 +45,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Generate templates before module checks
+        run: make templates
       - name: Modules are tidy
         run: |
           go mod tidy
-          go mod tidy -modfile=tools/go.mod
+          (cd tools && go mod tidy)
           git diff --exit-code -- go.mod go.sum tools/go.mod tools/go.sum
       - name: Generated code is current
         run: |
@@ -103,7 +105,7 @@ jobs:
             docker buildx build --load --target "$target" --build-arg VERSION=ci-${{ github.sha }} -t "previa-$target:ci" .
           done
       - name: Scan for fixable HIGH and CRITICAL vulnerabilities
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           scan-type: image
           image-ref: previa-worker:ci
@@ -111,7 +113,7 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
       - name: Scan the server image
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           scan-type: image
           image-ref: previa-server:ci
@@ -145,6 +147,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Generate application assets and code
+        run: make assets generate
       - name: Egress image
         run: make egress-image
       - name: Image builds
