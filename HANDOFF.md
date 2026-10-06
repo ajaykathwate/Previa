@@ -79,6 +79,7 @@ Last updated: 2026-10-05
   older than SyncStaleAfter (5m) -> "Sync stalled", Request starts a new revision.
   Mergeability gives up after 8 attempts -> pull_requests.mergeability_unresolved_at
   (migration 0019) -> "Unknown"; cleared by a new observation or check.
+- Brand PNGs + favicon in web/static/brand (/favicon.ico too).
 - Verified: lint 0, all packages with TEST_DATABASE_URL, -race on changed
   packages, browser suite, test-e2e. prod-smoke 43/43 earlier (not re-run).
 

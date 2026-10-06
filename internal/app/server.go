@@ -144,6 +144,7 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	})
 	router.Use(httpx.RateLimit(signInPaths, 2*time.Second, 20))
 	router.Handle("/static/*", web.StaticHandler())
+	router.Handle("/favicon.ico", web.FaviconHandler())
 	// The router sends unknown and removed preview hosts here. Public and
 	// outside the session group: it reads and sets no cookie.
 	router.Get(routing.UnavailablePath, routing.UnavailablePage)

@@ -53,6 +53,9 @@ repository's Secrets tab).
 - **Light and dark:** tokens switch under `prefers-color-scheme: dark` or an explicit
   `<html data-theme>`. The header toggle stores the choice in `localStorage`
   (`previa-theme`); an inline script in `Document` applies it before first paint.
+- **Brand:** `components.BrandMark` in the UI; `web/static/brand` holds the
+  favicon (SVG following the tab theme, PNG fallback, Apple touch icon, also served
+  at `/favicon.ico`) and downloadable logo PNGs ([web/static/README.md](../web/static/README.md)).
 - **Type:** system sans-serif for UI; system monospace for commits, branches and
   labels. No external fonts or CDNs, keeping the app self-hostable and private.
 - **Rules:** use the shared tokens and components; ask before changing the theme

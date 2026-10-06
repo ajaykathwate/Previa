@@ -37,3 +37,27 @@ func TestEmbeddedBrowserAssets(t *testing.T) {
 		}
 	}
 }
+
+func TestBrandAssetsAndFavicon(t *testing.T) {
+	h := StaticHandler()
+	for path, kind := range map[string]string{
+		"/static/brand/favicon.svg":             "image/svg+xml",
+		"/static/brand/favicon-32.png":          "image/png",
+		"/static/brand/apple-touch-icon.png":    "image/png",
+		"/static/brand/previa-mark.png":         "image/png",
+		"/static/brand/previa-mark-on-dark.png": "image/png",
+		"/static/brand/previa-logo.png":         "image/png",
+		"/static/brand/previa-logo-on-dark.png": "image/png",
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusOK || !strings.HasPrefix(w.Header().Get("Content-Type"), kind) {
+			t.Errorf("%s: status=%d type=%q", path, w.Code, w.Header().Get("Content-Type"))
+		}
+	}
+	w := httptest.NewRecorder()
+	FaviconHandler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/favicon.ico", nil))
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/png" || !strings.HasPrefix(w.Body.String(), "\x89PNG") {
+		t.Fatalf("/favicon.ico: status=%d type=%q", w.Code, w.Header().Get("Content-Type"))
+	}
+}
