@@ -441,7 +441,7 @@ Keep the DigitalOcean console/recovery path available.
 
 Use a separate staging VPS for first deployment, restores and upgrade drills.
 Choose a release only after checking the [CI and releases](#ci-and-releases)
-section and the current [smoke-test limitation](#local-staging-smoke-test).
+section and the [local staging smoke test](#local-staging-smoke-test).
 
 ### Step 2 — Set up domains, DNS and the DNS token
 
@@ -2298,8 +2298,8 @@ not fetch the latest GitHub commit. The operator chooses and applies releases.
    every package is automatically public. Check package access after publication;
    configure the VPS's read credential if private.
 6. Validate the exact release candidate and document migration/rollback behavior,
-   configuration changes and the pending live checks. Resolve the smoke-test
-   schema mismatch below before calling its current CI job green.
+   configuration changes and the pending live checks. Run the smoke test against
+   that candidate's images and confirm all current schema checks pass.
 
 Keep **production** OAuth/App secrets, database password, DNS token, repository
 keyring and backup identity out of these workflows. The workflows use disposable
@@ -2309,7 +2309,8 @@ that is not part of the current CI.
 
 ### What CI actually checks
 
-The `checks` job verifies modules are tidy, generates assets/templates/sqlc code,
+The `checks` job first generates template Go packages so a fresh checkout can
+resolve local imports, verifies modules are tidy, generates assets/templates/sqlc code,
 builds, runs `go vet`/golangci-lint and govulncheck, migrates disposable PostgreSQL,
 runs race-enabled Go tests, and checks Prometheus alert rules and dashboard queries.
 A separate browser job installs isolated Playwright tooling and runs UI regressions.
@@ -2430,13 +2431,13 @@ drill. `SMOKE_KEEP=1` retains the isolated stack for inspection rather than norm
 cleanup. Use disposable data and a separate host; the harness is not a production
 backup or acceptance substitute.
 
-**Current gate to fix separately:** the tracked `smoke.sh` asserts Goose schema
-**18** in multiple checks, while `internal/platform/database/schema.go` and the
-current migration set require **19**. Its old 43/43 result in the release report
-is historical, from the earlier schema. A fresh run against the current build
-can fail at those assertions, and CI includes this script. This documentation-only
-change does not repair it. Resolve and rerun that gate in an authorized code task
-before claiming the current production-stack suite passes.
+The tracked `smoke.sh` asserts Goose schema **19** after initial migration,
+upgrade and an optional older-backup restore, matching
+`internal/platform/database/schema.go` and the current migration set. When adding
+a migration, update those three expectations alongside the application's schema
+requirement. The earlier 43/43 result in the release report is historical; run the
+current harness against the exact candidate images before treating its gate as
+passed.
 
 ## Security notes
 
@@ -2489,7 +2490,7 @@ before claiming the current production-stack suite passes.
 | [Backup](../deploy/production/backup.sh), [restore](../deploy/production/restore.sh) | Local PostgreSQL target, encrypted artifacts, retention, destructive restore and paused startup. |
 | [Migration runner](../internal/app/migrate.go), [schema requirement](../internal/platform/database/schema.go) | Forward-only embedded migrations and the current schema gate. |
 | [CI](../.github/workflows/ci.yml), [Release](../.github/workflows/release.yml) | Exact triggers, jobs, tokens, draft artifacts and absence of deployment automation. |
-| [Smoke harness](../deploy/production/smoke.sh), [release report](25-release-report.md) | Historical local evidence, current assertion mismatch and live acceptance work. |
+| [Smoke harness](../deploy/production/smoke.sh), [release report](25-release-report.md) | Candidate rehearsal, historical local evidence and live acceptance work. |
 
 For daily actions use [21 · Operating the MVP](21-mvp-operations.md); for response
 to failures use [23 · Incident runbook](23-incident-runbook.md). This runbook expands

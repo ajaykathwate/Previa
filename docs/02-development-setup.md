@@ -58,6 +58,34 @@ the Optional values equal the defaults.
 Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 `go tool -modfile=tools/go.mod <tool>`.
 
+On a fresh checkout, generate the ignored template Go files before running
+`go mod tidy` or direct Go build/test commands:
+
+```sh
+make templates
+go mod tidy
+(cd tools && go mod tidy)
+git diff --exit-code -- go.mod go.sum tools/go.mod tools/go.sum
+```
+
+**Expected:** template generation succeeds and both tidy commands leave the four
+module files unchanged. Without generation, directories containing only
+`.templ` files are not Go packages; tidy can try to fetch Previa's own imports
+from GitHub and fail with `git ls-remote` or authentication errors. CI runs
+`make templates` before its module checks. `make build`, `make test` and
+`make lint` already generate templates as prerequisites.
+
+CI's separate Docker integration runner runs `make assets generate` before its
+opt-in suites. When running those suites manually on a fresh checkout, run the
+same command first; generated files are not passed between GitHub Actions jobs.
+
+Tidy the tools module from `tools/` as shown. Using
+`go mod tidy -modfile=tools/go.mod` from the repository root changes the module
+manifest without changing the source root; Go then interprets the application's
+packages as part of the tools module and tries to fetch their imports remotely.
+The existing `go tool -modfile=tools/go.mod <tool>` commands still select the
+pinned tool dependencies correctly.
+
 | Variable | Process | How to set it | Purpose |
 | --- | --- | --- | --- |
 | `DATABASE_URL` | server, worker, migrations | Keep the example for the Compose database. | Application data, sessions and River jobs. |
@@ -330,6 +358,15 @@ remain (`docker network ls --filter label=io.previa.managed`).
 
 ### Release images and production smoke test (optional)
 
+The production shell scripts are tracked with executable mode `100755`:
+`setup.sh`, `backup.sh`, `restore.sh` and `smoke.sh`. A Git checkout preserves
+this mode; it is required because Make and the backup/restore drill invoke the
+scripts directly. If copying the project loses those permissions, restore them:
+
+```sh
+chmod +x deploy/production/{setup,backup,restore,smoke}.sh
+```
+
 Needs Docker and, for the backup drill, `age` (`sudo apt-get install age`). It
 builds the three release images, then runs the production Compose stack on this
 machine under the project `previa-smoke` and removes it afterwards:
@@ -438,7 +475,7 @@ make run-server
 ```
 
 **Expected:** `internal listener serving /livez, /readyz and /metrics`,
-`database health check passed` (with `version`, `schema=18` and `environment`), then
+`database health check passed` (with `version`, `schema=19` and `environment`), then
 `HTTP server listening`. Open <http://localhost:8080/> and sign in with GitHub.
 `curl -s localhost:9090/readyz` answers `{"checks":{"database":"ok","schema":"ok"},"status":"ready",...}`.
 The server refuses to start if migrations are behind (`run migrations first`).

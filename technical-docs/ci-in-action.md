@@ -265,18 +265,40 @@ toolchain on the runner. The version is selected from the repository rather than
 duplicated in this step. The tool dependencies are separately declared in
 [tools/go.mod](../tools/go.mod).
 
-### 4.5 Verify dependency manifests are tidy
+### 4.5 Generate templates, then verify dependency manifests are tidy
+
+```yaml
+- name: Generate templates before module checks
+  run: make templates
+```
+
+This runs immediately after Go setup. Template-generated Go files are ignored by
+Git, so a fresh runner initially has some directories containing only `.templ`
+sources. `make templates` uses the pinned templ tool to turn them into local Go
+packages before `go mod tidy` resolves imports.
+
+Without this step, tidy can try to download Previa's own packages as external
+modules and report `git ls-remote` / GitHub authentication errors. Generate the
+local packages first; these errors do not require a GitHub PAT or a module rename.
 
 ```sh
+make templates
 go mod tidy
-go mod tidy -modfile=tools/go.mod
+(cd tools && go mod tidy)
 git diff --exit-code -- go.mod go.sum tools/go.mod tools/go.sum
 ```
 
-The first command tidies the application module; the second tidies the tools
-module. The final command fails if those tracked manifests/checksum files change.
+The two tidy commands check the application module and the tools module
+respectively. The final command fails if those tracked manifests/checksum files change.
 A green result means the checked-in dependency metadata did not need those
 updates. CI does not commit the changes for you.
+
+The subshell changes into the tools module before tidying and returns to the
+application root for the diff. `-modfile=tools/go.mod` by itself does not change
+the source root: using it for tidy from the application root makes Go interpret
+application packages under the tools module's path and fetch Previa imports from
+GitHub. This is separate from the missing-template problem. Tool execution with
+`go tool -modfile=tools/go.mod` remains the existing supported Makefile command.
 
 If this fails, inspect the diff, run the same tidy commands locally, review the
 dependency changes and commit the appropriate manifests/checksums.
@@ -486,7 +508,7 @@ copied to the Droplet. The later Docker integration job builds its own images.
 
 ```yaml
 - name: Scan for fixable HIGH and CRITICAL vulnerabilities
-  uses: aquasecurity/trivy-action@0.33.1
+  uses: aquasecurity/trivy-action@v0.33.1
   with:
     scan-type: image
     image-ref: previa-worker:ci
@@ -545,6 +567,17 @@ The PostgreSQL block repeats the same image, test credentials, port mapping and
 health options as Checks, on a new runner. Checkout and Go setup repeat too.
 No DB volume or built image is passed from the earlier job.
 
+```yaml
+- name: Generate application assets and code
+  run: make assets generate
+```
+
+The job generates CSS, template Go packages and SQL access code on its own
+runner before any integration suite loads application packages. A dependency on
+`checks` controls scheduling; it does not copy that job's generated files.
+Without this step, routing and end-to-end tests can fail to compile imports
+whose directories contain only ignored template output on a developer's machine.
+
 ### 7.3 Egress image
 
 ```yaml
@@ -589,6 +622,11 @@ make prod-smoke PREVIA_VERSION=ci
 3. Run [smoke.sh](../deploy/production/smoke.sh) against production Compose plus
    [compose.smoke.yml](../deploy/production/compose.smoke.yml).
 
+The production scripts are tracked with executable mode `100755`; Make and the
+drill invoke them directly, so a clean runner needs those permissions. On WSL,
+local permissions can hide a missing Git executable bit. A `Permission denied`
+error before a script starts calls for checking its tracked file mode.
+
 The harness uses project `previa-smoke`, temporary configuration/storage and
 loopback ports `18080`/`18443` for HTTP/HTTPS and `13000` for Grafana. The GitHub
 App is disabled, and ACME is deliberately unreachable. It checks startup,
@@ -604,11 +642,12 @@ The upgrade rehearsal retags the **same built images** with a next tag. It tests
 the replacement procedure, not compatibility between two different releases.
 The optional older-schema restore needs `SMOKE_OLD_DUMP`, which CI does not supply.
 
-**Known source mismatch:** the current smoke script asserts Goose schema
-**18** in three checks, while [schema.go](../internal/platform/database/schema.go)
-requires **19**. A fresh current-source run can fail there. This guide documents
-that existing limitation; it does not change the script or certify the old smoke
-result for today's schema.
+The initial migration, upgrade and optional older-backup restore checks assert
+Goose schema **19**, matching
+[schema.go](../internal/platform/database/schema.go). Update these three
+expectations when a release adds a migration, and rerun the smoke test against
+that release's images. The earlier release report's smoke result is historical;
+it does not establish that today's image passed.
 
 ## 8. The files behind the workflow
 
@@ -693,7 +732,8 @@ assuming every Go command automatically loads `.env`.
 
 | Failure | First place to investigate |
 | --- | --- |
-| Modules are tidy | Manifest/checksum diff after the two tidy commands |
+| Generate templates before module checks | Pinned templ tool installation and the first template-generation error |
+| Modules are tidy | Template generation must have succeeded; then inspect manifest/checksum changes |
 | Generated code is current | Tracked SQL output changes and the matching SQL queries/schema |
 | Build | The first compiler error and whether required templates were generated |
 | Vet/lint | Reported file/rule; warnings promoted to failures by the configured tool |
@@ -702,9 +742,9 @@ assuming every Go command automatically loads `.env`.
 | Race/tests | Test output, detected race and integration prerequisites |
 | Browser | Browser installation, OS dependencies, then failing UI scenario |
 | Image build | Dockerfile stage, dependency download and compile output |
-| Image scan | Image name, CVE, severity, fixed version and current scan settings |
+| Image scan | Action-resolution errors: use the published `v0.33.1` tag; scan errors: image name, CVE, severity and fixed version |
 | Real Docker | The selected suite's logs, Docker/networks, resources and fixture services |
-| Production smoke | First `FAIL` line, captured stack logs and the known schema mismatch |
+| Production smoke | First `FAIL` line, captured stack logs and schema expectations for the tested release |
 
 ## 10. What a passing run establishes
 

@@ -669,7 +669,7 @@ git rev-parse HEAD
 
 Confirm the exact commit passed CI/staging. A PR run may have tested a temporary
 merge SHA; inspect the final candidate's `main` run. Review migration/rollback
-compatibility and the smoke-test limitation in
+compatibility and the smoke-test coverage in
 [CI in action](ci-in-action.md#75-production-stack-smoke-test).
 
 Then create/push a new unused version. Example only:
@@ -1071,7 +1071,7 @@ That would be a separate operational/privilege design.
 | [production env example](../deploy/production/previa.env.example) | Documented runtime/backup settings |
 | [setup.sh](../deploy/production/setup.sh) | Existing host preparation and backup unit installation |
 | [backup.sh](../deploy/production/backup.sh) / [restore.sh](../deploy/production/restore.sh) | Encrypted logical backup and destructive DB recovery |
-| [smoke.sh](../deploy/production/smoke.sh) | Disposable stack rehearsal, with current limitations described by the CI guide |
+| [smoke.sh](../deploy/production/smoke.sh) | Disposable stack rehearsal and coverage described by the CI guide |
 | [production deployment](../docs/24-production-deployment.md) | Full DigitalOcean operational procedure |
 
 The code/configuration and those runbooks take precedence when versions change.

@@ -3,10 +3,9 @@ Last updated: 2026-10-06
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
-- docs/README.md indexes 26 numbered docs in reading order (01 overview, 02 setup,
-  03 user guide, 06-14 features, 21 MVP operations, 22 observability/hardening,
-  23 incident runbook, 24 production deployment, 25 release report, 26 roadmap).
-  A new doc takes its reading-order slot and later numbers shift (links, labels, H1s).
+- docs/README.md indexes 26 numbered docs; 02 setup, 21 operations, 22 observability,
+  23 incidents, 24 production deployment, 25 release report, 26 roadmap.
+  New numbered docs shift later slots (links, labels, H1s).
 - docs/26-roadmap.md: Prompts 1-12 done. Prompt 13 (backend previews: managed
   PostgreSQL/Redis, setup command, worker processes, owner-approved outbound
   connections) and Prompt 14 (detect missed uninstall/suspend/repository-removal
@@ -54,8 +53,7 @@ Last updated: 2026-10-06
 - Bug found by the smoke test and fixed: queue.Stats FILTER placement (now tested).
 - Kill switch: Service.Paused(); WaitPaused; capability "paused"; dashboard and
   PR comment say "Builds paused".
-- Deps: Go 1.26.8, containerd 2.3.6 (govulncheck clean); prometheus client,
-  x/time/rate, goose library (cmd/migrate).
+- Deps: Go 1.26.8, containerd 2.3.6; prometheus client, x/time/rate, goose (cmd/migrate).
 
 ## Prompt 12: packaging and release (docs/24, docs/25)
 - Dockerfile (cross-compiled, distroless, UID 65532; reproducible: identical
@@ -83,13 +81,15 @@ Last updated: 2026-10-06
   enforced by config/example_test.go). technical-docs/config-setup.md explains
   every setting (local, command line, production) with steps to get each value.
   Router dir errors name the fix. Brand PNGs + favicon in web/static/brand.
-- Conversations (docs/20): home How it works and FAQ (initStory, initFAQ; /faq, signed
-  out -> /#faq). Static copy: update answers with the behaviour they describe.
+- Conversations (docs/20): home How it works and FAQ (initStory, initFAQ; signed-out /faq -> /#faq).
 - Overview (docs/20): pipeline shares, coverage ring, tabs with expandable rows,
   preview lifetimes (initOverview); same Summary, presentation only.
 - technical-docs/inside-previa.md: the end-to-end book (35 Mermaid diagrams render).
-- CI/CD guides: technical-docs/ci-in-action.md and cd-in-action.md, indexed; 66 fences/20 shell examples/102 links passed.
-- Go build/test/vet/lint fail on existing generated outbound/PR templates; tests also hit sandbox sockets.
+- CI fixes committed in de40bb3: generate templates before root tidy; tidy tools from tools/; Trivy v0.33.1.
+- Docker job generates assets/code itself; production scripts tracked executable; smoke expects Goose 19.
+- Clean-checkout proof: tidy, SQL drift, build, vet/lint, PostgreSQL 17.11 race tests, govulncheck, promtool, actionlint passed.
+- Server/worker Trivy gates clean; three release images built; smoke 43/43 includes encrypted backup, rollback and restore 18 -> 19.
+- CI/CD + setup/deployment guides updated; 153 fences/95 shell examples/122 local links passed. Local ignored orphan outbound templates remain outside this CI fix.
 
 ## Pending (docs/25)
 - A real host (setup.sh, stack, backups to object storage, restore, upgrade);
