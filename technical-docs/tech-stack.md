@@ -141,6 +141,7 @@ Design and code diagrams: [class-diagram.md](class-diagram.md) and
 | `/builds`, `/environments` | Current build requests; current previews |
 | `/developer-tools`, `POST /queue/ping` | Queue ping (development only; off when `APP_ENV=production`) |
 | `/protected` | Your session and GitHub identity |
+| `/faq` | Frequently asked questions (signed out: redirects to the home page's `#faq`) |
 | `/webhooks/github` | GitHub webhook receiver (signed; at most 32 at once) |
 | `/previews/unavailable` | "Preview not found or expired" page for unknown preview hosts |
 | `/static/*` | CSS, HTMX, `ui.js` |

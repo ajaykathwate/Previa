@@ -17,6 +17,10 @@ templ SidebarContent(active NavItem) {
 			<p class="nav-group-label">System</p>
 			@WorkspaceLink("/developer-tools", "Developer tools", TerminalIcon(), NavTools, active)
 		</div>
+		<div class="nav-group">
+			<p class="nav-group-label">Help</p>
+			@WorkspaceLink("/faq", "FAQ", QuestionIcon(), NavFAQ, active)
+		</div>
 	</nav>
 }
 

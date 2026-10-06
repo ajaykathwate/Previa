@@ -392,6 +392,7 @@
 .footer-links a:hover { color: var(--ink); }
 
 @media (max-width: 1080px) {
+  .site-nav-links .nav-link-wide { display: none; }
   .hero-inner { grid-template-columns: minmax(0, 1fr); gap: 48px; }
   .hero-copy { max-width: 680px; }
   .workflow-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }

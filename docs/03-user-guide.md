@@ -22,7 +22,7 @@ show real saved state only.
 ## Moving around
 
 - The sidebar groups **Workspace** (Overview, Repositories), **Delivery** (Builds,
-  Environments) and **System** (Developer tools).
+  Environments), **System** (Developer tools) and **Help** (FAQ).
 - Medium screens collapse the sidebar to icons; phones use the menu button.
 - **Ctrl K** (**⌘K** on macOS) or the header search opens the command palette. Type
   to filter pages, repository filters and account actions; arrow keys and Enter
@@ -258,6 +258,7 @@ attempt; a new attempt replaces it.
 | Repositories | One card per repository with its open pull requests, live previews, build mode and last sync. |
 | Developer tools | Queue diagnostic: submit a ping and watch the worker process it. A production server (`APP_ENV=production`) does not offer it and the page says so. |
 | Session | Your GitHub identity; reached from the account menu. |
+| FAQ | Common questions as a conversation with Previa, grouped by topic, with topic filters and search; open a question to read the answer. The same answers are on the home page, next to **How it works**, which walks through a pull request's journey one question at a time. A link such as `/faq#faq-secrets` opens that answer. |
 
 Empty Builds/Environments views are normal: only real records appear. Logging out
 uses **Account menu → Log out → Confirm logout**; your GitHub session is unaffected.

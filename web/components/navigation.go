@@ -10,4 +10,5 @@ const (
 	NavEnvironments NavItem = "environments"
 	NavBuilds       NavItem = "builds"
 	NavTools        NavItem = "tools"
+	NavFAQ          NavItem = "faq"
 )

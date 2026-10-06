@@ -27,4 +27,6 @@ func MountWithSummary(r chi.Router, users UserSession, requireUser func(http.Han
 	r.With(requireUser).Get("/dashboard", h.dashboard)
 	r.With(requireUser).Get("/protected", h.protected)
 	r.With(requireUser).Get("/developer-tools", h.tools)
+	// Public: signed-out visitors are sent to the same answers on the home page.
+	r.Get("/faq", h.faq)
 }

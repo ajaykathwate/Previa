@@ -1,0 +1,56 @@
+package components
+
+// Conversation primitives shared by the home page's "How it works" story and
+// the FAQ: Previa answers on the left, the person asking sits on the right.
+// Names are visible text so screen readers hear who speaks; avatars are
+// decorative.
+
+// PreviaAvatar is Previa's face in a conversation: the brand mark on a dark tile.
+templ PreviaAvatar() {
+	<span class="chat-avatar is-previa" aria-hidden="true">
+		@BrandMark()
+	</span>
+}
+
+// PersonAvatar is the person asking: a named guide on the public site, or the
+// signed-in owner (you) in the workspace, styled like the account avatar.
+templ PersonAvatar(initial string, you bool) {
+	<span class={ "chat-avatar", templ.KV("is-you", you), templ.KV("is-asker", !you) } aria-hidden="true">{ initial }</span>
+}
+
+// Typing is the three-dot indicator shown while Previa "writes" an answer.
+templ Typing() {
+	<span class="chat-typing" aria-hidden="true"><i></i><i></i><i></i></span>
+}
+
+// PreviaMessage is one message from Previa: its name, the bubble (children)
+// and an optional attachment such as an example card.
+templ PreviaMessage(attrs templ.Attributes, attachment templ.Component) {
+	<div class="chat-msg is-previa" { attrs... }>
+		@PreviaAvatar()
+		<div class="chat-body">
+			<p class="chat-name">Previa</p>
+			<div class="chat-bubble">
+				{ children... }
+			</div>
+			if attachment != nil {
+				<div class="chat-attachment">
+					@attachment
+				</div>
+			}
+		</div>
+	</div>
+}
+
+// AskerMessage is one message from the person asking.
+templ AskerMessage(name, initial string, you bool, attrs templ.Attributes) {
+	<div class="chat-msg is-asker" { attrs... }>
+		<div class="chat-body">
+			<p class="chat-name">{ name }</p>
+			<div class="chat-bubble">
+				{ children... }
+			</div>
+		</div>
+		@PersonAvatar(initial, you)
+	</div>
+}

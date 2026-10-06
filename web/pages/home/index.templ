@@ -1,9 +1,12 @@
 package home
 
 import (
+	"strconv"
+
 	"github.com/ajaykathwatee/previa/web/components"
 	"github.com/ajaykathwatee/previa/web/components/button"
 	"github.com/ajaykathwatee/previa/web/layouts"
+	"github.com/ajaykathwatee/previa/web/pages/faq"
 )
 
 templ Index(loggedIn bool) {
@@ -105,6 +108,7 @@ templ Index(loggedIn bool) {
 					@workflowStep("04", "Review and merge", "Reviewers get a URL in the pull request. Closing it tears the preview down.", true, components.EnvironmentIcon())
 				</ol>
 			</section>
+			@story(loggedIn)
 			<section id="principles" class="principles-section" aria-labelledby="principles-title">
 				<div class="site-container principles-grid" data-scroll-reveal>
 					<div class="principles-intro">
@@ -162,16 +166,38 @@ templ Index(loggedIn bool) {
 							<li>Preview subdomains over HTTPS</li>
 							<li>Pull request comments and check runs</li>
 							<li>Teardown, expiry, live logs and secrets</li>
+							<li>Metrics, alerts and production hardening</li>
+							<li>Release images, encrypted backups and restore</li>
 						</ul>
 					</div>
 					<div class="status-column is-next">
 						<h3><span class="badge tone-neutral">Coming next</span></h3>
 						<ul>
-							<li>Metrics, alerts and production hardening</li>
-							<li>Backups and restore</li>
-							<li>Packaged releases and CI</li>
+							<li>Previews with managed databases, caches and background workers</li>
+							<li>Detecting an uninstall or repository removal whose webhook never arrived</li>
+							<li>Proof on a production host with a real domain</li>
 						</ul>
 					</div>
+				</div>
+			</section>
+			<section id="faq" class="site-container section-block faq-section" aria-labelledby="faq-title">
+				<div class="faq-layout">
+					<div class="section-heading faq-intro" data-scroll-reveal>
+						<span class="eyebrow">FAQ</span>
+						<h2 id="faq-title">Questions, <em>answered by Previa.</em></h2>
+						<p>Kai gathered the { strconv.Itoa(len(faq.Questions())) } questions teams ask before they try Previa. Open one and Previa answers, or narrow them down by topic and search.</p>
+						<ul class="faq-cast" aria-label="In this conversation">
+							<li>
+								@components.PersonAvatar("K", false)
+								<span><strong>Kai</strong><small>Asks the questions</small></span>
+							</li>
+							<li>
+								@components.PreviaAvatar()
+								<span><strong>Previa</strong><small>Answers for this release</small></span>
+							</li>
+						</ul>
+					</div>
+					@faq.Conversation(faq.Guide)
 				</div>
 			</section>
 			<section class="site-container start-section" data-scroll-reveal aria-labelledby="start-title">
@@ -193,7 +219,7 @@ templ Index(loggedIn bool) {
 					@components.Brand()
 					<p>A clearer view of what comes next.</p>
 				</div>
-				<nav class="footer-links" aria-label="Footer"><a href="#workflow">How it works</a><a href="#status">Status</a><a href="#content">Back to top <span aria-hidden="true">↑</span></a></nav>
+				<nav class="footer-links" aria-label="Footer"><a href="#how-it-works">How it works</a><a href="#faq">FAQ</a><a href="#status">Status</a><a href="#content">Back to top <span aria-hidden="true">↑</span></a></nav>
 			</div>
 		</footer>
 	}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/a-h/templ"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
+	faqpages "github.com/ajaykathwatee/previa/web/pages/faq"
 	homepages "github.com/ajaykathwatee/previa/web/pages/home"
 )
 
@@ -54,4 +55,15 @@ func (h *handler) protected(w http.ResponseWriter, r *http.Request) {
 func (h *handler) tools(w http.ResponseWriter, r *http.Request) {
 	username, _ := h.users.Username(r.Context())
 	templ.Handler(dashboardpages.Tools(username, h.users.CSRFToken(r.Context()), h.devTools)).ServeHTTP(w, r)
+}
+
+// faq shows the workspace FAQ. The answers are public, so a signed-out visitor
+// is sent to the same conversation on the home page instead of to sign-in.
+func (h *handler) faq(w http.ResponseWriter, r *http.Request) {
+	username, ok := h.users.Username(r.Context())
+	if !ok {
+		http.Redirect(w, r, "/#faq", http.StatusSeeOther)
+		return
+	}
+	templ.Handler(faqpages.Page(username, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
 }

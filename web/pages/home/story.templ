@@ -1,0 +1,292 @@
+package home
+
+import (
+	"strconv"
+
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/button"
+)
+
+// story is "How it works": Kai asks Previa what happens to a pull request,
+// one question at a time. Without JavaScript the whole conversation is shown
+// and the stages are links into it; ui.js (initStory) turns it into a guided
+// chat whose stage rail jumps ahead. Example cards are labelled as examples.
+templ story(loggedIn bool) {
+	<section id="how-it-works" class="story-section" aria-labelledby="story-title">
+		<div class="site-container">
+			<div class="section-heading" data-scroll-reveal>
+				<span class="eyebrow">How it works</span>
+				<h2 id="story-title">Ask Previa. <em>Step by step.</em></h2>
+				<p>Kai maintains a busy repository and asked Previa what really happens between opening a pull request and sharing a preview. Ask Kai's questions yourself, or jump to any stage of the pipeline.</p>
+			</div>
+			<div class="story" data-story>
+				<nav class="story-rail" aria-label="Pipeline stages">
+					<p class="story-rail-label">The pipeline</p>
+					<ol>
+						for i, t := range storyTurns() {
+							<li>
+								<a class="story-stage" href={ templ.SafeURL("#story-" + t.ID) } data-story-stage={ strconv.Itoa(i) }>
+									<span class="story-stage-icon">
+										@t.Icon
+									</span>
+									<span class="story-stage-text"><strong>{ t.Stage }</strong><small>{ t.Hint }</small></span>
+									<span class="story-stage-check" aria-hidden="true">
+										@components.CheckIcon()
+									</span>
+								</a>
+							</li>
+						}
+					</ol>
+				</nav>
+				<div class="story-window">
+					<header class="story-head">
+						<span class="story-head-avatars" aria-hidden="true">
+							@components.PersonAvatar("K", false)
+							@components.PreviaAvatar()
+						</span>
+						<span class="story-head-text">
+							<strong>Kai and Previa</strong>
+							<span>A guided conversation</span>
+						</span>
+						<span class="story-count" data-story-count aria-hidden="true"></span>
+						<button type="button" class="icon-button story-restart" data-story-restart aria-label="Start the conversation over" title="Start over" hidden>
+							@components.RestartIcon()
+						</button>
+						<span class="story-progress" aria-hidden="true"><span data-story-bar></span></span>
+					</header>
+					<div class="story-thread" data-story-thread role="log" aria-label="Conversation between Kai and Previa">
+						<div class="story-intro">
+							<span class="story-intro-avatars" aria-hidden="true">
+								@components.PersonAvatar("K", false)
+								@components.PreviaAvatar()
+							</span>
+							<p class="story-intro-title">How a pull request becomes a preview</p>
+							<p class="story-intro-text">{ strconv.Itoa(len(storyTurns())) } questions, from the first webhook to the last cleanup. Previa answers each one with an example.</p>
+						</div>
+						@components.PreviaMessage(nil, nil) {
+							<p>Hi Kai, I'm Previa. I turn pull requests into live previews on your own server. Ask me how, one step at a time.</p>
+						}
+						for _, t := range storyTurns() {
+							<div class="story-turn" id={ "story-" + t.ID } data-story-turn tabindex="-1">
+								@components.AskerMessage("Kai", "K", false, templ.Attributes{"data-story-ask": true}) {
+									<p>{ t.Ask }</p>
+								}
+								@components.PreviaMessage(templ.Attributes{"data-story-answer": true}, t.Card) {
+									@t.Reply
+								}
+							</div>
+						}
+						<div class="story-outro" data-story-outro>
+							@components.PreviaMessage(nil, nil) {
+								<p>That's the whole journey, from pull request to preview and back. Want to see it on your own repository?</p>
+								<p class="story-cta">
+									if loggedIn {
+										@button.Button(button.Props{Href: "/dashboard", Size: button.SizeSm}) {
+											Open your dashboard
+											@components.Arrow()
+										}
+									} else {
+										@button.Button(button.Props{Href: "/auth/github/login", Size: button.SizeSm}) {
+											@components.GitHubMark()
+											Try it with GitHub
+										}
+									}
+								</p>
+							}
+						</div>
+						<div class="chat-msg is-previa is-typing" data-story-typing aria-hidden="true" hidden>
+							@components.PreviaAvatar()
+							<div class="chat-body">
+								<p class="chat-name">Previa</p>
+								@components.Typing()
+							</div>
+						</div>
+					</div>
+					<div class="story-composer" data-story-composer hidden>
+						<button type="button" class="story-ask" data-story-next>
+							@components.PersonAvatar("K", false)
+							<span class="story-ask-text">
+								<span class="story-ask-label">Ask as Kai</span>
+								<span class="story-ask-question" data-story-question></span>
+							</span>
+							<span class="story-ask-send" aria-hidden="true">
+								@components.SendIcon()
+							</span>
+						</button>
+						<button type="button" class="story-ask is-again" data-story-again hidden>
+							<span class="story-ask-text">
+								<span class="story-ask-label">Kai has no more questions</span>
+								<span class="story-ask-question">Start the conversation over</span>
+							</span>
+							<span class="story-ask-send" aria-hidden="true">
+								@components.RestartIcon()
+							</span>
+						</button>
+						<button type="button" class="story-all" data-story-all>Show the whole conversation</button>
+					</div>
+				</div>
+			</div>
+		</div>
+	</section>
+}
+
+// exampleHead titles an example card; the tag keeps illustrations from
+// reading as live data.
+templ exampleHead(title string) {
+	<span class="story-card-head"><span>{ title }</span><span class="soon-tag">Example</span></span>
+}
+
+templ tick() {
+	<span class="story-tick" aria-hidden="true">
+		@components.CheckIcon()
+	</span>
+}
+
+templ replyDiscover() {
+	<p>Right away. GitHub sends me a signed webhook, and I verify its signature before trusting a single field. Then I record the pull request, its newest commit and whether it can merge.</p>
+	<p>If a webhook ever goes missing, <strong>Sync</strong> catches me up.</p>
+}
+
+templ cardDiscover() {
+	<div class="story-card">
+		@exampleHead("Webhook")
+		<dl class="story-kv">
+			<div><dt>Event</dt><dd><code>pull_request · opened</code></dd></div>
+			<div><dt>Pull request</dt><dd>#42 · feat: a calmer checkout</dd></div>
+			<div><dt>Commit</dt><dd><code>3f9c2a7</code></dd></div>
+		</dl>
+		<p class="story-card-foot is-ok">
+			@tick()
+			Signature verified (HMAC-SHA256)
+		</p>
+	</div>
+}
+
+templ replyGate() {
+	<p>When you say so. Press <strong>Build latest commit</strong>, or switch the repository to Automatic and I'll start five minutes after your last push.</p>
+	<p>Right before anything runs I ask GitHub again: is the pull request still open, is this still its newest commit, can it merge? If anything changed, I build nothing.</p>
+}
+
+templ cardGate() {
+	<div class="story-card">
+		@exampleHead("Before building")
+		<ul class="story-checks">
+			<li>
+				@tick()
+				<span>The owner pressed <strong>Build latest commit</strong></span>
+			</li>
+			<li>
+				@tick()
+				<span>Still open, still commit <code>3f9c2a7</code></span>
+			</li>
+			<li>
+				@tick()
+				<span>GitHub says it can merge</span>
+			</li>
+			<li>
+				@tick()
+				<span>A build slot is free</span>
+			</li>
+		</ul>
+	</div>
+}
+
+templ replyBuild() {
+	<p>From exactly that commit, fetched by its full SHA and unpacked with every path checked. A fresh rootless BuildKit runs your Dockerfile on a private network whose only exit is my proxy: public registries on ports 80 and 443, nothing internal.</p>
+	<p>The build log streams live while it runs.</p>
+}
+
+templ cardBuild() {
+	<div class="story-card is-console">
+		@exampleHead("Build log")
+		<ol class="story-console">
+			<li><span>#1</span>[internal] load build definition from Dockerfile</li>
+			<li><span>#6</span>[3/5] RUN npm ci</li>
+			<li><span>#9</span>exporting to docker image format</li>
+			<li class="is-ok">Built image previa/…-pr-42:g1-r1-3f9c2a7b1d04</li>
+		</ol>
+		<p class="story-card-foot"><span class="story-chip">rootless BuildKit</span><span class="story-chip">private network</span><span class="story-chip">egress 80/443</span></p>
+	</div>
+}
+
+templ replyRun() {
+	<p>No. It gets its own container on a network only that pull request uses, as an unprivileged user with a read-only filesystem, no capabilities and hard CPU and memory limits.</p>
+	<p>Repository secrets are added only for pull requests from your own repository, never from forks, and nobody can reach it until its health check passes.</p>
+}
+
+templ cardRun() {
+	<div class="story-card">
+		@exampleHead("Preview container")
+		<p class="story-spec"><span class="story-chip">user 65532</span><span class="story-chip">read-only root</span><span class="story-chip">no capabilities</span><span class="story-chip">1 vCPU · 1 GiB</span><span class="story-chip">private network</span></p>
+		<p class="story-card-foot is-ok">
+			@tick()
+			<code>GET /health</code> answered 200: healthy, not routed yet
+		</p>
+	</div>
+}
+
+templ replyRoute() {
+	<p>At one stable HTTPS address for the whole pull request. When a new commit is healthy I switch the address to it, and only then retire the old version, so reviewers keep a working link while the next one builds.</p>
+}
+
+templ cardRoute() {
+	<div class="story-card">
+		@exampleHead("Preview address")
+		<p class="story-url">
+			@components.LockIcon()
+			<span>https://pr-42-gc0uy9-k3x9q2ma.preview.example.net</span>
+		</p>
+		<ol class="story-swap">
+			<li class="is-old"><span><code>a1f9c3e</code> keeps serving while the next commit builds</span></li>
+			<li class="is-new"><span><code>3f9c2a7</code> takes over once healthy</span></li>
+		</ol>
+	</div>
+}
+
+templ replyReport() {
+	<p>I keep one comment on the pull request up to date, from Queued to Building to Ready with the link, and add a check run to the exact commit.</p>
+	<p>Your Previa dashboard updates live too, no refresh needed.</p>
+}
+
+templ cardReport() {
+	<div class="story-card">
+		@exampleHead("On the pull request")
+		<div class="story-comment">
+			<p class="story-comment-title">Previa preview: Ready</p>
+			<p class="story-comment-link">https://pr-42-gc0uy9-k3x9q2ma.preview.example.net</p>
+			<p class="story-comment-meta">Commit <code>3f9c2a7</code> · expires in 48 hours</p>
+		</div>
+		<p class="story-card-foot is-ok">
+			@tick()
+			<span><strong>Previa preview</strong> check run: success</span>
+		</p>
+	</div>
+}
+
+templ replyTeardown() {
+	<p>I take the address down first, then remove the container, the image and its network. A preview nobody closes expires after 48 hours by default, and anything a crash leaves behind is cleaned up automatically.</p>
+}
+
+templ cardTeardown() {
+	<div class="story-card">
+		@exampleHead("After the merge")
+		<ol class="story-checks">
+			<li>
+				@tick()
+				<span>Address withdrawn first</span>
+			</li>
+			<li>
+				@tick()
+				<span>Container stopped and removed</span>
+			</li>
+			<li>
+				@tick()
+				<span>Image removed</span>
+			</li>
+			<li>
+				@tick()
+				<span>Private network removed</span>
+			</li>
+		</ol>
+	</div>
+}

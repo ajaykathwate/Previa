@@ -16,7 +16,8 @@ License: [LICENSE.templui](LICENSE.templui) (MIT).
   Upstream input focus-ring classes are omitted; all text fields use the shared
   quiet border focus style in `web/styles/base.css`. Invalid borders retain
   their error colour. Button/radio keyboard indicators remain separate.
-- `navbar.templ`, `app_navbar.templ`, `sidebar.templ`, `icons.templ` and
+- `navbar.templ`, `app_navbar.templ`, `sidebar.templ`, `icons.templ`,
+  `conversation.templ` (the How it works and FAQ chat primitives) and
   `command_palette.templ` are application-specific composition, not copied library
   code. The command palette is a keyboard layer over existing links and the logout
   confirmation; every destination also exists in the sidebar. `confirmation.templ` is an application-owned

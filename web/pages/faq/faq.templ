@@ -1,0 +1,226 @@
+package faq
+
+import (
+	"strconv"
+
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+// Page is the workspace FAQ: the same conversation as the home page, asked by
+// the signed-in owner.
+templ Page(username string, csrfToken string) {
+	@layouts.App("FAQ", username, csrfToken, components.NavFAQ) {
+		<header class="page-header">
+			<div class="page-header-text">
+				<span class="eyebrow">Help</span>
+				<h1>Frequently asked questions</h1>
+				<p>Ask Previa about connecting repositories, builds, previews and security. Every answer describes how this release works today.</p>
+			</div>
+			<a class="text-link" href="/#how-it-works">
+				How it works, step by step
+				@components.Arrow()
+			</a>
+		</header>
+		<section class="faq-page" aria-labelledby="faq-page-title">
+			<h2 id="faq-page-title" class="sr-only">Questions and answers</h2>
+			@Conversation(Owner(components.Initial(username)))
+		</section>
+	}
+}
+
+// Conversation is the FAQ as a chat. Without JavaScript every question is a
+// native disclosure that opens Previa's answer; ui.js adds topic filters,
+// search, a short typing pause and #faq-… links that open their answer.
+templ Conversation(asker Asker) {
+	<div class="faq" data-faq>
+		<div class="faq-toolbar" data-faq-tools hidden>
+			<div class="faq-filters" role="group" aria-label="Show questions about">
+				@filter("all", "All topics", len(Questions()), true)
+				for _, t := range Topics() {
+					@filter(t.ID, t.Short, len(InTopic(t.ID)), false)
+				}
+			</div>
+			<div class="search-field faq-search">
+				<span class="search-field-icon">
+					@components.SearchIcon()
+				</span>
+				<input type="search" data-faq-search placeholder="Search questions and answers" aria-label="Search questions and answers" autocomplete="off" spellcheck="false"/>
+			</div>
+		</div>
+		<p class="sr-only" data-faq-status role="status" aria-live="polite"></p>
+		<div class="faq-thread">
+			@components.PreviaMessage(nil, nil) {
+				<p>Hi, I'm Previa. These are the questions people ask me most. Open any of them and I'll answer.</p>
+			}
+			for _, t := range Topics() {
+				<section class="faq-group" data-faq-group={ t.ID } aria-labelledby={ "faq-topic-" + t.ID }>
+					<h3 class="faq-topic" id={ "faq-topic-" + t.ID }>{ t.Title }</h3>
+					for _, q := range InTopic(t.ID) {
+						@item(q, asker)
+					}
+				</section>
+			}
+			<div class="faq-empty" data-faq-empty hidden>
+				@components.PreviaMessage(nil, nil) {
+					<p>I don't have an answer that matches that yet. Try another word, or <button type="button" class="faq-reset" data-faq-reset>show every question</button>.</p>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+templ filter(id, title string, count int, pressed bool) {
+	<button type="button" class="faq-filter" data-faq-filter={ id } aria-pressed={ strconv.FormatBool(pressed) }>
+		{ title }
+		<span class="faq-filter-count">{ strconv.Itoa(count) }</span>
+	</button>
+}
+
+// item is one question and its answer. The summary holds only phrasing
+// content, so its accessible name is the question itself.
+templ item(q Question, asker Asker) {
+	<details class="faq-item" id={ "faq-" + q.ID } data-faq-item data-topic={ q.Topic }>
+		<summary class="chat-msg is-asker faq-question">
+			<span class="faq-toggle" aria-hidden="true">
+				@components.PlusIcon()
+			</span>
+			<span class="chat-bubble">{ q.Ask }</span>
+			@components.PersonAvatar(asker.Initial, asker.You)
+		</summary>
+		<div class="chat-msg is-previa faq-answer">
+			@components.PreviaAvatar()
+			<div class="chat-body">
+				<p class="chat-name">Previa</p>
+				@components.Typing()
+				<div class="chat-bubble">
+					@q.Answer
+				</div>
+			</div>
+		</div>
+	</details>
+}
+
+// Answers, in Previa's voice. Keep them true to the current release: update an
+// answer in the same change that alters the behaviour it describes.
+templ whatIsPrevia() {
+	<p>I give every GitHub pull request its own live preview: the exact commit, built from its own <code>Dockerfile</code>, running in an isolated container at a stable HTTPS address, and announced right on the pull request.</p>
+	<p>I'm self-hosted, so all of it happens on a server you control.</p>
+}
+
+templ whatYouNeed() {
+	<p>One Linux server with Docker. Four CPUs and 8 GiB of memory is a comfortable start. Then:</p>
+	<ul>
+		<li>a GitHub OAuth App for sign-in and a GitHub App for repository access;</li>
+		<li>a domain with a wildcard DNS record for preview addresses, plus a DNS provider token so I can get their HTTPS certificate;</li>
+		<li>PostgreSQL 17, which my Docker Compose setup runs for you.</li>
+	</ul>
+	<p>Every setting is explained step by step in <code>technical-docs/config-setup.md</code>.</p>
+}
+
+templ repositoryFiles() {
+	<p>Two files at its root: a <code>Dockerfile</code> and a <code>.previewrc.yaml</code>. The config can be as short as <code>{ "{}" }</code>; by default I expect your app on port 3000.</p>
+	<p>When you need more, it sets the Dockerfile path, the port, an HTTP health check path, non-secret environment variables and a size: <code>small</code>, <code>standard</code> or <code>large</code>.</p>
+}
+
+templ signInAccess() {
+	<p>No. Signing in only tells me who you are, and asks GitHub for no extra permissions.</p>
+	<p>I can read code only in repositories where you install my GitHub App, and only with what it asks for: reading contents, plus writing pull request comments and checks.</p>
+}
+
+templ connectRepository() {
+	<p>Open <strong>Repositories</strong> and choose <strong>Install on a repo</strong>. Pick repositories on GitHub, then authorize as the same account you signed in with. I check that the installation really is yours before linking anything.</p>
+	<p>New repositories start in Manual mode, so nothing builds until you ask.</p>
+}
+
+templ whenItBuilds() {
+	<p>In <strong>Manual</strong> mode, the default, when you press <strong>Build latest commit</strong> on a pull request. In <strong>Automatic</strong> mode, five minutes after your latest push settles, so a burst of pushes becomes one build.</p>
+	<p>Either way I read the pull request from GitHub again first, and I only build a commit that can merge.</p>
+}
+
+templ previewLink() {
+	<p>On the pull request's page in Previa, under <strong>Environments</strong>, and in the comment I keep up to date on the GitHub pull request.</p>
+	<p>It looks like <code>pr-42-….preview.your-domain</code> and stays the same for the life of the pull request, through every rebuild.</p>
+}
+
+templ newCommit() {
+	<p>Your current preview keeps serving while the new commit builds: on its own in Automatic mode, or when you press <strong>Build latest commit</strong> in Manual mode.</p>
+	<p>Once the new version passes its health check, I switch the address over and then remove the old container. If the build fails, the previous preview stays up and my comment says what went wrong.</p>
+}
+
+templ previewLifetime() {
+	<p>Until its pull request is closed or merged, which removes it right away, or until it expires: 48 hours after it was last published, by default.</p>
+	<p>You can also tear it down yourself. Building again brings it back at the same address.</p>
+}
+
+templ backendApps() {
+	<p>Yes, as long as it serves HTTP: an API's preview address answers requests just like a website's does, and it can call public services over HTTPS through my proxy.</p>
+	<p>Managed databases, caches and background workers for previews are planned, not built yet.</p>
+}
+
+templ buildDisabled() {
+	<p>Because the build would be refused right now, and the note beside the button says why and what fixes it. The usual reasons:</p>
+	<ul>
+		<li>GitHub is still checking whether the branch can merge, or it has conflicts;</li>
+		<li>no worker that can build is running;</li>
+		<li>the operator has paused builds.</li>
+	</ul>
+}
+
+templ waitingForCapacity() {
+	<p>The server is busy, so the request waits its turn instead of failing, and starts on its own once there is room.</p>
+	<p>I cap how many builds run at once, and all previews together may use at most 60% of the server's memory and 75% of its CPUs, with up to 10 previews per repository by default.</p>
+}
+
+templ buildHistory() {
+	<p>No, on purpose: previews are disposable. I keep the log of the current attempt for 14 days and one living comment per pull request.</p>
+	<p>The check runs I add to each commit stay on GitHub, so that history lives where your team already looks.</p>
+}
+
+templ forkPullRequests() {
+	<p>That's what I'm built for. Every build runs in its own rootless BuildKit container on a private network, and every preview runs as an unprivileged user with a read-only filesystem, no capabilities and hard limits.</p>
+	<p>Forks never receive repository secrets, and they get their own build cache so they can't tamper with yours. One honest caveat: containers share the server's kernel, so keep that server dedicated to me.</p>
+}
+
+templ secretsProtected() {
+	<ul>
+		<li>Encrypted at rest with AES-256-GCM, and never shown again once saved.</li>
+		<li>Decrypted only on the worker, moments before a preview starts.</li>
+		<li>Never baked into images or given to builds, and redacted from logs.</li>
+		<li>Never given to pull requests from forks.</li>
+	</ul>
+}
+
+templ internalNetwork() {
+	<p>No. Each preview sits on a private network it shares only with my proxy and the router.</p>
+	<p>The proxy reaches public addresses on ports 80 and 443 and refuses private, loopback and cloud metadata addresses, even when a domain name tries to point there.</p>
+}
+
+templ whoCanOpen() {
+	<p>Anyone who has its address. Each address includes a random part, so previews can't be guessed, but they are not behind a login.</p>
+	<p>Use test data and sandbox credentials in previews, never production ones.</p>
+}
+
+templ dashboardSafety() {
+	<p>I keep them apart. Previews never run on the dashboard's own address, its session cookie is host-only and <code>__Host-</code> prefixed so a preview can't read or plant it, and every change here needs a CSRF token.</p>
+}
+
+templ workerCrash() {
+	<p>Nothing is lost. Every request and every step is recorded in PostgreSQL before it runs, so when a worker comes back the interrupted build runs again, reusing an image that was already finished.</p>
+	<p>Anything a crash leaves behind, like a stray container, is cleaned up after a 15-minute grace period.</p>
+}
+
+templ pauseBuilds() {
+	<p>Yes. Set <code>BUILDS_PAUSED=true</code> on the worker and restart it: no new build starts, and requests wait instead of failing.</p>
+	<p>Teardown, cleanup, routing and pull request comments keep working, so nothing is left stranded.</p>
+}
+
+templ whereCodeGoes() {
+	<p>Only to your server. I download each commit from GitHub, then build and run it on your Docker host; builds can fetch packages from public registries through my proxy.</p>
+	<p>Beyond that I talk to GitHub, your DNS provider and the certificate authority for HTTPS. There is no Previa cloud.</p>
+}
+
+templ monitoring() {
+	<p>Each process serves <code>/livez</code>, <code>/readyz</code> and Prometheus <code>/metrics</code> on an internal address, and my production setup includes a Grafana dashboard and 24 alert rules.</p>
+	<p>The headline number is the time from a build request to a serving preview.</p>
+}

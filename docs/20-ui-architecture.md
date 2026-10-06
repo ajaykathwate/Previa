@@ -33,13 +33,13 @@ user's point of view is in [03-user-guide.md](03-user-guide.md).
 | `internal/<feature>` | Routes, handlers, authorization, queries, jobs. |
 | `web/pages/<feature>` | Full pages, HTMX fragments and page-owned view models. |
 | `web/layouts` | `Document` (HTML shell, theme boot script, assets), `Base` (public pages), `App` (authenticated shell). |
-| `web/components` | Brand, sidebar, header, command palette, confirmation dialog, repository tabs, icons, navigation keys; copied templUI primitives. |
+| `web/components` | Brand, sidebar, header, command palette, confirmation dialog, repository tabs, conversation primitives (avatars, messages, typing indicator), icons, navigation keys; copied templUI primitives. |
 | `web/styles` | Tailwind entry (`app.css`) and handwritten CSS modules. |
 | `web/static` | HTMX, compiled CSS, `ui.js`; embedded by `web/assets.go`. |
 
 Dependencies point one way: feature handler → page package → layouts/components.
 Use import aliases (`authpages`, `dashboardpages`, `prpages`) where names collide.
-Ownership of routes: `internal/dashboard` (home, overview, session, tools),
+Ownership of routes: `internal/dashboard` (home, overview, session, tools, FAQ),
 `internal/installations` (`/repositories`), `internal/pullrequests` (repository and
 PR pages, Builds, Environments, the event stream), `internal/secrets` (a
 repository's Secrets tab).
@@ -70,7 +70,7 @@ repository's Secrets tab).
   between 900 and 1180px; below 900px a drawer opened from the header (a native
   `<details>`, closed by link click, backdrop or Escape).
 - **Navigation groups:** Workspace (Overview, Repositories), Delivery (Builds,
-  Environments), System (Developer tools).
+  Environments), System (Developer tools), Help (FAQ).
   `layouts.App` receives an explicit `components.NavItem`; titles never decide the
   active item.
 - **Repository tabs.** `components.RepositoryTabs` switches a repository between
@@ -90,7 +90,7 @@ Making full-page navigation feel instant, without giving up MPA semantics:
 | --- | --- | --- |
 | Cross-document view transitions | Content fades and lifts in; the sidebar stays still. Opted in by the inline script, so off without JavaScript and with reduced motion. | Normal navigation. |
 | Hover prefetch (Speculation Rules) | Workspace links are prefetched on hover. Excludes `/`, auth, installation, queue, webhook and static paths, and HTMX-driven links. | Normal navigation. |
-| Command palette (Ctrl/⌘ K) | Filterable list of pages, repository filters, theme switch, session, home and "Log out…" (which opens the normal confirmation). Every entry also exists as a link. | Sidebar links. |
+| Command palette (Ctrl/⌘ K) | Filterable list of pages (including the FAQ), repository filters, theme switch, session, home and "Log out…" (which opens the normal confirmation). Every entry also exists as a link. | Sidebar links. |
 
 ## HTMX contracts
 
@@ -125,7 +125,8 @@ pauses in hidden tabs, marks error-looking lines), `initRelativeTimes` (rewrites
 `time[data-relative]` as "3 minutes ago" every 30 s and after swaps, keeping the
 exact UTC time as the title), `initCopyButtons` (`data-copy` text or a log list's
 lines to the clipboard, confirmed for two seconds), `initSecretEditor` and
-`initBulkDelete` (the Secrets tab, below). A `js-enabled` class on `<html>` scopes
+`initBulkDelete` (the Secrets tab, below), `initStory` and `initFAQ` (the
+conversations, below). A `js-enabled` class on `<html>` scopes
 CSS that only makes sense with scripting. No third-party JavaScript besides HTMX.
 
 ## Confirmations
@@ -163,6 +164,38 @@ can build, the pipeline panel moves to the top and says exactly what fixes it.
 Delivery counts come first, then the five newest live previews (Open and Copy) and
 build requests, then the pipeline and the source counts (repositories, open pull
 requests, installations, unavailable access).
+
+## Conversations: How it works and the FAQ
+
+The home page explains Previa as a conversation between **Kai**, a maintainer, and
+**Previa**, which answers from its brand tile. The same FAQ also has its own workspace
+page. The building blocks are `components.PreviaAvatar`, `PersonAvatar`, `PreviaMessage`,
+`AskerMessage` and `Typing` (`web/components/conversation.templ`); styles live in
+`web/styles/conversation.css`.
+
+- **How it works** (`web/pages/home/story.*`, `#how-it-works`): seven turns, one per
+  pipeline stage with the Overview's stage names (Discover, Gate, Build, Run, Route,
+  Report, Teardown). Each answer carries an example card (webhook, checks, build log,
+  container, address, PR comment, cleanup) tagged **Example**, so nothing reads as live
+  data. With JavaScript, `initStory` turns the transcript into a fixed-height chat:
+  **Ask as Kai** adds the next question, Previa "types" for under 1.5 s, then answers
+  (no pause with reduced motion); the stage rail and **Show the whole conversation**
+  jump ahead and move focus to the turn; **Start over** resets. Turns enter the
+  `role="log"` region as new nodes, so screen readers hear them. A `#story-<stage>`
+  link opens the conversation at that stage. Without JavaScript the whole transcript is
+  shown and the rail stages are anchor links.
+- **FAQ** (`web/pages/faq`): 22 questions in four topics, as Go data (`Questions`,
+  `Topics`) with answers as templ components, so counts and anchors cannot drift. Each
+  question is a native `<details>` whose summary is the asker's bubble: outlined until
+  asked, then filled with the asker's avatar, Previa's answer below. `initFAQ` adds topic
+  filters, search across questions and answers with a polite result count, a short
+  typing pause before an answer, and `#faq-<id>` links that open their answer. Without
+  JavaScript the questions still open natively and the filters stay hidden. The home page
+  asks as Kai (`faq.Guide`); the workspace page `/faq` (`faq.Page`, sidebar **Help → FAQ**)
+  asks as the signed-in owner, with the account avatar. Signed-out visitors to `/faq` are
+  redirected to `/#faq`.
+- **Keeping it true:** the answers are static copy describing the current release.
+  Change an answer in the same change that alters the behaviour it describes.
 
 ## Secrets tab
 
@@ -219,8 +252,8 @@ redirect to the last valid page. The PR list follows the same 10-row pattern.
 
 - **Tailwind CSS v4.1.18** standalone CLI, checksum-pinned. `make assets` compiles
   `web/styles/app.css` into `web/static/css/app.css` (ignored, embedded at build).
-  `site.css` imports `base`, `home`, `workspace`, `command`, `repositories`,
-  `logs`, `confirmation` and `motion` modules.
+  `site.css` imports `base`, `home`, `conversation`, `workspace`, `command`,
+  `repositories`, `logs`, `confirmation` and `motion` modules.
 - **templUI v1.13.2** (MIT) supplies copied button, card, alert and input source;
   provenance and local changes are in [web/components/README.md](../web/components/README.md).
   Use complete class strings so Tailwind can find them.
@@ -239,8 +272,10 @@ Secrets tab (write-only saving, replacing, modal deletion), build logs (live app
 following, reset for a new attempt, inert script-looking output, paging without
 JavaScript), build requests (one per click, no second Build while queued), preview
 teardown confirmed in a modal (PR page and Environments rows, with and without
-JavaScript), unavailable actions, Builds/Environments content, reduced motion and
-no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-optional).
+JavaScript), unavailable actions, Builds/Environments content, the How it works
+conversation (one question at a time, stage jumps, start over, reduced motion, stage
+links) and the FAQ (topics, search, empty state, `#faq-…` links, the workspace page and
+palette, signed-out redirect), reduced motion and no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-optional).
 
 ## Decisions and trade-offs
 

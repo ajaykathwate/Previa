@@ -67,6 +67,10 @@ test('public home and protected dashboard access', async () => {
   assert.equal(await page.locator('[data-queue-form]').count(), 0);
   await page.getByRole('link', {name: 'The workflow', exact: true}).click();
   assert.equal(new URL(page.url()).hash, '#workflow');
+  // The FAQ is public: signed out, /faq is the home page's FAQ section.
+  const faq = await context.request.get(`${origin}/faq`, {maxRedirects: 0});
+  assert.equal(faq.status(), 303);
+  assert.equal(faq.headers().location, '/#faq');
 });
 
 test('preview unavailable page is an uncached cookie-free 404 in both themes', async () => {
@@ -225,12 +229,114 @@ test('home reveals once pauses offscreen and respects reduced motion', async () 
   assert.equal(await page.locator('.scroll-pending').count(), 0);
 });
 
+test('how it works asks one question at a time and jumps to any stage', async () => {
+  await page.goto(origin);
+  await page.getByRole('link', {name: 'How it works', exact: true}).first().click();
+  assert.equal(new URL(page.url()).hash, '#how-it-works');
+  const story = page.locator('[data-story]');
+  const turns = story.locator('[data-story-turn]');
+  const next = story.locator('[data-story-next]');
+  assert.equal(await turns.count(), 0);
+  assert.match(await next.innerText(), /I just opened a pull request/);
+  await next.click();
+  // Previa "types" first; the next question waits until the answer arrives.
+  assert.equal(await next.getAttribute('aria-disabled'), 'true');
+  await page.waitForFunction(() => !document.querySelector('[data-story-next]').hasAttribute('aria-disabled'));
+  assert(await story.locator('#story-discover [data-story-answer]').isVisible());
+  assert.match(await story.locator('#story-discover').innerText(), /signed webhook/);
+  assert.match(await story.locator('[data-story-stage][aria-current="step"]').innerText(), /^Discover/);
+  assert.match(await next.innerText(), /when does it actually build/);
+  assert(await page.evaluate(() => document.activeElement.matches('[data-story-next]')));
+  // A stage reveals every turn up to it and moves focus there.
+  await story.locator('[data-story-stage]', {hasText: 'Route'}).click();
+  assert.equal(await turns.count(), 5);
+  await page.waitForFunction(() => document.activeElement?.id === 'story-route');
+  assert.equal(await story.locator('[data-story-count]').innerText(), '5 / 7');
+  await story.locator('[data-story-all]').click();
+  assert.equal(await turns.count(), 7);
+  await story.locator('[data-story-outro]').waitFor();
+  assert.equal(await next.isVisible(), false);
+  await story.locator('[data-story-again]').click();
+  assert.equal(await turns.count(), 0);
+  assert(await page.evaluate(() => document.activeElement.matches('[data-story-next]')));
+  // With reduced motion the answer arrives at once.
+  await page.emulateMedia({reducedMotion: 'reduce'});
+  await next.click();
+  assert(await story.locator('#story-discover [data-story-answer]').isVisible());
+  assert.equal(await story.locator('[data-story-typing]').isVisible(), false);
+  // A shared stage link opens the conversation at that stage.
+  await page.goto('about:blank');
+  await page.goto(`${origin}/#story-build`);
+  await page.waitForFunction(() => document.activeElement?.id === 'story-build');
+  assert.equal(await turns.count(), 3);
+  for (const width of [320, 390, 768, 1024, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+});
+
+test('the FAQ answers as a conversation on the home page, from a link and in the workspace', async () => {
+  await page.goto(origin);
+  await page.getByRole('link', {name: 'FAQ', exact: true}).first().click();
+  assert.equal(new URL(page.url()).hash, '#faq');
+  const faq = page.locator('#faq [data-faq]');
+  const item = faq.locator('#faq-fork-pull-requests');
+  await item.locator('summary').click();
+  assert.equal(await item.evaluate(e => e.classList.contains('is-typing')), true);
+  await page.waitForFunction(() => !document.querySelector('#faq-fork-pull-requests').classList.contains('is-typing'));
+  assert.match(await item.locator('.faq-answer .chat-bubble').innerText(), /rootless BuildKit/);
+  // Topics and search narrow the questions; a status line counts them.
+  const visible = faq.locator('[data-faq-item]:not([hidden])');
+  await faq.getByRole('button', {name: /^Security/}).click();
+  assert.equal(await visible.count(), 5);
+  assert.deepEqual([...new Set(await visible.evaluateAll(items => items.map(i => i.dataset.topic)))], ['security']);
+  await faq.getByRole('button', {name: /^All topics/}).click();
+  await faq.locator('[data-faq-search]').fill('kernel');
+  assert.equal(await visible.count(), 1);
+  assert.equal(await faq.locator('[data-faq-status]').innerText(), '1 of 22 questions shown.');
+  await faq.locator('[data-faq-search]').fill('zzz-nothing');
+  assert(await faq.locator('[data-faq-empty]').isVisible());
+  await faq.getByRole('button', {name: 'show every question', exact: true}).click();
+  assert.equal(await visible.count(), 22);
+  // A shared #faq-… link opens its answer.
+  await page.goto('about:blank');
+  await page.goto(`${origin}/#faq-secrets`);
+  await page.waitForFunction(() => document.querySelector('#faq-secrets').open);
+  // In the workspace the signed-in owner asks, from the sidebar or the palette.
+  await login();
+  await page.locator('.app-sidebar a[href="/faq"]').click();
+  await page.waitForURL(`${origin}/faq`);
+  assert.equal(await page.locator('h1').innerText(), 'Frequently asked questions');
+  assert.equal(await page.locator('.app-sidebar a[href="/faq"]').getAttribute('aria-current'), 'page');
+  await page.locator('#faq-build-disabled summary').click();
+  await page.locator('#faq-build-disabled .faq-answer .chat-bubble').waitFor();
+  assert.equal(await page.locator('#faq-build-disabled .chat-avatar.is-you').innerText(), 'D');
+  for (const width of [320, 390, 768, 1024, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+  await page.goto(`${origin}/dashboard`);
+  await page.keyboard.press('Control+k');
+  await page.waitForFunction(() => document.querySelector('#command-palette').open);
+  await page.locator('#command-input').fill('faq');
+  assert.equal(await page.locator('[data-command-item]:not([hidden])').count(), 1);
+  await page.keyboard.press('Enter');
+  await page.waitForURL(`${origin}/faq`);
+});
+
 test('content and native confirmation remain usable without JavaScript', async () => {
   const noJS = await browser.newContext({javaScriptEnabled: false});
   try {
     const nativePage = await noJS.newPage();
     await nativePage.goto(origin);
     assert.equal(await nativePage.locator('#principles .principles-grid').evaluate(e => getComputedStyle(e).opacity), '1');
+    // How it works is a full transcript, and FAQ questions open natively.
+    assert.equal(await nativePage.locator('[data-story-turn]').count(), 7);
+    assert.equal(await nativePage.locator('[data-story-outro]').isVisible(), true);
+    assert.equal(await nativePage.locator('[data-story-composer]').isVisible(), false);
+    assert.equal(await nativePage.locator('[data-faq-tools]').isVisible(), false);
+    await nativePage.locator('#faq-secrets summary').click();
+    assert.match(await nativePage.locator('#faq-secrets .faq-answer').innerText(), /AES-256-GCM/);
     await nativePage.goto(`${origin}/auth/github/login`);
     await nativePage.waitForURL(`${origin}/dashboard`);
     await nativePage.goto(`${origin}/repositories?page=2`);

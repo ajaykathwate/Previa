@@ -35,6 +35,8 @@ html:not(.js-enabled) .account-popover { animation: none; }
 @keyframes dialog-in { from { opacity: 0; transform: translateY(10px) scale(.97); } }
 @keyframes palette-in { from { opacity: 0; transform: translateY(-8px) scale(.98); } }
 @keyframes preview-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@keyframes msg-in { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+@keyframes typing-dot { 0%, 60%, 100% { opacity: .35; transform: none; } 30% { opacity: 1; transform: translateY(-3px); } }
 
 /* Hero console: each step lights up in sequence, then the URL and page appear. */
 @keyframes step-cycle {

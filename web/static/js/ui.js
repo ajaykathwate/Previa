@@ -923,6 +923,210 @@
     });
   }
 
+  // "How it works" (home page): Kai asks one question at a time and Previa
+  // answers after a short typing pause (none with reduced motion). The stage
+  // rail and "Show the whole conversation" jump ahead. Turns enter the log as
+  // new nodes, so screen readers hear them; without JavaScript every turn is
+  // already in the page and the stages are ordinary links.
+  function initStory() {
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    document.querySelectorAll('[data-story]').forEach((story) => {
+      const thread = story.querySelector('[data-story-thread]');
+      const typing = story.querySelector('[data-story-typing]');
+      const turns = [...thread.querySelectorAll('[data-story-turn]')];
+      const outro = thread.querySelector('[data-story-outro]');
+      const stages = [...story.querySelectorAll('[data-story-stage]')];
+      const composer = story.querySelector('[data-story-composer]');
+      const next = story.querySelector('[data-story-next]');
+      const question = story.querySelector('[data-story-question]');
+      const again = story.querySelector('[data-story-again]');
+      const all = story.querySelector('[data-story-all]');
+      const restart = story.querySelector('[data-story-restart]');
+      const count = story.querySelector('[data-story-count]');
+      const bar = story.querySelector('[data-story-bar]');
+      const answerOf = turn => turn.querySelector('[data-story-answer]');
+      let shown = 0;
+      let timers = [];
+      turns.forEach(turn => turn.remove());
+      outro.remove();
+      composer.hidden = false;
+      thread.tabIndex = 0;
+
+      const render = () => {
+        const done = shown === turns.length;
+        stages.forEach((stage, index) => {
+          stage.classList.toggle('is-done', index < shown);
+          if (index === shown - 1) stage.setAttribute('aria-current', 'step');
+          else stage.removeAttribute('aria-current');
+        });
+        count.textContent = `${shown} / ${turns.length}`;
+        bar.style.width = `${(shown / turns.length) * 100}%`;
+        restart.hidden = shown === 0;
+        all.hidden = done;
+        next.hidden = done;
+        again.hidden = !done;
+        if (!done) question.textContent = turns[shown].querySelector('[data-story-ask] .chat-bubble').textContent.trim();
+      };
+      const scrollToTurn = (turn) => {
+        thread.scrollTo({top: Math.max(0, turn.offsetTop - 16), behavior: motion.matches ? 'auto' : 'smooth'});
+      };
+      // Ends a pending answer: every placed turn shows its answer.
+      const settle = () => {
+        timers.forEach(clearTimeout);
+        timers = [];
+        typing.hidden = true;
+        turns.slice(0, shown).forEach((turn) => { answerOf(turn).hidden = false; });
+        if (shown === turns.length && !outro.isConnected) thread.insertBefore(outro, typing);
+        next.removeAttribute('aria-disabled');
+        thread.removeAttribute('aria-busy');
+      };
+      const place = (turn) => {
+        turn.querySelectorAll('.chat-enter').forEach(message => message.classList.remove('chat-enter'));
+        thread.insertBefore(turn, typing);
+      };
+      // Shows every turn through upTo at once, then focuses one of them.
+      const reveal = (upTo, focusIndex) => {
+        settle();
+        thread.setAttribute('aria-live', 'off');
+        while (shown <= upTo && shown < turns.length) place(turns[shown++]);
+        settle();
+        render();
+        const target = turns[Math.min(focusIndex, shown - 1)];
+        if (target) {
+          scrollToTurn(target);
+          target.focus({preventScroll: true});
+        }
+        requestAnimationFrame(() => thread.setAttribute('aria-live', 'polite'));
+      };
+      const ask = () => {
+        if (next.getAttribute('aria-disabled') === 'true' || shown >= turns.length) return;
+        const reduce = motion.matches;
+        const turn = turns[shown++];
+        const answer = answerOf(turn);
+        place(turn);
+        answer.hidden = true;
+        if (!reduce) turn.querySelector('[data-story-ask]').classList.add('chat-enter');
+        scrollToTurn(turn);
+        const finish = () => {
+          settle();
+          if (!reduce) answer.classList.add('chat-enter');
+          render();
+          scrollToTurn(turn);
+          if (shown === turns.length && (document.activeElement === next || document.activeElement === document.body)) again.focus({preventScroll: true});
+        };
+        if (reduce) { finish(); return; }
+        next.setAttribute('aria-disabled', 'true');
+        thread.setAttribute('aria-busy', 'true');
+        // A longer answer takes a little longer to "type", within reason.
+        const pause = Math.min(1500, 450 + answer.textContent.trim().length * 2.5);
+        timers.push(setTimeout(() => {
+          typing.hidden = false;
+          typing.classList.add('chat-enter');
+          thread.scrollTo({top: thread.scrollHeight, behavior: 'smooth'});
+        }, 300));
+        timers.push(setTimeout(finish, 300 + pause));
+      };
+      const startOver = () => {
+        settle();
+        turns.forEach(turn => turn.remove());
+        outro.remove();
+        shown = 0;
+        render();
+        thread.scrollTo({top: 0});
+        next.focus({preventScroll: true});
+      };
+
+      next.addEventListener('click', ask);
+      again.addEventListener('click', startOver);
+      restart.addEventListener('click', startOver);
+      all.addEventListener('click', () => {
+        const from = shown;
+        reveal(turns.length - 1, from);
+      });
+      stages.forEach((stage, index) => stage.addEventListener('click', (event) => {
+        event.preventDefault();
+        reveal(index, index);
+        thread.closest('.story-window').scrollIntoView({block: 'nearest', behavior: motion.matches ? 'auto' : 'smooth'});
+      }));
+      render();
+      // A shared #story-… link opens the conversation at that stage.
+      const linked = turns.findIndex(turn => `#${turn.id}` === window.location.hash);
+      if (linked >= 0) {
+        reveal(linked, linked);
+        story.scrollIntoView({block: 'start'});
+      }
+    });
+  }
+
+  // FAQ (home page and workspace): each question is a native <details>, so it
+  // works without JavaScript. With it, topic buttons and search narrow the
+  // list, Previa "types" briefly before an answer opens (not with reduced
+  // motion), and a #faq-… link opens its answer.
+  function initFAQ() {
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    document.querySelectorAll('[data-faq]').forEach((faq) => {
+      const items = [...faq.querySelectorAll('[data-faq-item]')];
+      const groups = [...faq.querySelectorAll('[data-faq-group]')];
+      const filters = [...faq.querySelectorAll('[data-faq-filter]')];
+      const search = faq.querySelector('[data-faq-search]');
+      const empty = faq.querySelector('[data-faq-empty]');
+      const status = faq.querySelector('[data-faq-status]');
+      const words = new Map(items.map(item => [item, item.textContent.toLowerCase()]));
+      let topic = 'all';
+      faq.querySelector('[data-faq-tools]').hidden = false;
+
+      const apply = () => {
+        const terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        let visible = 0;
+        items.forEach((item) => {
+          item.hidden = !((topic === 'all' || item.dataset.topic === topic) && terms.every(term => words.get(item).includes(term)));
+          if (!item.hidden) visible += 1;
+        });
+        groups.forEach((group) => { group.hidden = !group.querySelector('[data-faq-item]:not([hidden])'); });
+        empty.hidden = visible > 0;
+        status.textContent = terms.length || topic !== 'all' ? `${visible} of ${items.length} questions shown.` : '';
+      };
+      const choose = (value) => {
+        topic = value;
+        filters.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.faqFilter === value)));
+        apply();
+      };
+      filters.forEach((button) => button.addEventListener('click', () => choose(button.dataset.faqFilter)));
+      search.addEventListener('input', apply);
+      search.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && search.value) { search.value = ''; apply(); }
+      });
+      faq.querySelector('[data-faq-reset]').addEventListener('click', () => {
+        search.value = '';
+        choose('all');
+        search.focus();
+      });
+      items.forEach((item) => {
+        let timer = 0;
+        // The click comes before the details opens, so the answer never flashes.
+        item.querySelector('summary').addEventListener('click', () => {
+          if (!item.open && !motion.matches) item.classList.add('is-typing');
+        });
+        item.addEventListener('toggle', () => {
+          clearTimeout(timer);
+          if (!item.open) { item.classList.remove('is-typing'); return; }
+          if (item.classList.contains('is-typing')) timer = setTimeout(() => item.classList.remove('is-typing'), 650);
+        });
+      });
+      const openLinked = () => {
+        const item = items.find(candidate => `#${candidate.id}` === window.location.hash);
+        if (!item) return;
+        search.value = '';
+        choose('all');
+        item.open = true;
+        item.scrollIntoView({block: 'center'});
+        item.querySelector('summary').focus({preventScroll: true});
+      };
+      window.addEventListener('hashchange', openLinked);
+      openLinked();
+    });
+  }
+
   initMotion();
   initTheme();
   initNavigation();
@@ -939,4 +1143,6 @@
   initSecretEditor();
   initBulkDelete();
   initRefreshDeadlines();
+  initStory();
+  initFAQ();
 })();
