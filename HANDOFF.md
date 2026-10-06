@@ -84,6 +84,9 @@ Last updated: 2026-10-05
   enforced by config/example_test.go). technical-docs/config-setup.md explains
   every setting (local, command line, production) with steps to get each value.
   Router dir errors name the fix. Brand PNGs + favicon in web/static/brand.
+- technical-docs/inside-previa.md (book "Inside Previa: From Pull Request to Live
+  Preview"): the end-to-end flow in 37 chapters + appendices; its 35 Mermaid
+  diagrams render (mermaid 11).
 - Verified: lint 0, all packages with TEST_DATABASE_URL, -race on changed
   packages, browser suite, test-e2e. prod-smoke 43/43 earlier (not re-run).
 
