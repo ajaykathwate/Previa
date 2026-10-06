@@ -1,5 +1,5 @@
 # Project handoff
-Last updated: 2026-10-05
+Last updated: 2026-10-06
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
@@ -88,8 +88,8 @@ Last updated: 2026-10-05
 - Overview (docs/20): pipeline shares, coverage ring, tabs with expandable rows,
   preview lifetimes (initOverview); same Summary, presentation only.
 - technical-docs/inside-previa.md: the end-to-end book (35 Mermaid diagrams render).
-- Verified: UX pass with TEST_DATABASE_URL + test-e2e; since then lint 0, go test,
-  browser 35/35 (no DB code changed). prod-smoke 43/43 earlier (not re-run).
+- CI/CD guides: technical-docs/ci-in-action.md and cd-in-action.md, indexed; 66 fences/20 shell examples/102 links passed.
+- Go build/test/vet/lint fail on existing generated outbound/PR templates; tests also hit sandbox sockets.
 
 ## Pending (docs/25)
 - A real host (setup.sh, stack, backups to object storage, restore, upgrade);
