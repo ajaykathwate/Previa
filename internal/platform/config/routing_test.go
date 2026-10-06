@@ -72,9 +72,17 @@ func TestWorkerRoutingSettings(t *testing.T) {
 			}
 		})
 	}
-	t.Setenv("ROUTER_DYNAMIC_DIR", dir+"/missing")
-	if _, err := LoadWorker(); err == nil {
-		t.Fatal("accepted a missing router directory")
+	// Each refusal names the fix, not only the rule.
+	for value, want := range map[string]string{
+		"":                "ROUTER_DYNAMIC_DIR is required when PREVIEW_BASE_DOMAIN is set",
+		"~/previa/router": "must be a full, clean path",
+		dir + "/":         "no trailing slash",
+		dir + "/missing":  "run make router-up",
+	} {
+		t.Setenv("ROUTER_DYNAMIC_DIR", value)
+		if _, err := LoadWorker(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("ROUTER_DYNAMIC_DIR=%q: %v, want a message with %q", value, err, want)
+		}
 	}
 }
 

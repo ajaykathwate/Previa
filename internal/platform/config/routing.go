@@ -74,11 +74,14 @@ func (c *RoutingConfig) check() error {
 		return err
 	}
 	dir := c.RouterDynamicDir
-	if dir == "" || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
-		return errors.New("ROUTER_DYNAMIC_DIR must be an absolute, clean path")
+	switch {
+	case strings.TrimSpace(dir) == "":
+		return errors.New("ROUTER_DYNAMIC_DIR is required when PREVIEW_BASE_DOMAIN is set: the full path of the directory the router reads routes from, for example /home/you/.local/share/previa/router (make router-up creates it). Leave PREVIEW_BASE_DOMAIN empty to run without previews")
+	case !filepath.IsAbs(dir) || filepath.Clean(dir) != dir:
+		return fmt.Errorf("ROUTER_DYNAMIC_DIR must be a full, clean path such as /home/you/.local/share/previa/router, not %q: no ~, no relative parts, no trailing slash", dir)
 	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return errors.New("ROUTER_DYNAMIC_DIR must be an existing directory shared with the router")
+		return fmt.Errorf("ROUTER_DYNAMIC_DIR %s does not exist or is not a directory: run make router-up, which creates it and starts the router", dir)
 	}
 	if !containerNamePattern.MatchString(c.RouterContainer) {
 		return errors.New("ROUTER_CONTAINER must be a Docker container name")

@@ -79,7 +79,11 @@ Last updated: 2026-10-05
   older than SyncStaleAfter (5m) -> "Sync stalled", Request starts a new revision.
   Mergeability gives up after 8 attempts -> pull_requests.mergeability_unresolved_at
   (migration 0019) -> "Unknown"; cleared by a new observation or check.
-- Brand PNGs + favicon in web/static/brand (/favicon.ico too).
+- .env.example: every line uncommented with a one-line label ([Required] /
+  [Required for <step>] / [Optional, default x]; optional lines hold the defaults,
+  enforced by config/example_test.go). technical-docs/config-setup.md explains
+  every setting (local, command line, production) with steps to get each value.
+  Router dir errors name the fix. Brand PNGs + favicon in web/static/brand.
 - Verified: lint 0, all packages with TEST_DATABASE_URL, -race on changed
   packages, browser suite, test-e2e. prod-smoke 43/43 earlier (not re-run).
 

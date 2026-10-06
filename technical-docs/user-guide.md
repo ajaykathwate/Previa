@@ -112,15 +112,20 @@ You need:
 **Previews on your own machine without a domain** (for trying everything locally):
 
 1. In `.env`, set `PREVIEW_BASE_DOMAIN=preview.localtest.me` (every
-   `*.localtest.me` name points at your own computer) and
-   `ROUTER_DYNAMIC_DIR` to an existing directory on the Linux filesystem, for
-   example `~/.local/share/previa/router`.
-2. Router settings for `make router-up`: `ACME_EMAIL=you@example.com`,
-   `ACME_DNS_PROVIDER=cloudflare`, `ACME_DNS_CREDENTIAL_VARIABLE=CF_DNS_API_TOKEN`,
-   `ACME_DNS_CREDENTIAL_FILE` = a file containing any text (`chmod 600` it), and
+   `*.localtest.me` name points at your own computer) and `ROUTER_DYNAMIC_DIR` to
+   a full path on the Linux filesystem, such as
+   `/home/<you>/.local/share/previa/router` (`echo $HOME` shows yours). Do not
+   write `~`: `.env` does not expand it. `make router-up` creates the directory.
+2. Router settings, all required by `make router-up`:
+   `ACME_EMAIL=you@example.com`, `ACME_DNS_PROVIDER=cloudflare`,
+   `ACME_DNS_CREDENTIAL_VARIABLE=CF_DNS_API_TOKEN`, `ACME_DNS_CREDENTIAL_FILE` = the
+   full path of a file containing any text (`mkdir -p ~/.config/previa;
+   printf x > ~/.config/previa/dns-credential; chmod 600
+   ~/.config/previa/dns-credential`), and
    `ACME_CA_SERVER=https://127.0.0.1:1/directory` so no certificate is requested.
-3. `make egress-image`, `make router-up`, then restart `make run-worker`. Its log
-   says `River worker started execution=true`.
+3. In this order: `make egress-image`, `make router-up`, then `make run-worker`.
+   Its log says `River worker started execution=true`. If it stops instead, its
+   error names the missing setting and the fix.
 4. Previews open at `https://pr-…preview.localtest.me`; the browser warns about
    the certificate (Traefik's default one). Accept it for testing only.
 

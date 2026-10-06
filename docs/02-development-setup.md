@@ -42,6 +42,19 @@ go mod download -modfile=tools/go.mod
 ```
 
 `.env` is Git-ignored and grouped by process. Never commit it, print it or share it.
+Every line of `.env.example` is uncommented and has a one-line label above it:
+`[Required]` (the process does not start without it), `[Required for <step>]`
+(repositories, live updates, repository secrets, previews: that step does not
+work without it) or `[Optional, default <x>]` (already set to its default;
+change it only if needed). Replace every placeholder (values containing
+`replace-with`, `/home/you`, `you@`, `your-` or `123456`). To skip a step for
+now, delete that step's `[Required for …]` lines from your `.env` instead of
+emptying them, and keep the Optional lines as they are: an empty number or
+switch fails to load. Step-by-step instructions for every value, including
+accounts to create and commands to run, are in
+[technical-docs/config-setup.md](../technical-docs/config-setup.md);
+`go test ./internal/platform/config` checks that every line is labelled and that
+the Optional values equal the defaults.
 Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 `go tool -modfile=tools/go.mod <tool>`.
 
@@ -55,15 +68,15 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | `TRUSTED_PROXIES` | server | Optional; addresses or CIDR ranges; empty trusts nobody. | Reverse proxies allowed to set `X-Forwarded-For`/`-Host`. |
 | `BACKUP_STATUS_FILE` | server | Optional; set in production Compose. | Its modification time becomes the last-backup metric ([24](24-production-deployment.md#backups-and-restore)). |
 | `APP_BASE_URL` | server | `http://localhost:8080` | OAuth redirects, CSRF origin checks, cookie security. |
-| `GITHUB_OAUTH_CLIENT_ID` / `_SECRET` | server | From a GitHub **OAuth App** ([04](04-github-sign-in-and-app.md)). | Dashboard sign-in. |
+| `GITHUB_OAUTH_CLIENT_ID` / `_SECRET` | server | **Required** (the server does not start without them). From a GitHub **OAuth App** ([04](04-github-sign-in-and-app.md)). | Dashboard sign-in. |
 | `SESSION_SECRET` | server | `openssl rand -hex 32` | Signs OAuth state; at least 32 characters. |
 | `MAX_CONCURRENT_BUILDS` | worker | `2` | Builds running at once across all workers (and build workers per process); also the ping queue's concurrency ([14](14-housekeeping-and-capacity.md)). |
 | `BUILD_TIMEOUT` | worker | `12m` (max `24h`) | Build execution budget plus a one-minute grace. |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | server, worker | From a GitHub **App** ([04](04-github-sign-in-and-app.md)). | App JWTs; the worker needs only these two for discovery. |
-| `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | server | Same GitHub App. | Installation page and verified linking. |
-| `GITHUB_WEBHOOK_SECRET` | server | `openssl rand -hex 32`, same value in the App settings. | Verifies webhook signatures ([05](05-webhooks-and-pr-discovery.md)). |
-| `SECRETS_ENCRYPTION_KEYS` | server, worker | `1:` + output of `openssl rand -base64 32`; comma-separate versions. | Encrypts repository secrets ([07](07-repository-secrets.md)). |
-| `SECRETS_ACTIVE_KEY_VERSION` | server, worker | The version new values use, e.g. `1`. | Selects the key for new values. |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | server, worker | **Required for repositories** (linking, sync, builds). From a GitHub **App** ([04](04-github-sign-in-and-app.md)). | App JWTs; the worker needs only these two for discovery. |
+| `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | server | **Required for repositories.** Same GitHub App. | Installation page and verified linking. |
+| `GITHUB_WEBHOOK_SECRET` | server | **Required for live updates and Automatic builds** (and in production). `openssl rand -hex 32`, same value in the App settings. | Verifies webhook signatures ([05](05-webhooks-and-pr-discovery.md)). |
+| `SECRETS_ENCRYPTION_KEYS` | server, worker | **Required for repository secrets.** `1:` + output of `openssl rand -base64 32`; comma-separate versions. | Encrypts repository secrets ([07](07-repository-secrets.md)). |
+| `SECRETS_ACTIVE_KEY_VERSION` | server, worker | **Required for repository secrets.** The version new values use, e.g. `1`. | Selects the key for new values. |
 | `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS` | worker | Optional; defaults `2`, `4GiB`, `2048`. | Per-build limits for the isolated builder ([09](09-image-builds.md)). |
 | `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK` | worker | Optional; defaults `20GiB`, `4GiB`, `15GiB`. | Disk and image bounds; sizes take `KiB`, `MiB`, `GiB` or `TiB`. |
 | `BUILDKIT_IMAGE`, `EGRESS_IMAGE` | worker | Optional; defaults to the pinned rootless BuildKit image and `previa-egress:dev`. | Builder image; egress proxy and prober image for builds and previews. |
@@ -77,12 +90,12 @@ Pinned tools (Goose, templ, sqlc, golangci-lint, Air) run through
 | `ENV_TTL_HOURS` | worker | Optional; default `48`, `0` never expires. | Preview lifetime after its latest publication ([14](14-housekeeping-and-capacity.md)). |
 | `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE` | worker | Optional; defaults `false`, `15m`. | Log housekeeping deletions without making them; the minimum age of an orphan. |
 | `BUILD_CACHE_BUDGET` | worker | Optional; default `40GiB`. | All build caches together; the oldest unused ones are pruned first. |
-| `PREVIEW_BASE_DOMAIN` | server, worker | Optional, e.g. `preview.example.com`; not the dashboard's host or a parent of it. | Preview hostnames below it ([11](11-routing-and-https.md)); turns routing on in the worker. |
+| `PREVIEW_BASE_DOMAIN` | server, worker | **Required for builds and previews.** `preview.localtest.me` on one machine, or a domain you control (not the dashboard's host or a parent of it). | Preview hostnames below it ([11](11-routing-and-https.md)); turns routing on in the worker. |
 | `APP_BASE_URL` | worker (when routing) | The dashboard origin, as on the server. | Unknown preview hosts are redirected to its `/previews/unavailable`. |
-| `ROUTER_DYNAMIC_DIR` | worker (when routing) | An existing directory on a Linux filesystem, shared with the router. | Where the route controller writes Traefik's route table. |
+| `ROUTER_DYNAMIC_DIR` | worker (when routing), router | **Required for builds and previews.** A full path on a Linux filesystem, without `~` (`.env` does not expand it) or a trailing slash; `make router-up` creates it. | Where the route controller writes Traefik's route table. |
 | `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS` | worker | Optional; defaults `previa-router`, `websecure`, `127.0.0.1:8080` (must be loopback). | The router container, its HTTPS entry point and its in-container API. |
-| `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE` | router (`make router-up`) | Your ACME contact, lego provider (e.g. `cloudflare`), its credential variable (e.g. `CF_DNS_API_TOKEN`) and a `chmod 600` file holding the token. | Wildcard certificate over DNS-01; read by `deploy/traefik/compose.yml`, not by Go. |
-| `ACME_CA_SERVER`, `ACME_DNS_RESOLVERS` | router | Optional; Let's Encrypt **staging** and public resolvers. | Switch to production only after staging issued a certificate. |
+| `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE` | router (`make router-up`) | **Required for builds and previews** (`make router-up` refuses without them, even on one machine; the file may hold any text there). Your ACME contact, lego provider (e.g. `cloudflare`), its credential variable (e.g. `CF_DNS_API_TOKEN`) and a `chmod 600` file holding the token. | Wildcard certificate over DNS-01; read by `deploy/traefik/compose.yml`, not by Go. |
+| `ACME_CA_SERVER`, `ACME_DNS_RESOLVERS` | router | `ACME_CA_SERVER` is **required on one machine**: `https://127.0.0.1:1/directory` requests no certificate. With a real domain, Let's Encrypt **staging** (the default), then production. Resolvers are optional. | Switch to production only after staging issued a certificate. |
 
 - Sign-in needs real OAuth values; placeholders start the server but cannot log in.
 - The five server App settings are all-or-nothing. Omit them all to run with
@@ -376,11 +389,15 @@ make test-routing         # about 5 minutes
 networks, volume, schema and images are removed. Set `TEST_ROUTING_LOG=1` for the
 worker-side logs.
 
-### The router (optional, needs a domain)
+### The router (required for builds and previews)
 
-With a domain whose wildcard record points at this host, a DNS provider token in a
-`chmod 600` file and the `PREVIEW_BASE_DOMAIN`, `ROUTER_DYNAMIC_DIR` and `ACME_*`
-settings in `.env`:
+On one machine, keep `PREVIEW_BASE_DOMAIN=preview.localtest.me`, set
+`ROUTER_DYNAMIC_DIR` to a full path, create the credential file with any text
+(`printf x > ~/.config/previa/dns-credential; chmod 600` it) and keep
+`ACME_CA_SERVER=https://127.0.0.1:1/directory`; no certificate is requested and
+browsers warn about Traefik's default one. With a real domain, its wildcard record
+must point at this host and the credential file must hold a real DNS provider
+token. Then:
 
 ```sh
 make router-up            # checks settings, writes the route table, starts Traefik

@@ -7,6 +7,7 @@ Go-to references for Previa, each complete on its own. The numbered documents in
 | Document | Read it to learn |
 | --- | --- |
 | [tech-stack.md](tech-stack.md) | Every technology and version, what it is used for, where it lives in the code, processes and containers, every URL and built-in dashboard, configuration and infrastructure files, deployment setups, tests and admin commands. |
+| [config-setup.md](config-setup.md) | Every configuration setting: Required or Optional, what it is for, where the app uses it, and step by step how to get its value (accounts, pages, commands). |
 | [user-guide.md](user-guide.md) | What Previa offers, every user flow step by step from sign-in to a live preview and its removal, what each message means, and a manual test checklist with edge cases. |
 | [class-diagram.md](class-diagram.md) | Mermaid class diagrams: every package, the worker's build pipeline, and the server's request handling. |
 | [database-schema-diagram.md](database-schema-diagram.md) | A Mermaid entity-relationship diagram of the whole database, with notes on key columns. |
@@ -19,4 +20,4 @@ render the blocks in place.
 
 Configuration lives in [.env.example](../.env.example) (local) and
 [deploy/production/previa.env.example](../deploy/production/previa.env.example)
-(production): every setting with a placeholder, its purpose and how to get it.
+(production); [config-setup.md](config-setup.md) explains every setting in full.
