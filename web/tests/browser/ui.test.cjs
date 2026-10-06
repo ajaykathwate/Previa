@@ -267,6 +267,12 @@ test('owner builds once and tears a preview down only after confirming in a moda
   const preview = page.locator('[data-preview-url]');
   assert.equal(await preview.getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
   assert.equal(await preview.getAttribute('target'), '_blank');
+  assert.equal(await page.getByRole('link', {name: 'Open preview', exact: true}).getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin});
+  const copy = page.getByRole('button', {name: 'Copy the preview address', exact: true});
+  await copy.click();
+  await page.waitForFunction(() => document.querySelector('[data-copy] [data-copy-status]')?.textContent === 'Copied');
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'https://pr-3-1-fixture.preview.example.com');
   assert.match(await page.locator('.pr-detail-grid').innerText(), /Expires/);
   assert.match(await page.locator('.pr-detail-grid').innerText(), /earlier commit/);
   for (const width of [320, 390, 768, 1440]) {
@@ -292,8 +298,25 @@ test('owner builds once and tears a preview down only after confirming in a moda
 test('unavailable repository PRs offer no actions and say why', async () => {
   await login();
   await page.goto(`${origin}/repositories/2/pull-requests/1`);
-  assert.match(await page.locator('[data-build-unavailable]').innerText(), /GitHub access to this repository is unavailable/);
-  assert.equal(await page.getByRole('button', {name: /Build|Retry|Rebuild|Tear down/}).count(), 0);
+  assert.match(await page.locator('[data-build-unavailable]').innerText(), /GitHub access to this repository is unavailable[\s\S]*Manage connections/);
+  assert(await page.getByRole('button', {name: 'Build latest commit', exact: true}).isDisabled(), 'the action is shown, disabled');
+  assert.equal(await page.getByRole('button', {name: /Retry|Rebuild|Tear down|Cancel build/}).count(), 0);
+  assert.equal(await page.locator('form[action$="/build"]').count(), 0, 'nothing can be submitted');
+});
+
+test('a blocked build stays visible, disabled, with the reason and the fix', async () => {
+  await login();
+  await page.goto(`${origin}/repositories/1/pull-requests/9`);
+  const blocked = page.getByRole('button', {name: 'Build latest commit', exact: true});
+  assert(await blocked.isDisabled());
+  assert.equal(await blocked.getAttribute('aria-describedby'), 'build-unavailable');
+  assert.match(await page.locator('#build-unavailable').innerText(), /no preview domain[\s\S]*PREVIEW_BASE_DOMAIN/);
+  assert.equal(await page.locator('form[action$="/build"]').count(), 0, 'nothing can be submitted');
+  assert.match(await page.locator('[data-pr-status] h2').innerText(), /No preview yet/);
+  for (const width of [320, 390, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
 });
 
 test('Environments and Builds show addresses, waits and failures, and teardown confirms per row', async () => {
@@ -390,7 +413,7 @@ test('PR workspace live search pagination modal and build control', async () => 
   await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
   await search.fill('');
   await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===10);
-  await page.getByRole('switch',{name:'Enable Automatic Builds',exact:true}).click();
+  await page.getByRole('switch',{name:'Automatic builds',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
   assert.equal(new URL(page.url()).pathname,'/repositories/1');
   await page.keyboard.press('Escape');
@@ -403,7 +426,7 @@ test('PR workspace live search pagination modal and build control', async () => 
   await page.locator('.pr-table tbody a').first().click();
   await page.waitForURL(url=>url.pathname.includes('/pull-requests/'));
   assert(await page.getByRole('button',{name:'Build latest commit'}).isEnabled());
-  assert.match(await page.locator('.pr-detail-grid').innerText(),/Not requested/);
+  assert.match(await page.locator('.pr-detail-grid').innerText(),/No build requested yet/);
 });
 
 test('PR search and pagination work without JavaScript', async () => {
@@ -418,8 +441,8 @@ test('PR search and pagination work without JavaScript', async () => {
     assert.equal(await p.locator('.pr-table tbody tr').count(),1);
     assert.match(await p.locator('.pr-table').innerText(),/#25/);
     await p.locator('.pr-table tbody a').click();assert.equal(new URL(p.url()).pathname,'/repositories/1/pull-requests/25');
-    await p.getByRole('link',{name:'Back to pull requests'}).click();assert.equal(await p.locator('#pull-request-search').inputValue(),'preview 25');
-    await p.getByRole('switch',{name:'Enable Automatic Builds',exact:true}).click();
+    await p.locator('.pr-directory-link').click();assert.equal(await p.locator('#pull-request-search').inputValue(),'preview 25');
+    await p.getByRole('switch',{name:'Automatic builds',exact:true}).click();
     assert(await p.locator('#build-policy').evaluate(e=>e.matches(':modal')));
     await p.locator('#build-policy').getByRole('button',{name:'Enable automatic',exact:true}).click();
     assert.equal(await p.locator('#pull-request-search').inputValue(),'preview 25');assert.match(await p.locator('.pr-panel-heading').innerText(),/Automatic/);
@@ -435,7 +458,7 @@ test('Automatic confirms before enabling saves in place and live updates respect
  await page.locator('#pull-request-search').fill('preview 25');await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
  let policyRequests=0;
  page.on('request',request=>{if(request.method()==='POST' && request.url().endsWith('/repositories/1/policy')) policyRequests++;});
- const mode=page.getByRole('switch',{name:'Enable Automatic Builds',exact:true});
+ const mode=page.getByRole('switch',{name:'Automatic builds',exact:true});
  assert.equal(await mode.getAttribute('aria-checked'),'false');
  await mode.click();await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
  assert.equal(await mode.getAttribute('aria-checked'),'false');assert.equal(policyRequests,0);
@@ -474,7 +497,7 @@ test('unavailable repositories and empty PR states remain clear and cannot reque
  await login();await page.goto(`${origin}/repositories/2?access=all&pr_state=closed`);
  assert.match(await page.locator('.pr-summary').innerText(),/Repository unavailable/);
  assert(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).isDisabled());
- assert(await page.getByRole('switch',{name:'Enable Automatic Builds',exact:true}).isDisabled());
+ assert(await page.getByRole('switch',{name:'Automatic builds',exact:true}).isDisabled());
  assert.equal(await page.locator('.pr-table').count(),0);assert.match(await page.locator('#pull-request-results').innerText(),/No pull requests/);
  assert.equal(await page.locator('#repository-filters').count(),0);
 });
@@ -501,7 +524,9 @@ test('dedicated repository and PR pages preserve filters through breadcrumbs and
  assert.equal(await page.locator('#repository-filters').count(),0);
  assert.equal(await page.evaluate(()=>document===window.directoryDocument),false);
  assert.match(await page.locator('.pr-breadcrumb').innerText(),/fixture-owner.*repository-25/s);
- assert.match(await page.locator('.pr-summary').innerText(),/Last synced.*4 Oct 2026, 10:00 UTC/s);
+ const synced=page.locator('.pr-summary time');
+ assert.equal(await synced.getAttribute('title'),'4 Oct 2026, 10:00 UTC');
+ assert.notEqual(await synced.innerText(),'4 Oct 2026, 10:00 UTC','shown relative, with the exact time as its title');
  await page.locator('#pull-request-search').fill('preview 25');await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
  await page.locator('.pr-table tbody a').click();await page.waitForURL(url=>url.pathname==='/repositories/25/pull-requests/25');
  assert.match(await page.locator('.pr-breadcrumb [aria-current=page]').innerText(),/#25.*A careful change to preview 25/);
@@ -533,15 +558,15 @@ test('full pages align desktop filters and remain usable on short mobile and tab
  }
  assert(await page.getByRole('button',{name:'Build latest commit'}).isEnabled());
  const github=page.getByRole('link',{name:'View on GitHub',exact:true});
- assert.equal(await github.locator('svg').count(),1);assert.equal(await github.getAttribute('target'),'_blank');
- await page.getByRole('link',{name:'Back to pull requests'}).click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+ assert(await github.locator('svg').count()>=1);assert.equal(await github.getAttribute('target'),'_blank');
+ await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
 });
 
 test('failed PR searches preserve records and query bookmarks redirect to dedicated pages',async()=>{
  await login();await page.goto(`${origin}/repositories?repo_id=1&pr=7&pr_q=preview`);
  await page.waitForURL(url=>url.pathname==='/repositories/1/pull-requests/7');
- assert.match(await page.locator('.pr-detail-grid').innerText(),/Not requested/);
- await page.getByRole('link',{name:'Back to pull requests'}).click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+ assert.match(await page.locator('.pr-detail-grid').innerText(),/No build requested yet/);
+ await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
  await page.route('**/repositories/1?*',route=>route.fulfill({status:503,body:'fixture unavailable'}));
  await page.locator('#pull-request-search').fill('preview 25');
  await page.locator('#pull-request-filters [data-repository-feedback][data-error]').waitFor();
@@ -553,22 +578,22 @@ test('failed PR searches preserve records and query bookmarks redirect to dedica
 
 test('sync and automatic controls appear only on the PR list and breadcrumbs use consistent sizing',async()=>{
  await login();await page.goto(`${origin}/repositories/1?pr_q=preview&q=fixture&page=2`);
- await page.getByRole('switch',{name:'Enable Automatic Builds'}).click();await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
+ await page.getByRole('switch',{name:'Automatic builds'}).click();await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
  await page.getByRole('button',{name:'Enable automatic',exact:true}).click();await readyPanel('1');
  assert.equal(await page.locator('.automatic-switch').getAttribute('aria-checked'),'true');
  assert.notEqual(await page.locator('.automatic-switch').evaluate(e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)');
  await page.getByRole('button',{name:'Sync Pull Requests'}).click();await page.locator('.sync-state').filter({hasText:'Syncing'}).waitFor();
  await page.waitForFunction(()=>!document.querySelector('.pr-summary').textContent.includes('Syncing'));await readyPanel('1');
  await page.locator('.pr-table tbody a').first().click();await page.waitForURL(url=>url.pathname.includes('/pull-requests/'));
- assert.equal(await page.getByRole('switch',{name:'Enable Automatic Builds'}).count(),0);
+ assert.equal(await page.getByRole('switch',{name:'Automatic builds'}).count(),0);
  assert.equal(await page.getByRole('button',{name:'Sync Pull Requests'}).count(),0);assert.equal(await page.locator('#build-policy').count(),0);
  const sizes=await page.locator('.pr-breadcrumb').evaluate(e=>Array.from(e.children).map(child=>getComputedStyle(child).fontSize));
  assert(sizes.length>2 && sizes.every(size=>size===sizes[0]), 'breadcrumb text and separators share one size');
- await page.getByRole('link',{name:'Back to pull requests'}).click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+ await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
  assert.equal(await page.locator('.automatic-switch').getAttribute('aria-checked'),'true');
  assert.equal(new URL(page.url()).searchParams.get('page'),'2');
  await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories');
- assert.equal(await page.getByRole('switch',{name:'Enable Automatic Builds'}).count(),0);assert.equal(await page.getByRole('button',{name:'Sync Pull Requests'}).count(),0);
+ assert.equal(await page.getByRole('switch',{name:'Automatic builds'}).count(),0);assert.equal(await page.getByRole('button',{name:'Sync Pull Requests'}).count(),0);
 });
 
 test('small repository collections use compact cards with natural height and no pagination',async()=>{
@@ -578,7 +603,8 @@ test('small repository collections use compact cards with natural height and no 
   assert.equal(await page.locator('.repository-row').count(),count);
   assert.equal(await page.getByRole('navigation',{name:'Repository pages'}).count(),0);
   assert.match(await page.locator('.repository-count').innerText(),new RegExp(`${count} repositor`));
-  assert.equal(await page.locator('.repository-select').first().locator('svg').count(),2);
+  assert.equal(await page.locator('.repository-select').first().locator(':scope > :not(.repository-card-facts) svg').count(),2);
+  assert.equal(await page.locator('.repository-select').first().locator('.repository-card-facts li').count(),4,'open PRs, live previews, build mode and last sync');
   assert.equal(await page.locator('.repository-card-name p').first().innerText(),'fixture-owner');
   assert.equal(await page.locator('.repository-card-name h2').first().innerText().then(v=>v.includes('fixture-owner/')),false);
   for(const width of [320,390,768,1440,1917]) {
@@ -589,7 +615,8 @@ test('small repository collections use compact cards with natural height and no 
    assert(cards.every(c=>c.height<280), 'long repository names fit compact cards');
    if(count<=2 && width>700) {
     const catalog=await page.locator('.repository-catalog').boundingBox();
-    assert(catalog.height<500, 'small collections do not stretch toward the footer');
+    // Cards include a facts row (open PRs, previews, mode, sync); a 960px screen leaves room to spare.
+    assert(catalog.height<560, 'small collections do not stretch toward the footer: '+catalog.height+' at '+width);
     assert(catalog.width<=1241,'catalog stays within the content column');
    }
   }
@@ -655,38 +682,79 @@ test('live updates push changes across tabs without polling',async()=>{
  } finally {await other.close();}
 });
 
-test('repository secrets tab saves names only and confirms deletion in a modal',async()=>{
+test('repository secrets editor saves several at once, never shows values, and deletes selected ones',async()=>{
  await login();await page.goto(`${origin}/repositories/1`);await readyPanel('1');
  await page.locator('.repo-tabs').getByRole('link',{name:'Secrets',exact:true}).click();
  await page.waitForURL(`${origin}/repositories/1/secrets`);
  assert.match(await page.locator('.pr-breadcrumb').innerText(),/repository-1/);
  assert.equal(await page.locator('.repo-tabs a[aria-current=page]').innerText(),'Secrets');
- await page.locator('#secret-name').fill('API_KEY');
- await page.locator('#secret-value').fill('sk_test_never_shown_123');
- await page.getByRole('button',{name:'Save secret',exact:true}).click();
- await page.waitForURL(url=>url.searchParams.get('saved')==='API_KEY');
- assert.match(await page.locator('.secrets-table').innerText(),/API_KEY/);
+ const name=n=>page.getByRole('textbox',{name:`Name, line ${n}`,exact:true});
+ const value=n=>page.getByRole('textbox',{name:`Value, line ${n}`,exact:true});
+ // One line per secret; a duplicate name is refused before anything is sent.
+ await name(1).fill('API_KEY');await value(1).fill('sk_test_never_shown_123');
+ await page.getByRole('button',{name:'Add another line',exact:true}).click();
+ await name(2).fill('API_KEY');await value(2).fill('duplicate');
+ await page.locator('[data-secret-submit]').click();
+ assert.match(await page.locator('[data-secret-row]').nth(1).innerText(),/appears more than once/);
+ assert.equal(new URL(page.url()).search,'','a refused save stays on the page');
+ await name(2).fill('WEBHOOK_SECRET');
+ assert.equal(await page.locator('[data-secret-submit-label]').innerText(),'Save 2 secrets');
+ await page.locator('[data-secret-submit]').click();
+ await page.waitForURL(url=>url.searchParams.get('saved_count')==='2');
+ assert.match(await page.locator('.connection-notice').innerText(),/Saved 2 secrets \(2 new, 0 replaced\)/);
+ assert.match(await page.locator('.secrets-table').innerText(),/API_KEY[\s\S]*WEBHOOK_SECRET/);
  assert(!(await page.content()).includes('sk_test_never_shown_123'),'the value must never be rendered');
+ // Pasting NAME=value lines into a name splits them into lines.
+ await name(1).evaluate(input=>{const data=new DataTransfer();data.setData('text/plain','API_KEY=replaced\nFEATURE_FLAG=on');input.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));});
+ assert.equal(await name(2).inputValue(),'FEATURE_FLAG');
+ assert.match(await page.locator('[data-secret-row]').first().innerText(),/Replaces the stored value/);
+ await page.locator('[data-secret-submit]').click();
+ await page.waitForURL(url=>url.searchParams.get('saved_count')==='2');
+ assert.match(await page.locator('.connection-notice').innerText(),/1 new, 1 replaced/);
+ // A row's Replace prefills its name and never its value.
  await page.getByRole('link',{name:'Replace API_KEY',exact:true}).click();
  await page.waitForURL(url=>url.searchParams.get('replace')==='API_KEY');
- assert(await page.locator('#secret-name').evaluate(e=>e.readOnly));
- assert.equal(await page.locator('#secret-value').inputValue(),'');
- await page.locator('#secret-value').fill('replacement-value-456');
- await page.getByRole('button',{name:'Replace secret',exact:true}).click();
- await page.waitForURL(url=>url.searchParams.get('saved')==='API_KEY');
+ assert.equal(await name(1).inputValue(),'API_KEY');assert.equal(await value(1).inputValue(),'');
+ // A single delete confirms in its own modal; Escape changes nothing.
  const remove=page.getByRole('button',{name:'Delete API_KEY',exact:true});
  await remove.click();await page.waitForFunction(()=>document.querySelector('#delete-secret-0').matches(':modal'));
  assert.equal(await page.evaluate(()=>document.activeElement.textContent.trim()),'Cancel');
  await page.keyboard.press('Escape');
  assert.equal(await page.locator('#delete-secret-0').evaluate(e=>e.open),false);
- assert.equal(await page.locator('.secrets-table tbody tr').count(),1);
- await remove.click();await page.waitForFunction(()=>document.querySelector('#delete-secret-0').matches(':modal'));
- await page.locator('#delete-secret-0').getByRole('button',{name:'Delete secret',exact:true}).click();
- await page.waitForURL(url=>url.searchParams.get('deleted')==='API_KEY');
+ assert.equal(await page.locator('.secrets-table tbody tr').count(),3);
+ // Selected secrets are deleted together after one confirmation.
+ const bulk=page.locator('[data-bulk-delete]');
+ assert(await bulk.isDisabled(),'nothing is selected yet');
+ await page.getByRole('checkbox',{name:'Select all secrets'}).check();
+ assert.match(await bulk.innerText(),/\(3\)/);
+ await bulk.click();await page.waitForFunction(()=>document.querySelector('#delete-selected-secrets').matches(':modal'));
+ assert.match(await page.locator('[data-bulk-delete-summary]').innerText(),/3 secrets: API_KEY, FEATURE_FLAG, WEBHOOK_SECRET/);
+ await page.locator('#delete-selected-secrets').getByRole('button',{name:'Delete selected',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('deleted_count')==='3');
  await page.getByText('No secrets yet').waitFor();
  for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
  await page.locator('.repo-tabs').getByRole('link',{name:'Pull requests',exact:true}).click();
  await page.waitForURL(`${origin}/repositories/1`);
+});
+
+test('the secrets editor works without JavaScript and pasted .env text is saved',async()=>{
+ const noJS=await browser.newContext({javaScriptEnabled:false});
+ try {
+  const plain=await noJS.newPage();
+  await plain.goto(`${origin}/auth/github/login`);await plain.waitForURL(`${origin}/dashboard`);
+  await plain.goto(`${origin}/repositories/3/secrets`);
+  assert.equal(await plain.locator('[data-secret-row]').count(),4,'one line plus three spare lines');
+  await plain.locator('summary').filter({hasText:'Paste or import a .env file'}).click();
+  await plain.locator('#secret-dotenv').fill('# comment\nexport DB_URL=postgres://preview\nPRIVATE_KEY="-----BEGIN\nabc\n-----END"');
+  await plain.locator('[data-secret-submit]').click();
+  await plain.waitForURL(url=>url.searchParams.get('saved_count')==='2');
+  assert.match(await plain.locator('.secrets-table').innerText(),/DB_URL[\s\S]*PRIVATE_KEY/);
+  await plain.locator('summary').filter({hasText:'Paste or import a .env file'}).click();
+  await plain.locator('#secret-dotenv').fill('NOT A LINE');
+  await plain.locator('[data-secret-submit]').click();
+  assert.match(await plain.locator('#secret-dotenv-error').innerText(),/Line 1: expected NAME=value/);
+  assert.equal(await plain.locator('#secret-dotenv').inputValue(),'','pasted text is never rendered back');
+ } finally {await noJS.close();}
 });
 
 test('build logs stream live, reset for a new attempt and render output as text',async()=>{

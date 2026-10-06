@@ -56,10 +56,11 @@ func (r *Repository) List(ctx context.Context, userID, repoID int64) ([]Summary,
 	return result, nil
 }
 
-// Put locks only the repository row: it serializes the per-repository limit
-// without taking a second lock, so it cannot form a cycle with the
-// installation → repository → PR order used elsewhere.
-func (r *Repository) Put(ctx context.Context, userID, repoID int64, name string, sealed []byte, version int32) (created bool, err error) {
+// PutMany stores several sealed values in one transaction: all or nothing.
+// It locks only the repository row, which serializes the per-repository limit
+// without a second lock, so it cannot form a cycle with the installation →
+// repository → PR order used elsewhere. It reports how many names were new.
+func (r *Repository) PutMany(ctx context.Context, userID, repoID int64, items []SealedSecret) (created int, err error) {
 	err = database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
 		repo, err := q.LockOwnedRepository(ctx, dbgen.LockOwnedRepositoryParams{ID: repoID, OwnerUserID: owner(userID)})
@@ -69,38 +70,46 @@ func (r *Repository) Put(ctx context.Context, userID, repoID int64, name string,
 		if !repo.Available {
 			return ErrUnavailable
 		}
-		exists, err := q.SecretExists(ctx, dbgen.SecretExistsParams{RepoID: repoID, Key: name})
-		if err != nil {
-			return fmt.Errorf("check secret: %w", err)
+		names := make([]string, len(items))
+		for i, item := range items {
+			names[i] = item.Name
 		}
-		if !exists {
+		existing, err := q.ExistingSecretNames(ctx, dbgen.ExistingSecretNamesParams{RepoID: repoID, Keys: names})
+		if err != nil {
+			return fmt.Errorf("check secrets: %w", err)
+		}
+		fresh := len(items) - len(existing)
+		if fresh > 0 {
 			count, err := q.CountSecrets(ctx, repoID)
 			if err != nil {
 				return fmt.Errorf("count secrets: %w", err)
 			}
-			if count >= MaxSecretsPerRepository {
+			if count+int64(fresh) > MaxSecretsPerRepository {
 				return ErrLimit
 			}
 		}
-		created = !exists
-		if err := q.UpsertSecret(ctx, dbgen.UpsertSecretParams{RepoID: repoID, Key: name, EncryptedValue: sealed, KeyVersion: version}); err != nil {
-			return fmt.Errorf("store secret: %w", err)
+		for _, item := range items {
+			if err := q.UpsertSecret(ctx, dbgen.UpsertSecretParams{RepoID: repoID, Key: item.Name, EncryptedValue: item.Value, KeyVersion: item.Version}); err != nil {
+				return fmt.Errorf("store secret: %w", err)
+			}
 		}
+		created = fresh
 		return nil
 	})
 	return created, err
 }
 
-func (r *Repository) Delete(ctx context.Context, userID, repoID int64, name string) (bool, error) {
+// DeleteMany removes the named secrets and reports how many existed.
+func (r *Repository) DeleteMany(ctx context.Context, userID, repoID int64, names []string) (int, error) {
 	q := dbgen.New(r.pool)
 	if _, err := q.OwnedRepository(ctx, dbgen.OwnedRepositoryParams{ID: repoID, OwnerUserID: owner(userID)}); err != nil {
-		return false, ownedError(err)
+		return 0, ownedError(err)
 	}
-	n, err := q.DeleteOwnedSecret(ctx, dbgen.DeleteOwnedSecretParams{ID: repoID, OwnerUserID: owner(userID), Key: name})
+	n, err := q.DeleteOwnedSecrets(ctx, dbgen.DeleteOwnedSecretsParams{ID: repoID, OwnerUserID: owner(userID), Keys: names})
 	if err != nil {
-		return false, fmt.Errorf("delete secret: %w", err)
+		return 0, fmt.Errorf("delete secrets: %w", err)
 	}
-	return n == 1, nil
+	return int(n), nil
 }
 
 func (r *Repository) SealedSecrets(ctx context.Context, repoID int64) ([]SealedSecret, error) {

@@ -60,6 +60,10 @@
 .log-number:hover { color: var(--text-muted); }
 .log-text { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .log-system .log-text { color: var(--info-ink); font-style: italic; }
+.log-error .log-text { color: var(--danger-ink); }
+.log-error { background: color-mix(in oklab, var(--danger-soft) 55%, transparent); }
+.log-pager .copy-button { height: 28px; }
+.log-pager a[download] svg { width: 14px; height: 14px; }
 
 .logs-link { display: inline-flex; align-items: center; gap: 6px; }
 .logs-link svg, .pr-cell-logs svg { width: 14px; height: 14px; }

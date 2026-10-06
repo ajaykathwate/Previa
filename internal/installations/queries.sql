@@ -73,8 +73,16 @@ WHERE i.owner_user_id = sqlc.arg(user_id)
    OR (sqlc.arg(access)::text = 'unavailable' AND NOT (r.accessible AND i.status = 'active')));
 
 -- name: ListRepositoryPage :many
-SELECT r.id, r.full_name, r.accessible, i.status, i.account_login, i.github_installation_id
+-- One directory page with what each card shows: build mode, open PRs, live
+-- previews and when PRs were last discovered.
+SELECT r.id, r.full_name, r.accessible, i.status, i.account_login, i.github_installation_id, r.build_mode,
+ (SELECT count(*) FROM pull_requests p WHERE p.repo_id = r.id AND p.state = 'open')::bigint AS open_prs,
+ (SELECT count(*) FROM pull_requests p JOIN environments e ON e.pull_request_id = p.id
+   WHERE p.repo_id = r.id AND p.state = 'open' AND e.head_sha IS NOT NULL
+     AND e.status IN ('running', 'failed', 'publishing'))::bigint AS live_previews,
+ s.last_success_at
 FROM repos r JOIN installations i ON i.id = r.installation_id
+LEFT JOIN pr_syncs s ON s.repo_id = r.id
 WHERE i.owner_user_id = sqlc.arg(user_id)
  AND strpos(lower(r.full_name), lower(sqlc.arg(search)::text)) > 0
  AND (sqlc.arg(access)::text = 'all'

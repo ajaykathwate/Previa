@@ -78,7 +78,15 @@ All three only *observe* state; none of them authorizes a build. The screens are
 
 - Verified linking/addition atomically queues initial open-only discovery once for
   accessible owned repositories. Later clicks sync only open PRs; additional
-  clicks while queued/syncing coalesce.
+  clicks while queued/syncing coalesce, unless the sync is **stale**: requested more
+  than five minutes ago (`SyncStaleAfter`) and still unfinished. A stale sync never
+  ran (no worker) or was lost, so the dashboard shows **Sync stalled** and Sync
+  starts a new run whose revision fences the old job's pages.
+- While no live worker can discover (no heartbeat with the `discovery` capability),
+  a queued sync shows **Waiting for a worker** instead of a spinner, and the
+  repository page says no worker is running and how to start one. A running sync
+  refreshes the page once it would turn stale (`data-refresh-at`), since no database
+  change announces that.
 - Each page's observations, progress and next River job commit together. A crash
   replay cannot double-count an already completed page or lose continuation.
 - The GitHub client resolves repository metadata by numeric ID before using its
@@ -172,8 +180,12 @@ replaces the saved signal, so a push resets the status to Checking.
   two seconds later. It GETs only that already-tracked PR
   (`GET /repos/{owner}/{repo}/pulls/{number}`) and never discovers history.
 - Still-unresolved results retry every two seconds, at most eight ordinary attempts;
-  rate limits respect retry-after/reset. Exhaustion leaves Checking visible and
-  builds blocked until another event or sync retries.
+  rate limits respect retry-after/reset. The last failed attempt records
+  `pull_requests.mergeability_unresolved_at` for exactly that generation and commit
+  (migration 0019). The dashboard then shows **Unknown** ("GitHub did not report
+  mergeability") with Sync as the way to ask again, and builds stay blocked. A new
+  observation or a newly scheduled check clears it. While no worker runs, a PR in
+  Checking says it is waiting for a worker.
 - API calls run outside transactions. Installation/repository revisions and PR
   generation/SHA fence stale responses, so an old check cannot overwrite a newer commit.
 - A check triggered by a webhook resumes Automatic coordination when it resolves;

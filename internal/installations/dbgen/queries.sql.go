@@ -199,8 +199,14 @@ func (q *Queries) ListLinkedInstallations(ctx context.Context, ownerUserID pgtyp
 }
 
 const listRepositoryPage = `-- name: ListRepositoryPage :many
-SELECT r.id, r.full_name, r.accessible, i.status, i.account_login, i.github_installation_id
+SELECT r.id, r.full_name, r.accessible, i.status, i.account_login, i.github_installation_id, r.build_mode,
+ (SELECT count(*) FROM pull_requests p WHERE p.repo_id = r.id AND p.state = 'open')::bigint AS open_prs,
+ (SELECT count(*) FROM pull_requests p JOIN environments e ON e.pull_request_id = p.id
+   WHERE p.repo_id = r.id AND p.state = 'open' AND e.head_sha IS NOT NULL
+     AND e.status IN ('running', 'failed', 'publishing'))::bigint AS live_previews,
+ s.last_success_at
 FROM repos r JOIN installations i ON i.id = r.installation_id
+LEFT JOIN pr_syncs s ON s.repo_id = r.id
 WHERE i.owner_user_id = $1
  AND strpos(lower(r.full_name), lower($2::text)) > 0
  AND ($3::text = 'all'
@@ -225,8 +231,14 @@ type ListRepositoryPageRow struct {
 	Status               string
 	AccountLogin         string
 	GithubInstallationID int64
+	BuildMode            string
+	OpenPrs              int64
+	LivePreviews         int64
+	LastSuccessAt        pgtype.Timestamptz
 }
 
+// One directory page with what each card shows: build mode, open PRs, live
+// previews and when PRs were last discovered.
 func (q *Queries) ListRepositoryPage(ctx context.Context, arg ListRepositoryPageParams) ([]ListRepositoryPageRow, error) {
 	rows, err := q.db.Query(ctx, listRepositoryPage,
 		arg.UserID,
@@ -249,6 +261,10 @@ func (q *Queries) ListRepositoryPage(ctx context.Context, arg ListRepositoryPage
 			&i.Status,
 			&i.AccountLogin,
 			&i.GithubInstallationID,
+			&i.BuildMode,
+			&i.OpenPrs,
+			&i.LivePreviews,
+			&i.LastSuccessAt,
 		); err != nil {
 			return nil, err
 		}

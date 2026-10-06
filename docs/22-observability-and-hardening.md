@@ -72,7 +72,7 @@ collectors are included.
 | Endpoint | Server (`INTERNAL_ADDR`, default `127.0.0.1:9090`) | Worker (`WORKER_INTERNAL_ADDR`, default `127.0.0.1:9091`) |
 | --- | --- | --- |
 | `GET /livez` | 200 while the process runs | Same |
-| `GET /readyz` | database ping and schema at least migration 18; adds `version` | database, schema, River running, heartbeat recorded within 90 s, Docker reachable (when it builds); adds `capabilities` and `version` |
+| `GET /readyz` | database ping and schema at least the build's migration (19 now); adds `version` | database, schema, River running, heartbeat recorded within 90 s, Docker reachable (when it builds); adds `capabilities` and `version` |
 | `GET /metrics` | Prometheus | Prometheus |
 
 `/readyz` answers 503 with each failing check's (redacted) reason. Both binaries

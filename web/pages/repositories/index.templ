@@ -127,6 +127,37 @@ templ Results(page Page) {
 								if row.Status!="active" {
 									<span class="repository-status-detail">Installation { row.Status }</span>
 								}
+								<ul class="repository-card-facts" aria-label="Repository activity">
+									<li>
+										@components.PullRequestIcon()
+										{ Count(row.OpenPRs, "open pull request", "open pull requests") }
+									</li>
+									<li
+										if row.LivePreviews > 0 {
+											class="is-live"
+										}
+									>
+										@components.EnvironmentIcon()
+										{ Count(row.LivePreviews, "live preview", "live previews") }
+									</li>
+									<li>
+										@components.BuildIcon()
+										if row.BuildMode=="automatic" {
+											Automatic builds
+										} else {
+											Manual builds
+										}
+									</li>
+									<li>
+										@components.ClockIcon()
+										if row.LastSynced!="" {
+											Synced { " " }
+											@components.Time(row.LastSynced, row.SyncedLabel())
+										} else {
+											Not synced yet
+										}
+									</li>
+								</ul>
 								<span class="repository-card-link">
 									View pull requests
 									@components.Arrow()

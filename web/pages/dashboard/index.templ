@@ -3,89 +3,189 @@ package dashboard
 import "strconv"
 import "github.com/ajaykathwatee/previa/web/components"
 import "github.com/ajaykathwatee/previa/web/layouts"
+import prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 
 templ Index(username string, csrfToken string, summary Summary) {
 	@layouts.App("Overview", username, csrfToken, components.NavOverview) {
+		{{ note, attention := summary.WorkerNote() }}
 		<header class="page-header dashboard-heading">
 			<div class="page-header-text">
 				<span class="eyebrow">Overview</span>
 				<h1>Welcome back, <span class="accent-text">{ username }</span></h1>
-				<p>Your workspace at a glance. Every number here comes from your own linked installations.</p>
+				<p>Your previews at a glance. Every number here comes from your own linked installations.</p>
 			</div>
-			<a href="/protected" class="identity-badge"><span class="status-dot" aria-hidden="true"></span>Signed in with GitHub</a>
 		</header>
-		<section class="stat-grid overview-stats" aria-label="Workspace counts">
-			@statTile("/repositories", "Linked installations", summary.Installations, "Manage connections", components.ServerIcon())
-			@statTile("/repositories?access=all", "Repositories", summary.Repositories, "Browse your source", components.RepositoryIcon())
-			@statTile("/repositories?access=available", "Access available", summary.Available, "View accessible repositories", components.ShieldIcon())
-			@statTile("/repositories?access=unavailable", "Access unavailable", summary.Unavailable(), "Review removed access", components.AlertIcon())
-		</section>
+		if !summary.SetupDone() {
+			@setup(summary)
+		}
+		if attention {
+			@pipeline(summary, note, attention)
+		}
 		<section class="stat-grid overview-stats" aria-label="Delivery counts">
-			@statTile("/builds", "Waiting or queued", summary.Waiting, "View builds", components.ClockIcon())
-			@statTile("/builds", "Building", summary.Building, "View builds", components.BuildIcon())
 			@statTile("/environments", "Live previews", summary.Live, "View environments", components.EnvironmentIcon())
+			@statTile("/builds", "Building", summary.Building, "View builds", components.BuildIcon())
+			@statTile("/builds", "Waiting or queued", summary.Waiting, "View builds", components.ClockIcon())
 			@statTile("/builds", "Failed requests", summary.Failed, "Review failures", components.AlertIcon())
 		</section>
-		<div class="overview-grid">
-			<section class="panel pipeline-panel" aria-labelledby="pipeline-title">
+		<div class="overview-lists">
+			<section class="panel overview-list" aria-labelledby="previews-title">
 				<header class="panel-header">
-					<div><span class="eyebrow">Preview pipeline</span><h2 id="pipeline-title">From pull request to preview</h2></div>
-					<p class="legend"><span class="legend-item is-live">Connected</span><span class="legend-item is-soon">No worker running</span></p>
+					<div><span class="eyebrow">Live now</span><h2 id="previews-title">Previews</h2></div>
+					<a class="text-link" href="/environments">
+						All environments
+						@components.Arrow()
+					</a>
 				</header>
-				<ol class="pipeline">
-					for i, stage := range summary.Stages() {
-						<li
-							if stage.Live {
-								class="pipeline-stage is-live"
-							} else {
-								class="pipeline-stage is-soon"
-							}
-						>
-							<span class="pipeline-node" aria-hidden="true">
-								if stage.Live {
-									@components.CheckIcon()
-								} else {
-									{ strconv.Itoa(i + 1) }
-								}
-							</span>
-							<strong>{ stage.Name }</strong>
-							<span class="pipeline-detail">{ stage.Detail }</span>
-							if stage.Live {
-								<span class="badge tone-ok">Connected</span>
-							} else {
-								<span class="badge tone-neutral">Not running</span>
-							}
-						</li>
-					}
-				</ol>
-				<p class="panel-note">
-					@components.InfoIcon()
-					if summary.Workers.Execution {
-						A running worker builds, publishes and reports previews. Nothing on this page is simulated.
-					} else if summary.Workers.Paused {
-						Builds are paused by the operator. Teardown, cleanup and reports keep running; queued requests start when builds resume.
-					} else {
-						No running worker can build yet: it needs the GitHub App, Docker and a preview domain (see the setup guide). Requests wait until one starts.
-					}
-				</p>
+				if len(summary.Previews) == 0 {
+					<p class="overview-empty">No preview is live. Open a pull request and choose <strong>Build latest commit</strong>.</p>
+				} else {
+					<ul class="overview-rows">
+						for _, row := range summary.Previews {
+							<li>
+								@rowTitle(row)
+								<div class="overview-row-side">
+									if row.PreviewURL != "" {
+										<a class="text-link" href={ templ.SafeURL(row.PreviewURL) } target="_blank" rel="noopener noreferrer" title={ row.PreviewURL }>
+											Open
+											@components.ArrowUpRight()
+										</a>
+										@components.CopyButton(row.PreviewURL, "Copy the preview address of "+row.Name+" #"+strconv.Itoa(int(row.Number)))
+									}
+									if row.ExpiresAt != "" {
+										<small>
+											Expires { " " }
+											@components.Time(row.ExpiresAt, prpages.TimeLabel(row.ExpiresAt))
+										</small>
+									}
+								</div>
+							</li>
+						}
+					</ul>
+				}
 			</section>
-			<section class="panel checklist-panel" aria-labelledby="setup-title">
-				<header class="panel-header"><div><span class="eyebrow">Getting set up</span><h2 id="setup-title">Your next steps</h2></div></header>
-				<ol class="checklist">
-					@checkItem(true, false, "Sign in with GitHub", "Your Previa session is active.", "", "")
-					@checkItem(summary.Installations > 0, false, "Connect the GitHub App", "Choose which repositories Previa may read.", "/repositories", "Open repositories")
-					@checkItem(summary.Repositories > 0, false, "Link repositories", "Verified repositories appear in your directory.", "/repositories?access=all", "View directory")
-					@checkItem(false, false, "Sync pull requests", "Open a repository, then choose Sync Pull Requests.", "/repositories?access=available", "Pick a repository")
-					@checkItem(summary.Live > 0, false, "Build a preview", "Open a pull request and choose Build latest commit, or enable Automatic builds.", "/repositories?access=available", "Pick a repository")
-				</ol>
-			</section>
-			<section class="shortcut-grid" aria-label="Workspace areas">
-				@shortcut("/builds", "Builds", "Current and latest build requests across your repositories, with their captured commits.", "View builds", components.BuildIcon())
-				@shortcut("/environments", "Environments", "Live previews with their addresses, deployed commits and expiry.", "View environments", components.EnvironmentIcon())
-				@shortcut("/developer-tools", "Developer tools", "Send a harmless queue ping to confirm the River worker is connected.", "Open tools", components.TerminalIcon())
+			<section class="panel overview-list" aria-labelledby="builds-title">
+				<header class="panel-header">
+					<div><span class="eyebrow">Latest activity</span><h2 id="builds-title">Build requests</h2></div>
+					<a class="text-link" href="/builds">
+						All builds
+						@components.Arrow()
+					</a>
+				</header>
+				if len(summary.Builds) == 0 {
+					<p class="overview-empty">No build has been requested yet.</p>
+				} else {
+					<ul class="overview-rows">
+						for _, row := range summary.Builds {
+							<li>
+								@rowTitle(row)
+								<div class="overview-row-side">
+									if row.Waiting != "" {
+										<span class="badge tone-info"><span class="badge-dot" aria-hidden="true"></span>{ row.Waiting }</span>
+									} else {
+										<span class={ "badge", prpages.Tone(row.State) }><span class="badge-dot" aria-hidden="true"></span>{ prpages.Label(row.State) }</span>
+									}
+									if row.CompletedAt != "" {
+										<small>
+											@components.Time(row.CompletedAt, prpages.TimeLabel(row.CompletedAt))
+										</small>
+									} else if row.StartedAt != "" {
+										<small>
+											Started { " " }
+											@components.Time(row.StartedAt, prpages.TimeLabel(row.StartedAt))
+										</small>
+									}
+								</div>
+							</li>
+						}
+					</ul>
+				}
 			</section>
 		</div>
+		if !attention {
+			@pipeline(summary, note, attention)
+		}
+		<section class="stat-grid overview-stats" aria-label="Source counts">
+			@statTile("/repositories?access=all", "Repositories", summary.Repositories, "Browse repositories", components.RepositoryIcon())
+			@statTile("/repositories?access=available", "Open pull requests", summary.OpenPRs, "Pick a repository", components.PullRequestIcon())
+			@statTile("/repositories", "Linked installations", summary.Installations, "Manage connections", components.ServerIcon())
+			@statTile("/repositories?access=unavailable", "Access unavailable", summary.Unavailable(), "Review removed access", components.AlertIcon())
+		</section>
 	}
+}
+
+// rowTitle names a pull request in an Overview list and links to it.
+templ rowTitle(row prpages.ActivityRow) {
+	<div class="overview-row-main">
+		<a href={ templ.SafeURL(prpages.PRURL(row.RepoID, row.Number)) }>
+			if row.Title != "" {
+				#{ strconv.Itoa(int(row.Number)) } · { row.Title }
+			} else {
+				#{ strconv.Itoa(int(row.Number)) }
+			}
+		</a>
+		<small>{ row.Name }</small>
+	</div>
+}
+
+templ setup(summary Summary) {
+	<section class="panel checklist-panel" aria-labelledby="setup-title">
+		<header class="panel-header"><div><span class="eyebrow">Getting set up</span><h2 id="setup-title">Your next steps</h2></div></header>
+		<ol class="checklist">
+			for _, step := range summary.Setup() {
+				@checkItem(step.Done, step.Title, step.Detail, step.Href, step.Action)
+			}
+		</ol>
+	</section>
+}
+
+templ pipeline(summary Summary, note string, attention bool) {
+	<section
+		if attention {
+			class="panel pipeline-panel needs-attention"
+		} else {
+			class="panel pipeline-panel"
+		}
+		aria-labelledby="pipeline-title"
+	>
+		<header class="panel-header">
+			<div><span class="eyebrow">Preview pipeline</span><h2 id="pipeline-title">From pull request to preview</h2></div>
+			<p class="legend"><span class="legend-item is-live">Connected</span><span class="legend-item is-soon">No worker running</span></p>
+		</header>
+		<ol class="pipeline">
+			for i, stage := range summary.Stages() {
+				<li
+					if stage.Live {
+						class="pipeline-stage is-live"
+					} else {
+						class="pipeline-stage is-soon"
+					}
+				>
+					<span class="pipeline-node" aria-hidden="true">
+						if stage.Live {
+							@components.CheckIcon()
+						} else {
+							{ strconv.Itoa(i + 1) }
+						}
+					</span>
+					<strong>{ stage.Name }</strong>
+					<span class="pipeline-detail">{ stage.Detail }</span>
+					if stage.Live {
+						<span class="badge tone-ok">Connected</span>
+					} else {
+						<span class="badge tone-neutral">Not running</span>
+					}
+				</li>
+			}
+		</ol>
+		<p class="panel-note" role="status">
+			if attention {
+				@components.AlertIcon()
+			} else {
+				@components.InfoIcon()
+			}
+			{ note }
+		</p>
+	</section>
 }
 
 templ statTile(href, label string, value int64, action string, icon templ.Component) {
@@ -103,14 +203,10 @@ templ statTile(href, label string, value int64, action string, icon templ.Compon
 	</a>
 }
 
-templ checkItem(done, soon bool, title, detail, href, action string) {
+templ checkItem(done bool, title, detail, href, action string) {
 	<li
 		if done {
 			class="check-item is-done"
-		}
-		else
-		if soon {
-			class="check-item is-soon"
 		} else {
 			class="check-item"
 		}
@@ -129,27 +225,11 @@ templ checkItem(done, soon bool, title, detail, href, action string) {
 			</strong>
 			<span>{ detail }</span>
 		</div>
-		if soon {
-			<span class="soon-tag">Soon</span>
-		} else if !done && href != "" {
+		if !done && href != "" {
 			<a class="check-action" href={ templ.SafeURL(href) }>
 				{ action }
 				@components.Arrow()
 			</a>
 		}
 	</li>
-}
-
-templ shortcut(href, title, detail, action string, icon templ.Component) {
-	<a class="shortcut-card" href={ templ.SafeURL(href) }>
-		<span class="shortcut-icon">
-			@icon
-		</span>
-		<h2>{ title }</h2>
-		<p>{ detail }</p>
-		<span class="shortcut-action">
-			{ action }
-			@components.Arrow()
-		</span>
-	</a>
 }

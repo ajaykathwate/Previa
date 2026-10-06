@@ -100,7 +100,7 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | `internal/reporting` | PR feedback: state derivation, comment and check run rendering, the GitHub adapter and the leased reporter ([13](13-pr-feedback.md)). |
 | `internal/housekeeping` | Startup and periodic River jobs: recovery, resource inventory with grace periods, PR reconciliation, expiry, pruning, dry runs ([14](14-housekeeping-and-capacity.md)). |
 | `web/` | `pages/<feature>`, `layouts`, `components`, `styles` (Tailwind), `static` (HTMX, compiled CSS, `ui.js`), browser tests. |
-| `db/migrations` | Goose migrations 0001–0018 (embedded by `db/migrations.go`); sqlc generates typed queries into each feature's `dbgen/`. |
+| `db/migrations` | Goose migrations 0001–0019 (embedded by `db/migrations.go`); sqlc generates typed queries into each feature's `dbgen/`. |
 | `deploy/egress` | Dockerfile for the egress proxy and prober image (`make egress-image`). |
 | `deploy/traefik` | The development router's Compose file (`make router-up`): file provider, loopback API, staging ACME, secret-file DNS credential. |
 | `deploy/production`, `Dockerfile` | Release images; production Compose; host setup, backup, restore and smoke-test scripts ([24](24-production-deployment.md)). |

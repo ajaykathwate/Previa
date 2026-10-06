@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/installations"
@@ -52,11 +53,33 @@ func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Val
 		Available: data.Repo.Accessible && data.Repo.Status == "active", DiscoveryEnabled: h.enabled,
 		SyncState: data.Sync.State, SyncMessage: data.Sync.Message, LastRefresh: timestamp(data.Sync.LastSuccessAt),
 		Fetched: data.Sync.Fetched, Number: data.Page, Pages: data.Pages, Total: data.Total,
-		Search: f.Search, State: f.State, WorkspaceQuery: params.Encode()}
+		Search: f.Search, State: f.State, WorkspaceQuery: params.Encode(), CSRF: h.users.CSRFToken(ctx)}
+	if h.actions != nil {
+		caps, err := h.actions.Capabilities.Current(ctx)
+		if err != nil {
+			return pages.Page{}, err
+		}
+		page.WorkerMissing = !caps.Discovery
+	}
+	if page.Syncing() && data.Sync.RequestedAt.Valid {
+		page.SyncStale = syncStale(data.Sync, time.Now())
+		page.SyncStaleAt = data.Sync.RequestedAt.Time.Add(SyncStaleAfter).UTC().Format(time.RFC3339)
+	}
 	for _, row := range data.Rows {
-		page.Rows = append(page.Rows, pages.PR{Number: row.Number, Title: row.Title, Author: row.Author,
+		pr := pages.PR{Number: row.Number, Title: row.Title, Author: row.Author,
 			Branch: row.HeadBranch, SHA: row.HeadSha, State: DisplayStatus(row.State, row.BuildStatus), Build: row.BuildState,
-			Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh})
+			Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh, RequestCurrent: row.RequestCurrent,
+			DeployedSHA: row.DeployedSha, Environment: row.EnvironmentStatus}
+		live := row.DeployedSha != "" && (row.EnvironmentStatus == "running" || row.EnvironmentStatus == "failed" || row.EnvironmentStatus == "publishing")
+		if live && h.actions != nil && h.actions.PreviewBaseDomain != "" && row.Hostname != "" {
+			pr.PreviewURL = "https://" + row.Hostname + "." + h.actions.PreviewBaseDomain
+			pr.OlderPreview = row.DeployedSha != row.HeadSha
+		}
+		if pr.State == "checking" && row.MergeabilityUnresolvedAt.Valid {
+			pr.State, pr.MergeUnknown = "unknown", true
+		}
+		pr.NoWorker = page.WorkerMissing
+		page.Rows = append(page.Rows, pr)
 	}
 	if number > 0 {
 		row, err := h.repo.Detail(ctx, userID, repoID, int32(number))

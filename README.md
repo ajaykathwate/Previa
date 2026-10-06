@@ -224,21 +224,25 @@ on hover where the browser supports speculation rules.
 Overview shows real installation/repository/access counts, a setup checklist
 derived from those counts and a pipeline view marking which stages are connected.
 Repositories shows a responsive repository card grid (up to three columns, one on
-phones) inside a 1240px content column. Cards show the repository name, owner and
-access state; search and access filters share a sticky toolbar.
+phones) inside a 1240px content column. Cards show the repository name, owner,
+access state, open pull requests, live previews, build mode and last sync; search
+and access filters share a sticky toolbar.
 Pagination appears only when more than one page is needed.
 Selecting a source opens its dedicated repository page; selecting a PR opens its
 dedicated detail page. Clickable owner/repository/PR breadcrumbs and Back links
 preserve list filters. Search and filters share a row on desktop and stack on
-narrow screens. The PR list page shows **Sync Pull Requests** and an **Enable
-Automatic Builds** switch with a subtle background. These controls are absent
-from individual PR detail pages. The switch is off in Manual mode; enabling
+narrow screens. The PR list page shows **Sync Pull Requests** and an **Automatic
+builds** switch with a subtle background, plus each PR's preview link. These
+controls are absent from individual PR detail pages, which open with one status
+panel: a headline, the preview address with Copy, every action, and the last lines
+of a failed build. The switch is off in Manual mode; enabling
 requires an owner-controlled, CSRF-protected confirmation modal. Search, sync
 progress and policy saves update in place through HTMX, and committed changes
 (sync progress, webhook and mergeability updates) are pushed to open repository
 pages over Server-Sent Events rather than polled. Each repository also has a
 **Secrets** tab where its owner stores encrypted runtime values (write-only, never
-given to fork PRs). Page URLs are shareable
+given to fork PRs), several at once or from pasted `.env` text, and deletes the
+selected ones together. Page URLs are shareable
 and navigation works without JavaScript.
 
 PR discovery, latest/requested/deployed commit views and the owner's Build,
@@ -246,8 +250,10 @@ Build now, Retry, Rebuild and Tear down controls are implemented. Builds and
 Environments show actual saved state (queued and running work, failure reasons,
 preview URL, health and expiry) and link to each PR's **Build logs** page, which
 shows the current attempt's output live over Server-Sent Events (bounded, redacted,
-readable without JavaScript). When no worker that can build is running, the
-controls say so and the endpoints refuse with 503 instead of recording work.
+readable without JavaScript, with Copy and Download). When no worker that can build
+is running, the build action is shown disabled with the reason and the fix (for
+example a worker without a preview domain), and the endpoints refuse with 503
+instead of recording work.
 See [03-user-guide.md](docs/03-user-guide.md) for the current browser workflow.
 
 - **Builds** describes current/latest execution work and its commit/logs, not a

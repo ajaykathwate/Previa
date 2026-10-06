@@ -338,6 +338,24 @@
   const liveBlocked = () => Boolean(document.querySelector('dialog[data-confirmation-dialog][open]') ||
     document.activeElement?.closest('#pull-request-filters'));
 
+  // A state that changes with time alone (a sync turning stale) carries
+  // data-refresh-at: refresh the panel once that moment passes, since no
+  // database change will announce it.
+  function initRefreshDeadlines() {
+    const timers = new Set();
+    const schedule = () => {
+      timers.forEach(clearTimeout);
+      timers.clear();
+      document.querySelectorAll('[data-refresh-at]').forEach((element) => {
+        const delay = Date.parse(element.dataset.refreshAt) - Date.now() + 1000;
+        if (!(delay > 0 && delay < 30 * 60 * 1000)) return;
+        timers.add(setTimeout(() => { if (liveBlocked()) livePending = true; else liveRefresh(); }, delay));
+      });
+    };
+    schedule();
+    document.addEventListener('htmx:afterSettle', schedule);
+  }
+
   function initLiveUpdates() {
     const config = document.querySelector('[data-live-events]');
     if (!config || !('EventSource' in window)) return;
@@ -419,6 +437,7 @@
         const item = document.createElement('li');
         item.id = 'L' + number;
         item.className = line.system ? 'log-line log-system' : 'log-line';
+        if (!line.system && /\b(error|failed|fatal|panic)\b/i.test(line.text)) item.classList.add('log-error');
         const anchor = document.createElement('a');
         anchor.className = 'log-number';
         anchor.href = '#L' + number;
@@ -503,6 +522,309 @@
     window.addEventListener('pageshow', (event) => { if (event.persisted && !source && !document.hidden) connect(); });
     if (!window.location.hash) stick();
     if (!document.hidden) connect(); else setState('paused', 'Paused while hidden');
+  }
+
+  // Times are rendered as exact UTC; show them relative ("3 minutes ago") and
+  // keep the exact time as the title. Refreshed every 30 s and after swaps.
+  function initRelativeTimes() {
+    if (!('RelativeTimeFormat' in Intl)) return;
+    const format = new Intl.RelativeTimeFormat('en', {numeric: 'auto'});
+    const units = [['year', 31536e6], ['month', 2592e6], ['week', 6048e5], ['day', 864e5], ['hour', 36e5], ['minute', 6e4]];
+    const render = () => document.querySelectorAll('time[data-relative]').forEach((element) => {
+      const when = Date.parse(element.dateTime);
+      if (Number.isNaN(when)) return;
+      const diff = when - Date.now();
+      const [unit, size] = units.find(([, length]) => Math.abs(diff) >= length) || ['second', 1000];
+      const text = unit === 'second' ? (diff < 0 ? 'just now' : 'in a moment') : format.format(Math.round(diff / size), unit);
+      if (element.textContent !== text) element.textContent = text;
+    });
+    render();
+    setInterval(render, 30000);
+    document.addEventListener('htmx:afterSettle', render);
+  }
+
+  // Copy buttons: data-copy holds the text, or data-copy-lines names a log
+  // list whose line texts are copied. The label confirms for two seconds.
+  function initCopyButtons() {
+    const timers = new WeakMap();
+    document.addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-copy], [data-copy-lines]');
+      if (!button) return;
+      const status = button.querySelector('[data-copy-status]');
+      const label = status?.textContent;
+      let text = button.dataset.copy ?? '';
+      if (button.dataset.copyLines) {
+        const list = document.querySelector(button.dataset.copyLines);
+        text = [...(list?.querySelectorAll('.log-text') || [])].map(line => line.textContent).join('\n');
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        button.dataset.copied = '';
+        if (status) status.textContent = 'Copied';
+      } catch {
+        if (status) status.textContent = 'Copy failed';
+      }
+      clearTimeout(timers.get(button));
+      timers.set(button, setTimeout(() => {
+        delete button.dataset.copied;
+        if (status && label) status.textContent = label;
+      }, 2000));
+    });
+  }
+
+  // .env text: the same rules as the server's secrets.ParseDotenv.
+  function parseDotenv(text) {
+    const lines = text.replace(/\r\n/g, '\n').split('\n');
+    const entries = [];
+    const closing = (body) => {
+      for (let i = 0; i < body.length; i++) {
+        if (body[i] === '\\') i++;
+        else if (body[i] === '"') return i;
+      }
+      return -1;
+    };
+    const unescape = body => body.replace(/\\(.)/g, (_, c) => (c === 'n' ? '\n' : c === 't' ? '\t' : c));
+    for (let i = 0; i < lines.length; i++) {
+      const number = i + 1;
+      let line = lines[i].trim();
+      if (!line || line.startsWith('#')) continue;
+      if (line.startsWith('export ')) line = line.slice(7);
+      const equals = line.indexOf('=');
+      const name = equals < 0 ? '' : line.slice(0, equals).trim();
+      if (!name) throw new Error(`Line ${number}: expected NAME=value.`);
+      let raw = line.slice(equals + 1).trim();
+      let value;
+      if (raw.startsWith('"')) {
+        let body = raw.slice(1);
+        for (;;) {
+          const end = closing(body);
+          if (end >= 0) { value = unescape(body.slice(0, end)); break; }
+          i++;
+          if (i >= lines.length) throw new Error(`Line ${number}: the quoted value of ${name} is not closed.`);
+          body += '\n' + lines[i].replace(/[ \t]+$/, '');
+        }
+      } else if (raw.startsWith("'")) {
+        const end = raw.lastIndexOf("'");
+        if (end === 0) throw new Error(`Line ${number}: the quoted value of ${name} is not closed.`);
+        value = raw.slice(1, end);
+      } else {
+        const comment = raw.indexOf(' #');
+        if (comment >= 0) raw = raw.slice(0, comment).trim();
+        value = raw;
+      }
+      entries.push([name, value]);
+    }
+    return entries;
+  }
+
+  // Secrets editor: lines of name and value like a key-value table. Pasting
+  // several NAME=value lines into a name splits them into lines; a .env file
+  // or pasted text can be moved into lines to review before saving. Checks
+  // run before submit; the server checks everything again.
+  function initSecretEditor() {
+    const form = document.querySelector('[data-secret-editor]');
+    if (!form) return;
+    const list = form.querySelector('[data-secret-rows]');
+    const template = form.querySelector('[data-secret-row-template]');
+    const existing = new Set((form.dataset.existingNames || '').split(' ').filter(Boolean));
+    const remaining = Number(form.dataset.remaining || 0);
+    const dotenv = form.querySelector('[data-dotenv-text]');
+    const dotenvFeedback = form.querySelector('[data-dotenv-feedback]');
+    const feedback = form.querySelector('[data-secret-editor-feedback]');
+    const submitLabel = form.querySelector('[data-secret-submit-label]');
+    const namePattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+    const rows = () => [...list.querySelectorAll('[data-secret-row]')];
+    const fields = row => [row.querySelector('[name="name"]'), row.querySelector('[name="value"]')];
+    // setNote shows a hint, or an error that marks invalidField.
+    const setNote = (row, text, invalidField = null) => {
+      const note = row.querySelector('[data-row-note]');
+      row.classList.toggle('has-error', Boolean(invalidField));
+      fields(row).forEach((field) => {
+        if (field === invalidField) field.setAttribute('aria-invalid', 'true'); else field.removeAttribute('aria-invalid');
+      });
+      note.replaceChildren();
+      if (!text) return;
+      if (invalidField) {
+        const span = document.createElement('span');
+        span.className = 'field-error';
+        span.textContent = text;
+        note.append(span);
+      } else note.textContent = text;
+    };
+    const hint = (row) => {
+      const name = fields(row)[0].value.trim();
+      if (!row.classList.contains('has-error')) setNote(row, existing.has(name) ? 'Replaces the stored value.' : '');
+    };
+    const grow = (area) => { area.rows = Math.min(8, Math.max(1, area.value.split('\n').length)); };
+    const relabel = () => rows().forEach((row, index) => {
+      const [name, value] = fields(row);
+      name.setAttribute('aria-label', `Name, line ${index + 1}`);
+      value.setAttribute('aria-label', `Value, line ${index + 1}`);
+      row.querySelector('[data-remove-secret-row]').setAttribute('aria-label', `Remove line ${index + 1}`);
+    });
+    const count = () => {
+      const filled = rows().filter(row => fields(row).some(field => field.value.trim() !== '')).length;
+      let pasted = 0;
+      try { pasted = dotenv?.value.trim() ? parseDotenv(dotenv.value).length : 0; } catch { /* Reported on submit. */ }
+      const total = filled + pasted;
+      if (submitLabel) submitLabel.textContent = total > 1 ? `Save ${total} secrets` : total === 1 ? 'Save 1 secret' : 'Save secrets';
+    };
+    const addRow = (name = '', value = '') => {
+      const empty = rows().find(row => fields(row).every(field => field.value === ''));
+      const row = empty || template.content.firstElementChild.cloneNode(true);
+      if (!empty) list.append(row);
+      const [nameField, valueField] = fields(row);
+      nameField.value = name;
+      valueField.value = value;
+      grow(valueField);
+      hint(row);
+      relabel();
+      return row;
+    };
+    const fill = (entries) => {
+      entries.forEach(([name, value]) => addRow(name, value));
+      count();
+    };
+    list.addEventListener('input', (event) => {
+      const row = event.target.closest('[data-secret-row]');
+      if (!row) return;
+      if (event.target.name === 'value') grow(event.target);
+      if (row.classList.contains('has-error')) setNote(row, '');
+      hint(row);
+      count();
+    });
+    list.addEventListener('paste', (event) => {
+      if (event.target.name !== 'name') return;
+      const text = event.clipboardData?.getData('text') || '';
+      if (!text.includes('=')) return;
+      try {
+        const entries = parseDotenv(text);
+        if (!entries.length) return;
+        event.preventDefault();
+        const row = event.target.closest('[data-secret-row]');
+        fields(row).forEach(field => { field.value = ''; });
+        fill(entries);
+        if (feedback) feedback.textContent = `Added ${entries.length} line${entries.length === 1 ? '' : 's'} from the pasted text.`;
+      } catch { /* Not .env text: paste it as typed. */ }
+    });
+    list.addEventListener('click', (event) => {
+      const remove = event.target.closest('[data-remove-secret-row]');
+      if (!remove) return;
+      const row = remove.closest('[data-secret-row]');
+      if (rows().length > 1) {
+        const next = row.nextElementSibling || row.previousElementSibling;
+        row.remove();
+        fields(next)[0]?.focus();
+      } else {
+        fields(row).forEach(field => { field.value = ''; });
+        setNote(row, '');
+        fields(row)[0].focus();
+      }
+      relabel();
+      count();
+    });
+    form.querySelector('[data-add-secret-row]')?.addEventListener('click', () => {
+      const row = template.content.firstElementChild.cloneNode(true);
+      list.append(row);
+      relabel();
+      fields(row)[0].focus();
+    });
+    dotenv?.addEventListener('input', count);
+    form.querySelector('[data-dotenv-file]')?.addEventListener('change', async (event) => {
+      const file = event.target.files?.[0];
+      if (!file || !dotenv) return;
+      if (file.size > 256 * 1024) { dotenvFeedback.textContent = 'That file is too large for secrets (256 KiB at most).'; return; }
+      dotenv.value = await file.text();
+      event.target.value = '';
+      dotenvFeedback.textContent = `Loaded ${file.name}. Review it, then save or move it into lines.`;
+      count();
+    });
+    form.querySelector('[data-dotenv-split]')?.addEventListener('click', () => {
+      if (!dotenv?.value.trim()) { dotenvFeedback.textContent = 'Paste .env text or choose a file first.'; return; }
+      try {
+        const entries = parseDotenv(dotenv.value);
+        fill(entries);
+        dotenv.value = '';
+        dotenv.removeAttribute('aria-invalid');
+        dotenvFeedback.textContent = `Moved ${entries.length} line${entries.length === 1 ? '' : 's'} above.`;
+        count();
+      } catch (error) {
+        dotenvFeedback.textContent = error.message;
+      }
+    });
+    form.addEventListener('submit', (event) => {
+      const seen = new Map();
+      let firstInvalid = null;
+      let fresh = 0;
+      const fail = (row, message, field) => { setNote(row, message, field); firstInvalid ||= field; };
+      rows().forEach((row) => {
+        const [nameField, valueField] = fields(row);
+        const name = nameField.value.trim();
+        const value = valueField.value;
+        if (!name && !value) { setNote(row, ''); return; }
+        if (!name) return fail(row, 'Enter a name for this value.', nameField);
+        if (!namePattern.test(name)) return fail(row, 'Use letters, digits and underscores, starting with a letter or underscore.', nameField);
+        if (name.toUpperCase().startsWith('PREVIA_')) return fail(row, 'Names starting with PREVIA_ are reserved for the platform.', nameField);
+        if (seen.has(name)) return fail(row, `${name} appears more than once. Keep one value per name.`, nameField);
+        if (!value) return fail(row, `Enter a value for ${name}.`, valueField);
+        seen.set(name, row);
+        if (!existing.has(name)) fresh++;
+        hint(row);
+      });
+      let pasted = [];
+      try {
+        pasted = dotenv?.value.trim() ? parseDotenv(dotenv.value) : [];
+      } catch (error) {
+        dotenvFeedback.textContent = error.message;
+        firstInvalid ||= dotenv;
+      }
+      for (const [name] of pasted) {
+        if (seen.has(name)) {
+          dotenvFeedback.textContent = `${name} is both in the lines above and in the pasted text. Keep one.`;
+          firstInvalid ||= dotenv;
+        }
+        seen.set(name, null);
+        if (!existing.has(name)) fresh++;
+      }
+      if (!firstInvalid && seen.size === 0) {
+        if (feedback) feedback.textContent = 'Add at least one name and value.';
+        firstInvalid = fields(rows()[0])[0];
+      } else if (!firstInvalid && fresh > remaining) {
+        if (feedback) feedback.textContent = `Only ${remaining} more name${remaining === 1 ? '' : 's'} fit. Delete some secrets or save fewer new names.`;
+        firstInvalid = fields(rows()[0])[0];
+      }
+      if (firstInvalid) {
+        event.preventDefault();
+        firstInvalid.closest('details')?.setAttribute('open', '');
+        firstInvalid.focus();
+      }
+    });
+    rows().forEach((row) => { hint(row); grow(fields(row)[1]); });
+    count();
+  }
+
+  // Bulk delete: checkboxes belong to the confirmation's form; the trigger
+  // shows how many are selected and stays disabled until one is.
+  function initBulkDelete() {
+    const trigger = document.querySelector('[data-bulk-delete]');
+    if (!trigger) return;
+    const boxes = [...document.querySelectorAll('[data-select-secret]')];
+    const all = document.querySelector('[data-select-all]');
+    const counter = trigger.querySelector('[data-bulk-delete-count]');
+    const summary = document.querySelector('[data-bulk-delete-summary]');
+    const update = () => {
+      const chosen = boxes.filter(box => box.checked);
+      trigger.disabled = chosen.length === 0;
+      counter.textContent = chosen.length ? `(${chosen.length})` : '';
+      if (all) {
+        all.checked = chosen.length === boxes.length && boxes.length > 0;
+        all.indeterminate = chosen.length > 0 && chosen.length < boxes.length;
+      }
+      if (summary) summary.textContent = chosen.length ? `${chosen.length === 1 ? '1 secret' : chosen.length + ' secrets'}: ${chosen.map(box => box.value).join(', ')}` : '';
+    };
+    boxes.forEach(box => box.addEventListener('change', update));
+    all?.addEventListener('change', () => { boxes.forEach((box) => { box.checked = all.checked; }); update(); });
+    update();
   }
 
   function initRepositorySearch() {
@@ -612,4 +934,9 @@
   initRepositorySearch();
   initLiveUpdates();
   initBuildLogs();
+  initRelativeTimes();
+  initCopyButtons();
+  initSecretEditor();
+  initBulkDelete();
+  initRefreshDeadlines();
 })();

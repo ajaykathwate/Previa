@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -47,14 +48,20 @@ func installationDatabase(t *testing.T) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, name := range []string{"0001_init.sql", "0005_installation_linking.sql"} {
-		data, err := os.ReadFile("../../db/migrations/" + name)
+	// The whole schema: the directory query reads pull requests, previews and
+	// sync state.
+	files, err := filepath.Glob("../../db/migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		data, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
 		up, _, _ := strings.Cut(string(data), "-- +goose Down")
 		if _, err := pool.Exec(t.Context(), up); err != nil {
-			t.Fatal(err)
+			t.Fatalf("%s: %v", file, err)
 		}
 	}
 	return pool
@@ -239,6 +246,33 @@ func TestPostgresRepositoryPaginationFiltersAndOwnership(t *testing.T) {
 	page, err := repo.Page(ctx, user, RepositoryFilter{Page: 9223372036854775807, Access: "all"})
 	if err != nil || page.Page != 15 {
 		t.Fatalf("page was not safely clamped: %v", err)
+	}
+	// Each card counts open PRs and live previews, with build mode and last sync.
+	var repoID int64
+	if err := pool.QueryRow(ctx, "SELECT id FROM repos WHERE full_name='owner/repo-001'").Scan(&repoID); err != nil {
+		t.Fatal(err)
+	}
+	for _, sql := range []string{
+		`UPDATE repos SET build_mode='automatic' WHERE id=$1`,
+		`INSERT INTO pull_requests(repo_id,number,head_sha,state) VALUES ($1,1,'a','open'),($1,2,'b','open'),($1,3,'c','closed')`,
+		`INSERT INTO environments(pull_request_id,subdomain,status,head_sha) SELECT id,'pr-'||number||'-x','running','a' FROM pull_requests WHERE repo_id=$1 AND number=1`,
+		`INSERT INTO environments(pull_request_id,subdomain,status) SELECT id,'pr-'||number||'-x','building' FROM pull_requests WHERE repo_id=$1 AND number=2`,
+		`INSERT INTO pr_syncs(repo_id,state,last_success_at) VALUES ($1,'complete','2026-10-04T10:00:00Z')`,
+	} {
+		if _, err := pool.Exec(ctx, sql, repoID); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	first, err := repo.Page(ctx, user, RepositoryFilter{Page: 1, Access: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := first.Rows[0]
+	if card.OpenPRs != 2 || card.LivePreviews != 1 || card.BuildMode != "automatic" || card.LastSynced.IsZero() {
+		t.Fatalf("card facts: %+v", card)
+	}
+	if next := first.Rows[1]; next.OpenPRs != 0 || next.LivePreviews != 0 || next.BuildMode != "manual" || !next.LastSynced.IsZero() {
+		t.Fatalf("an untouched repository: %+v", next)
 	}
 	for _, search := range []string{"REPO-150", "%", "other/private"} {
 		page, err := repo.Page(ctx, user, RepositoryFilter{Page: 1, Access: "all", Search: search})

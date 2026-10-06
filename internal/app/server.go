@@ -100,6 +100,7 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	installationHandler := installations.NewHandler(service, authHandler, sessions, cfg.GitHubAppSlug, logger)
 	prRepository := pullrequests.NewRepository(pool)
 	capabilities := workers.NewReader(pool)
+	var prs *pullrequests.Handler // set below; the Overview reads its highlights
 	summaryReader := func(ctx context.Context, userID int64) (dashboardpages.Summary, error) {
 		summary, err := service.Summary(ctx, userID)
 		if err != nil {
@@ -113,10 +114,15 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		if err != nil {
 			return dashboardpages.Summary{}, err
 		}
+		builds, previews, err := prs.Highlights(ctx, userID, dashboardpages.HighlightRows)
+		if err != nil {
+			return dashboardpages.Summary{}, err
+		}
 		return dashboardpages.Summary{
 			Installations: summary.Installations, Repositories: summary.Repositories, Available: summary.Available,
-			Waiting: delivery.Waiting, Building: delivery.Building, Failed: delivery.Failed, Live: delivery.Live,
+			OpenPRs: delivery.OpenPrs, Waiting: delivery.Waiting, Building: delivery.Building, Failed: delivery.Failed, Live: delivery.Live,
 			Workers: dashboardpages.Workers{Discovery: caps.Discovery, Execution: caps.Execution, Reporting: caps.Reporting, Housekeeping: caps.Housekeeping, Paused: caps.Paused},
+			Builds:  builds, Previews: previews,
 		}, nil
 	}
 	appURL, err := url.Parse(cfg.AppBaseURL)
@@ -163,7 +169,9 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	go realtime.Listen(listenCtx, func(ctx context.Context) (*pgx.Conn, error) {
 		return pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
 	}, hub, logger)
-	prs := pullrequests.NewHandler(prRepository, syncService, policy, authHandler, logger, cfg.GitHubAppID > 0).WithLiveUpdates(hub)
+	logStore := buildlogs.NewStore(pool)
+	prs = pullrequests.NewHandler(prRepository, syncService, policy, authHandler, logger, cfg.GitHubAppID > 0).
+		WithLiveUpdates(hub).WithLogTail(logStore)
 	if appClient != nil {
 		// Builds need fresh GitHub reads; without the App the controls say so.
 		prs.WithActions(pullrequests.Actions{
@@ -184,7 +192,7 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	secretHandler := secrets.NewHandler(secretService, authHandler, logger)
-	logHandler := buildlogs.NewHandler(buildlogs.NewStore(pool), authHandler, logger).WithLiveUpdates(hub, realtime.DefaultStreamOptions)
+	logHandler := buildlogs.NewHandler(logStore, authHandler, logger).WithLiveUpdates(hub, realtime.DefaultStreamOptions)
 	router.Group(func(r chi.Router) {
 		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
 		authHandler.Mount(r)

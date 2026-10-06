@@ -202,6 +202,32 @@ func (s *Store) LinesBefore(ctx context.Context, environmentID, epoch, before in
 	return lines, nil
 }
 
+// Tail returns the last limit lines of an environment's current attempt when
+// that attempt belongs to the given request generation and revision. It
+// returns nothing when there is no stream, a different attempt owns it or its
+// lines were pruned, so a PR page never quotes another attempt's output.
+func (s *Store) Tail(ctx context.Context, environmentID, generation, revision int64, limit int) ([]string, error) {
+	stream, err := s.Stream(ctx, environmentID)
+	if errors.Is(err, ErrNoStream) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if stream.Generation != generation || stream.Revision != revision || !stream.PrunedAt.IsZero() {
+		return nil, nil
+	}
+	lines, err := s.LinesBefore(ctx, environmentID, stream.Epoch, stream.Lines, limit)
+	if err != nil {
+		return nil, err
+	}
+	texts := make([]string, len(lines))
+	for i, l := range lines {
+		texts[i] = l.Text
+	}
+	return texts, nil
+}
+
 // maxReadLines bounds one read.
 const maxReadLines = 1000
 

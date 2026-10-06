@@ -42,6 +42,7 @@ func (h *handler) dashboard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	summary.DeveloperTools = h.devTools
 	templ.Handler(dashboardpages.Index(username, h.users.CSRFToken(r.Context()), summary)).ServeHTTP(w, r)
 }
 

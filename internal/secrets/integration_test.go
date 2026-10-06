@@ -286,6 +286,94 @@ func TestSecretsHTTPOwnerFlowCSRFAndIsolation(t *testing.T) {
 	}
 }
 
+func TestSecretsBulkSaveDotenvAndBulkDelete(t *testing.T) {
+	f := setup(t)
+	k := keyring(t, 1)
+	service, err := secrets.NewService(secrets.NewRepository(f.pool), k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, token := newBrowser(t, f, service)
+	path := fmt.Sprintf("/repositories/%d/secrets", f.repoAvailable)
+	count := func() int {
+		t.Helper()
+		var n int
+		if err := f.pool.QueryRow(t.Context(), "SELECT count(*) FROM env_secrets WHERE repo_id=$1", f.repoAvailable).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	// Editor lines (one unused) and pasted .env text are saved together.
+	form := url.Values{"csrf_token": {token},
+		"name":   {"API_KEY", "", "FEATURE_FLAG"},
+		"value":  {"sk_bulk_value_123", "", "on"},
+		"dotenv": {"# pasted\r\nexport DB_URL=postgres://preview\r\nKEY_PEM=\"-----BEGIN\nabc\n-----END\"\r\n"}}
+	w := b.do("POST", path, form)
+	if w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "saved_count=4") || !strings.Contains(w.Header().Get("Location"), "created=4") {
+		t.Fatalf("bulk save: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	if storedValue(t, f, k, f.repoAvailable, "KEY_PEM") != "-----BEGIN\nabc\n-----END" || storedValue(t, f, k, f.repoAvailable, "API_KEY") != "sk_bulk_value_123" {
+		t.Fatal("bulk values must decrypt back exactly")
+	}
+	if page := b.do("GET", path+"?saved_count=4&created=4", nil).Body.String(); !strings.Contains(page, "Saved 4 secrets (4 new, 0 replaced)") {
+		t.Fatal("bulk save notice missing")
+	}
+
+	// All or nothing: one bad line saves nothing, keeps names and never values.
+	w = b.do("POST", path, url.Values{"csrf_token": {token},
+		"name": {"API_KEY", "PREVIA_TOKEN"}, "value": {"would-replace-456", "reserved-789"}})
+	body := w.Body.String()
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(body, "reserved for the platform") ||
+		!strings.Contains(body, `value="PREVIA_TOKEN"`) || strings.Contains(body, "would-replace-456") || strings.Contains(body, "reserved-789") {
+		t.Fatalf("rejected batch: %d (values echoed: %v)", w.Code, strings.Contains(body, "would-replace-456"))
+	}
+	if storedValue(t, f, k, f.repoAvailable, "API_KEY") != "sk_bulk_value_123" {
+		t.Fatal("a rejected batch must not change any value")
+	}
+	for _, bad := range []url.Values{
+		{"name": {"NO_VALUE"}, "value": {""}},
+		{"name": {""}, "value": {"orphan-value"}},
+		{"name": {"TWICE", "TWICE"}, "value": {"a", "b"}},
+		{"name": {"FROM_LINE"}, "value": {"a"}, "dotenv": {"FROM_LINE=b"}},
+		{"dotenv": {"not a line"}},
+		{"name": {"", ""}, "value": {"", ""}},
+	} {
+		bad.Set("csrf_token", token)
+		if w := b.do("POST", path, bad); w.Code != http.StatusUnprocessableEntity || strings.Contains(w.Body.String(), "orphan-value") {
+			t.Fatalf("invalid batch %v: %d", bad, w.Code)
+		}
+	}
+	if count() != 4 {
+		t.Fatalf("rejected batches stored rows: %d", count())
+	}
+
+	// The limit counts new names only; replacing existing ones still fits.
+	for i := count(); i < secrets.MaxSecretsPerRepository-1; i++ {
+		if _, err := service.Put(t.Context(), f.owner, f.repoAvailable, fmt.Sprintf("FILL_%03d", i), []byte("v")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := service.PutMany(t.Context(), f.owner, f.repoAvailable, []secrets.Entry{{Name: "NEW_ONE", Value: []byte("1")}, {Name: "NEW_TWO", Value: []byte("2")}}); err != secrets.ErrLimit {
+		t.Fatalf("two new names over the limit: %v", err)
+	}
+	if created, err := service.PutMany(t.Context(), f.owner, f.repoAvailable, []secrets.Entry{{Name: "API_KEY", Value: []byte("r")}, {Name: "NEW_ONE", Value: []byte("1")}}); err != nil || created != 1 {
+		t.Fatalf("one new name and one replacement at the limit: created=%d %v", created, err)
+	}
+
+	// Several names are deleted with one confirmation.
+	w = b.do("POST", path+"/delete", url.Values{"csrf_token": {token}, "name": {"API_KEY", "FEATURE_FLAG", "UNKNOWN_NAME"}})
+	if w.Code != http.StatusSeeOther || !strings.HasSuffix(w.Header().Get("Location"), "deleted_count=2") {
+		t.Fatalf("bulk delete: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	if count() != secrets.MaxSecretsPerRepository-2 {
+		t.Fatalf("rows after bulk delete: %d", count())
+	}
+	if w := b.do("POST", path+"/delete", url.Values{"csrf_token": {token}}); w.Code != http.StatusSeeOther || strings.Contains(w.Header().Get("Location"), "deleted") {
+		t.Fatalf("delete with nothing selected: %d %s", w.Code, w.Header().Get("Location"))
+	}
+}
+
 func TestSecretsLimitConstraintsAndUnconfiguredServer(t *testing.T) {
 	f := setup(t)
 	k := keyring(t, 1)

@@ -50,7 +50,15 @@ type LogPage struct {
 	// Live updates resume from Epoch/After. Empty EventsURL disables them.
 	EventsURL string
 	Epoch     int64
+	// HasOutput: the attempt has a stored stream, so it can be downloaded.
+	HasOutput bool
 }
+
+// DownloadURL is the whole current output as a text file.
+func (p LogPage) DownloadURL() string { return pages.LogsURL(p.RepoID, p.Number) + "/download" }
+
+// IsError marks a line worth the reader's eye; only its colour changes.
+func (l LogLine) IsError() bool { return !l.System && pages.LooksLikeError(l.Text) }
 
 func (p LogPage) PRURL() string   { return pages.PRURL(p.RepoID, p.Number) }
 func (p LogPage) RepoURL() string { return pages.RepoURL(p.RepoID) }

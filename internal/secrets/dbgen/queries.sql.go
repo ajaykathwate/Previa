@@ -51,24 +51,54 @@ func (q *Queries) CountSecretsByKeyVersion(ctx context.Context) ([]CountSecretsB
 	return items, nil
 }
 
-const deleteOwnedSecret = `-- name: DeleteOwnedSecret :execrows
+const deleteOwnedSecrets = `-- name: DeleteOwnedSecrets :execrows
 DELETE FROM env_secrets s
 USING repos r JOIN installations i ON i.id = r.installation_id
-WHERE s.repo_id = r.id AND r.id = $1 AND i.owner_user_id = $2 AND s.key = $3
+WHERE s.repo_id = r.id AND r.id = $1 AND i.owner_user_id = $2
+  AND s.key = ANY($3::text[])
 `
 
-type DeleteOwnedSecretParams struct {
+type DeleteOwnedSecretsParams struct {
 	ID          int64
 	OwnerUserID pgtype.Int8
-	Key         string
+	Keys        []string
 }
 
-func (q *Queries) DeleteOwnedSecret(ctx context.Context, arg DeleteOwnedSecretParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteOwnedSecret, arg.ID, arg.OwnerUserID, arg.Key)
+func (q *Queries) DeleteOwnedSecrets(ctx context.Context, arg DeleteOwnedSecretsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOwnedSecrets, arg.ID, arg.OwnerUserID, arg.Keys)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const existingSecretNames = `-- name: ExistingSecretNames :many
+SELECT key FROM env_secrets WHERE repo_id = $1 AND key = ANY($2::text[])
+`
+
+type ExistingSecretNamesParams struct {
+	RepoID int64
+	Keys   []string
+}
+
+func (q *Queries) ExistingSecretNames(ctx context.Context, arg ExistingSecretNamesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, existingSecretNames, arg.RepoID, arg.Keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		items = append(items, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listSecrets = `-- name: ListSecrets :many
@@ -203,22 +233,6 @@ func (q *Queries) SealedSecrets(ctx context.Context, repoID int64) ([]SealedSecr
 		return nil, err
 	}
 	return items, nil
-}
-
-const secretExists = `-- name: SecretExists :one
-SELECT EXISTS (SELECT 1 FROM env_secrets WHERE repo_id = $1 AND key = $2)
-`
-
-type SecretExistsParams struct {
-	RepoID int64
-	Key    string
-}
-
-func (q *Queries) SecretExists(ctx context.Context, arg SecretExistsParams) (bool, error) {
-	row := q.db.QueryRow(ctx, secretExists, arg.RepoID, arg.Key)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
 }
 
 const secretsNeedingRotation = `-- name: SecretsNeedingRotation :many

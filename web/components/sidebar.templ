@@ -35,7 +35,10 @@ templ Sidebar(active NavItem) {
 				<span class="nav-label">Quick jump</span>
 				<kbd class="kbd" data-shortcut-label>Ctrl K</kbd>
 			</button>
-			<p class="sidebar-status"><span class="status-dot" aria-hidden="true"></span><span class="nav-label">Self-hosted control plane</span></p>
+			<p class="sidebar-status">
+				@ServerIcon()
+				<span class="nav-label">Self-hosted control plane</span>
+			</p>
 		</div>
 	</aside>
 }

@@ -72,7 +72,7 @@ flowchart LR
 | Database | PostgreSQL 17 (17.11 in production images) | Application data, sessions, the job queue, change notifications | `db/migrations`, `deploy/docker-compose.yml` | [database-schema.md](database-schema.md) |
 | Database driver | pgx v5.10.0 | Connection pool, transactions | `internal/platform/database` | [01](../docs/01-system-overview.md) |
 | SQL | sqlc v1.31.1 | Type-safe Go from each feature's SQL | `internal/*/queries.sql` to `internal/*/dbgen`, `sqlc.yaml` | [02](../docs/02-development-setup.md) |
-| Migrations | Goose v3.28.0 | Schema changes 0001–0018; CLI for development, embedded library in release images | `db/migrations`, `db/migrations.go`, `cmd/migrate` | [24](../docs/24-production-deployment.md) |
+| Migrations | Goose v3.28.0 | Schema changes 0001–0019; CLI for development, embedded library in release images | `db/migrations`, `db/migrations.go`, `cmd/migrate` | [24](../docs/24-production-deployment.md) |
 | Job queue | River v0.47.0 (riverpgxv5) | Builds, teardowns, wake-ups, routes, reports, cleanup, discovery, housekeeping, log pruning | `internal/platform/queue`, `internal/environments/{jobs,scheduler,worker,operation_worker}.go`, `internal/housekeeping/jobs.go` | [16](../docs/16-build-scheduling.md) |
 | Sessions | SCS v2.9.0 + pgxstore | Server-side sessions, `__Host-` cookie | `internal/auth/session.go` | [04](../docs/04-github-sign-in-and-app.md) |
 | Sign-in | golang.org/x/oauth2 v0.37.0 | GitHub OAuth App sign-in; GitHub App user authorization | `internal/auth`, `internal/installations/authorization.go` | [04](../docs/04-github-sign-in-and-app.md) |
@@ -130,13 +130,13 @@ Design and code diagrams: [class-diagram.md](class-diagram.md) and
 | --- | --- |
 | `/` | Public home page |
 | `/auth/github/login`, `/auth/github/callback`, `/auth/logout` | Sign-in with GitHub (rate limited), sign-out (confirmation) |
-| `/dashboard` | Overview: counts, pipeline stages, next steps |
+| `/dashboard` | Overview: next steps until set up, counts, the newest live previews and build requests, pipeline stages |
 | `/repositories` | Linked repositories (Available, Unavailable, All) |
 | `/installations/start`, `/installations/callback`, `/installations/authorize/callback` | Installing the GitHub App and verifying it |
 | `/repositories/{id}` | A repository's pull requests; `POST …/refresh` syncs, `POST …/policy` sets Manual/Automatic |
-| `/repositories/{id}/secrets` | The repository's secrets (`POST` save, `POST …/delete`) |
+| `/repositories/{id}/secrets` | The repository's secrets (`POST` saves one or many lines and pasted `.env` text together; `POST …/delete` removes one or the selected names) |
 | `/repositories/{id}/pull-requests/{n}` | Pull request detail; `POST …/build` (Build, Build now, Retry, Rebuild), `POST …/teardown` |
-| `/repositories/{id}/pull-requests/{n}/logs` | The current build's log page (`…/logs/events` streams it) |
+| `/repositories/{id}/pull-requests/{n}/logs` | The current build's log page (`…/logs/events` streams it; `…/logs/download` sends it as a text file) |
 | `/repositories/{id}/events` | Live updates for a repository page (Server-Sent Events) |
 | `/builds`, `/environments` | Current build requests; current previews |
 | `/developer-tools`, `POST /queue/ping` | Queue ping (development only; off when `APP_ENV=production`) |
@@ -190,7 +190,7 @@ inside the containers.
 | `deploy/observability/` | `prometheus.yml`, `alerts.yml` + `alerts_test.yml`, Grafana provisioning and dashboard |
 | `deploy/egress/Dockerfile` | Development egress image (`make egress-image`) |
 | `.github/workflows/ci.yml`, `release.yml`, `.goreleaser.yaml` | CI and releases |
-| `db/migrations/*.sql` | Schema migrations 0001–0018 |
+| `db/migrations/*.sql` | Schema migrations 0001–0019 |
 | A repository's `.previewrc.yaml` | How its previews build and run: port, health path, resources, environment ([06](../docs/06-source-and-configuration.md)) |
 
 ## Deployment setups

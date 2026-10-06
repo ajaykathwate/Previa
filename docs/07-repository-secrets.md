@@ -14,6 +14,7 @@ without secrets build normally.
 | Decision | Choice | Why |
 | --- | --- | --- |
 | Where owners manage secrets | A **Secrets** tab on each repository (`/repositories/{id}/secrets`) | Keeps the PR list focused; both tabs are ordinary pages, so they work without JavaScript. |
+| Adding many at once | An editor with one name and value per line plus pasted or imported `.env` text, saved in **one transaction** (all or nothing); several names can be deleted with one confirmation | Owners usually have a whole `.env` to bring over; a half-saved batch would be harder to reason about than a refused one. |
 | Encryption | Standard-library AES-256-GCM, random 96-bit nonce per value | Authenticated encryption with no extra dependency. |
 | Key provisioning | `SECRETS_ENCRYPTION_KEYS` + `SECRETS_ACTIVE_KEY_VERSION` environment variables | Matches how `SESSION_SECRET` is provided; versioned for rotation. |
 | Name collision with `.previewrc.yaml` env | **The stored secret wins**, and the override is reported by name | The owner's value must beat contributor-editable YAML. |
@@ -46,6 +47,20 @@ Rules enforced by `secrets.Service`:
 Values are write-only: after saving, pages list names and update times only.
 Values never appear in pages (not even in a rejected form), jobs, logs, metrics or
 errors.
+
+### Saving several at once
+
+`POST /repositories/{id}/secrets` takes repeated `name`/`value` pairs (unused lines
+are skipped) and optional `dotenv` text, parsed by `secrets.ParseDotenv`: one
+`NAME=value` per line, blank lines and `#` comments ignored, an optional `export `
+prefix, single-quoted literals, double-quoted values with `\n`, `\"` and `\\`
+escapes that may span lines, and unquoted values ending at ` #`. Parse errors name
+the line, never its value. `Service.PutMany` validates every entry (format, reserved
+prefix, duplicates, value size) before sealing any, and `Repository.PutMany` stores
+them under the repository row lock in one transaction; the 100-secret limit counts
+only names that are new. A rejected batch re-renders the names with the reason and
+asks for the values again. `POST …/secrets/delete` takes one or more `name` values
+(`Service.DeleteMany`), so a row's Delete and **Delete selected** share one endpoint.
 
 ## Keys: provisioning and rotation
 
@@ -128,8 +143,9 @@ protect the credential.
 | Path | Role |
 | --- | --- |
 | `internal/secrets/crypto.go` | Keyring parsing, sealing and opening. |
-| `internal/secrets/service.go`, `repository.go`, `queries.sql` | Owner management, limits, owner-scoped SQL. |
-| `internal/secrets/handler.go`, `web/pages/secrets` | Secrets tab, CSRF-protected forms, delete confirmation modal. |
+| `internal/secrets/service.go`, `repository.go`, `queries.sql` | Owner management, batch saves and deletes, limits, owner-scoped SQL. |
+| `internal/secrets/dotenv.go` | Pasted `.env` text. |
+| `internal/secrets/handler.go`, `web/pages/secrets` | Secrets tab, the editor, CSRF-protected forms, delete confirmation modals. |
 | `internal/secrets/runtime.go` | Trust rule, collision rule, `ContainerEnv` for the worker. |
 | `internal/secrets/redact.go` | Streaming redaction. |
 | `internal/secrets/rotation.go`, `cmd/secrets-reencrypt` | Re-encryption. |
@@ -146,5 +162,9 @@ CSRF middleware; CSRF rejection; cross-owner isolation; revoked repositories
 (delete-only); the 100-secret limit; database constraints; an unconfigured server;
 fork, deleted-head and unverified withholding with no decryption; collision
 precedence; fail-closed decryption; redaction at every split point, random chunking,
-overlaps and multi-line values. The browser suite covers the tab, saving, replacing
-and modal deletion.
+overlaps and multi-line values; `.env` parsing and errors that never repeat a value;
+batch saves that are all or nothing, keep names and never values on rejection, and
+count only new names against the limit; multi-name deletes. The browser suite covers
+the tab, saving several lines, splitting pasted `NAME=value` lines, refusing
+duplicates before submit, replacing, modal and bulk deletion, and saving pasted
+`.env` text without JavaScript.

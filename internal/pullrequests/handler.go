@@ -48,6 +48,7 @@ type Handler struct {
 	enabled bool
 	live    LiveEvents
 	actions *Actions
+	logs    LogTail
 }
 
 func NewHandler(repo *Repository, sync Refresher, policy Policy, users UserSession, logger *slog.Logger, enabled bool) *Handler {
@@ -300,11 +301,35 @@ func (h *Handler) activity(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Highlights are the Overview's latest build requests and published previews,
+// up to limit of each, mapped like the Builds and Environments rows.
+func (h *Handler) Highlights(ctx context.Context, userID int64, limit int) (builds, previews []pages.ActivityRow, err error) {
+	recent, err := h.repo.Activity(ctx, userID, 0, 1, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, row := range recent.Rows[:min(limit, len(recent.Rows))] {
+		builds = append(builds, h.activityRow(row, false))
+	}
+	live, err := h.repo.Activity(ctx, userID, 0, 1, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, row := range live.Rows {
+		if out := h.activityRow(row, true); out.Deployed != "" && out.State != "tearing_down" && len(previews) < limit {
+			previews = append(previews, out)
+		}
+	}
+	return builds, previews, nil
+}
+
 // activityRow maps one Builds or Environments row to display data.
 func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool) pages.ActivityRow {
 	available := row.Accessible && row.InstallationStatus == "active"
-	out := pages.ActivityRow{RepoID: row.RepoID, Number: row.Number, Name: row.FullName, Latest: row.HeadSha,
-		Requested: row.RequestedSha, Deployed: row.DeployedSha, State: row.BuildState, Deadline: timestamp(row.AvailableAt), Available: available}
+	out := pages.ActivityRow{RepoID: row.RepoID, Number: row.Number, Name: row.FullName, Title: row.Title, Latest: row.HeadSha,
+		Requested: row.RequestedSha, Deployed: row.DeployedSha, State: row.BuildState, Deadline: timestamp(row.AvailableAt), Available: available,
+		RequestCurrent: row.RequestCurrent, RequestSource: row.RequestSource,
+		StartedAt: timestamp(row.StartedAt), CompletedAt: timestamp(row.CompletedAt), PublishedAt: timestamp(row.PublishedAt)}
 	if deployments {
 		out.State = row.EnvironmentStatus
 	}
@@ -331,7 +356,11 @@ func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool) pages.Act
 	case deployments && row.EnvironmentStatus == "failed":
 		out.Failure = environments.FailureMessage(row.FailureCode)
 	}
-	out.Teardown = deployments && h.actions != nil && available && row.PrState == "open" &&
-		row.EnvironmentStatus != "tearing_down" && row.EnvironmentStatus != "torn_down"
+	// Environments offers teardown for published previews; an unfinished
+	// build is cancelled from its pull request page.
+	out.Teardown = deployments && live && h.actions != nil && available && row.PrState == "open"
+	if deployments && !live {
+		out.PublishedAt = ""
+	}
 	return out
 }

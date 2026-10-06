@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
+	"github.com/ajaykathwatee/previa/internal/platform/database"
 	pr "github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/webhooks"
 	"github.com/google/go-github/v91/github"
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -260,5 +263,85 @@ func TestDiscoveryPersistenceRejectsHistoricalSnapshots(t *testing.T) {
 	}
 	if f.count(t, "SELECT count(*) FROM pull_requests") != 2 || f.count(t, "SELECT fetched FROM pr_syncs") != 2 {
 		t.Fatal("persistence boundary stored/counts historical snapshots")
+	}
+}
+
+func TestMergeabilityThatNeverResolvesIsRecordedAndCleared(t *testing.T) {
+	f := setup(t)
+	result := observation(7)
+	result.SHA = "sha-unknown"
+	result.Mergeable = nil
+	result.MergeableState = "unknown"
+	result.BuildStatus = "checking"
+	service := pr.NewSyncService(f.pool, f.producer, pollSource{func() (pr.Observation, error) { return result, nil }}, environments.NewBroker(f.pool, f.producer))
+	hook := webhooks.NewHandler("fixture-secret", webhooks.NewDeliveryService(f.pool, environments.NewBroker(f.pool, f.producer), nil, service), f.log)
+	var b map[string]any
+	if err := json.Unmarshal([]byte(payload("opened", "sha-unknown", "open", "2026-10-03T10:00:00Z")), &b); err != nil {
+		t.Fatal(err)
+	}
+	b["pull_request"].(map[string]any)["mergeable"] = nil
+	b["pull_request"].(map[string]any)["mergeable_state"] = "unknown"
+	body, _ := json.Marshal(b)
+	if send(hook, "never-resolves", "pull_request", string(body)) != 204 {
+		t.Fatal("delivery")
+	}
+	unresolved := func() int {
+		return f.count(t, "SELECT count(*) FROM pull_requests WHERE mergeability_unresolved_at IS NOT NULL")
+	}
+	worker := &pr.MergeabilityWorker{Service: service}
+	args := pr.MergeabilityArgs{RepoID: f.repoID, Number: 7, Generation: 1, SHA: "sha-unknown"}
+	if err := worker.Work(t.Context(), &river.Job[pr.MergeabilityArgs]{JobRow: &rivertype.JobRow{Attempt: 1, MaxAttempts: 8}, Args: args}); err == nil || unresolved() != 0 {
+		t.Fatal("an early attempt must retry, not give up")
+	}
+	if err := worker.Work(t.Context(), &river.Job[pr.MergeabilityArgs]{JobRow: &rivertype.JobRow{Attempt: 8, MaxAttempts: 8}, Args: args}); err == nil || unresolved() != 1 {
+		t.Fatal("the last attempt must record that GitHub never answered")
+	}
+	row, err := pr.NewRepository(f.pool).Detail(t.Context(), f.userID, f.repoID, 7)
+	if err != nil || !row.MergeabilityUnresolvedAt.Valid || row.BuildStatus != "checking" {
+		t.Fatal("unresolved check not visible", err)
+	}
+	// A new check (Sync, an event) starts over and clears it.
+	if err := database.InTransaction(t.Context(), f.pool, func(tx pgx.Tx) error {
+		return service.RefreshMergeabilityTx(t.Context(), tx, f.repoID, 7)
+	}); err != nil || unresolved() != 0 {
+		t.Fatal("a new check must clear the earlier result", err)
+	}
+	// A late give-up for an older commit never marks the newer one.
+	if send(hook, "new-push", "pull_request", strings.Replace(string(body), `"opened"`, `"synchronize"`, 1)) != 204 {
+		t.Fatal("push delivery")
+	}
+	if err := service.MarkMergeabilityUnresolved(t.Context(), args); err != nil || unresolved() != 0 {
+		t.Fatal("a stale give-up marked a newer observation", err)
+	}
+}
+
+func TestStalledSyncIsReplacedInsteadOfWaitingForever(t *testing.T) {
+	f := setup(t)
+	service := pr.NewSyncService(f.pool, f.producer, sourceFunc(func(context.Context, int64, int64, int32) ([]pr.Observation, int32, error) {
+		return []pr.Observation{observation(1)}, 0, nil
+	}))
+	for range 2 {
+		if err := service.Request(t.Context(), f.userID, f.repoID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.count(t, "SELECT count(*) FROM river_job WHERE kind='pr_discovery'") != 1 {
+		t.Fatal("a sync in progress must coalesce")
+	}
+	if _, err := f.pool.Exec(t.Context(), "UPDATE pr_syncs SET requested_at = now() - interval '6 minutes'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Request(t.Context(), f.userID, f.repoID); err != nil {
+		t.Fatal(err)
+	}
+	if f.count(t, "SELECT count(*) FROM river_job WHERE kind='pr_discovery'") != 2 || f.count(t, "SELECT revision FROM pr_syncs") != 2 {
+		t.Fatal("a stalled sync must be replaced by a new one")
+	}
+	// The stalled run's job is fenced by its old revision.
+	if err := service.RunPage(t.Context(), pr.SyncArgs{RepoID: f.repoID, Revision: 1, Page: 1}); err != nil || f.count(t, "SELECT count(*) FROM pull_requests") != 0 {
+		t.Fatal("the stalled run's job still wrote", err)
+	}
+	if err := service.RunPage(t.Context(), pr.SyncArgs{RepoID: f.repoID, Revision: 2, Page: 1}); err != nil || f.count(t, "SELECT count(*) FROM pr_syncs WHERE state='complete'") != 1 {
+		t.Fatal("the new sync did not complete", err)
 	}
 }

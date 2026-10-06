@@ -12,8 +12,11 @@ import (
 )
 
 const activity = `-- name: Activity :many
-SELECT p.repo_id,p.number,p.head_sha,r.full_name,r.accessible,i.status AS installation_status,
+SELECT p.repo_id,p.number,p.head_sha,p.title,r.full_name,r.accessible,i.status AS installation_status,
  coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,b.available_at,
+ b.started_at, b.completed_at, coalesce(b.source,'')::text AS request_source,
+ coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
+ e.last_active_at AS published_at,
  coalesce(e.status,'Not deployed') AS environment_status,coalesce(e.head_sha,'') AS deployed_sha,
  coalesce(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END,'')::text AS waiting_reason,
  coalesce(e.subdomain,'')::text AS hostname, e.expires_at, coalesce(e.last_error_code,'')::text AS failure_code,
@@ -24,7 +27,8 @@ LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
 WHERE i.owner_user_id=$1 AND ($2::bigint=0 OR r.id=$2)
 AND (($3::boolean AND e.id IS NOT NULL) OR (NOT $3::boolean AND b.pull_request_id IS NOT NULL))
-ORDER BY p.id DESC LIMIT 10 OFFSET $4
+ORDER BY (CASE WHEN $3::boolean THEN e.last_active_at ELSE b.updated_at END) DESC NULLS LAST, p.id DESC
+LIMIT 10 OFFSET $4
 `
 
 type ActivityParams struct {
@@ -38,12 +42,18 @@ type ActivityRow struct {
 	RepoID             int64
 	Number             int32
 	HeadSha            string
+	Title              string
 	FullName           string
 	Accessible         bool
 	InstallationStatus string
 	BuildState         string
 	RequestedSha       string
 	AvailableAt        pgtype.Timestamptz
+	StartedAt          pgtype.Timestamptz
+	CompletedAt        pgtype.Timestamptz
+	RequestSource      string
+	RequestCurrent     bool
+	PublishedAt        pgtype.Timestamptz
 	EnvironmentStatus  string
 	DeployedSha        string
 	WaitingReason      string
@@ -54,6 +64,8 @@ type ActivityRow struct {
 	PrState            string
 }
 
+// Builds (current requests) or Environments (live previews), most recently
+// active first.
 func (q *Queries) Activity(ctx context.Context, arg ActivityParams) ([]ActivityRow, error) {
 	rows, err := q.db.Query(ctx, activity,
 		arg.OwnerUserID,
@@ -72,12 +84,18 @@ func (q *Queries) Activity(ctx context.Context, arg ActivityParams) ([]ActivityR
 			&i.RepoID,
 			&i.Number,
 			&i.HeadSha,
+			&i.Title,
 			&i.FullName,
 			&i.Accessible,
 			&i.InstallationStatus,
 			&i.BuildState,
 			&i.RequestedSha,
 			&i.AvailableAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.RequestSource,
+			&i.RequestCurrent,
+			&i.PublishedAt,
 			&i.EnvironmentStatus,
 			&i.DeployedSha,
 			&i.WaitingReason,
@@ -103,6 +121,15 @@ UPDATE repos SET observation_version=observation_version+1 WHERE id=$1
 
 func (q *Queries) BumpObservation(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, bumpObservation, id)
+	return err
+}
+
+const clearMergeabilityUnresolved = `-- name: ClearMergeabilityUnresolved :exec
+UPDATE pull_requests SET mergeability_unresolved_at=NULL WHERE id=$1 AND mergeability_unresolved_at IS NOT NULL
+`
+
+func (q *Queries) ClearMergeabilityUnresolved(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, clearMergeabilityUnresolved, id)
 	return err
 }
 
@@ -154,6 +181,7 @@ func (q *Queries) CountPRs(ctx context.Context, arg CountPRsParams) (int64, erro
 
 const deliverySummary = `-- name: DeliverySummary :one
 SELECT
+ count(*)::bigint AS open_prs,
  count(*) FILTER (WHERE b.state IN ('pending','queued') AND b.generation = p.generation)::bigint AS waiting,
  count(*) FILTER (WHERE b.state = 'running' AND b.generation = p.generation)::bigint AS building,
  count(*) FILTER (WHERE b.state = 'failed' AND b.generation = p.generation)::bigint AS failed,
@@ -165,18 +193,20 @@ WHERE i.owner_user_id=$1 AND p.state='open'
 `
 
 type DeliverySummaryRow struct {
+	OpenPrs  int64
 	Waiting  int64
 	Building int64
 	Failed   int64
 	Live     int64
 }
 
-// Overview counts across the owner's repositories: current requests by state
-// and live previews.
+// Overview counts across the owner's repositories: open PRs, current requests
+// by state and live previews.
 func (q *Queries) DeliverySummary(ctx context.Context, ownerUserID pgtype.Int8) (DeliverySummaryRow, error) {
 	row := q.db.QueryRow(ctx, deliverySummary, ownerUserID)
 	var i DeliverySummaryRow
 	err := row.Scan(
+		&i.OpenPrs,
 		&i.Waiting,
 		&i.Building,
 		&i.Failed,
@@ -336,9 +366,13 @@ func (q *Queries) InvalidateObservedIntent(ctx context.Context, arg InvalidateOb
 }
 
 const listPRs = `-- name: ListPRs :many
-SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason,coalesce(b.state,'Not requested') AS build_state
+SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason, p.mergeability_unresolved_at,coalesce(b.state,'Not requested') AS build_state,
+ coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
+ coalesce(e.status,'Not deployed') AS environment_status, coalesce(e.head_sha,'') AS deployed_sha,
+ coalesce(e.subdomain,'')::text AS hostname
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
+LEFT JOIN environments e ON e.pull_request_id=p.id
 WHERE r.id=$1 AND i.owner_user_id=$2 AND ($3::text='all' OR p.state=$3)
 AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower($4))>0
 ORDER BY p.number DESC LIMIT 10 OFFSET $5
@@ -375,9 +409,17 @@ type ListPRsRow struct {
 	BuildStatus                 string
 	TeardownRequestedGeneration int64
 	TeardownReason              pgtype.Text
+	MergeabilityUnresolvedAt    pgtype.Timestamptz
 	BuildState                  string
+	RequestCurrent              bool
+	EnvironmentStatus           string
+	DeployedSha                 string
+	Hostname                    string
 }
 
+// One page of a repository's PRs with their current request and preview, so
+// the list can say which PRs have a live preview and whether the request is
+// for the latest commit.
 func (q *Queries) ListPRs(ctx context.Context, arg ListPRsParams) ([]ListPRsRow, error) {
 	rows, err := q.db.Query(ctx, listPRs,
 		arg.ID,
@@ -416,7 +458,12 @@ func (q *Queries) ListPRs(ctx context.Context, arg ListPRsParams) ([]ListPRsRow,
 			&i.BuildStatus,
 			&i.TeardownRequestedGeneration,
 			&i.TeardownReason,
+			&i.MergeabilityUnresolvedAt,
 			&i.BuildState,
+			&i.RequestCurrent,
+			&i.EnvironmentStatus,
+			&i.DeployedSha,
+			&i.Hostname,
 		); err != nil {
 			return nil, err
 		}
@@ -454,7 +501,7 @@ func (q *Queries) LockInstallation(ctx context.Context, id int64) (LockInstallat
 }
 
 const lockPR = `-- name: LockPR :one
-SELECT id, repo_id, number, head_sha, state, github_comment_id, created_at, generation, teardown_completed_generation, title, author, head_branch, html_url, head_repo_id, is_fork, source_updated_at, needs_refresh, mergeable, mergeable_state, build_status, teardown_requested_generation, teardown_reason FROM pull_requests WHERE repo_id=$1 AND number=$2 FOR UPDATE
+SELECT id, repo_id, number, head_sha, state, github_comment_id, created_at, generation, teardown_completed_generation, title, author, head_branch, html_url, head_repo_id, is_fork, source_updated_at, needs_refresh, mergeable, mergeable_state, build_status, teardown_requested_generation, teardown_reason, mergeability_unresolved_at FROM pull_requests WHERE repo_id=$1 AND number=$2 FOR UPDATE
 `
 
 type LockPRParams struct {
@@ -488,6 +535,7 @@ func (q *Queries) LockPR(ctx context.Context, arg LockPRParams) (PullRequest, er
 		&i.BuildStatus,
 		&i.TeardownRequestedGeneration,
 		&i.TeardownReason,
+		&i.MergeabilityUnresolvedAt,
 	)
 	return i, err
 }
@@ -542,6 +590,32 @@ func (q *Queries) LockSync(ctx context.Context, repoID int64) (PrSync, error) {
 	return i, err
 }
 
+const markMergeabilityUnresolved = `-- name: MarkMergeabilityUnresolved :execrows
+UPDATE pull_requests SET mergeability_unresolved_at=clock_timestamp()
+WHERE repo_id=$1 AND number=$2 AND generation=$3 AND head_sha=$4 AND state='open' AND build_status='checking'
+`
+
+type MarkMergeabilityUnresolvedParams struct {
+	RepoID     int64
+	Number     int32
+	Generation int64
+	HeadSha    string
+}
+
+// The bounded mergeability check gave up on exactly this observation.
+func (q *Queries) MarkMergeabilityUnresolved(ctx context.Context, arg MarkMergeabilityUnresolvedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markMergeabilityUnresolved,
+		arg.RepoID,
+		arg.Number,
+		arg.Generation,
+		arg.HeadSha,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const markSyncing = `-- name: MarkSyncing :exec
 UPDATE pr_syncs SET state='syncing',message='' WHERE repo_id=$1 AND revision=$2
 `
@@ -557,11 +631,13 @@ func (q *Queries) MarkSyncing(ctx context.Context, arg MarkSyncingParams) error 
 }
 
 const ownedPR = `-- name: OwnedPR :one
-SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason,(r.accessible AND i.status='active') AS available,coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
+SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason, p.mergeability_unresolved_at,(r.accessible AND i.status='active') AS available,coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
  b.available_at,b.revision AS request_revision,
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
  coalesce(b.source,'')::text AS request_source,
+ b.requested_at, b.started_at, b.completed_at, coalesce(u.username,'')::text AS requested_by_login,
  coalesce(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END,'')::text AS waiting_reason,
+ coalesce(e.id,0)::bigint AS environment_id,
  coalesce(e.status,'Not deployed') AS environment_status,
  coalesce(e.head_sha,'') AS deployed_sha, coalesce(e.subdomain,'')::text AS hostname,
  e.expires_at, e.last_active_at AS published_at, coalesce(e.last_error_code,'')::text AS failure_code,
@@ -569,6 +645,7 @@ SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.cr
  (p.teardown_requested_generation = p.generation)::boolean AS teardown_requested
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
+LEFT JOIN users u ON u.id=b.requested_by
 LEFT JOIN environments e ON e.pull_request_id=p.id
 WHERE r.id=$1 AND i.owner_user_id=$2 AND p.number=$3
 `
@@ -602,6 +679,7 @@ type OwnedPRRow struct {
 	BuildStatus                 string
 	TeardownRequestedGeneration int64
 	TeardownReason              pgtype.Text
+	MergeabilityUnresolvedAt    pgtype.Timestamptz
 	Available                   pgtype.Bool
 	BuildState                  string
 	RequestedSha                string
@@ -609,7 +687,12 @@ type OwnedPRRow struct {
 	RequestRevision             pgtype.Int8
 	RequestCurrent              bool
 	RequestSource               string
+	RequestedAt                 pgtype.Timestamptz
+	StartedAt                   pgtype.Timestamptz
+	CompletedAt                 pgtype.Timestamptz
+	RequestedByLogin            string
 	WaitingReason               string
+	EnvironmentID               int64
 	EnvironmentStatus           string
 	DeployedSha                 string
 	Hostname                    string
@@ -648,6 +731,7 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 		&i.BuildStatus,
 		&i.TeardownRequestedGeneration,
 		&i.TeardownReason,
+		&i.MergeabilityUnresolvedAt,
 		&i.Available,
 		&i.BuildState,
 		&i.RequestedSha,
@@ -655,7 +739,12 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 		&i.RequestRevision,
 		&i.RequestCurrent,
 		&i.RequestSource,
+		&i.RequestedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.RequestedByLogin,
 		&i.WaitingReason,
+		&i.EnvironmentID,
 		&i.EnvironmentStatus,
 		&i.DeployedSha,
 		&i.Hostname,
@@ -738,7 +827,8 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 ON CONFLICT (repo_id,number) DO UPDATE SET head_sha=EXCLUDED.head_sha,state=EXCLUDED.state,
  generation=EXCLUDED.generation,title=EXCLUDED.title,author=EXCLUDED.author,
  head_branch=EXCLUDED.head_branch,html_url=EXCLUDED.html_url,head_repo_id=EXCLUDED.head_repo_id,
- is_fork=EXCLUDED.is_fork,source_updated_at=EXCLUDED.source_updated_at,needs_refresh=false,mergeable=EXCLUDED.mergeable,mergeable_state=EXCLUDED.mergeable_state,build_status=EXCLUDED.build_status
+ is_fork=EXCLUDED.is_fork,source_updated_at=EXCLUDED.source_updated_at,needs_refresh=false,mergeable=EXCLUDED.mergeable,mergeable_state=EXCLUDED.mergeable_state,build_status=EXCLUDED.build_status,
+ mergeability_unresolved_at=NULL
 RETURNING id
 `
 

@@ -88,6 +88,16 @@ templ Logs(username, csrf string, p LogPage) {
 						} else {
 							<a class="text-link" href={ templ.SafeURL(p.LatestURL()) }>Latest lines</a>
 						}
+						if p.HasOutput {
+							<button type="button" class="copy-button" data-copy-lines="[data-log-lines]" aria-label="Copy the lines shown">
+								@components.CopyIcon()
+								<span data-copy-status aria-live="polite">Copy</span>
+							</button>
+							<a class="text-link" href={ templ.SafeURL(p.DownloadURL()) } download>
+								@components.DownloadIcon()
+								Download
+							</a>
+						}
 						if p.EventsURL != "" {
 							<label class="log-follow" hidden data-log-follow-control>
 								<input type="checkbox" checked data-log-follow/>
@@ -99,7 +109,7 @@ templ Logs(username, csrf string, p LogPage) {
 				<p class="log-empty" data-log-empty hidden?={ len(p.Lines) > 0 }>{ p.Empty }</p>
 				<ol class="log-lines" aria-label="Build output" data-log-lines>
 					for _, line := range p.Lines {
-						<li id={ line.Anchor() } class={ "log-line", templ.KV("log-system", line.System) }>
+						<li id={ line.Anchor() } class={ "log-line", templ.KV("log-system", line.System), templ.KV("log-error", line.IsError()) }>
 							<a class="log-number" href={ templ.SafeURL("#" + line.Anchor()) } tabindex="-1">{ line.Number() }</a>
 							<span class="log-text">{ line.Text }</span>
 						</li>

@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"strconv"
 	"strings"
 	"time"
 )
@@ -9,6 +10,12 @@ import (
 type Secret struct {
 	Name      string
 	UpdatedAt time.Time
+}
+
+// Row is one line of the secrets editor. Only the name is kept after a
+// rejected save; values are never rendered back.
+type Row struct {
+	Name, Error string
 }
 
 // Page is the Secrets tab of one owned repository.
@@ -20,10 +27,14 @@ type Page struct {
 	Secrets    []Secret
 	Limit      int
 	Notice     string
-	Error      string
-	ErrorField string // "name", "value" or "" for form-level errors
-	FormName   string // prefilled name when replacing or after a rejected submit
-	Replacing  bool
+	Error      string // why a save or delete was refused, for the whole form
+	// Rows are the editor's lines after a rejected save, or the name being
+	// replaced; empty shows one blank line.
+	Rows []Row
+	// DotenvError explains why pasted .env text was rejected; the text itself
+	// is never rendered back.
+	DotenvError string
+	Replacing   string // name chosen with a row's Replace link
 }
 
 func (p Page) Owner() string {
@@ -42,7 +53,50 @@ func (p Page) RepositoryName() string {
 // CanEdit reports whether new values can be saved.
 func (p Page) CanEdit() bool { return p.Configured && p.Available }
 
-func (p Page) AtLimit() bool { return len(p.Secrets) >= p.Limit && !p.Replacing }
+// AtLimit: no new names fit; existing ones can still be replaced.
+func (p Page) AtLimit() bool { return len(p.Secrets) >= p.Limit }
+
+// Remaining is how many new names still fit.
+func (p Page) Remaining() int { return max(0, p.Limit-len(p.Secrets)) }
+
+// EditorRows are the lines the editor starts with.
+func (p Page) EditorRows() []Row {
+	if len(p.Rows) == 0 {
+		return []Row{{}}
+	}
+	return p.Rows
+}
+
+// Exists reports whether name is already stored, so saving replaces it.
+func (p Page) Exists(name string) bool {
+	for _, s := range p.Secrets {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// ExistingNames lists stored names for the editor's "replaces" hints.
+func (p Page) ExistingNames() string {
+	names := make([]string, len(p.Secrets))
+	for i, s := range p.Secrets {
+		names[i] = s.Name
+	}
+	return strings.Join(names, " ")
+}
+
+// RemainingLabel says how many new names fit.
+func (p Page) RemainingLabel() string {
+	switch n := p.Remaining(); n {
+	case 0:
+		return "The limit is reached: you can replace existing names but not add new ones."
+	case 1:
+		return "1 more name fits."
+	default:
+		return strconv.Itoa(n) + " more names fit."
+	}
+}
 
 // UpdatedLabel is a compact UTC timestamp for a table cell.
 func (s Secret) UpdatedLabel() string { return s.UpdatedAt.UTC().Format("2 Jan 2006, 15:04 UTC") }

@@ -31,10 +31,12 @@ var (
 )
 
 // InvalidError explains why a submitted name or value was rejected. It never
-// contains the value.
+// contains the value. Entry is the 1-based position of the rejected entry in a
+// batch, or 0.
 type InvalidError struct {
 	Field   string
 	Message string
+	Entry   int
 }
 
 func (e *InvalidError) Error() string { return e.Message }
@@ -56,10 +58,12 @@ type RepositoryView struct {
 type Store interface {
 	Repository(ctx context.Context, userID, repoID int64) (RepositoryView, error)
 	List(ctx context.Context, userID, repoID int64) ([]Summary, error)
-	// Put creates or replaces a value. It enforces ownership, current access and
-	// the per-repository limit atomically and reports whether it created a name.
-	Put(ctx context.Context, userID, repoID int64, name string, sealed []byte, version int32) (bool, error)
-	Delete(ctx context.Context, userID, repoID int64, name string) (bool, error)
+	// PutMany creates or replaces values, all or nothing. It enforces
+	// ownership, current access and the per-repository limit atomically and
+	// reports how many names it created.
+	PutMany(ctx context.Context, userID, repoID int64, items []SealedSecret) (int, error)
+	// DeleteMany removes names and reports how many existed.
+	DeleteMany(ctx context.Context, userID, repoID int64, names []string) (int, error)
 }
 
 // Service manages repository secrets for their owners.
@@ -118,20 +122,68 @@ func (s *Service) Put(ctx context.Context, userID, repoID int64, name string, va
 	if err := validateValue(value); err != nil {
 		return false, err
 	}
+	created, err := s.PutMany(ctx, userID, repoID, []Entry{{Name: name, Value: value}})
+	return created == 1, err
+}
+
+// PutMany encrypts entries and stores them together: all are saved or none.
+// Names must be unique; existing names are replaced. It reports how many names
+// were new. The caller should clear the values afterwards.
+func (s *Service) PutMany(ctx context.Context, userID, repoID int64, entries []Entry) (int, error) {
+	if len(entries) == 0 {
+		return 0, &InvalidError{Message: "Add at least one secret with a name and a value."}
+	}
+	seen := make(map[string]bool, len(entries))
+	for i, e := range entries {
+		if err := ValidateName(e.Name); err != nil {
+			invalid := err.(*InvalidError)
+			return 0, &InvalidError{Field: "name", Message: invalid.Message, Entry: i + 1}
+		}
+		if seen[e.Name] {
+			return 0, &InvalidError{Field: "name", Message: e.Name + " appears more than once. Keep one value per name.", Entry: i + 1}
+		}
+		seen[e.Name] = true
+		if err := validateValue(e.Value); err != nil {
+			invalid := err.(*InvalidError)
+			return 0, &InvalidError{Field: "value", Message: e.Name + ": " + invalid.Message, Entry: i + 1}
+		}
+	}
 	if s.keys == nil {
-		return false, ErrNotConfigured
+		return 0, ErrNotConfigured
 	}
-	sealed, version, err := s.keys.Seal(repoID, name, value)
-	if err != nil {
-		return false, err
+	items := make([]SealedSecret, len(entries))
+	for i, e := range entries {
+		sealed, version, err := s.keys.Seal(repoID, e.Name, e.Value)
+		if err != nil {
+			return 0, err
+		}
+		items[i] = SealedSecret{Name: e.Name, Value: sealed, Version: version}
 	}
-	return s.store.Put(ctx, userID, repoID, name, sealed, version)
+	return s.store.PutMany(ctx, userID, repoID, items)
 }
 
 // Delete removes a secret. Owners may delete even after GitHub access was lost.
 func (s *Service) Delete(ctx context.Context, userID, repoID int64, name string) (bool, error) {
-	if !namePattern.MatchString(name) {
-		return false, &InvalidError{Field: "name", Message: "Unknown secret."}
+	n, err := s.DeleteMany(ctx, userID, repoID, []string{name})
+	return n == 1, err
+}
+
+// DeleteMany removes several secrets at once and reports how many existed.
+// Owners may delete even after GitHub access was lost.
+func (s *Service) DeleteMany(ctx context.Context, userID, repoID int64, names []string) (int, error) {
+	unique := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		if !namePattern.MatchString(name) {
+			return 0, &InvalidError{Field: "name", Message: "Unknown secret."}
+		}
+		if !seen[name] {
+			seen[name] = true
+			unique = append(unique, name)
+		}
 	}
-	return s.store.Delete(ctx, userID, repoID, name)
+	if len(unique) == 0 {
+		return 0, &InvalidError{Field: "name", Message: "Select at least one secret."}
+	}
+	return s.store.DeleteMany(ctx, userID, repoID, unique)
 }

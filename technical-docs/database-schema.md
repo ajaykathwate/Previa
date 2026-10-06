@@ -1,8 +1,8 @@
 # Database schema
 
-The complete PostgreSQL schema of Previa after every migration (Goose `0001`–`0018`, River `001`–`007`), generated from a freshly migrated database, so it matches what `previa-migrate up` / `make migrate-up` create. The full annotated diagram, as Mermaid code to paste into [mermaid.live](https://mermaid.live), is [database-schema-diagram.md](database-schema-diagram.md). Migrations: [`db/migrations/`](../db/migrations/); each feature's queries: `internal/<feature>/*queries.sql` (sqlc generates `internal/<feature>/dbgen`).
+The complete PostgreSQL schema of Previa after every migration (Goose `0001`–`0019`, River `001`–`007`), generated from a freshly migrated database, so it matches what `previa-migrate up` / `make migrate-up` create. The full annotated diagram, as Mermaid code to paste into [mermaid.live](https://mermaid.live), is [database-schema-diagram.md](database-schema-diagram.md). Migrations: [`db/migrations/`](../db/migrations/); each feature's queries: `internal/<feature>/*queries.sql` (sqlc generates `internal/<feature>/dbgen`).
 
-**26 tables** (19 owned by Previa, the rest by Goose, SCS and River), 234 columns, 153 constraints, 57 indexes, 7 triggers.
+**26 tables** (19 owned by Previa, the rest by Goose, SCS and River), 235 columns, 153 constraints, 57 indexes, 7 triggers.
 
 ## How the data fits together
 
@@ -113,6 +113,7 @@ erDiagram
         text build_status
         bigint teardown_requested_generation
         text teardown_reason
+        timestamptz mergeability_unresolved_at
     }
     build_intents {
         bigint pull_request_id PK,FK
@@ -455,6 +456,7 @@ erDiagram
 | `build_status` | text | no | `'checking'::text` | open, checking or conflicts (the mergeability gate). |
 | `teardown_requested_generation` | bigint | no | `'-1'::integer` | A local teardown (owner, expiry, revocation) at this generation. |
 | `teardown_reason` | text | yes |  | requested, expired or revoked. |
+| `mergeability_unresolved_at` | timestamptz | yes |  | When the bounded mergeability check gave up without an answer from GitHub (migration 0019); the dashboard then says so and offers Sync. Cleared by a new observation or a new check. |
 
 **Constraints**
 
@@ -841,7 +843,7 @@ erDiagram
 
 ### goose_db_version
 
-*Library.* Goose's migration history. The newest row per `version_id` decides whether that migration is applied; processes require version 18.
+*Library.* Goose's migration history. The newest row per `version_id` decides whether that migration is applied; processes require version 19.
 
 | Column | Type | Null | Default | Notes |
 | --- | --- | --- | --- | --- |

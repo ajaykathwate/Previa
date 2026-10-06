@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Row struct {
@@ -11,7 +12,28 @@ type Row struct {
 	FullName, Account, Status string
 	InstallationID            int64
 	Accessible                bool
+	BuildMode                 string // "manual" or "automatic"
+	OpenPRs, LivePreviews     int64
+	LastSynced                string // RFC 3339; empty before the first discovery
 }
+
+// SyncedLabel is LastSynced as an exact UTC time for display.
+func (r Row) SyncedLabel() string {
+	parsed, err := time.Parse(time.RFC3339, r.LastSynced)
+	if err != nil {
+		return ""
+	}
+	return parsed.UTC().Format("2 Jan 2006, 15:04 UTC")
+}
+
+// Count says "1 open pull request" or "3 open pull requests".
+func Count(n int64, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return strconv.FormatInt(n, 10) + " " + many
+}
+
 type Page struct {
 	Rows                                            []Row
 	Total, Number, Pages, Start, End, Installations int64

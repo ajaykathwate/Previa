@@ -135,11 +135,20 @@ Requests** and Manual builds.
 2. Authorize Previa on GitHub (first time only).
 3. You land on **Overview**, signed in as your GitHub user.
 
-What you see on **Overview**: counts of linked installations, repositories and
-access; delivery counts (**Waiting or queued**, **Building**, **Live previews**,
-**Failed requests**); the pipeline stages **Discover, Gate, Build, Run, Route,
-Report, Teardown**, each **Connected** or **Not running** depending on the worker;
-and **Your next steps**.
+What you see on **Overview**, top to bottom:
+
+- **Your next steps**, a getting-started checklist, until every step is done.
+- When no worker can build, the pipeline first, with a highlighted note that says
+  exactly what to fix (for example "set `PREVIEW_BASE_DOMAIN` on the worker").
+- Delivery counts: **Live previews**, **Building**, **Waiting or queued**,
+  **Failed requests**.
+- **Previews**: the five newest live previews with **Open** and a copy button, and
+  when each expires. **Build requests**: the five newest requests with their status
+  and time.
+- The pipeline stages **Discover, Gate, Build, Run, Route, Report, Teardown**, each
+  **Connected** or **Not running** depending on the worker.
+- Source counts: **Repositories**, **Open pull requests**, **Linked
+  installations**, **Access unavailable**.
 
 ## 2. Connect your repositories
 
@@ -148,8 +157,9 @@ and **Your next steps**.
 2. On GitHub, pick the account and the repositories Previa may use.
 3. GitHub returns to Previa and asks you to authorize the App with the **same
    account**. Previa checks you really own that installation before linking it.
-4. Your repositories appear as cards. Linking never builds anything; it starts a
-   first discovery of open pull requests.
+4. Your repositories appear as cards showing open pull requests, live previews,
+   the build mode and when pull requests were last synced. Linking never builds
+   anything; it starts a first discovery of open pull requests.
 
 To add or remove repositories later, use **Manage connections** (GitHub's page).
 
@@ -164,7 +174,14 @@ To add or remove repositories later, use **Manage connections** (GitHub's page).
 
 1. The repository page shows **Last synced**, the build mode and the pull requests.
 2. **Sync Pull Requests** fetches the open pull requests from GitHub (metadata only;
-   never builds). Clicking repeatedly while it syncs does nothing extra.
+   never builds). Clicking repeatedly while it syncs does nothing extra. The status
+   beside **Last synced** says what is happening:
+   - **Syncing** (spinning): a worker is fetching.
+   - **Waiting for a worker**: no worker is running, so nothing is fetched; a box
+     explains how to start one, and the sync continues by itself once it runs.
+   - **Sync stalled**: it did not finish within 5 minutes; **Sync Pull Requests**
+     works again and starts a fresh sync.
+   - **Sync failed**: GitHub refused (hover for the reason); sync again.
 3. With webhooks, new commits, closes and mergeability changes appear by themselves;
    the green **Live** dot means the page is receiving updates.
 4. Tabs **Open**, **Closed**, **Merged**, **All**; search by title, number, author
@@ -174,13 +191,27 @@ To add or remove repositories later, use **Manage connections** (GitHub's page).
    | State | Meaning | Can it build? |
    | --- | --- | --- |
    | **Open** | GitHub says it can merge | Yes |
-   | **Checking** | GitHub is still computing mergeability | Not yet; wait or sync again |
+   | **Checking** | GitHub is still computing mergeability (or, with "Waiting for a worker", no worker is running to ask) | Not yet; wait, or start the worker |
+   | **Unknown** | GitHub never answered after 8 checks, so Previa stopped asking | No; **Sync Pull Requests** asks again (a new commit does too) |
    | **Conflicts** | It conflicts with its base branch | No; resolve and push |
    | **Refresh required** | Two observations arrived at the same instant | Sync again |
 
-6. Click a pull request to open its page: three panels, **Latest observed commit**,
-   **Current build request** and **Deployed preview**, plus **Build logs** and
-   **View on GitHub**.
+6. The list's **Preview** column opens each live preview directly, and **Latest
+   request** notes when a request was for an earlier commit. A repository never
+   synced shows a **Sync Pull Requests** button in its empty list.
+7. Click a pull request to open its page:
+   - At the top, the **status panel**: a headline (**Preview is live**, **Building
+     …**, **Build failed**, **Blocked by merge conflicts**, **No preview yet**, …),
+     the preview address with **Copy**, and every action (**Open preview**,
+     Build/Retry/Rebuild, **Tear down preview** or **Cancel build**, **Build
+     logs**). A failed build also shows **Last lines of the build output** with
+     error lines in red.
+   - Three cards: **Latest commit** (linked to GitHub, with **Ready to build**,
+     **Checking mergeability** or **Has merge conflicts**), **Build request** (who
+     asked or **Automatic build**, when it started and finished, how long it took)
+     and **Deployed preview** (when it was published and expires).
+   - Times read "3 minutes ago"; hover for the exact UTC time. **View on GitHub**
+     opens the pull request; the back link returns to the list with its filters.
 
 ## 5. Prepare a repository for previews
 
@@ -207,7 +238,7 @@ At the repository root (on the commit you want to preview):
 On the repository page (pull request list only):
 
 - **Manual** (default): nothing builds until you click.
-- **Enable Automatic Builds**: a confirmation dialog explains it; confirm to turn it
+- **Automatic builds** switch: a confirmation dialog explains it; confirm to turn it
   on. Each new commit then builds after five minutes without another push. It does
   not build pull requests that already exist.
 - Turning it off saves Manual at once and cancels automatic requests that have not
@@ -218,16 +249,21 @@ On the repository page (pull request list only):
 1. Open the pull request's page.
 2. Click **Build latest commit**. Previa first reads the pull request fresh from
    GitHub, then records one request (double clicks count once).
-3. **Current build request** shows **Queued**, then **Running**. Open **Build logs**
-   to watch the output live.
-4. When the app answers its health check, the preview goes live: **Deployed
-   preview** shows **Running**, the address, and **Expires** (48 hours later by
-   default).
+3. The status panel shows **Queued to build …**, then **Building …**; the **Build
+   request** card shows who asked and when it started. Open **Build logs** to watch
+   the output live.
+4. When the app answers its health check, the preview goes live: the headline says
+   **Preview is live**, the address appears with **Copy** and **Open preview**, and
+   **Deployed preview** shows **Running**, when it was published and when it
+   **Expires** (48 hours later by default).
 5. On GitHub, the pull request gets the Previa comment ("Previa preview: Ready" with
    the address) and a **Previa preview** check run with a success result.
 
-If the button is missing, a sentence says why (see
-[When Previa says no](#18-when-previa-says-no)).
+If the button is greyed out, the box beside it says why and how to fix it (see
+[When Previa says no](#18-when-previa-says-no)). On a local setup, the most common
+case is **The running worker cannot build previews: it has no preview domain**: set
+`PREVIEW_BASE_DOMAIN=preview.localtest.me` and start the router as described in
+[Before you start](#0-before-you-start), then restart the worker and reload.
 
 ## 8. Automatic builds
 
@@ -253,8 +289,9 @@ again**.
 
 ## 10. Open and share a preview
 
-- Click the address under **Deployed preview** (or **Open preview** on
-  **Environments**) and share it with reviewers.
+- Click **Open preview** in the status panel (or **Open** on the pull request list,
+  **Open preview** on **Environments** and **Previews** on Overview). **Copy** puts
+  the address on the clipboard to share with reviewers.
 - The address never changes for that pull request.
 - **This preview serves an earlier commit than the latest one** means a newer
   commit exists but has not been built (Manual) or is building.
@@ -288,10 +325,12 @@ A **Previa preview** check run is added for each build request on its exact comm
 3. New lines appear live while it runs; the view follows the end while you are at
    the bottom. Scroll up to stop following; **Follow output** resumes.
 4. **Earlier lines** / **Later lines** page through long logs; each line number is a
-   link.
-5. Only the current attempt is kept; a new attempt clears the page. Logs are kept
+   link. Lines that look like errors are red.
+5. **Copy** copies the lines shown; **Download** saves the whole output of the
+   attempt as a `.log` file.
+6. Only the current attempt is kept; a new attempt clears the page. Logs are kept
    14 days after an attempt finishes; at most 5 MiB / 20,000 lines are stored.
-6. Secrets and credentials appear as `[redacted]`.
+7. Secrets and credentials appear as `[redacted]`.
 
 ## 13. Tear down a preview
 
@@ -304,19 +343,36 @@ From the pull request page:
    the comment says the preview was removed. The address stays reserved: build again
    to bring it back.
 
-From **Environments**: each row has **Tear down** with the same dialog.
+While a build runs and nothing is deployed yet, the same control reads **Cancel
+build** (dialog **Cancel this build?**): it stops the build and publishes nothing.
+
+From **Environments**: each published preview has **Tear down** with the same
+dialog.
 
 Automatically: closing or merging the pull request removes its preview; reopening
 follows the build mode again.
 
 ## 14. Repository secrets
 
-1. Open a repository, then the **Secrets** tab.
-2. Enter a **Name** (letters, digits and underscores, such as `STRIPE_KEY`) and a
-   **Value**, click **Save secret**. From then on only the name and the time it was
-   updated are shown.
-3. **Replace** sets a new value (the old one is never shown).
-4. **Delete** asks for confirmation in a dialog.
+1. Open a repository, then the **Secrets** tab. **Stored secrets** lists names and
+   when each was updated; **Add or replace secrets** is below.
+2. On each line enter a **Name** (letters, digits and underscores, such as
+   `STRIPE_KEY`) and a **Value**. **Add another line** adds a line; × removes one.
+3. Shortcut: paste several `NAME=value` lines into a name field; each becomes its own
+   line, like a bulk edit.
+4. Or open **Paste or import a .env file**: paste the text or **Choose a .env
+   file…**, then save it directly or **Move into lines above to review**. Blank lines
+   and `#` comments are ignored, quotes are optional, and a double-quoted value may
+   span lines (for example a private key).
+5. Click **Save N secrets**. Everything is saved together, or nothing if any line is
+   wrong (a missing name or value, a repeated name, a name starting with
+   `PREVIA_`); the page marks the line and keeps the names, and you enter the values
+   again. Names that already exist show **Replaces the stored value**.
+6. From then on only names and update times are shown. **Replace** on a row starts a
+   line with that name (the old value is never shown).
+7. **Delete** on a row asks for confirmation in a dialog. To remove several, tick
+   them (or the header box) and click **Delete selected (N)**; one dialog lists them
+   and confirms.
 
 Good to know: pull requests from **forks never receive secrets**; a secret overrides
 a same-named entry in `.previewrc.yaml`; use preview-only credentials; up to 100
@@ -327,12 +383,16 @@ configured.
 ## 15. Builds, Environments and Overview
 
 - **Builds**: the current or latest request of each pull request across your
-  repositories: latest and requested commit, status, why it waits or failed, the
-  eligibility time and **Logs**. It is not a history: a new request replaces the row.
-- **Environments**: each preview: status (**Publishing**, **Running**, **Failed**,
-  **Removing**), deployed commit (marked when earlier than the latest), **Open
-  preview**, **Expires**, **Logs**, **Tear down**.
-- **Overview**: totals and whether a worker provides each pipeline stage.
+  repositories, most recent first: the pull request's title, the requested commit
+  (and the latest one when it differs), status, why it waits or failed, when it
+  became eligible, started or finished and how long it took, and **Logs**. It is not
+  a history: a new request replaces the row.
+- **Environments**: each preview, most recently published first: title, status
+  (**Building**, **Publishing**, **Running**, **Failed**, **Removing**), the deployed
+  commit (marked when earlier than the latest), **Open preview** with a copy button,
+  when it was published and expires, **Logs**, and **Tear down** for published
+  previews.
+- **Overview**: see [Sign in](#1-sign-in).
 
 ## 16. Everyday navigation
 
@@ -360,14 +420,21 @@ configured.
 
 ## 18. When Previa says no
 
+On a pull request page, a build action that cannot run now stays visible but greyed
+out, and the box beside it shows the message and the fix below.
+
 | Message | Why | What to do |
 | --- | --- | --- |
 | GitHub access to this repository is unavailable. | The App no longer has access | Restore access in **Manage connections** |
 | Closed and merged pull requests are not built. | The PR is closed | Reopen it on GitHub |
 | Build refused: resolve merge conflicts and push a new commit first. | **Conflicts** | Fix the conflict and push |
-| Build paused: GitHub is checking mergeability… | **Checking** | Wait or **Sync Pull Requests** |
+| Build paused: GitHub is checking mergeability… | **Checking** | Wait or **Sync Pull Requests**; if it says no worker is running, start the worker |
+| Build paused: GitHub did not report whether this pull request can merge. | **Unknown**: the check gave up after 8 attempts | **Sync Pull Requests** to ask again, or push a commit |
+| No worker is running… (repository page) | Syncs, mergeability checks and builds wait | Start the worker (`make run-worker`) and check its log |
+| Sync stalled | A sync did not finish within 5 minutes | **Sync Pull Requests** starts a new one |
 | Conflicting upstream observations need a fresh GitHub snapshot… | **Refresh required** | **Sync Pull Requests** |
-| No preview worker is running with builds configured… | No worker can build | Start the worker with builds configured |
+| No worker that can build previews is running. | No worker runs, or it runs without the GitHub App | Start the worker (`make run-worker`) with the GitHub App, Docker and a preview domain, then reload |
+| The running worker cannot build previews: it has no preview domain. | The worker tracks pull requests but `PREVIEW_BASE_DOMAIN` is empty | Set `PREVIEW_BASE_DOMAIN` (`preview.localtest.me` on one machine), start Docker and the router, restart the worker, reload |
 | Builds are paused by the operator… | Kill switch on | Wait; queued requests start when builds resume |
 | GitHub could not confirm the pull request right now… | GitHub outage | Try again shortly; nothing was recorded |
 | The pull request or its build changed meanwhile. Reload and try again. | The page is out of date | Reload |
@@ -388,8 +455,8 @@ After that:
 
 1. Removal starts as soon as GitHub's notification arrives and does not need GitHub
    access. Preview addresses then show **Preview not found or expired**.
-2. Pull request pages show "GitHub access to this repository is unavailable." instead
-   of build buttons. Secrets can only be deleted.
+2. Pull request pages say "GitHub access to this repository is unavailable." next to
+   a greyed-out build button. Secrets can only be deleted.
 3. The Previa comment and check run on GitHub keep their last state, because Previa
    can no longer write to the repository. A comment may still say **Ready** and link
    to the removed preview.
@@ -448,26 +515,31 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | C1 | Open a repository, **Sync Pull Requests** | Open PRs appear; **Last synced** updates; nothing builds |
 | C2 | Click **Sync Pull Requests** several times quickly | One sync runs |
 | C3 | (Webhooks) Open a new PR on GitHub | It appears without reloading (**Live** dot green) |
-| C4 | Create a PR that conflicts with its base | State **Conflicts**; no build button; the reason sentence shows |
+| C4 | Create a PR that conflicts with its base | State **Conflicts**; **Build latest commit** greyed out; the box beside it gives the reason and fix |
 | C5 | Resolve the conflict and push | State becomes **Open** |
 | C6 | (Webhooks) Close a PR on GitHub, then open the **Closed** tab | It is listed as closed; it cannot build. Without webhooks, discovery lists open PRs only; housekeeping later notices closes of PRs that have previews |
 | C7 | Search by author, branch and number | Matching PRs only |
+| C8 | Stop the worker, then **Sync Pull Requests** | **Waiting for a worker** (no spinner) and a box saying no worker is running; start the worker and the sync finishes by itself |
+| C9 | Leave a sync waiting for more than 5 minutes (worker stopped) | **Sync stalled**; **Sync Pull Requests** is clickable again and starts a new sync |
+| C10 | With the worker stopped, open a PR that shows **Checking** | Headline **Waiting for a worker to check mergeability**, with how to start one |
+| C11 | A PR GitHub never resolves (rare; or block the worker's GitHub access during the check) | After about 8 checks the state becomes **Unknown**: "GitHub did not report mergeability"; **Sync Pull Requests** asks again |
 
 ### D. Manual builds (worker with builds)
 
 | # | Steps | Expected |
 | --- | --- | --- |
-| D1 | Open an open PR, **Build latest commit** | **Queued**, then **Running**; Build logs stream; then **Deployed preview** **Running** with an address and **Expires** |
+| D1 | Open an open PR, **Build latest commit** | Headline **Queued to build …**, then **Building …**; Build logs stream; then **Preview is live** with the address, **Copy** and **Open preview**; **Deployed preview** shows **Running**, published and expiry times |
 | D2 | Open the address | Your app over HTTPS |
 | D3 | Double-click **Build latest commit** on a fresh PR | One request (one row on **Builds**, one check run) |
-| D4 | While queued, look for a second build button | None |
+| D4 | While queued, look for a second build button | None; **Cancel build** is offered instead (nothing is deployed yet) |
 | D5 | Push a new commit to that PR (Manual mode) | Nothing builds; the page notes the preview serves an earlier commit |
 | D6 | **Build latest commit** again | Builds the new commit; the address stays the same |
 | D7 | Open the PR page in two tabs; build in one, then click the old button in the other | "Reload and try again" |
-| D8 | Stop the worker; open the PR page | The button is replaced by "No preview worker is running…" |
-| D9 | Start the worker again | The button returns |
+| D8 | Stop the worker; open the PR page | **Build latest commit** is greyed out; the box says "No worker that can build previews is running." and how to start one |
+| D8b | Run the worker with `PREVIEW_BASE_DOMAIN` empty | Greyed out; the box says the worker "has no preview domain" and names `PREVIEW_BASE_DOMAIN`; Overview shows the pipeline first with the same fix |
+| D9 | Start the worker with a preview domain, reload | The button works again |
 | D10 | Remove `.previewrc.yaml` from a PR's commit and build | **Failed**: "The commit could not be prepared…"; **Retry build** appears |
-| D11 | Make the `Dockerfile` fail (`RUN exit 1`) and build | **Failed**: "The image build failed"; logs show the failing step |
+| D11 | Make the `Dockerfile` fail (`RUN exit 1`) and build | Headline **Build failed**: "The image build failed"; **Last lines of the build output** shows the failing step in red; the log page has it all |
 | D12 | Set `health_check_path` to a path that returns 500 | **Failed**: "The app did not become ready" (after the startup timeout) |
 | D13 | With a working preview, push a failing commit and build | The failure is shown, and the old preview still serves at the same address |
 | D14 | **Retry build** after fixing | A new attempt; new check run on the same commit |
@@ -477,7 +549,7 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 
 | # | Steps | Expected |
 | --- | --- | --- |
-| E1 | **Enable Automatic Builds**, then **Cancel** in the dialog | Still Manual |
+| E1 | Click the **Automatic builds** switch, then **Cancel** in the dialog | Still Manual |
 | E2 | Enable and confirm | Mode shows Automatic; existing PRs are not built |
 | E3 | Push a commit | **Waiting** with the eligible time; builds about five minutes later |
 | E4 | Push three commits a minute apart | Only the last commit builds |
@@ -492,6 +564,8 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | F2 | **Tear down preview** and confirm | **Removing**, then removed; the address shows "Preview not found or expired"; the comment says removed |
 | F3 | Build again | The preview returns at the same address |
 | F4 | **Environments**, **Tear down** on a row, confirm | Same as F2, back on Environments |
+| F4b | Start a build of a PR with no preview, then **Cancel build** and confirm | The build stops; nothing is published |
+| F4c | **Copy** next to a preview address (PR page, Environments, Overview) | The address is on the clipboard; the button says **Copied** briefly |
 | F5 | Close the PR on GitHub | The preview is removed automatically |
 | F6 | Reopen it (Manual) | Nothing builds until you click |
 | F7 | Set `ENV_TTL_HOURS=1` on the worker, build, wait over an hour | The preview expires; the comment says "Preview expired" |
@@ -512,9 +586,14 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | # | Steps | Expected |
 | --- | --- | --- |
 | H1 | **Secrets**, add `API_KEY` with a value | Listed by name and time only; the value is never shown |
-| H2 | **Replace** it | Time updates; still no value shown |
+| H1b | Add three lines with **Add another line**, then **Save 3 secrets** | "Saved 3 secrets (3 new, 0 replaced)" |
+| H1c | Paste `A=1`, `B=2` (two lines) into an empty name field | Two lines appear, one per name |
+| H1d | **Paste or import a .env file**: paste a `.env` with comments and a quoted multi-line value, save | All its names are saved; comments ignored |
+| H1e | **Choose a .env file…**, then **Move into lines above to review** | The lines fill in; the text area empties |
+| H2 | **Replace** it | A line starts with that name; after saving, the time updates; still no value shown |
 | H3 | **Delete**, then **Cancel** / confirm | Kept / removed |
-| H4 | Use an invalid name (`my-key`) | Refused with a reason; the value is not shown back |
+| H3b | Tick two secrets, **Delete selected (2)**, confirm | The dialog lists both; both are removed |
+| H4 | Use an invalid name (`my-key`), a repeated name, or a name without a value | Refused with a reason on that line; nothing is saved; names are kept, values are not shown back |
 | H5 | Build a PR whose app prints `API_KEY` when it starts | Build logs show the start-up output with `[redacted]` (secrets are given only when the container starts, never during the image build) |
 | H6 | Build a PR from a **fork** | The preview runs without the secret |
 | H7 | Start the server without `SECRETS_*` keys | The tab says secrets are not configured |
@@ -528,6 +607,8 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | I3 | Switch tabs for a while, come back | Indicator shows paused while hidden, then live again |
 | I4 | Start a new attempt while the page is open | The page clears and shows the new attempt |
 | I5 | Disable JavaScript; open the log page | Lines show; **Earlier lines**, **Later lines**, **Refresh** work |
+| I6 | **Copy** / **Download** on a log page | The lines shown are copied / `<repository>-pr-<number>-build.log` downloads with every line |
+| I7 | Open a failed build's log | Lines with "error" or "failed" are tinted red |
 
 ### J. Navigation, accessibility and layout
 

@@ -17,6 +17,17 @@ import (
 const SyncQueue = "pr_discovery"
 const SyncTimeout = 45 * time.Second
 
+// SyncStaleAfter is how long a requested sync may stay queued or running
+// before the dashboard calls it stalled and Sync Pull Requests starts a new one.
+// A live worker finishes a page within seconds; a sync this old never ran
+// (no worker) or was lost.
+const SyncStaleAfter = 5 * time.Minute
+
+// syncStale reports whether an unfinished sync has outlived SyncStaleAfter.
+func syncStale(row dbgen.PrSync, now time.Time) bool {
+	return (row.State == "queued" || row.State == "syncing") && row.RequestedAt.Valid && now.Sub(row.RequestedAt.Time) > SyncStaleAfter
+}
+
 type SyncArgs struct {
 	RepoID   int64 `json:"repo_id"`
 	Revision int64 `json:"revision"`
@@ -61,7 +72,9 @@ func (s *SyncService) Request(ctx context.Context, userID, repoID int64) error {
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		if err == nil && (old.State == "queued" || old.State == "syncing") {
+		// A sync in progress is not requested twice; a stalled one is replaced
+		// (its new revision makes the old job's pages stale).
+		if err == nil && (old.State == "queued" || old.State == "syncing") && !syncStale(old, time.Now()) {
 			return nil
 		}
 		row, err := q.StartSync(ctx, repoID)

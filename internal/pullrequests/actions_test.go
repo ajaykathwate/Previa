@@ -22,10 +22,10 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-type fixedCapabilities struct{ execution, paused bool }
+type fixedCapabilities struct{ execution, paused, discovery bool }
 
 func (c *fixedCapabilities) Current(context.Context) (workers.Capabilities, error) {
-	return workers.Capabilities{Execution: c.execution, Discovery: true, Paused: c.paused}, nil
+	return workers.Capabilities{Execution: c.execution, Discovery: c.discovery, Paused: c.paused}, nil
 }
 
 // actionsHarness is the PR workspace with build and teardown actions, signed
@@ -42,7 +42,7 @@ type actionsHarness struct {
 func newActionsHarness(t *testing.T) *actionsHarness {
 	t.Helper()
 	f := setup(t)
-	h := &actionsHarness{fixture: f, caps: &fixedCapabilities{execution: true}}
+	h := &actionsHarness{fixture: f, caps: &fixedCapabilities{execution: true, discovery: true}}
 	h.prID = seedPR(t, f, `"mergeable":true,"mergeable_state":"clean",`)
 	h.upstream = &upstreamFake{inspect: func(context.Context, int64, int64, int32) (pr.Upstream, error) {
 		return upstreamPR("sha-a", "open", yes(), "clean", verifyBase), nil
@@ -143,9 +143,19 @@ func TestBuildIsUnavailableWithoutAWorkerThatCanBuild(t *testing.T) {
 	h := newActionsHarness(t)
 	h.caps.execution = false
 	values, body := h.form(t)
-	if values != nil || !strings.Contains(body, "No preview worker is running") {
+	if values != nil {
 		t.Fatal("a build control was offered with no worker able to build")
 	}
+	// The action stays visible but disabled, with the reason and the fix.
+	disabled := regexp.MustCompile(`(?s)<button[^>]*disabled[^>]*aria-describedby="build-unavailable"[^>]*>.*?Build latest commit`)
+	if !disabled.MatchString(body) || !strings.Contains(body, "it has no preview domain") || !strings.Contains(body, "PREVIEW_BASE_DOMAIN") {
+		t.Fatal("the blocked build was not shown disabled with its reason and fix")
+	}
+	h.caps.discovery = false
+	if _, body := h.form(t); !strings.Contains(body, "No worker that can build previews is running") {
+		t.Fatal("with no worker at all, the page did not say so")
+	}
+	h.caps.discovery = true
 	token := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(body)[1]
 	w := h.request(t, "POST", detailPath+"/build", "csrf_token="+url.QueryEscape(token)+"&action=build&expected_revision=0&request_key=abcdefghijklmnop1234")
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "No build was requested") {
@@ -389,5 +399,49 @@ func TestEnvironmentsAndBuildsShowRealDeliveryState(t *testing.T) {
 	h.exec(t, "UPDATE environments SET last_error_code='unhealthy', applied_revision=1 WHERE pull_request_id=$1", h.prID)
 	if _, body := h.form(t); !strings.Contains(body, "The app did not become ready.") {
 		t.Fatal("the PR does not explain its failure")
+	}
+}
+
+func TestRepositoryPageSaysWhenSyncsWaitStallOrNeverResolve(t *testing.T) {
+	h := newActionsHarness(t)
+	list := func() string {
+		t.Helper()
+		w := h.request(t, "GET", "/repositories/1", "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("list %d", w.Code)
+		}
+		return w.Body.String()
+	}
+	syncButton := regexp.MustCompile(`(?s)<button[^>]*class="[^"]*sync-button[^"]*"[^>]*>`)
+	disabled := func(button string) bool { return regexp.MustCompile(`\sdisabled(\s|>|=)`).MatchString(button) }
+	h.exec(t, "INSERT INTO pr_syncs(repo_id,state) VALUES(1,'queued') ON CONFLICT (repo_id) DO UPDATE SET state='queued', requested_at=clock_timestamp()")
+	if body := list(); !strings.Contains(body, "is-syncing") || !strings.Contains(body, "data-refresh-at=") || !disabled(syncButton.FindString(body)) {
+		t.Fatal("a fresh sync spins, refreshes when it would stall, and is not requested twice")
+	}
+	// No worker: no spinner, an explanation and how to start one.
+	h.caps.discovery = false
+	if body := list(); strings.Contains(body, "is-syncing") || !strings.Contains(body, "Waiting for a worker") || !strings.Contains(body, "data-worker-missing") || !strings.Contains(body, "make run-worker") {
+		t.Fatal("a sync with no worker must say it waits for one")
+	}
+	h.caps.discovery = true
+	// Older than SyncStaleAfter: stalled, and Sync works again.
+	h.exec(t, "UPDATE pr_syncs SET requested_at = now() - interval '6 minutes'")
+	if body := list(); !strings.Contains(body, "Sync stalled") || !strings.Contains(body, "data-sync-stalled") || disabled(syncButton.FindString(body)) {
+		t.Fatal("a stalled sync must say so and let the owner sync again")
+	}
+	// A mergeability check that gave up reads Unknown, with Sync as the way on.
+	h.exec(t, "UPDATE pull_requests SET build_status='checking', mergeable=NULL, mergeability_unresolved_at=now() WHERE id=$1", h.prID)
+	if body := list(); !strings.Contains(body, ">Unknown<") || !strings.Contains(body, "GitHub did not answer; sync to ask again") {
+		t.Fatal("an unresolved check must read Unknown in the list")
+	}
+	values, body := h.form(t)
+	if values != nil || !strings.Contains(body, "GitHub did not report mergeability") || !strings.Contains(body, "Choose Sync Pull Requests on the repository page to ask again") {
+		t.Fatal("the PR page must say GitHub did not answer and how to ask again")
+	}
+	// Still checking, but no worker to ask: the page says so and how to fix it.
+	h.exec(t, "UPDATE pull_requests SET mergeability_unresolved_at=NULL WHERE id=$1", h.prID)
+	h.caps.discovery = false
+	if values, body := h.form(t); values != nil || !strings.Contains(body, "Waiting for a worker to check mergeability") || !strings.Contains(body, "No worker is running to ask GitHub") {
+		t.Fatal("the PR page must explain the missing worker")
 	}
 }

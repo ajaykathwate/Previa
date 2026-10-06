@@ -15,8 +15,8 @@ SELECT key, updated_at FROM env_secrets WHERE repo_id = $1 ORDER BY key;
 -- name: CountSecrets :one
 SELECT count(*) FROM env_secrets WHERE repo_id = $1;
 
--- name: SecretExists :one
-SELECT EXISTS (SELECT 1 FROM env_secrets WHERE repo_id = $1 AND key = $2);
+-- name: ExistingSecretNames :many
+SELECT key FROM env_secrets WHERE repo_id = sqlc.arg(repo_id) AND key = ANY(sqlc.arg(keys)::text[]);
 
 -- name: UpsertSecret :exec
 INSERT INTO env_secrets (repo_id, key, encrypted_value, key_version)
@@ -24,10 +24,11 @@ VALUES ($1, $2, $3, $4)
 ON CONFLICT (repo_id, key) DO UPDATE
 SET encrypted_value = EXCLUDED.encrypted_value, key_version = EXCLUDED.key_version, updated_at = now();
 
--- name: DeleteOwnedSecret :execrows
+-- name: DeleteOwnedSecrets :execrows
 DELETE FROM env_secrets s
 USING repos r JOIN installations i ON i.id = r.installation_id
-WHERE s.repo_id = r.id AND r.id = $1 AND i.owner_user_id = $2 AND s.key = $3;
+WHERE s.repo_id = r.id AND r.id = sqlc.arg(id) AND i.owner_user_id = sqlc.arg(owner_user_id)
+  AND s.key = ANY(sqlc.arg(keys)::text[]);
 
 -- name: SealedSecrets :many
 SELECT key, encrypted_value, key_version FROM env_secrets WHERE repo_id = $1 ORDER BY key;

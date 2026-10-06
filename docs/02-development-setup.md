@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 18**, **River 007**. After pulling changes, run
+Current schema: **Goose 19**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker.
 
 ## 1. Prerequisites

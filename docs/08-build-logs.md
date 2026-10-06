@@ -91,7 +91,12 @@ installation-owner scope as PR pages; retained PRs stay readable after access is
 revoked, with a notice). It shows the newest 500 lines; without JavaScript, **Earlier
 lines** / **Later lines** links page by sequence (`?before=`, `?after=`) and
 **Refresh** reloads. Lines are rendered as text nodes: build output can never become
-markup.
+markup. Lines that look like errors are tinted; **Copy** copies the lines shown and
+`…/logs/download` sends the attempt's whole output as `text/plain` (an attachment
+named `<repository>-pr-<number>-build.log`, read in batches of 1,000 lines, owner-only,
+`no-store`). The PR page quotes the last twelve lines of a failed attempt through
+`Store.Tail`, which returns nothing unless the stored stream belongs to that
+request's generation and revision.
 
 `…/logs/events` streams Server-Sent Events:
 
@@ -140,7 +145,7 @@ showing nothing.
 | `internal/environments/admission.go`, `scheduling_queries.sql` | Epoch reset and line clearing inside admission; `Attempt` for the runtime. |
 | `internal/buildlogs/lines.go`, `writer.go` | Control stripping, line bounds, caps, batching, fencing, loss accounting. |
 | `internal/buildlogs/store.go`, `queries.sql`, `prune.go` | Fenced appends, owner-scoped reads, finish, retention job. |
-| `internal/buildlogs/status.go`, `handler.go` | Status wording, page, live stream, stream caps. |
+| `internal/buildlogs/status.go`, `handler.go` | Status wording, page, download, live stream, stream caps. |
 | `web/pages/builds/logs.*`, `web/static/js/ui.js` (`initBuildLogs`), `web/styles/logs.css` | Page, live client, styles. |
 
 ```sh
@@ -155,5 +160,6 @@ retried revision getting a new epoch; rejected and rolled-back admissions keepin
 logs; continuation across writers; finish and retention; the realtime trigger;
 owner scoping; escaped script-looking output; no-JavaScript paging; status states;
 resume without duplicates; reset for a replacement attempt; per-user stream caps;
-and dropping a client that stops reading. The browser suite covers live append,
-following, reset and paging without JavaScript.
+and dropping a client that stops reading; the owner-only download of a whole
+attempt; and `Tail` refusing another generation or revision. The browser suite covers
+live append, following, reset and paging without JavaScript.

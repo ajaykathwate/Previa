@@ -57,7 +57,10 @@ discovery for each newly accessible repository.
 1. Select a repository card to open its page: a breadcrumb (owner / repository),
    **Last synced**, the current build mode and the PR list.
 2. **Sync Pull Requests** queues another open-only discovery. It fetches metadata
-   only and never starts builds. Repeated clicks while syncing coalesce.
+   only and never starts builds. Repeated clicks while syncing coalesce. Instead of
+   spinning forever, the status says **Waiting for a worker** when no worker is
+   running (with a box explaining how to start one) and **Sync stalled** when a sync
+   has not finished within 5 minutes, at which point Sync starts a fresh one.
 3. With the worker running, progress, webhook changes and mergeability results
    appear by themselves. A green **Live** dot beside Last synced means the page is
    receiving updates; nothing is polled.
@@ -69,34 +72,48 @@ discovery for each newly accessible repository.
    | State | Meaning | Can it build? |
    | --- | --- | --- |
    | **Open** | GitHub reports the PR as mergeable. | Yes. |
-   | **Checking** | GitHub has not finished computing mergeability. | No; wait or sync again. |
+   | **Checking** | GitHub has not finished computing mergeability. | No; wait or sync again (if no worker is running, start one). |
+   | **Unknown** | GitHub never answered after 8 checks, so Previa stopped asking. | No; **Sync Pull Requests** asks again. |
    | **Conflicts** | The PR conflicts with its base branch. | No; resolve and push a new commit. |
 
    Closed and merged PRs appear only if Previa tracked them while they were open.
    **Refresh required** means conflicting observations arrived at the same instant;
    sync again to get an authoritative snapshot.
-6. Select a PR for its detail page, which tracks three things separately:
-   - **Latest observed commit:** the head GitHub reports.
-   - **Current build request:** authorized work, its captured commit, its state
+   The list's **Latest request** column notes when a request was for an earlier
+   commit, and **Preview** links straight to each live preview. A repository that
+   was never synced shows a **Sync Pull Requests** button in place of the empty
+   list.
+6. Select a PR for its detail page. At the top, one status panel says what is
+   happening (**Preview is live**, **Building …**, **Build failed**, **Blocked by
+   merge conflicts**, **No preview yet**, …) and holds the preview address with
+   **Copy**, **Open preview** and every action. A failed build quotes the last lines
+   of its output there. Below, three cards track things separately:
+   - **Latest commit:** the head GitHub reports (linked to GitHub) and whether it
+     can build (**Ready to build**, **Checking mergeability**, **Has merge
+     conflicts**).
+   - **Build request:** authorized work, its captured commit, its state
      (**Waiting** with the time it becomes eligible, **Queued**, **Running**,
      **Succeeded**, **Failed** with a short reason and a link to the log), or why it
-     waits (capacity, disk space).
+     waits (capacity, disk space); who asked (or **Automatic build**), when it
+     started and finished, and how long it took. A note says when it was for an
+     earlier commit.
    - **Deployed preview:** what a preview actually serves, its status as last
      recorded (**Publishing**, **Running**, **Failed** when its container went missing,
-     **Removing**, **Removed**), its address and when it expires. It can lag the
-     latest commit; a note says so.
+     **Removing**, **Removed**), when it was published and when it expires. It can
+     lag the latest commit; a note says so.
 
-   **Not requested** means no build intent exists; **Not deployed** means no
-   environment exists. **Build logs** opens the PR's log page (below). **View on
-   GitHub** opens the real PR. The actions are described in
-   [Build and tear down previews](#build-and-tear-down-previews).
-7. **Back to pull requests**, the breadcrumb and **Repositories** return to the
-   previous list with its search, tab and page preserved.
+   Times read like "3 minutes ago"; hover for the exact UTC time. **No build
+   requested yet** and **Nothing deployed** mean what they say. **Build logs** opens
+   the PR's log page (below). **View on GitHub** opens the real PR. The actions are
+   described in [Build and tear down previews](#build-and-tear-down-previews).
+7. The back link (**<repository> pull requests**), the breadcrumb and
+   **Repositories** return to the previous list with its search, tab and page
+   preserved.
 
 ## Choose a build policy
 
-The **Enable Automatic Builds** switch and **Sync Pull Requests** appear only on a
-repository's PR list, never on PR details.
+The **Automatic builds** switch (off or on) and **Sync Pull Requests** appear only
+on a repository's PR list, never on PR details.
 
 - **Manual** (default): PR events update tracking but never authorize a build.
 - **Automatic**: each relevant new commit sets a five-minute quiet deadline; another
@@ -131,20 +148,26 @@ chosen from the current request:
 - There is no bulk build: each PR is built from its own page, or by Automatic mode.
 - A queued request shows no second button. Its progress appears on the page, on
   **Builds**, in **Build logs** and on the pull request on GitHub.
-- When nothing can build, the button is replaced by the reason: GitHub access
-  removed, a closed PR, Checking or Conflicts, **no running worker can build
-  previews**, or **Builds are paused by the operator** (an incident switch; queued
-  requests show **Builds paused** and start when builds resume). Requests made while the worker is stopped (Automatic or teardown) wait
-  and run when it starts.
+- When the build cannot run now, the button stays visible but disabled, and a
+  notice beside it gives the reason and the fix: GitHub access removed (restore it
+  with **Manage connections**), Checking or Conflicts (resolve and push), **no worker
+  that can build previews is running** (start one), **the running worker cannot
+  build previews: it has no preview domain** (set `PREVIEW_BASE_DOMAIN` on the
+  worker), or **Builds are paused by the operator** (an incident switch; queued
+  requests show **Builds paused** and start when builds resume). A closed or merged
+  PR shows no build button. Requests made while the worker is stopped (Automatic or
+  teardown) wait and run when it starts.
 - A failed build or rebuild never replaces a working preview: the old one keeps
   serving and the page shows both.
 
-**Tear down preview** (an open PR with a preview, or a build in progress) opens a
-confirmation dialog over the page; Cancel, Close or Escape changes nothing. Confirming
-stops the preview, cancels unfinished work and removes its containers. The address
-stays reserved: build again to bring it back. On **Environments**, each row has its
-own **Tear down** with the same dialog. Only the repository's owner can tear down,
-and closing or merging the PR tears down automatically.
+**Tear down preview** (an open PR with a preview) opens a confirmation dialog over
+the page; Cancel, Close or Escape changes nothing. Confirming stops the preview,
+cancels unfinished work and removes its containers. The address stays reserved:
+build again to bring it back. While a build runs and nothing is deployed yet, the
+same control reads **Cancel build** and only stops the build. On **Environments**,
+each published preview has its own **Tear down** with the same dialog. Only the
+repository's owner can tear down, and closing or merging the PR tears down
+automatically.
 
 **Preview addresses.** Each PR gets one HTTPS address for its whole life, such as
 `https://pr-42-k2j4ld-7xq9m2fa.preview.example.com`, kept across rebuilds, teardown and
@@ -170,11 +193,21 @@ Each repository page has two tabs: **Pull requests** and **Secrets**. Secrets ar
 environment variables your previews receive when their container starts.
 
 1. Open a repository, then **Secrets**.
-2. Enter a **Name** (letters, digits and underscores, such as `STRIPE_KEY`) and a
-   **Value**, then **Save secret**. The value is encrypted immediately; from then on
-   only the name and its update time are shown.
-3. **Replace** asks for a new value for that name; the current value is never shown.
-4. **Delete** asks for confirmation in a dialog; Cancel or Escape keeps the secret.
+2. In **Add or replace secrets**, enter a **Name** (letters, digits and
+   underscores, such as `STRIPE_KEY`) and a **Value** on each line; **Add another
+   line** adds more, × removes one. Pasting several `NAME=value` lines into a name
+   fills one line each, like a bulk edit. Then **Save N secrets**: all are saved
+   together, or none if one is invalid. Values are encrypted immediately; from then
+   on only names and update times are shown.
+3. Or open **Paste or import a .env file**: paste `.env` text or **Choose a .env
+   file…** (read in your browser), then save it as is or **Move into lines above to
+   review**. Blank lines and `#` comments are ignored; quotes are optional; a
+   double-quoted value may span lines.
+4. A name that already exists says **Replaces the stored value**. **Replace** on a
+   row starts a line with that name; the current value is never shown.
+5. **Delete** asks for confirmation in a dialog; Cancel or Escape keeps the secret.
+   To remove several, tick them (or the header checkbox) and use **Delete
+   selected**, which confirms once and lists the names.
 
 Good to know:
 
@@ -206,6 +239,8 @@ attempt; a new attempt replaces it.
   line.
 - **Earlier lines** and **Later lines** page through long logs; **Refresh** reloads.
   These work without JavaScript. Each line number links to that line.
+- Lines that look like errors are tinted red. **Copy** copies the lines shown;
+  **Download** saves the attempt's whole output as `<repository>-pr-<number>-build.log`.
 - Notices explain gaps instead of hiding them: **Logs truncated** (an attempt keeps at
   most 5 MiB / 20,000 lines; later lines are counted, not stored), lines that could
   not be stored, and logs that **expired** (kept 14 days after an attempt finishes).
@@ -217,8 +252,10 @@ attempt; a new attempt replaces it.
 
 | Screen | What it shows |
 | --- | --- |
-| Builds | The current or latest request per PR across your repositories: latest and requested commit, waiting/queued/building/outcome, why it waits or failed, the eligibility time and a **Logs** link. Not an attempt history: a new request replaces the row. |
-| Environments | Each preview: status (Publishing, Running, Failed, Removing), the deployed commit (marked when earlier than the latest), **Open preview**, expiry, **Logs** and **Tear down**. |
+| Overview | A getting-started checklist until setup is done; live previews, building, waiting and failed counts; the five newest live previews (Open, Copy) and build requests; the pipeline with what each running worker provides (first, with the fix, when nothing can build); repository, open PR, installation and access counts. |
+| Builds | The current or latest request per PR across your repositories, most recent first: the PR title, the requested commit (and the latest one when they differ), waiting/queued/building/outcome, why it waits or failed, when it became eligible, started or finished and how long it took, and a **Logs** link. Not an attempt history: a new request replaces the row. |
+| Environments | Each preview, most recently published first: the PR title, status (Building, Publishing, Running, Failed, Removing), the deployed commit (marked when earlier than the latest), **Open preview** with **Copy**, when it was published and expires, **Logs** and, for published previews, **Tear down**. |
+| Repositories | One card per repository with its open pull requests, live previews, build mode and last sync. |
 | Developer tools | Queue diagnostic: submit a ping and watch the worker process it. A production server (`APP_ENV=production`) does not offer it and the page says so. |
 | Session | Your GitHub identity; reached from the account menu. |
 

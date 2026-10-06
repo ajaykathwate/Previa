@@ -292,6 +292,20 @@ func TestStorePagesAndOwnerScope(t *testing.T) {
 	if err != nil || len(from) != 3 || from[0].Text != "line 10" {
 		t.Fatalf("later page: %+v %v", from, err)
 	}
+	// The PR page quotes the end of the attempt that belongs to its request,
+	// and nothing from another generation or revision.
+	tail, err := f.store.Tail(t.Context(), f.environmentID, 1, 1, 3)
+	if err != nil || len(tail) != 3 || tail[0] != "line 27" || tail[2] != "line 29" {
+		t.Fatalf("tail: %q %v", tail, err)
+	}
+	for _, fence := range [][2]int64{{1, 2}, {2, 1}} {
+		if other, err := f.store.Tail(t.Context(), f.environmentID, fence[0], fence[1], 3); err != nil || other != nil {
+			t.Fatalf("tail for generation %d revision %d: %q %v", fence[0], fence[1], other, err)
+		}
+	}
+	if none, err := f.store.Tail(t.Context(), f.environmentID+1000, 1, 1, 3); err != nil || none != nil {
+		t.Fatalf("tail without a stream: %q %v", none, err)
+	}
 	if _, err := f.store.Target(t.Context(), f.other, f.repoID, 7); !errors.Is(err, buildlogs.ErrUnavailable) {
 		t.Fatalf("another user's PR: %v", err)
 	}

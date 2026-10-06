@@ -39,6 +39,10 @@ func (s *SyncService) RefreshMergeabilityTx(ctx context.Context, tx pgx.Tx, repo
 	if pr.State != "open" || pr.BuildStatus != "checking" {
 		return nil
 	}
+	// A new check starts: an earlier one that gave up no longer applies.
+	if err := dbgen.New(tx).ClearMergeabilityUnresolved(ctx, pr.ID); err != nil {
+		return fmt.Errorf("reset mergeability result: %w", err)
+	}
 	_, err = s.jobs.InsertTx(ctx, tx, MergeabilityArgs{RepoID: repoID, Number: number, Generation: pr.Generation, SHA: pr.HeadSha, Authorize: len(authorize) > 0 && authorize[0]}, &river.InsertOpts{ScheduledAt: time.Now().Add(2 * time.Second)})
 	return err
 }
@@ -157,7 +161,26 @@ func (w *MergeabilityWorker) Work(ctx context.Context, job *river.Job[Mergeabili
 	if errors.As(err, &rate) {
 		return river.JobSnooze(max(time.Second, rate.Delay))
 	}
+	if err != nil && job.Attempt >= job.MaxAttempts {
+		// The last attempt: record that GitHub never answered, so the dashboard
+		// stops showing "Checking" and offers Sync Pull Requests instead.
+		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if markErr := w.Service.MarkMergeabilityUnresolved(saveCtx, job.Args); markErr != nil {
+			return errors.Join(err, markErr)
+		}
+	}
 	return err
+}
+
+// MarkMergeabilityUnresolved records that the bounded check gave up on exactly
+// this observation; a newer commit or check is never marked.
+func (s *SyncService) MarkMergeabilityUnresolved(ctx context.Context, args MergeabilityArgs) error {
+	if _, err := dbgen.New(s.pool).MarkMergeabilityUnresolved(ctx, dbgen.MarkMergeabilityUnresolvedParams{
+		RepoID: args.RepoID, Number: args.Number, Generation: args.Generation, HeadSha: args.SHA}); err != nil {
+		return fmt.Errorf("record unresolved mergeability: %w", err)
+	}
+	return nil
 }
 
 // Ordinary pending errors consume the eight-attempt budget; rate limits snooze.

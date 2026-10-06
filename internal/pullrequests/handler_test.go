@@ -141,7 +141,7 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 	if w := request("GET", base+"?page=999&q=Improve&state=open", ""); w.Code != 303 || !strings.Contains(w.Header().Get("Location"), "pr_q=Improve") {
 		t.Fatal("legacy filter redirect", w.Code)
 	}
-	if w := request("GET", base+"/pull-requests/7", ""); w.Code != 200 || !strings.Contains(w.Body.String(), "Latest observed commit") {
+	if w := request("GET", base+"/pull-requests/7", ""); w.Code != 200 || !strings.Contains(w.Body.String(), "Latest commit") {
 		t.Fatal("dedicated detail page", w.Code)
 	}
 	for _, target := range []string{"repository-detail", "pull-request-results"} {
@@ -165,7 +165,7 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 	if w.Code != 200 || strings.Contains(w.Body.String(), "<!doctype") || strings.Contains(w.Body.String(), `role="switch"`) || !strings.Contains(w.Header().Get("HX-Push-Url"), "/pull-requests/7") {
 		t.Fatal("inline policy response", w.Code, w.Body.String())
 	}
-	if list := request("GET", workspace, ""); list.Code != 200 || !strings.Contains(list.Body.String(), `role="switch" aria-checked="true"`) || !strings.Contains(list.Body.String(), "Enable Automatic Builds") {
+	if list := request("GET", workspace, ""); list.Code != 200 || !strings.Contains(list.Body.String(), `role="switch" aria-checked="true"`) || !strings.Contains(list.Body.String(), ">Automatic builds<") {
 		t.Fatal("PR list policy controls", list.Code)
 	}
 	if detail := request("GET", base+"/pull-requests/7", ""); detail.Code != 200 || strings.Contains(detail.Body.String(), `id="build-policy"`) || strings.Contains(detail.Body.String(), "Sync Pull Requests") {
@@ -204,7 +204,7 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 	if w := stream("/repositories/999/events", false); w.Code != 404 {
 		t.Fatal("event stream for unowned repository", w.Code)
 	}
-	if w := request("GET", base+"/pull-requests/7", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Not requested") {
+	if w := request("GET", base+"/pull-requests/7", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "No build requested yet") {
 		t.Fatal("PR detail", w.Code)
 	}
 	if f.count(t, "SELECT count(*) FROM build_intents") != 0 {
@@ -233,7 +233,7 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 	if w := request("GET", workspace, ""); w.Code != 200 || !strings.Contains(w.Body.String(), "Repository unavailable") {
 		t.Fatal("unavailable page")
 	}
-	if w := request("GET", base+"/pull-requests/7", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Repository unavailable") {
+	if w := request("GET", base+"/pull-requests/7", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "GitHub access to this repository is unavailable") {
 		t.Fatal("unavailable detail", w.Code)
 	}
 	if w := request("POST", base+"/policy", "csrf_token="+token+"&mode=manual"); w.Code != 404 {

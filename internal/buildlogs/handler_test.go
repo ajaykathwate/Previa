@@ -185,6 +185,37 @@ func TestLogPageIsOwnerScopedAndRendersOutputAsText(t *testing.T) {
 	}
 }
 
+func TestLogDownloadSendsTheWholeAttemptToItsOwner(t *testing.T) {
+	logs := newFakeLogs(2500)
+	logs.add(`<script>x</script>`)
+	server, _ := testServer(t, logs)
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+testPRPath+"/download", nil)
+	req.Header.Set(ownerHeader, strconv.FormatInt(testOwner, 10))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	body, _ := io.ReadAll(res.Body)
+	lines := strings.Split(strings.TrimSuffix(string(body), "\n"), "\n")
+	if res.StatusCode != http.StatusOK || len(lines) != 2501 || lines[0] != "line 0" || lines[2500] != `<script>x</script>` {
+		t.Fatalf("download: %d, %d lines", res.StatusCode, len(lines))
+	}
+	if res.Header.Get("Content-Type") != "text/plain; charset=utf-8" || res.Header.Get("Content-Disposition") != `attachment; filename="app-pr-7-build.log"` || res.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("download headers: %v", res.Header)
+	}
+	if status, _ := get(t, server.URL+testPRPath+"/download", 99); status != http.StatusNotFound {
+		t.Fatalf("another user's download: status %d", status)
+	}
+	logs.stream = nil
+	if status, body := get(t, server.URL+testPRPath+"/download", testOwner); status != http.StatusNotFound || !strings.Contains(body, "No build output") {
+		t.Fatalf("download without a stream: status %d", status)
+	}
+	if _, page := get(t, server.URL+testPRPath, testOwner); strings.Contains(page, "/logs/download") {
+		t.Fatal("a page without output must not offer a download")
+	}
+}
+
 func TestLogPagePaginatesWithoutJavaScript(t *testing.T) {
 	logs := newFakeLogs(1200)
 	server, _ := testServer(t, logs)

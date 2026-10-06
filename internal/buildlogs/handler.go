@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -81,6 +82,7 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 		r.Use(requireUser)
 		r.Get("/repositories/{repoID}/pull-requests/{number}/logs", h.page)
 		r.Get("/repositories/{repoID}/pull-requests/{number}/logs/events", h.events)
+		r.Get("/repositories/{repoID}/pull-requests/{number}/logs/download", h.download)
 	})
 }
 
@@ -127,7 +129,7 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 	view := buildpages.LogPage{
 		RepoID: target.RepoID, Repository: target.Repository, Number: target.Number, Title: target.Title,
 		StatusLabel: st.Label, StatusTone: st.Tone, Summary: st.Summary, StreamSHA: st.SHA, Notices: st.Notices,
-		Empty: st.Empty, Epoch: st.Epoch,
+		Empty: st.Empty, Epoch: st.Epoch, HasOutput: hasStream && stream.Lines > 0,
 	}
 	if hasStream {
 		lines, tail, more, err := h.window(r, stream)
@@ -161,6 +163,60 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 }
 
 var errBadPage = errors.New("invalid log page")
+
+// download sends the current attempt's whole output as a text file, in
+// bounded reads. Lines were redacted before they were stored.
+func (h *Handler) download(w http.ResponseWriter, r *http.Request) {
+	user, repoID, number, ok := h.identity(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	target, err := h.logs.Target(r.Context(), user, repoID, number)
+	if err != nil {
+		h.unavailable(w, r, err)
+		return
+	}
+	stream, err := h.logs.Stream(r.Context(), target.EnvironmentID)
+	if errors.Is(err, ErrNoStream) {
+		http.Error(w, "No build output is stored for this pull request.", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		h.unavailable(w, r, err)
+		return
+	}
+	_, name, _ := strings.Cut(target.Repository, "/")
+	file := fmt.Sprintf("%s-pr-%d-build.log", downloadName.ReplaceAllString(name, "-"), target.Number)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+file+`"`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	for next := int64(0); next < stream.Lines; {
+		lines, err := h.logs.LinesFrom(r.Context(), stream.EnvironmentID, stream.Epoch, next, downloadBatch)
+		if err != nil {
+			h.logger.WarnContext(r.Context(), "build log download ended early", "error", err)
+			return
+		}
+		if len(lines) == 0 {
+			return
+		}
+		var b strings.Builder
+		for _, l := range lines {
+			b.WriteString(l.Text)
+			b.WriteByte('\n')
+		}
+		if _, err := w.Write([]byte(b.String())); err != nil {
+			return
+		}
+		next = lines[len(lines)-1].Sequence + 1
+	}
+}
+
+// downloadBatch lines are read per query; downloadName keeps a file name safe.
+const downloadBatch = 1000
+
+var downloadName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // window selects the lines for one page: the newest by default, or the page
 // before/after a sequence number.

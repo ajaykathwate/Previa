@@ -23,6 +23,9 @@ type RepositoryRow struct {
 	ID, InstallationID        int64
 	FullName, Account, Status string
 	Accessible                bool
+	BuildMode                 string
+	OpenPRs, LivePreviews     int64
+	LastSynced                time.Time // zero before the first discovery
 }
 type RepositoryPage struct {
 	Rows               []RepositoryRow
@@ -86,7 +89,8 @@ func (r *Repository) Page(ctx context.Context, userID int64, filter RepositoryFi
 	}
 	page = RepositoryPage{Total: total, Page: current, Pages: pages, Filter: filter}
 	for _, row := range rows {
-		page.Rows = append(page.Rows, RepositoryRow{ID: row.ID, InstallationID: row.GithubInstallationID, FullName: row.FullName, Account: row.AccountLogin, Status: row.Status, Accessible: row.Accessible && row.Status == "active"})
+		page.Rows = append(page.Rows, RepositoryRow{ID: row.ID, InstallationID: row.GithubInstallationID, FullName: row.FullName, Account: row.AccountLogin, Status: row.Status, Accessible: row.Accessible && row.Status == "active",
+			BuildMode: row.BuildMode, OpenPRs: row.OpenPrs, LivePreviews: row.LivePreviews, LastSynced: row.LastSuccessAt.Time})
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return RepositoryPage{}, fmt.Errorf("commit repository page snapshot: %w", err)

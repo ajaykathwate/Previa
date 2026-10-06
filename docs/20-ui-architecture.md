@@ -12,9 +12,11 @@ user's point of view is in [03-user-guide.md](03-user-guide.md).
 - **Works without JavaScript.** Links, GET forms, POST forms and native `<dialog>`
   confirmations all function with scripting off.
 - **Honest UI.** Only real saved state is shown: no invented metrics, activity,
-  health or URLs. A control that cannot work now (no worker that can build, no
-  GitHub access, conflicts) is absent and a sentence says why; unbuilt features are
-  labelled ("Coming next" on the home page).
+  health or URLs. A control that would apply but cannot work now (no worker that
+  can build, no GitHub access, conflicts, builds paused) is shown **disabled**, with
+  a notice beside it that says why and what fixes it, so owners can find the action
+  and learn how to enable it. A control that does not apply (building a closed PR)
+  is absent. Unbuilt features are labelled ("Coming next" on the home page).
 - **Strict Content-Security-Policy.** Every page is served with a per-request nonce
   policy: the theme boot script carries the nonce (and passes it to the style it
   creates), `ui.js` gives it to the speculation rules it injects, and HTMX is
@@ -113,10 +115,14 @@ offscreen), `initTheme`, `initNavigation` (drawer dismissal, platform shortcut l
 `initPrefetch`, `initConfirmationDialogs` (focus trap, backdrop close, focus return,
 `?confirm=logout` deep link), `initAccountMenus`, `initQueueForms`,
 `initCommandPalette`, `initRepositorySearch` (request/feedback/focus handling),
-`initLiveUpdates` (repository EventSource lifecycle) and `initBuildLogs` (the log
+`initLiveUpdates` (repository EventSource lifecycle), `initBuildLogs` (the log
 page's EventSource: appends lines as text nodes, clears on `reset`, updates the
 status card from `state`, follows output only while the reader is at the bottom,
-pauses in hidden tabs). A `js-enabled` class on `<html>` scopes
+pauses in hidden tabs, marks error-looking lines), `initRelativeTimes` (rewrites
+`time[data-relative]` as "3 minutes ago" every 30 s and after swaps, keeping the
+exact UTC time as the title), `initCopyButtons` (`data-copy` text or a log list's
+lines to the clipboard, confirmed for two seconds), `initSecretEditor` and
+`initBulkDelete` (the Secrets tab, below). A `js-enabled` class on `<html>` scopes
 CSS that only makes sense with scripting. No third-party JavaScript besides HTMX.
 
 ## Confirmations
@@ -125,17 +131,52 @@ Decisions open a shared native `<dialog>` (`components.ConfirmationDialog`) over
 current page: labelled title and description, Cancel focused first, Escape/close/
 backdrop dismiss without a request, focus returns to the trigger. The caller
 supplies the CSRF-protected form. Logout, enabling Automatic builds, deleting a
-secret and tearing a preview down (on a PR page and per row on Environments) use it.
+secret or the selected secrets, and tearing a preview down or cancelling an
+unfinished build (on a PR page; per row on Environments) use it.
 Native `commandfor`/`command` attributes open dialogs without JavaScript in
 supporting browsers.
 
+## Pull request page
+
+One status panel answers "what is happening with this preview?": a headline with a
+tone (Preview is live, Building, Build failed, Blocked by merge conflicts, No
+preview yet, ...), the preview address with **Copy**, and every action in one row
+(**Open preview** first when one is live, then Build/Retry/Rebuild, Tear down or
+**Cancel build** when nothing is deployed, and **Build logs**). When building is
+blocked, the build action is shown disabled (`aria-describedby` points at the
+notice) and the notice names the reason and the fix, for example a worker without
+`PREVIEW_BASE_DOMAIN`. A failed build quotes the last twelve lines of its own output
+(fenced by generation and revision, so never another attempt's), with error lines
+highlighted. Three lifecycle cards follow: the latest commit (linked to GitHub) and
+its mergeability, the build request (who or what asked, when it started and
+finished, how long it took, whether it is for an earlier commit), and the deployed
+preview (published and expiry times). Times are relative with the exact UTC time as
+their title. The back link returns to the repository's PR list with its filters.
+
+## Overview
+
+A getting-started checklist appears only until every step is done. When no worker
+can build, the pipeline panel moves to the top and says exactly what fixes it.
+Delivery counts come first, then the five newest live previews (Open and Copy) and
+build requests, then the pipeline and the source counts (repositories, open pull
+requests, installations, unavailable access).
+
 ## Secrets tab
 
-Write-only by design: the page lists names and update times, a form adds or
-replaces a value, and each Delete opens its own confirmation dialog. Forms are
-ordinary CSRF-protected POSTs with post/redirect/get, so they work without
-JavaScript. A rejected submission re-renders the form with the error but never the
-submitted value; the value textarea is never prefilled. See
+Write-only by design. The **Stored secrets** table lists names and update times,
+each with Replace and Delete; checkboxes and **Delete selected** remove several
+after one confirmation (the checkboxes belong to the dialog's form, so this works
+without JavaScript). The editor below adds or replaces several values at once, one
+name and value per line like a key-value table, plus a **Paste or import a .env
+file** section. With JavaScript, **Add another line** and × manage lines, pasting
+several `NAME=value` lines into a name splits them into lines, a chosen .env file is
+read in the browser (never uploaded on its own), **Move into lines above** turns
+pasted text into lines to review, names that exist say "Replaces the stored value",
+and duplicate, reserved or incomplete lines are flagged before submit. Without
+JavaScript the page renders spare lines and the server parses pasted text with the
+same rules (`secrets.ParseDotenv`). The server saves everything in one transaction
+(all or nothing; the limit counts new names only). A rejected save re-renders the
+names with the reason but never a value or the pasted text. See
 [07](07-repository-secrets.md).
 
 ## Build log page
@@ -148,6 +189,9 @@ tone. Without JavaScript it is a complete page: the newest 500 lines plus
 **Earlier lines**, **Later lines** and **Refresh**; the indicator says **Live
 updates off** and the follow control stays hidden. Notices are cloned from a
 server-rendered `<template>` so live updates look identical to the first render.
+Error-looking lines (`error`, `failed`, `fatal`, `panic` as whole words) are tinted;
+the text is unchanged. **Copy** puts the lines shown on the clipboard and
+**Download** (`…/logs/download`) sends the attempt's whole output as a text file.
 Styles live in `web/styles/logs.css`. See [08](08-build-logs.md).
 
 ## Preview unavailable page

@@ -19,7 +19,7 @@ Last updated: 2026-10-05
 ## Run and configuration
 - Go 1.26.8+ (go.mod minimum; earlier releases have reachable stdlib vulns).
 - make build/test/lint/vuln; make observability-check (promtool via Docker).
-- PostgreSQL 17 via Compose; make migrate-up applies Goose 18 and River 007. The
+- PostgreSQL 17 via Compose; make migrate-up applies Goose 19 and River 007. The
   dev DB was last seen at 16: run make migrate-up before make run-*.
   Processes refuse an older schema ("run migrations first").
 - Settings added in Prompt 11: APP_ENV (development|production), LOG_LEVEL,
@@ -67,12 +67,20 @@ Last updated: 2026-10-05
 - Router: router-config one-shot writes previa-dashboard.yml into the route dir
   (a config mount inside the read-only bind failed); dashboard cert TLS-ALPN-01.
 
-## Verification (2026-10-05)
-- lint 0, vuln 0 reachable, full suite 31 packages, -race on every package pass;
-  test-e2e (with GitHub outage) pass; browser 30/30 under CSP; observability-check
-  pass; prod-smoke 43/43 incl. upgrade/rollback and a migration-16 dev dump
-  restored and upgraded (dump deleted afterwards); actionlint, goreleaser check,
-  shellcheck pass. A final re-run of real suites/smoke was in progress at commit.
+## UX pass (2026-10-05, docs/20 Pull request page, Overview, Secrets tab)
+- Rule change: a blocked build action is shown disabled with the reason and fix
+  (Actions.Blocked/Hint); missing PREVIEW_BASE_DOMAIN is named explicitly.
+- PR page status panel (headline, address + Copy, actions, failed-log tail via
+  buildlogs.Store.Tail); lists: titles, times, Preview column; repo cards: facts;
+  Overview: checklist until done, previews/builds lists; secrets: multi-line
+  editor + .env (ParseDotenv, PutMany/DeleteMany, all or nothing); logs: Copy,
+  Download (…/logs/download), error tint; relative times (time[data-relative]).
+- Sync never spins forever: no discovery worker -> "Waiting for a worker" + notice;
+  older than SyncStaleAfter (5m) -> "Sync stalled", Request starts a new revision.
+  Mergeability gives up after 8 attempts -> pull_requests.mergeability_unresolved_at
+  (migration 0019) -> "Unknown"; cleared by a new observation or check.
+- Verified: lint 0, all packages with TEST_DATABASE_URL, -race on changed
+  packages, browser suite, test-e2e. prod-smoke 43/43 earlier (not re-run).
 
 ## Pending (docs/25)
 - A real host (setup.sh, stack, backups to object storage, restore, upgrade);

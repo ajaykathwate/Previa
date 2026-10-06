@@ -371,33 +371,48 @@ func (f *fixtureSecrets) List(ctx context.Context, user, repoID int64) ([]secret
 	return out, nil
 }
 
-func (f *fixtureSecrets) Put(ctx context.Context, user, repoID int64, name string, sealed []byte, _ int32) (bool, error) {
+func (f *fixtureSecrets) PutMany(ctx context.Context, user, repoID int64, items []secrets.SealedSecret) (int, error) {
 	repo, err := f.Repository(ctx, user, repoID)
 	if err != nil || !repo.Available {
-		return false, secrets.ErrUnavailable
-	}
-	if len(sealed) == 0 {
-		return false, errors.New("fixture expected ciphertext")
+		return 0, secrets.ErrUnavailable
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.names[repoID] == nil {
 		f.names[repoID] = map[string]time.Time{}
 	}
-	_, exists := f.names[repoID][name]
-	f.names[repoID][name] = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
-	return !exists, nil
+	created := 0
+	for _, item := range items {
+		if len(item.Value) == 0 {
+			return 0, errors.New("fixture expected ciphertext")
+		}
+		if _, exists := f.names[repoID][item.Name]; !exists {
+			created++
+		}
+	}
+	if len(f.names[repoID])+created > secrets.MaxSecretsPerRepository {
+		return 0, secrets.ErrLimit
+	}
+	for _, item := range items {
+		f.names[repoID][item.Name] = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	}
+	return created, nil
 }
 
-func (f *fixtureSecrets) Delete(ctx context.Context, user, repoID int64, name string) (bool, error) {
+func (f *fixtureSecrets) DeleteMany(ctx context.Context, user, repoID int64, names []string) (int, error) {
 	if _, err := f.Repository(ctx, user, repoID); err != nil {
-		return false, err
+		return 0, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	_, exists := f.names[repoID][name]
-	delete(f.names[repoID], name)
-	return exists, nil
+	deleted := 0
+	for _, name := range names {
+		if _, exists := f.names[repoID][name]; exists {
+			deleted++
+			delete(f.names[repoID], name)
+		}
+	}
+	return deleted, nil
 }
 
 type fixturePings struct{}
@@ -483,26 +498,37 @@ func (f *fixtureLogs) LinesBefore(_ context.Context, _, epoch, before int64, lim
 // build or teardown (kept in the session) moves it on.
 func fixturePR(r *http.Request, sessions *scs.SessionManager, number int32, available bool) *prpages.PR {
 	pr := &prpages.PR{Number: number, Available: available, Title: "A careful change to preview " + strconv.Itoa(int(number)), SHA: "latest-commit",
-		Build: "Not requested", State: "open", Environment: "Not deployed", URL: "https://github.com/fixture-owner/repository/pull/1"}
+		Build: "Not requested", State: "open", Environment: "Not deployed", URL: "https://github.com/fixture-owner/repository/pull/1",
+		Headline: prpages.Headline{Tone: "tone-neutral", Title: "No preview yet", Detail: "Build the latest commit to get a preview address for this pull request."}}
 	if !available {
-		pr.Actions.Unavailable = "GitHub access to this repository is unavailable."
+		pr.Actions = prpages.Actions{Unavailable: "GitHub access to this repository is unavailable.",
+			Hint: "Restore access with Manage connections on the Repositories page.", Blocked: "Build latest commit"}
+		pr.Headline = prpages.Headline{Tone: "tone-neutral", Title: "GitHub access to this repository is unavailable"}
 		return pr
 	}
-	if number == 3 {
+	switch number {
+	case 3:
 		pr.Build, pr.RequestedSHA, pr.Environment, pr.DeployedSHA = "succeeded", "older-commit", "running", "older-commit"
 		pr.PreviewURL, pr.ExpiresAt, pr.OlderPreview = "https://pr-3-1-fixture.preview.example.com", "2026-10-07T10:00:00Z", true
 		pr.Actions = prpages.Actions{Build: true, Teardown: true, ExpectedRevision: 1, RequestKey: "fixture-request-key-0003"}
-	} else {
+		pr.Headline = prpages.Headline{Tone: "tone-warn", Title: "Preview live on an earlier commit"}
+	case 9:
+		// A worker runs but has no preview domain: the action is shown disabled.
+		pr.Actions = prpages.Actions{Unavailable: "The running worker cannot build previews: it has no preview domain.",
+			Hint: "Set PREVIEW_BASE_DOMAIN on the worker, then restart it.", Blocked: "Build latest commit"}
+	default:
 		pr.Actions = prpages.Actions{Build: true, RequestKey: "fixture-request-key-" + strconv.Itoa(int(number))}
 	}
 	switch sessions.GetString(r.Context(), "fixture-pr-"+strconv.Itoa(int(number))) {
 	case "queued":
-		pr.Build, pr.RequestedSHA = "queued", "latest-commit"
-		pr.Actions = prpages.Actions{Teardown: true}
+		pr.Build, pr.RequestedSHA, pr.RequestCurrent = "queued", "latest-commit", true
+		pr.Actions = prpages.Actions{Teardown: true, CancelOnly: pr.DeployedSHA == ""}
+		pr.Headline = prpages.Headline{Tone: "tone-info", Title: "Queued to build latest-commi"}
 	case "removing":
 		pr.Environment, pr.PreviewURL, pr.ExpiresAt, pr.OlderPreview = "tearing_down", "", "", false
 		pr.RemovedNote = "The owner tore this preview down. Build again to bring it back at the same address."
 		pr.Actions = prpages.Actions{}
+		pr.Headline = prpages.Headline{Tone: "tone-warn", Title: "Removing the preview"}
 	}
 	return pr
 }

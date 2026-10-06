@@ -25,7 +25,7 @@ triggers) are in [database-schema.md](database-schema.md).
 
 ```mermaid
 ---
-title: "Previa database schema (Goose 0001-0018, River 001-007)"
+title: "Previa database schema (Goose 0001-0019, River 001-007)"
 ---
 erDiagram
 
@@ -122,6 +122,7 @@ erDiagram
     text build_status "open, checking or conflicts (the mergeability gate)"
     bigint teardown_requested_generation "A local teardown (owner, expiry, revocation) at this generation"
     text teardown_reason "requested, expired or revoked"
+    timestamptz mergeability_unresolved_at "The bounded mergeability check gave up (migration 0019), cleared by a new observation or check"
   }
 
   %% ===== Builds =====
@@ -308,7 +309,7 @@ erDiagram
   }
 
   %% ===== Library =====
-  %% goose_db_version: Goose's migration history. The newest row per version_id decides whether that migration is applied; processes require version 18.
+  %% goose_db_version: Goose's migration history. The newest row per version_id decides whether that migration is applied; processes require version 19.
   goose_db_version {
     integer id PK
     bigint version_id

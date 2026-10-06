@@ -195,6 +195,7 @@ type PullRequest struct {
 	BuildStatus                 string
 	TeardownRequestedGeneration int64
 	TeardownReason              pgtype.Text
+	MergeabilityUnresolvedAt    pgtype.Timestamptz
 }
 
 type PullRequestReport struct {
