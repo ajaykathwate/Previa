@@ -142,18 +142,22 @@ Requests** and Manual builds.
 
 What you see on **Overview**, top to bottom:
 
-- **Your next steps**, a getting-started checklist, until every step is done.
-- When no worker can build, the pipeline first, with a highlighted note that says
-  exactly what to fix (for example "set `PREVIEW_BASE_DOMAIN` on the worker").
-- Delivery counts: **Live previews**, **Building**, **Waiting or queued**,
+- The worker status (**Worker connected**, **Builds paused**, …) and when the
+  numbers were loaded, with a refresh button.
+- When no worker can build, a notice first that says exactly what to fix (for
+  example "set `PREVIEW_BASE_DOMAIN` on the worker").
+- **Your next steps**, with progress, until every step is done.
+- **Delivery pipeline**: **Open pull requests** → **Waiting or queued** →
+  **Building** → **Live previews**, each with its share of open pull requests, plus
   **Failed requests**.
-- **Previews**: the five newest live previews with **Open** and a copy button, and
-  when each expires. **Build requests**: the five newest requests with their status
-  and time.
+- **Latest activity**: **Build requests** and **Live previews** tabs. Click a row to
+  see its commit, how it was requested, when it started and finished, why it waits
+  or failed, and links to the pull request and its build logs; a preview also shows
+  **Open**, a copy button and how much of its lifetime is left.
+- **Preview coverage**: how many open pull requests have a live preview.
 - The pipeline stages **Discover, Gate, Build, Run, Route, Report, Teardown**, each
   **Connected** or **Not running** depending on the worker.
-- Source counts: **Repositories**, **Open pull requests**, **Linked
-  installations**, **Access unavailable**.
+- **Linked repositories**: available and unavailable.
 
 ## 2. Connect your repositories
 

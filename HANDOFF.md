@@ -17,8 +17,7 @@ Last updated: 2026-10-05
   theme, modal confirmations, server-rendered navigation and GET/POST fallbacks.
 
 ## Run and configuration
-- Go 1.26.8+ (go.mod minimum; earlier releases have reachable stdlib vulns).
-- make build/test/lint/vuln; make observability-check (promtool via Docker).
+- Go 1.26.8+; make build/test/lint/vuln; make observability-check (promtool via Docker).
 - PostgreSQL 17 via Compose; make migrate-up applies Goose 19 and River 007. The
   dev DB was last seen at 16: run make migrate-up before make run-*.
   Processes refuse an older schema ("run migrations first").
@@ -84,12 +83,13 @@ Last updated: 2026-10-05
   enforced by config/example_test.go). technical-docs/config-setup.md explains
   every setting (local, command line, production) with steps to get each value.
   Router dir errors name the fix. Brand PNGs + favicon in web/static/brand.
-- Conversations (docs/20): home How it works (Kai asks, Previa answers; initStory)
-  and FAQ (22 Q&A as Go data; initFAQ) on home and /faq (signed out -> /#faq). Static
-  copy: update answers with the behaviour they describe. "What's live" list corrected.
+- Conversations (docs/20): home How it works and FAQ (initStory, initFAQ; /faq, signed
+  out -> /#faq). Static copy: update answers with the behaviour they describe.
+- Overview (docs/20): pipeline shares, coverage ring, tabs with expandable rows,
+  preview lifetimes (initOverview); same Summary, presentation only.
 - technical-docs/inside-previa.md: the end-to-end book (35 Mermaid diagrams render).
-- Verified: UX pass with TEST_DATABASE_URL and test-e2e; conversations: lint 0,
-  go test, browser 34/34 (no DB code changed). prod-smoke 43/43 earlier (not re-run).
+- Verified: UX pass with TEST_DATABASE_URL + test-e2e; since then lint 0, go test,
+  browser 35/35 (no DB code changed). prod-smoke 43/43 earlier (not re-run).
 
 ## Pending (docs/25)
 - A real host (setup.sh, stack, backups to object storage, restore, upgrade);

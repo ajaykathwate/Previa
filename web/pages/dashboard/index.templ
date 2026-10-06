@@ -1,235 +1,621 @@
 package dashboard
 
-import "strconv"
-import "github.com/ajaykathwatee/previa/web/components"
-import "github.com/ajaykathwatee/previa/web/layouts"
-import prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
+import (
+	"strconv"
 
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
+)
+
+// Index is the Overview: where the owner's open pull requests are in the
+// delivery pipeline, the newest builds and previews, and what the running
+// workers provide. Every number comes from Summary; proportions are drawn as
+// SVG attributes (no inline styles under the CSP). ui.js (initOverview) adds
+// the activity tabs, preview lifetimes and the "updated" time; without
+// JavaScript both activity lists show and rows still expand.
 templ Index(username string, csrfToken string, summary Summary) {
 	@layouts.App("Overview", username, csrfToken, components.NavOverview) {
 		{{ note, attention := summary.WorkerNote() }}
-		<header class="page-header dashboard-heading">
-			<div class="page-header-text">
-				<span class="eyebrow">Overview</span>
-				<h1>Welcome back, <span class="accent-text">{ username }</span></h1>
-				<p>Your previews at a glance. Every number here comes from your own linked installations.</p>
+		<div class="ov" data-overview>
+			<header class="page-header dashboard-heading ov-hero">
+				<div class="page-header-text">
+					<span class="eyebrow">Overview</span>
+					<h1>Welcome back, <span class="accent-text">{ username }</span></h1>
+					<p>Your previews at a glance. Every number here comes from your own linked installations.</p>
+				</div>
+				<div class="ov-hero-side">
+					@workerStatus(summary.Workers)
+					<span class="ov-updated" data-overview-updated hidden></span>
+					<a class="icon-button" href="/dashboard" aria-label="Refresh the overview" title="Refresh">
+						@components.SyncIcon()
+					</a>
+				</div>
+			</header>
+			if attention {
+				@blocked(note)
+			}
+			if !summary.SetupDone() {
+				@setup(summary)
+			}
+			<div class="ov-grid">
+				<div class="ov-main">
+					@flow(summary)
+					@activity(summary)
+				</div>
+				<div class="ov-side">
+					@coverage(summary)
+					@platform(summary, note, attention)
+					@sources(summary)
+				</div>
 			</div>
-		</header>
-		if !summary.SetupDone() {
-			@setup(summary)
-		}
-		if attention {
-			@pipeline(summary, note, attention)
-		}
-		<section class="stat-grid overview-stats" aria-label="Delivery counts">
-			@statTile("/environments", "Live previews", summary.Live, "View environments", components.EnvironmentIcon())
-			@statTile("/builds", "Building", summary.Building, "View builds", components.BuildIcon())
-			@statTile("/builds", "Waiting or queued", summary.Waiting, "View builds", components.ClockIcon())
-			@statTile("/builds", "Failed requests", summary.Failed, "Review failures", components.AlertIcon())
-		</section>
-		<div class="overview-lists">
-			<section class="panel overview-list" aria-labelledby="previews-title">
-				<header class="panel-header">
-					<div><span class="eyebrow">Live now</span><h2 id="previews-title">Previews</h2></div>
-					<a class="text-link" href="/environments">
-						All environments
-						@components.Arrow()
-					</a>
-				</header>
-				if len(summary.Previews) == 0 {
-					<p class="overview-empty">No preview is live. Open a pull request and choose <strong>Build latest commit</strong>.</p>
-				} else {
-					<ul class="overview-rows">
-						for _, row := range summary.Previews {
-							<li>
-								@rowTitle(row)
-								<div class="overview-row-side">
-									if row.PreviewURL != "" {
-										<a class="text-link" href={ templ.SafeURL(row.PreviewURL) } target="_blank" rel="noopener noreferrer" title={ row.PreviewURL }>
-											Open
-											@components.ArrowUpRight()
-										</a>
-										@components.CopyButton(row.PreviewURL, "Copy the preview address of "+row.Name+" #"+strconv.Itoa(int(row.Number)))
-									}
-									if row.ExpiresAt != "" {
-										<small>
-											Expires { " " }
-											@components.Time(row.ExpiresAt, prpages.TimeLabel(row.ExpiresAt))
-										</small>
-									}
-								</div>
-							</li>
-						}
-					</ul>
-				}
-			</section>
-			<section class="panel overview-list" aria-labelledby="builds-title">
-				<header class="panel-header">
-					<div><span class="eyebrow">Latest activity</span><h2 id="builds-title">Build requests</h2></div>
-					<a class="text-link" href="/builds">
-						All builds
-						@components.Arrow()
-					</a>
-				</header>
-				if len(summary.Builds) == 0 {
-					<p class="overview-empty">No build has been requested yet.</p>
-				} else {
-					<ul class="overview-rows">
-						for _, row := range summary.Builds {
-							<li>
-								@rowTitle(row)
-								<div class="overview-row-side">
-									if row.Waiting != "" {
-										<span class="badge tone-info"><span class="badge-dot" aria-hidden="true"></span>{ row.Waiting }</span>
-									} else {
-										<span class={ "badge", prpages.Tone(row.State) }><span class="badge-dot" aria-hidden="true"></span>{ prpages.Label(row.State) }</span>
-									}
-									if row.CompletedAt != "" {
-										<small>
-											@components.Time(row.CompletedAt, prpages.TimeLabel(row.CompletedAt))
-										</small>
-									} else if row.StartedAt != "" {
-										<small>
-											Started { " " }
-											@components.Time(row.StartedAt, prpages.TimeLabel(row.StartedAt))
-										</small>
-									}
-								</div>
-							</li>
-						}
-					</ul>
-				}
-			</section>
 		</div>
-		if !attention {
-			@pipeline(summary, note, attention)
-		}
-		<section class="stat-grid overview-stats" aria-label="Source counts">
-			@statTile("/repositories?access=all", "Repositories", summary.Repositories, "Browse repositories", components.RepositoryIcon())
-			@statTile("/repositories?access=available", "Open pull requests", summary.OpenPRs, "Pick a repository", components.PullRequestIcon())
-			@statTile("/repositories", "Linked installations", summary.Installations, "Manage connections", components.ServerIcon())
-			@statTile("/repositories?access=unavailable", "Access unavailable", summary.Unavailable(), "Review removed access", components.AlertIcon())
-		</section>
 	}
 }
 
-// rowTitle names a pull request in an Overview list and links to it.
-templ rowTitle(row prpages.ActivityRow) {
-	<div class="overview-row-main">
-		<a href={ templ.SafeURL(prpages.PRURL(row.RepoID, row.Number)) }>
-			if row.Title != "" {
-				#{ strconv.Itoa(int(row.Number)) } · { row.Title }
-			} else {
-				#{ strconv.Itoa(int(row.Number)) }
-			}
+// percent is part of whole in whole percent, 0 when there is no whole.
+func percent(part, whole int64) int {
+	if whole <= 0 || part <= 0 {
+		return 0
+	}
+	return int(min(100, part*100/whole))
+}
+
+func plural(n int64, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+func count(n int64) string { return strconv.FormatInt(n, 10) }
+
+// prTitle names a pull request in a row: "#42 · Title".
+func prTitle(row prpages.ActivityRow) string {
+	title := "#" + strconv.Itoa(int(row.Number))
+	if row.Title != "" {
+		title += " · " + row.Title
+	}
+	return title
+}
+
+templ workerStatus(w Workers) {
+	switch {
+		case w.Execution:
+			<span class="ov-status tone-ok"><span class="pulse-dot" aria-hidden="true"></span>Worker connected</span>
+		case w.Paused:
+			<span class="ov-status tone-warn"><span class="badge-dot" aria-hidden="true"></span>Builds paused</span>
+		case w.Discovery || w.Reporting || w.Housekeeping:
+			<span class="ov-status tone-warn"><span class="badge-dot" aria-hidden="true"></span>Worker cannot build</span>
+		default:
+			<span class="ov-status tone-neutral"><span class="badge-dot" aria-hidden="true"></span>No worker running</span>
+	}
+}
+
+// blocked leads the page when no running worker can build previews.
+templ blocked(note string) {
+	<section class="ov-alert" aria-labelledby="ov-alert-title">
+		<span class="ov-alert-icon" aria-hidden="true">
+			@components.AlertIcon()
+		</span>
+		<div class="ov-alert-text">
+			<h2 id="ov-alert-title">Previews can't be built right now</h2>
+			<p>{ note }</p>
+		</div>
+		<a class="text-link ov-alert-link" href="/faq#faq-build-disabled">
+			Why builds are blocked
+			@components.Arrow()
 		</a>
-		<small>{ row.Name }</small>
-	</div>
+	</section>
 }
 
 templ setup(summary Summary) {
-	<section class="panel checklist-panel" aria-labelledby="setup-title">
-		<header class="panel-header"><div><span class="eyebrow">Getting set up</span><h2 id="setup-title">Your next steps</h2></div></header>
-		<ol class="checklist">
-			for _, step := range summary.Setup() {
-				@checkItem(step.Done, step.Title, step.Detail, step.Href, step.Action)
+	{{ steps := summary.Setup() }}
+	{{ done, next := 0, -1 }}
+	for i, step := range steps {
+		if step.Done {
+			{{ done++ }}
+		} else if next < 0 {
+			{{ next = i }}
+		}
+	}
+	<section class="panel ov-setup" aria-labelledby="setup-title">
+		<header class="ov-setup-head">
+			<div><span class="eyebrow">Getting set up</span><h2 id="setup-title">Your next steps</h2></div>
+			<div class="ov-setup-progress">
+				<span><strong>{ strconv.Itoa(done) } of { strconv.Itoa(len(steps)) }</strong> done</span>
+				@bar(done*100/len(steps), "tone-ok")
+			</div>
+		</header>
+		<ol class="ov-steps">
+			for i, step := range steps {
+				<li class={ "ov-step", templ.KV("is-done", step.Done), templ.KV("is-next", i == next) }>
+					<span class="ov-step-mark" aria-hidden="true">
+						if step.Done {
+							@components.CheckIcon()
+						} else {
+							{ strconv.Itoa(i + 1) }
+						}
+					</span>
+					<strong>
+						{ step.Title }
+						if step.Done {
+							<span class="sr-only">(complete)</span>
+						}
+					</strong>
+					<span class="ov-step-detail">{ step.Detail }</span>
+					if !step.Done && step.Href != "" {
+						<a class="ov-step-action" href={ templ.SafeURL(step.Href) }>
+							{ step.Action }
+							@components.Arrow()
+						</a>
+					}
+				</li>
 			}
 		</ol>
 	</section>
 }
 
-templ pipeline(summary Summary, note string, attention bool) {
-	<section
-		if attention {
-			class="panel pipeline-panel needs-attention"
-		} else {
-			class="panel pipeline-panel"
+// bar draws a share as an SVG rectangle, so its width is an attribute.
+templ bar(pct int, tone string) {
+	<svg class={ "ov-bar", tone } viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+		<rect class="ov-bar-track" width="100" height="6"></rect>
+		if pct > 0 {
+			<rect class="ov-bar-fill" width={ strconv.Itoa(pct) } height="6"></rect>
 		}
-		aria-labelledby="pipeline-title"
-	>
+	</svg>
+}
+
+// flow places the owner's open pull requests along the delivery pipeline.
+templ flow(summary Summary) {
+	<section class="panel ov-flow" aria-labelledby="flow-title">
 		<header class="panel-header">
-			<div><span class="eyebrow">Preview pipeline</span><h2 id="pipeline-title">From pull request to preview</h2></div>
-			<p class="legend"><span class="legend-item is-live">Connected</span><span class="legend-item is-soon">No worker running</span></p>
+			<div><span class="eyebrow">Delivery pipeline</span><h2 id="flow-title">Where your open pull requests are</h2></div>
+			<a class="text-link" href="/builds">
+				All builds
+				@components.Arrow()
+			</a>
 		</header>
-		<ol class="pipeline">
-			for i, stage := range summary.Stages() {
-				<li
-					if stage.Live {
-						class="pipeline-stage is-live"
-					} else {
-						class="pipeline-stage is-soon"
+		<ol class="ov-flow-track">
+			@flowNode("/repositories?access=available", "Open pull requests", "Tracked from GitHub", summary.OpenPRs, summary.OpenPRs, "tone-neutral", false, false, components.PullRequestIcon())
+			@flowNode("/builds", "Waiting or queued", "Quiet period, queue or capacity", summary.Waiting, summary.OpenPRs, "tone-info", true, summary.Waiting > 0, components.ClockIcon())
+			@flowNode("/builds", "Building", "Image and preview starting", summary.Building, summary.OpenPRs, "tone-info", true, summary.Building > 0, components.BuildIcon())
+			@flowNode("/environments", "Live previews", "Serving at their address", summary.Live, summary.OpenPRs, "tone-ok", true, false, components.EnvironmentIcon())
+		</ol>
+		<a class={ "ov-flow-failed", templ.KV("tone-danger", summary.Failed > 0), templ.KV("tone-ok", summary.Failed == 0 && summary.OpenPRs > 0), templ.KV("tone-neutral", summary.Failed == 0 && summary.OpenPRs == 0) } href="/builds">
+			<span class="ov-flow-failed-icon" aria-hidden="true">
+				if summary.Failed > 0 {
+					@components.AlertIcon()
+				} else {
+					@components.CheckIcon()
+				}
+			</span>
+			if summary.Failed > 0 {
+				<span><strong>{ count(summary.Failed) } { plural(summary.Failed, "failed request", "failed requests") }</strong> · the latest attempt failed; Builds shows why.</span>
+			} else {
+				<span><strong>No failed requests</strong> · nothing to review right now.</span>
+			}
+			@components.Arrow()
+		</a>
+		<p class="panel-note">
+			@components.InfoIcon()
+			A pull request can count twice: its live preview keeps serving while a newer commit waits or builds.
+		</p>
+	</section>
+}
+
+templ flowNode(href, label, hint string, n, whole int64, tone string, share, active bool, icon templ.Component) {
+	<li class={ "ov-flow-node", tone, templ.KV("is-active", active), templ.KV("is-empty", n == 0) }>
+		<a class="ov-flow-link" href={ templ.SafeURL(href) }>
+			<span class="ov-flow-top">
+				<span class="ov-flow-icon" aria-hidden="true">
+					@icon
+				</span>
+				if active {
+					<span class="ov-flow-now"><span class="pulse-dot" aria-hidden="true"></span>Now</span>
+				}
+			</span>
+			<strong class="ov-flow-count">{ count(n) }</strong>
+			<span class="ov-flow-label">{ label }</span>
+			<span class="ov-flow-hint">{ hint }</span>
+			<span class="ov-flow-share">
+				switch {
+					case whole == 0:
+						@bar(0, tone)
+						<small>No open PRs yet</small>
+					case share:
+						@bar(percent(n, whole), tone)
+						<small>{ strconv.Itoa(percent(n, whole)) }% of open PRs</small>
+					default:
+						@bar(100, tone)
+						<small>All tracked</small>
+				}
+			</span>
+		</a>
+	</li>
+}
+
+// activity lists the newest build requests and live previews. With
+// JavaScript they become two tabs; without it both lists show.
+templ activity(summary Summary) {
+	<section class="panel ov-activity" aria-labelledby="activity-title" data-overview-activity>
+		<header class="panel-header ov-activity-head">
+			<div><span class="eyebrow">Latest activity</span><h2 id="activity-title">Builds and previews</h2></div>
+			<div class="ov-tabs" role="tablist" aria-label="Latest activity" data-overview-tabs hidden>
+				<button type="button" class="ov-tab" role="tab" id="ov-tab-builds" aria-controls="ov-panel-builds" aria-selected="true">
+					Build requests <span class="ov-tab-count">{ strconv.Itoa(len(summary.Builds)) }</span>
+				</button>
+				<button type="button" class="ov-tab" role="tab" id="ov-tab-previews" aria-controls="ov-panel-previews" aria-selected="false" tabindex="-1">
+					Live previews <span class="ov-tab-count">{ strconv.Itoa(len(summary.Previews)) }</span>
+				</button>
+			</div>
+		</header>
+		<div class="ov-panel" id="ov-panel-builds" data-overview-panel>
+			<h3 class="ov-panel-title">Build requests</h3>
+			if len(summary.Builds) == 0 {
+				<p class="ov-empty">No build has been requested yet. Open a pull request and choose <strong>Build latest commit</strong>.</p>
+			} else {
+				<ul class="ov-rows">
+					for _, row := range summary.Builds {
+						@buildRow(row)
 					}
-				>
-					<span class="pipeline-node" aria-hidden="true">
+				</ul>
+			}
+			<p class="ov-panel-foot">
+				<span>The newest request of each pull request. Open a row for its details.</span>
+				<a class="text-link" href="/builds">
+					All builds
+					@components.Arrow()
+				</a>
+			</p>
+		</div>
+		<div class="ov-panel" id="ov-panel-previews" data-overview-panel>
+			<h3 class="ov-panel-title">Live previews</h3>
+			if len(summary.Previews) == 0 {
+				<p class="ov-empty">No preview is live. Open a pull request and choose <strong>Build latest commit</strong>.</p>
+			} else {
+				<ul class="ov-rows">
+					for _, row := range summary.Previews {
+						@previewRow(row)
+					}
+				</ul>
+			}
+			<p class="ov-panel-foot">
+				<span>Showing { strconv.Itoa(len(summary.Previews)) } of { count(summary.Live) } live { plural(summary.Live, "preview", "previews") }, newest first.</span>
+				<a class="text-link" href="/environments">
+					All environments
+					@components.Arrow()
+				</a>
+			</p>
+		</div>
+	</section>
+}
+
+templ stateBadge(row prpages.ActivityRow) {
+	if row.Waiting != "" {
+		<span class="badge tone-info"><span class="badge-dot" aria-hidden="true"></span>{ row.Waiting }</span>
+	} else {
+		<span class={ "badge", prpages.Tone(row.State) }><span class="badge-dot" aria-hidden="true"></span>{ prpages.Label(row.State) }</span>
+	}
+}
+
+templ sha(value string) {
+	<code class="sha">{ prpages.Short(value) }</code>
+}
+
+templ buildRow(row prpages.ActivityRow) {
+	<li class="ov-row">
+		<details class="ov-row-details">
+			<summary class="ov-row-summary">
+				<span class={ "ov-row-dot", prpages.Tone(row.State) } aria-hidden="true"></span>
+				<span class="ov-row-main">
+					<strong>{ prTitle(row) }</strong>
+					<small>{ row.Name }</small>
+				</span>
+				<span class="ov-row-meta">
+					@stateBadge(row)
+					if row.CompletedAt != "" {
+						<small>
+							@components.Time(row.CompletedAt, prpages.TimeLabel(row.CompletedAt))
+						</small>
+					} else if row.StartedAt != "" {
+						<small>
+							Started { " " }
+							@components.Time(row.StartedAt, prpages.TimeLabel(row.StartedAt))
+						</small>
+					} else if row.Deadline != "" {
+						<small>
+							Eligible { " " }
+							@components.Time(row.Deadline, prpages.TimeLabel(row.Deadline))
+						</small>
+					}
+				</span>
+				<span class="ov-row-chevron" aria-hidden="true">
+					@components.ChevronDownIcon()
+				</span>
+			</summary>
+			<div class="ov-row-body">
+				<dl class="ov-facts">
+					if row.Requested != "" {
+						<div>
+							<dt>Commit</dt>
+							<dd>
+								@sha(row.Requested)
+								if !row.RequestCurrent && row.Latest != "" && row.Latest != row.Requested {
+									<span class="ov-fact-note">earlier than the latest, { prpages.Short(row.Latest) }</span>
+								}
+							</dd>
+						</div>
+					}
+					if row.RequestSource != "" {
+						<div><dt>Requested</dt><dd>{ prpages.Label(row.RequestSource) }</dd></div>
+					}
+					if row.Deadline != "" {
+						<div>
+							<dt>Eligible</dt>
+							<dd>
+								@components.Time(row.Deadline, prpages.TimeLabel(row.Deadline))
+							</dd>
+						</div>
+					}
+					if row.StartedAt != "" {
+						<div>
+							<dt>Started</dt>
+							<dd>
+								@components.Time(row.StartedAt, prpages.TimeLabel(row.StartedAt))
+							</dd>
+						</div>
+					}
+					if row.CompletedAt != "" {
+						<div>
+							<dt>Finished</dt>
+							<dd>
+								@components.Time(row.CompletedAt, prpages.TimeLabel(row.CompletedAt))
+								if took := prpages.Took(row.StartedAt, row.CompletedAt); took != "" {
+									<span class="ov-fact-note">took { took }</span>
+								}
+							</dd>
+						</div>
+					}
+					if row.Waiting != "" {
+						<div><dt>Waiting</dt><dd>{ row.Waiting }</dd></div>
+					}
+					if row.Failure != "" {
+						<div class="is-danger"><dt>Why it failed</dt><dd>{ row.Failure }</dd></div>
+					}
+					if !row.Available {
+						<div class="is-warn"><dt>Access</dt><dd>GitHub access to this repository is unavailable.</dd></div>
+					}
+				</dl>
+				<p class="ov-row-links">
+					<a class="text-link" href={ templ.SafeURL(prpages.PRURL(row.RepoID, row.Number)) }>
+						Pull request
+						@components.Arrow()
+					</a>
+					<a class="text-link" href={ templ.SafeURL(prpages.LogsURL(row.RepoID, row.Number)) }>
+						Build logs
+						@components.Arrow()
+					</a>
+				</p>
+			</div>
+		</details>
+	</li>
+}
+
+templ previewRow(row prpages.ActivityRow) {
+	<li class="ov-row has-quick">
+		<details class="ov-row-details">
+			<summary class="ov-row-summary">
+				<span class={ "ov-row-dot", prpages.Tone(row.State) } aria-hidden="true"></span>
+				<span class="ov-row-main">
+					<strong>{ prTitle(row) }</strong>
+					<small>{ row.Name }</small>
+				</span>
+				<span class="ov-row-meta">
+					if row.State != "running" {
+						@stateBadge(row)
+					}
+					if row.ExpiresAt != "" {
+						<small>
+							Expires { " " }
+							@components.Time(row.ExpiresAt, prpages.TimeLabel(row.ExpiresAt))
+						</small>
+					}
+				</span>
+				<span class="ov-row-chevron" aria-hidden="true">
+					@components.ChevronDownIcon()
+				</span>
+			</summary>
+			<div class="ov-row-body">
+				<dl class="ov-facts">
+					if row.Deployed != "" {
+						<div>
+							<dt>Serving</dt>
+							<dd>
+								@sha(row.Deployed)
+								if row.OlderPreview && row.Latest != "" {
+									<span class="ov-fact-note">newer commit { prpages.Short(row.Latest) } is not live yet</span>
+								}
+							</dd>
+						</div>
+					}
+					<div>
+						<dt>Status</dt>
+						<dd>
+							@stateBadge(row)
+						</dd>
+					</div>
+					if row.PublishedAt != "" {
+						<div>
+							<dt>Published</dt>
+							<dd>
+								@components.Time(row.PublishedAt, prpages.TimeLabel(row.PublishedAt))
+							</dd>
+						</div>
+					}
+					if row.ExpiresAt != "" {
+						<div>
+							<dt>Expires</dt>
+							<dd>
+								@components.Time(row.ExpiresAt, prpages.TimeLabel(row.ExpiresAt))
+								if row.PublishedAt != "" {
+									<span class="ov-life" data-lifetime data-from={ row.PublishedAt } data-to={ row.ExpiresAt } hidden>
+										<span class="ov-life-track" aria-hidden="true"><span data-lifetime-fill></span></span>
+										<small data-lifetime-text></small>
+									</span>
+								}
+							</dd>
+						</div>
+					}
+					if row.Failure != "" {
+						<div class="is-danger"><dt>Latest attempt</dt><dd>{ row.Failure }</dd></div>
+					}
+				</dl>
+				<p class="ov-row-links">
+					<a class="text-link" href={ templ.SafeURL(prpages.PRURL(row.RepoID, row.Number)) }>
+						Pull request
+						@components.Arrow()
+					</a>
+					<a class="text-link" href={ templ.SafeURL(prpages.LogsURL(row.RepoID, row.Number)) }>
+						Build logs
+						@components.Arrow()
+					</a>
+				</p>
+			</div>
+		</details>
+		if row.PreviewURL != "" {
+			<div class="ov-row-quick">
+				<a class="ov-open" href={ templ.SafeURL(row.PreviewURL) } target="_blank" rel="noopener noreferrer" title={ row.PreviewURL }>
+					Open
+					@components.ArrowUpRight()
+				</a>
+				@components.CopyButton(row.PreviewURL, "Copy the preview address of "+row.Name+" #"+strconv.Itoa(int(row.Number)))
+			</div>
+		}
+	</li>
+}
+
+// coverage is the share of open pull requests with a live preview: both
+// counts are over open pull requests, so the share never passes 100%.
+templ coverage(summary Summary) {
+	{{ pct := percent(summary.Live, summary.OpenPRs) }}
+	<section class="panel ov-coverage" aria-labelledby="coverage-title">
+		<header class="panel-header">
+			<div><span class="eyebrow">Preview coverage</span><h2 id="coverage-title">Open pull requests with a preview</h2></div>
+		</header>
+		<div class="ov-coverage-body">
+			<span class="ov-ring-wrap">
+				<svg class="ov-ring" viewBox="0 0 120 120" role="img" aria-label={ strconv.Itoa(pct) + "% of open pull requests have a live preview" }>
+					<circle class="ov-ring-track" cx="60" cy="60" r="50"></circle>
+					if pct > 0 {
+						<circle class="ov-ring-value" cx="60" cy="60" r="50" pathLength="100" stroke-dasharray={ strconv.Itoa(pct) + " 100" } transform="rotate(-90 60 60)"></circle>
+					}
+				</svg>
+				<span class="ov-ring-label" aria-hidden="true">
+					if summary.OpenPRs == 0 {
+						<strong>–</strong>
+					} else {
+						<strong>{ strconv.Itoa(pct) }<span>%</span></strong>
+					}
+					<small>covered</small>
+				</span>
+			</span>
+			<div class="ov-coverage-text">
+				if summary.OpenPRs == 0 {
+					<p>No open pull requests yet. Once Previa tracks some, this shows how many have a live preview.</p>
+				} else {
+					<p><strong>{ count(summary.Live) } of { count(summary.OpenPRs) }</strong> open { plural(summary.OpenPRs, "pull request has", "pull requests have") } a live preview.</p>
+					if summary.OpenPRs > summary.Live {
+						<p class="ov-muted">{ count(summary.OpenPRs - summary.Live) } without one: open it and choose <strong>Build latest commit</strong>, or turn on Automatic builds.</p>
+					}
+				}
+			</div>
+		</div>
+	</section>
+}
+
+// platform shows which pipeline stages the running workers provide now.
+templ platform(summary Summary, note string, attention bool) {
+	{{ stages := summary.Stages() }}
+	{{ live := 0 }}
+	for _, stage := range stages {
+		if stage.Live {
+			{{ live++ }}
+		}
+	}
+	<section class="panel ov-platform" aria-labelledby="platform-title">
+		<header class="panel-header">
+			<div><span class="eyebrow">Workers</span><h2 id="platform-title">Pipeline stages</h2></div>
+			<span class={ "badge", templ.KV("tone-ok", live == len(stages)), templ.KV("tone-warn", live < len(stages)) }>
+				<span class="badge-dot" aria-hidden="true"></span>{ strconv.Itoa(live) } of { strconv.Itoa(len(stages)) } connected
+			</span>
+		</header>
+		<ol class="ov-stages">
+			for i, stage := range stages {
+				<li class={ "ov-stage", templ.KV("is-live", stage.Live) }>
+					<span class="ov-stage-node" aria-hidden="true">
 						if stage.Live {
 							@components.CheckIcon()
 						} else {
 							{ strconv.Itoa(i + 1) }
 						}
 					</span>
-					<strong>{ stage.Name }</strong>
-					<span class="pipeline-detail">{ stage.Detail }</span>
-					if stage.Live {
-						<span class="badge tone-ok">Connected</span>
-					} else {
-						<span class="badge tone-neutral">Not running</span>
-					}
+					<span class="ov-stage-text">
+						<strong>{ stage.Name }</strong>
+						<small>{ stage.Detail }</small>
+					</span>
+					<span class="ov-stage-state">
+						if stage.Live {
+							Connected
+						} else {
+							Not running
+						}
+					</span>
 				</li>
 			}
 		</ol>
-		<p class="panel-note" role="status">
-			if attention {
-				@components.AlertIcon()
-			} else {
+		if !attention {
+			<p class="panel-note">
 				@components.InfoIcon()
-			}
-			{ note }
-		</p>
+				{ note }
+			</p>
+		}
 	</section>
 }
 
-templ statTile(href, label string, value int64, action string, icon templ.Component) {
-	<a class="stat-tile" href={ templ.SafeURL(href) }>
-		<span class="stat-head">
-			<span class="stat-icon">
-				@icon
-			</span><span class="stat-label">{ label }</span>
-		</span>
-		<strong class="stat-value">{ strconv.FormatInt(value, 10) }</strong>
-		<span class="stat-action">
-			{ action }
-			@components.ArrowUpRight()
-		</span>
-	</a>
-}
-
-templ checkItem(done bool, title, detail, href, action string) {
-	<li
-		if done {
-			class="check-item is-done"
-		} else {
-			class="check-item"
-		}
-	>
-		<span class="check-mark" aria-hidden="true">
-			if done {
-				@components.CheckIcon()
-			}
-		</span>
-		<div class="check-text">
-			<strong>
-				{ title }
-				if done {
-					<span class="sr-only">(complete)</span>
-				}
-			</strong>
-			<span>{ detail }</span>
-		</div>
-		if !done && href != "" {
-			<a class="check-action" href={ templ.SafeURL(href) }>
-				{ action }
+templ sources(summary Summary) {
+	{{ unavailable := summary.Unavailable() }}
+	{{ availablePct := percent(summary.Available, summary.Repositories) }}
+	<section class="panel ov-sources" aria-labelledby="sources-title">
+		<header class="panel-header">
+			<div><span class="eyebrow">Sources</span><h2 id="sources-title">Linked repositories</h2></div>
+			<a class="text-link" href="/repositories">
+				Manage
 				@components.Arrow()
 			</a>
-		}
-	</li>
+		</header>
+		<div class="ov-sources-body">
+			<p class="ov-sources-total">
+				<strong>{ count(summary.Repositories) }</strong> { plural(summary.Repositories, "repository", "repositories") } in
+				<strong>{ count(summary.Installations) }</strong> { plural(summary.Installations, "installation", "installations") }
+			</p>
+			<svg class="ov-split" viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+				<rect class="ov-split-track" width="100" height="8"></rect>
+				if availablePct > 0 {
+					<rect class="ov-split-ok" width={ strconv.Itoa(availablePct) } height="8"></rect>
+				}
+				if unavailable > 0 {
+					<rect class="ov-split-warn" x={ strconv.Itoa(availablePct) } width={ strconv.Itoa(100 - availablePct) } height="8"></rect>
+				}
+			</svg>
+			<ul class="ov-sources-list">
+				<li class="tone-ok">
+					<a href="/repositories?access=available"><span class="badge-dot" aria-hidden="true"></span><strong>{ count(summary.Available) }</strong> available</a>
+				</li>
+				<li class={ templ.KV("tone-warn", unavailable > 0), templ.KV("tone-neutral", unavailable == 0) }>
+					<a href="/repositories?access=unavailable"><span class="badge-dot" aria-hidden="true"></span><strong>{ count(unavailable) }</strong> access unavailable</a>
+				</li>
+			</ul>
+		</div>
+	</section>
 }

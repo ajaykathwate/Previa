@@ -252,7 +252,7 @@ attempt; a new attempt replaces it.
 
 | Screen | What it shows |
 | --- | --- |
-| Overview | A getting-started checklist until setup is done; live previews, building, waiting and failed counts; the five newest live previews (Open, Copy) and build requests; the pipeline with what each running worker provides (first, with the fix, when nothing can build); repository, open PR, installation and access counts. |
+| Overview | A notice with the fix when no worker can build; setup steps with progress until setup is done; the delivery pipeline (open pull requests, waiting or queued, building, live previews, each with its share of open pull requests, and failed requests); the newest build requests and live previews as two tabs, each row opening to its commit, times, duration, failure reason and links (previews: Open, Copy and how much of their lifetime is left); preview coverage; the pipeline stages each running worker provides; linked repositories. |
 | Builds | The current or latest request per PR across your repositories, most recent first: the PR title, the requested commit (and the latest one when they differ), waiting/queued/building/outcome, why it waits or failed, when it became eligible, started or finished and how long it took, and a **Logs** link. Not an attempt history: a new request replaces the row. |
 | Environments | Each preview, most recently published first: the PR title, status (Building, Publishing, Running, Failed, Removing), the deployed commit (marked when earlier than the latest), **Open preview** with **Copy**, when it was published and expires, **Logs** and, for published previews, **Tear down**. |
 | Repositories | One card per repository with its open pull requests, live previews, build mode and last sync. |

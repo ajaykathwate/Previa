@@ -1127,6 +1127,70 @@
     });
   }
 
+  // Overview: the latest-activity lists become two tabs (the choice is kept for
+  // this browser session), each live preview shows how much of its lifetime is
+  // left, and the header says how fresh the numbers are. Without JavaScript
+  // both lists show and their rows still expand.
+  function initOverview() {
+    const overview = document.querySelector('[data-overview]');
+    if (!overview) return;
+    const activity = overview.querySelector('[data-overview-activity]');
+    const tablist = activity?.querySelector('[data-overview-tabs]');
+    if (tablist) {
+      const tabs = [...tablist.querySelectorAll('[role="tab"]')];
+      const panels = tabs.map(tab => document.getElementById(tab.getAttribute('aria-controls')));
+      const select = (index, focus) => {
+        tabs.forEach((tab, i) => {
+          tab.setAttribute('aria-selected', String(i === index));
+          tab.tabIndex = i === index ? 0 : -1;
+          panels[i].hidden = i !== index;
+        });
+        if (focus) tabs[index].focus();
+        try { sessionStorage.setItem('previa-overview-tab', tabs[index].id); } catch { /* Storage may be unavailable. */ }
+      };
+      panels.forEach((panel, i) => {
+        panel.setAttribute('role', 'tabpanel');
+        panel.setAttribute('aria-labelledby', tabs[i].id);
+        panel.tabIndex = 0;
+      });
+      tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => select(index, false));
+        tab.addEventListener('keydown', (event) => {
+          const moves = {ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabs.length - 1};
+          if (!(event.key in moves)) return;
+          event.preventDefault();
+          select((moves[event.key] + tabs.length) % tabs.length, true);
+        });
+      });
+      let saved = null;
+      try { saved = sessionStorage.getItem('previa-overview-tab'); } catch { /* Storage may be unavailable. */ }
+      tablist.hidden = false;
+      activity.classList.add('has-tabs');
+      select(Math.max(0, tabs.findIndex(tab => tab.id === saved)), false);
+    }
+    const lifetimes = [...overview.querySelectorAll('[data-lifetime]')];
+    const updated = overview.querySelector('[data-overview-updated]');
+    const loaded = Date.now();
+    const refresh = () => {
+      const now = Date.now();
+      lifetimes.forEach((life) => {
+        const from = Date.parse(life.dataset.from);
+        const to = Date.parse(life.dataset.to);
+        if (!(to > from)) return;
+        const left = Math.min(1, Math.max(0, (to - now) / (to - from)));
+        life.querySelector('[data-lifetime-fill]').style.width = `${left * 100}%`;
+        life.querySelector('[data-lifetime-text]').textContent = left > 0 ? `${Math.max(1, Math.round(left * 100))}% of its lifetime left` : 'Expired';
+        life.classList.toggle('is-low', left < 0.15);
+        life.hidden = false;
+      });
+      const minutes = Math.floor((now - loaded) / 60000);
+      updated.textContent = minutes < 1 ? 'Updated just now' : minutes < 60 ? `Updated ${minutes} min ago` : 'Updated over an hour ago';
+      updated.hidden = false;
+    };
+    refresh();
+    setInterval(refresh, 30000);
+  }
+
   initMotion();
   initTheme();
   initNavigation();
@@ -1145,4 +1209,5 @@
   initRefreshDeadlines();
   initStory();
   initFAQ();
+  initOverview();
 })();

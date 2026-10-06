@@ -109,6 +109,72 @@ test('responsive dashboard sticky navigation and honest placeholders', async () 
   assert.equal(await page.locator('[data-queue-form]').count(), 0);
 });
 
+test('Overview places open PRs along the pipeline and its activity tabs and rows are interactive', async () => {
+  await login();
+  // An empty workspace: the blocked notice, setup steps and honest zeros.
+  assert(await page.locator('.ov-alert').isVisible());
+  assert.match(await page.locator('.ov-setup-progress').innerText(), /1 of 5\s+done/);
+  assert.deepEqual(await page.locator('.ov-flow-count').allInnerTexts(), ['0', '0', '0', '0']);
+  assert.match(await page.locator('.ov-platform .badge').innerText(), /0 of 7 connected/);
+  // A busy workspace.
+  await page.goto(`${origin}/__fixture/overview?state=busy`);
+  await page.waitForURL(`${origin}/dashboard`);
+  assert.equal(await page.locator('.ov-alert').count(), 0);
+  assert.equal(await page.locator('.ov-setup').count(), 0);
+  assert.match(await page.locator('.ov-status').innerText(), /Worker connected/);
+  assert.match(await page.locator('[data-overview-updated]').innerText(), /^Updated just now$/);
+  assert.deepEqual(await page.locator('.ov-flow-count').allInnerTexts(), ['12', '2', '1', '4']);
+  assert.deepEqual(await page.locator('.ov-flow-share small').allInnerTexts(), ['All tracked', '16% of open PRs', '8% of open PRs', '33% of open PRs']);
+  assert.match(await page.locator('.ov-flow-failed').innerText(), /1 failed request/);
+  assert.equal(await page.locator('.ov-ring').getAttribute('aria-label'), '33% of open pull requests have a live preview');
+  assert.match(await page.locator('.ov-platform .badge').innerText(), /7 of 7 connected/);
+  // Tabs switch by click or arrow keys, and the choice is kept for the session.
+  const builds = page.locator('#ov-panel-builds');
+  const previews = page.locator('#ov-panel-previews');
+  assert(await builds.isVisible());
+  assert.equal(await previews.isVisible(), false);
+  await page.locator('#ov-tab-builds').focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.locator('#ov-tab-previews').getAttribute('aria-selected'), 'true');
+  assert(await page.evaluate(() => document.activeElement.id === 'ov-tab-previews'));
+  assert(await previews.isVisible());
+  assert.equal(await builds.isVisible(), false);
+  // A preview expands to what it serves and how much of its lifetime is left.
+  const preview = previews.locator('.ov-row').first();
+  await preview.locator('summary').click();
+  assert.match(await preview.locator('.ov-facts').innerText(), /newer commit .* is not live yet/);
+  assert.equal(await preview.locator('[data-lifetime-text]').innerText(), '75% of its lifetime left');
+  assert.equal(await preview.locator('.ov-open').getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
+  await page.reload();
+  assert.equal(await page.locator('#ov-tab-previews').getAttribute('aria-selected'), 'true');
+  // A failed request says why and how long it took.
+  await page.locator('#ov-tab-builds').click();
+  const failed = builds.locator('.ov-row', {hasText: 'Fixture pull request 4'});
+  await failed.locator('summary').click();
+  assert.match(await failed.locator('.ov-facts').innerText(), /The app did not become ready\./);
+  assert.match(await failed.locator('.ov-facts').innerText(), /took 3 min/);
+  assert.equal(await failed.locator('.ov-row-links a').last().getAttribute('href'), '/repositories/1/pull-requests/4/logs');
+  for (const width of [320, 390, 768, 1024, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+  // Without JavaScript both lists show and their rows still expand.
+  const noJS = await browser.newContext({javaScriptEnabled: false});
+  try {
+    const plain = await noJS.newPage();
+    await plain.goto(`${origin}/auth/github/login`);
+    await plain.waitForURL(`${origin}/dashboard`);
+    await plain.goto(`${origin}/__fixture/overview?state=busy`);
+    await plain.waitForURL(`${origin}/dashboard`);
+    assert.equal(await plain.locator('[data-overview-tabs]').isVisible(), false);
+    assert.equal(await plain.locator('[data-overview-updated]').isVisible(), false);
+    assert(await plain.locator('#ov-panel-builds').isVisible());
+    assert(await plain.locator('#ov-panel-previews').isVisible());
+    await plain.locator('#ov-panel-builds .ov-row summary').first().click();
+    assert(await plain.locator('#ov-panel-builds .ov-row .ov-facts').first().isVisible());
+  } finally { await noJS.close(); }
+});
+
 test('mobile navigation opens separate pages and highlights the destination', async () => {
   await login();
   await page.setViewportSize({width: 390, height: 844});

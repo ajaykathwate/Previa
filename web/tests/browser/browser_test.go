@@ -29,6 +29,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/web"
+	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
 	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
 	"github.com/alexedwards/scs/v2"
@@ -103,7 +104,21 @@ func TestBrowserRegression(t *testing.T) {
 		buildlogs.NewHandler(logs, handler, logger).
 			WithLiveUpdates(hub, realtime.StreamOptions{Retry: 500 * time.Millisecond, Heartbeat: 10 * time.Second, MaxDuration: time.Minute}).
 			Mount(r, auth.RequireUser)
-		dashboard.Mount(r, handler, auth.RequireUser)
+		// The Overview shows an empty workspace until a test asks for a busy one
+		// (GET /__fixture/overview?state=busy), kept in the session.
+		dashboard.MountWithSummary(r, handler, auth.RequireUser, dashboard.Options{
+			DeveloperTools: true, Identity: handler.UserIDs,
+			Summary: func(ctx context.Context, _ int64) (dashboardpages.Summary, error) {
+				if sessions.GetString(ctx, "fixture-overview") != "busy" {
+					return dashboardpages.Summary{}, nil
+				}
+				return fixtureOverview(time.Now()), nil
+			},
+		})
+		r.With(auth.RequireUser).Get("/__fixture/overview", func(w http.ResponseWriter, r *http.Request) {
+			sessions.Put(r.Context(), "fixture-overview", r.URL.Query().Get("state"))
+			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+		})
 		for _, path := range []string{"/builds", "/environments"} {
 			r.With(auth.RequireUser).Get(path, func(w http.ResponseWriter, r *http.Request) {
 				activity := prpages.Activity{Environments: r.URL.Path == "/environments", Number: 1, Pages: 1}
@@ -531,4 +546,27 @@ func fixturePR(r *http.Request, sessions *scs.SessionManager, number int32, avai
 		pr.Headline = prpages.Headline{Tone: "tone-warn", Title: "Removing the preview"}
 	}
 	return pr
+}
+
+// fixtureOverview is a busy workspace for the Overview's browser checks:
+// requests waiting, building and failed, previews part-way through their
+// lifetime and every worker capability connected.
+func fixtureOverview(now time.Time) dashboardpages.Summary {
+	at := func(d time.Duration) string { return now.Add(d).UTC().Format(time.RFC3339) }
+	return dashboardpages.Summary{
+		Installations: 2, Repositories: 6, Available: 5, OpenPRs: 12, Waiting: 2, Building: 1, Failed: 1, Live: 4,
+		Workers: dashboardpages.Workers{Discovery: true, Execution: true, Reporting: true, Housekeeping: true},
+		Builds: []prpages.ActivityRow{
+			{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Title: "Fixture pull request 3", Latest: "latest-commit", Requested: "latest-commit",
+				State: "running", RequestCurrent: true, RequestSource: "manual", Available: true, Deadline: at(-3 * time.Minute), StartedAt: at(-2 * time.Minute)},
+			{RepoID: 1, Number: 4, Name: "fixture-owner/repository-1", Title: "Fixture pull request 4", Latest: "latest-commit", Requested: "latest-commit",
+				State: "failed", Failure: "The app did not become ready.", RequestCurrent: true, RequestSource: "automatic", Available: true,
+				StartedAt: at(-50 * time.Minute), CompletedAt: at(-47 * time.Minute)},
+		},
+		Previews: []prpages.ActivityRow{
+			{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Title: "Fixture pull request 3", Latest: "latest-commit", Deployed: "older-commit",
+				OlderPreview: true, State: "running", Available: true, PreviewURL: "https://pr-3-1-fixture.preview.example.com",
+				PublishedAt: at(-12 * time.Hour), ExpiresAt: at(36 * time.Hour)},
+		},
+	}
 }

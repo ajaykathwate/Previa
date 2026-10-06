@@ -126,7 +126,7 @@ pauses in hidden tabs, marks error-looking lines), `initRelativeTimes` (rewrites
 exact UTC time as the title), `initCopyButtons` (`data-copy` text or a log list's
 lines to the clipboard, confirmed for two seconds), `initSecretEditor` and
 `initBulkDelete` (the Secrets tab, below), `initStory` and `initFAQ` (the
-conversations, below). A `js-enabled` class on `<html>` scopes
+conversations, below), `initOverview` (the Overview, above). A `js-enabled` class on `<html>` scopes
 CSS that only makes sense with scripting. No third-party JavaScript besides HTMX.
 
 ## Confirmations
@@ -159,11 +159,32 @@ their title. The back link returns to the repository's PR list with its filters.
 
 ## Overview
 
-A getting-started checklist appears only until every step is done. When no worker
-can build, the pipeline panel moves to the top and says exactly what fixes it.
-Delivery counts come first, then the five newest live previews (Open and Copy) and
-build requests, then the pipeline and the source counts (repositories, open pull
-requests, installations, unavailable access).
+`web/pages/dashboard/index.templ`, styled by `web/styles/overview.css`. Every number
+comes from `dashboardpages.Summary`; nothing is simulated.
+
+- **Header:** worker status (connected, builds paused, cannot build, none running),
+  how fresh the numbers are ("Updated 3 min ago", counted from page load) and a
+  refresh link.
+- **Blocked notice** first when no running worker can build, with the fix and a link
+  to the FAQ answer; then **setup steps** with a progress bar until every step is done,
+  the next step highlighted with its action.
+- **Delivery pipeline:** open pull requests, waiting or queued, building and live
+  previews as connected stages, each with its count, its share of open pull requests
+  and a link; stages with work in progress are marked **Now**; a lane below names
+  failed requests. All counts are over open pull requests, and the page says that one
+  can count twice (a live preview keeps serving while a newer commit builds).
+- **Latest activity:** the newest build requests and live previews as two tabs (ARIA
+  tabs with arrow keys; the choice is kept in `sessionStorage`). Each row is a
+  `<details>` that expands to its commit, how it was requested, eligible, started and
+  finished times and duration, why it waits or failed, and links to the pull request
+  and its build logs. Preview rows show the served commit, status, publication,
+  expiry and a lifetime bar, with **Open** and **Copy** beside the row.
+- **Side column:** preview coverage (live previews over open pull requests, an SVG
+  ring), the worker pipeline stages (connected or not running) and linked
+  repositories (available versus unavailable).
+- Proportions are SVG attributes (`width`, `stroke-dasharray`), so the CSP needs no
+  inline styles. `initOverview` adds the tabs, lifetime bars and the updated time;
+  without JavaScript both activity lists show and rows still expand.
 
 ## Conversations: How it works and the FAQ
 
@@ -252,8 +273,8 @@ redirect to the last valid page. The PR list follows the same 10-row pattern.
 
 - **Tailwind CSS v4.1.18** standalone CLI, checksum-pinned. `make assets` compiles
   `web/styles/app.css` into `web/static/css/app.css` (ignored, embedded at build).
-  `site.css` imports `base`, `home`, `conversation`, `workspace`, `command`,
-  `repositories`, `logs`, `confirmation` and `motion` modules.
+  `site.css` imports `base`, `home`, `conversation`, `workspace`, `overview`,
+  `command`, `repositories`, `logs`, `confirmation` and `motion` modules.
 - **templUI v1.13.2** (MIT) supplies copied button, card, alert and input source;
   provenance and local changes are in [web/components/README.md](../web/components/README.md).
   Use complete class strings so Tailwind can find them.
@@ -275,7 +296,9 @@ teardown confirmed in a modal (PR page and Environments rows, with and without
 JavaScript), unavailable actions, Builds/Environments content, the How it works
 conversation (one question at a time, stage jumps, start over, reduced motion, stage
 links) and the FAQ (topics, search, empty state, `#faq-…` links, the workspace page and
-palette, signed-out redirect), reduced motion and no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-optional).
+palette, signed-out redirect), the Overview (empty and busy workspaces, pipeline
+shares, coverage, tabs with arrow keys and session memory, expandable rows, preview
+lifetime, both lists without JavaScript), reduced motion and no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-optional).
 
 ## Decisions and trade-offs
 
