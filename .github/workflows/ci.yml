@@ -94,6 +94,8 @@ jobs:
     name: Release images build and scan
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      TRIVY_IMAGE: aquasec/trivy:0.65.0@sha256:a22415a38938a56c379387a8163fcb0ce38b10ace73e593475d3658d578b2436
     steps:
       - uses: actions/checkout@v4
         with:
@@ -105,22 +107,20 @@ jobs:
             docker buildx build --load --target "$target" --build-arg VERSION=ci-${{ github.sha }} -t "previa-$target:ci" .
           done
       - name: Scan for fixable HIGH and CRITICAL vulnerabilities
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          scan-type: image
-          image-ref: previa-worker:ci
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
+        run: |
+          mkdir -p "$RUNNER_TEMP/trivy-cache"
+          docker run --rm \
+            --mount "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/trivy-cache,target=/root/.cache/trivy" \
+            "$TRIVY_IMAGE" image --no-progress --image-src docker \
+            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 previa-worker:ci
       - name: Scan the server image
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          scan-type: image
-          image-ref: previa-server:ci
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-          skip-setup-trivy: true
+        run: |
+          docker run --rm \
+            --mount "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/trivy-cache,target=/root/.cache/trivy" \
+            "$TRIVY_IMAGE" image --no-progress --image-src docker \
+            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 previa-server:ci
 
   real-docker:
     name: Real Docker, BuildKit, Traefik and end-to-end suites
@@ -147,6 +147,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Prepare host for rootless BuildKit
+        run: |
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: Generate application assets and code
         run: make assets generate
       - name: Egress image

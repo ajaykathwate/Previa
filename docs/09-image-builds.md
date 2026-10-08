@@ -126,6 +126,16 @@ takes an address range from Docker's default pools until it is removed.
 - The egress proxy image, built locally: `make egress-image` produces
   `previa-egress:dev` (shared with previews).
 
+Ubuntu 24.04 Docker hosts also need the RootlessKit user-namespace prerequisite:
+see [development setup](02-development-setup.md) for the temporary sysctl command
+and [production deployment](24-production-deployment.md) for persistent host
+configuration. This is a host kernel setting, not `BUILDKIT_IMAGE` or a secret.
+
+A builder that stops before readiness now fails immediately with its status,
+exit code and up to 4 KiB of the last 20 startup log lines. A startup timeout
+includes the last `buildctl` probe error and daemon logs. These diagnostics are
+captured before cleanup; the error remains `builder_unavailable`.
+
 | Variable (worker) | Default | Meaning |
 | --- | --- | --- |
 | `BUILDKIT_IMAGE` | pinned `moby/buildkit:v0.33.1-rootless@sha256:f8a8…57b4` | Builder image. |

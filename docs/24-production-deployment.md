@@ -534,6 +534,25 @@ you are still configuring storage and the application. Re-enable it after the
 first successful backup. Re-running setup does not regenerate an existing env
 file, but does update its Docker group and credential file permissions.
 
+Before running builds on an Ubuntu 24.04 Docker host, configure the
+[RootlessKit user-namespace prerequisite](https://github.com/moby/buildkit/blob/master/docs/rootless.md#ubuntu-2404-or-later)
+as root. `setup.sh` does not configure this sysctl:
+
+```sh
+if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+    printf '%s\n' 'kernel.apparmor_restrict_unprivileged_userns=0' \
+        > /etc/sysctl.d/90-previa-rootless.conf
+    sysctl -p /etc/sysctl.d/90-previa-rootless.conf
+fi
+```
+
+**Expected:** on a host with that setting, sysctl prints
+`kernel.apparmor_restrict_unprivileged_userns = 0`. The file reapplies it at boot.
+This changes the dedicated Docker host's handling of unprivileged user
+namespaces used by the rootless builder. Container capability, network and
+resource policies are configured separately by Previa. Rehearse a real preview
+build on staging after configuring the host.
+
 ### Step 4 — Register GitHub integrations and install credential files
 
 Create separate production registrations instead of changing working local
@@ -2315,7 +2334,9 @@ builds, runs `go vet`/golangci-lint and govulncheck, migrates disposable Postgre
 runs race-enabled Go tests, and checks Prometheus alert rules and dashboard queries.
 A separate browser job installs isolated Playwright tooling and runs UI regressions.
 The image job builds server/worker/egress images on the runner and scans the
-server and worker with Trivy for fixable HIGH/CRITICAL vulnerabilities. These CI
+server and worker with the digest-pinned official Trivy container for fixable
+HIGH/CRITICAL vulnerabilities. It shares a temporary vulnerability-DB cache
+between scans and avoids downloading a separate scanner binary. These CI
 image builds are not pushed to the production registry by `ci.yml`.
 
 The `real-docker` job runs builder, runtime, routing, housekeeping, complete

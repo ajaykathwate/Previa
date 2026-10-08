@@ -31,6 +31,22 @@ On WSL, if `docker version` reports a socket permission error, check that your
 user is in the `docker` group (`id -nG`) and open a new terminal or run
 `newgrp docker` after adding it.
 
+For rootless builds on an Ubuntu 24.04 Docker host, apply BuildKit's
+[user-namespace prerequisite](https://github.com/moby/buildkit/blob/master/docs/rootless.md#ubuntu-2404-or-later):
+
+```sh
+if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+    sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+fi
+```
+
+**Expected:** when the setting exists, sysctl prints
+`kernel.apparmor_restrict_unprivileged_userns = 0`. This permits RootlessKit to
+create its namespace; the setting is on the machine running Docker Engine.
+Docker Desktop uses its own Linux VM. CI applies it on its temporary runner.
+This command lasts until reboot; persistent configuration for a dedicated
+production host is in [24 · Production deployment](24-production-deployment.md).
+
 ## 2. Code and configuration
 
 ```sh
@@ -78,6 +94,12 @@ from GitHub and fail with `git ls-remote` or authentication errors. CI runs
 CI's separate Docker integration runner runs `make assets generate` before its
 opt-in suites. When running those suites manually on a fresh checkout, run the
 same command first; generated files are not passed between GitHub Actions jobs.
+
+To verify a CI fix, commit and push the workflow and application changes, then
+open the new Actions run and compare its commit SHA with `git rev-parse HEAD`.
+**Re-run jobs** keeps the original run's commit and cannot test local changes or
+a later fix. See [CI in action](../technical-docs/ci-in-action.md#92-manual-run-and-logs)
+for the steps that identify the corrected scanner and rootless-builder setup.
 
 Tidy the tools module from `tools/` as shown. Using
 `go mod tidy -modfile=tools/go.mod` from the repository root changes the module
@@ -300,6 +322,11 @@ behind. Without the three variables the target stops with a message; with
 
 Needs Docker and internet access (Docker pulls the pinned BuildKit image; builds
 pull `alpine` through the egress proxy). No database or GitHub access is used.
+
+On Ubuntu 24.04, apply the host prerequisite above before starting the suite.
+An exited builder now reports its status, exit code and bounded daemon logs;
+`permission denied` plus `apparmor_restrict_unprivileged_userns` identifies a
+host namespace restriction. A startup timeout retains the last probe error.
 
 ```sh
 make egress-image         # expect an image ID; creates previa-egress:dev

@@ -1,45 +1,34 @@
 # Project handoff
-Last updated: 2026-10-06
+Last updated: 2026-10-08
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
-- docs/README.md indexes 26 numbered docs; 02 setup, 21 operations, 22 observability,
-  23 incidents, 24 production deployment, 25 release report, 26 roadmap.
+- docs/README.md indexes 26 numbered docs; 02 setup, 21 operations, 22 observability, 23 incidents, 24 production deployment, 25 release report, 26 roadmap.
   New numbered docs shift later slots (links, labels, H1s).
-- docs/26-roadmap.md: Prompts 1-12 done. Prompt 13 (backend previews: managed
-  PostgreSQL/Redis, setup command, worker processes, owner-approved outbound
+- docs/26-roadmap.md: Prompts 1-12 done. Prompt 13 (backend previews: managed PostgreSQL/Redis, setup command, worker processes, owner-approved outbound
   connections) and Prompt 14 (detect missed uninstall/suspend/repository-removal
   webhooks by reconciliation) are planned, not started. docs/25-release-report.md answers the
   release checklist: ready for staging; production needs the pending live checks.
-- Backend features flat under internal/<feature>; construction in internal/app;
-  presentation in web/ with view models and no backend imports. Keep the "signal"
+- Backend features flat under internal/<feature>; construction in internal/app; presentation in web/ with view models and no backend imports. Keep the "signal"
   theme, modal confirmations, server-rendered navigation and GET/POST fallbacks.
 
 ## Run and configuration
 - Go 1.26.8+; make build/test/lint/vuln; make observability-check (promtool via Docker).
-- PostgreSQL 17 via Compose; make migrate-up applies Goose 19 and River 007. The
-  dev DB was last seen at 16: run make migrate-up before make run-*.
+- PostgreSQL 17 via Compose; make migrate-up applies Goose 19 and River 007. The dev DB was last seen at 16: run make migrate-up before make run-*.
   Processes refuse an older schema ("run migrations first").
-- Settings added in Prompt 11: APP_ENV (development|production), LOG_LEVEL,
-  INTERNAL_ADDR (server 127.0.0.1:9090), WORKER_INTERNAL_ADDR (127.0.0.1:9091),
+- Settings added in Prompt 11: APP_ENV (development|production), LOG_LEVEL, INTERNAL_ADDR (server 127.0.0.1:9090), WORKER_INTERNAL_ADDR (127.0.0.1:9091),
   TRUSTED_PROXIES, BACKUP_STATUS_FILE, BUILDS_PAUSED (kill switch, migration 0018).
-- /livez, /readyz, /metrics on the internal listeners; previa-server|worker
-  healthcheck and check-config subcommands.
-- Real suites: make test-builder, test-runtime, test-routing, test-housekeeping,
-  test-e2e (~75 s, includes a GitHub reporting outage). Browser:
+- /livez, /readyz, /metrics on the internal listeners; previa-server|worker healthcheck and check-config subcommands.
+- Real suites: make test-builder, test-runtime, test-routing, test-housekeeping, test-e2e (~75 s, includes a GitHub reporting outage). Browser:
   UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-browser.
-- Release: make release-images PREVIA_VERSION=x (Dockerfile targets server,
-  worker, egress); make prod-smoke PREVIA_VERSION=x (needs age; SMOKE_OLD_DUMP to
+- Release: make release-images PREVIA_VERSION=x (Dockerfile targets server, worker, egress); make prod-smoke PREVIA_VERSION=x (needs age; SMOKE_OLD_DUMP to
   rehearse an older-schema restore; SMOKE_KEEP=1 to inspect a failure). Uses
   ports 127.0.0.1:18080/18443/13000 and project previa-smoke.
-- WSL quirk: the shell's cwd on /mnt/c sometimes goes stale ("Failed to get
-  current directory"); use absolute paths (the Makefile does for prod-smoke).
-- Docker Desktop's credential helper sometimes fails pulls ("error getting
-  credentials"); retry, and avoid unneeded frontends (Dockerfile has no syntax line).
+- WSL quirk: the shell's cwd on /mnt/c sometimes goes stale ("Failed to get current directory"); use absolute paths (the Makefile does for prod-smoke).
+- Docker Desktop's credential helper sometimes fails pulls ("error getting credentials"); retry, and avoid unneeded frontends (Dockerfile has no syntax line).
 
 ## Prompts 1-10 (details in docs/06-21)
-- Source, secrets, logs, BuildKit builds, hardened previews, fenced routing,
-  teardown, PR feedback, housekeeping; the worker composes the pipeline from
+- Source, secrets, logs, BuildKit builds, hardened previews, fenced routing, teardown, PR feedback, housekeeping; the worker composes the pipeline from
   validated dependencies (internal/app/pipeline.go); server records, worker
   executes; owner Build/Retry/Rebuild/Tear down; worker_capabilities heartbeat.
 
@@ -85,11 +74,22 @@ Last updated: 2026-10-06
 - Overview (docs/20): pipeline shares, coverage ring, tabs with expandable rows,
   preview lifetimes (initOverview); same Summary, presentation only.
 - technical-docs/inside-previa.md: the end-to-end book (35 Mermaid diagrams render).
-- CI fixes committed in de40bb3: generate templates before root tidy; tidy tools from tools/; Trivy v0.33.1.
-- Docker job generates assets/code itself; production scripts tracked executable; smoke expects Goose 19.
-- Clean-checkout proof: tidy, SQL drift, build, vet/lint, PostgreSQL 17.11 race tests, govulncheck, promtool, actionlint passed.
-- Server/worker Trivy gates clean; three release images built; smoke 43/43 includes encrypted backup, rollback and restore 18 -> 19.
-- CI/CD + setup/deployment guides updated; 153 fences/95 shell examples/122 local links passed. Local ignored orphan outbound templates remain outside this CI fix.
+
+## CI follow-up (2026-10-08)
+- Earlier fixes de40bb3/16e1d22: templates before tidy, tools tidy from tools/,
+  Docker-job generation, executable production scripts, smoke expects Goose 19.
+- Scanner installer archive v0.65.0 returns 404; CI now uses digest-pinned official
+  aquasec/trivy:0.65.0, local Docker images, shared runner DB cache and same gate.
+- Ubuntu 24.04 runner sets apparmor_restrict_unprivileged_userns=0 for rootless
+  BuildKit; setup/deployment docs give temporary/persistent host commands.
+- sandbox.go detects exited builders and retains bounded startup logs/probe errors;
+  sandbox_test.go covers stopped daemons, oversized logs, log errors and cancellation.
+- Previous proof: all real Docker suites, release images/scans; smoke 43/43 (encrypted backup, rollback, restore 18 -> 19).
+- Rechecked 2026-10-08: build, vet/lint, PostgreSQL race tests, real BuildKit suite,
+  three release images, both Trivy gates, actionlint and docs fences/111 local links pass.
+- Last observed GitHub CI 37508788804 tests 16e1d22. Push the CI fix commit, then confirm the new run tests its SHA.
+  Re-running the old job uses the old commit; guides now explain this.
+- GitHub Ubuntu host verification still needs a new run with these changes.
 
 ## Pending (docs/25)
 - A real host (setup.sh, stack, backups to object storage, restore, upgrade);

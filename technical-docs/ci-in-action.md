@@ -506,26 +506,45 @@ copied to the Droplet. The later Docker integration job builds its own images.
 
 ### 6.3 Scan the worker image
 
+The image job pins the official scanner image:
+
 ```yaml
-- name: Scan for fixable HIGH and CRITICAL vulnerabilities
-  uses: aquasecurity/trivy-action@v0.33.1
-  with:
-    scan-type: image
-    image-ref: previa-worker:ci
-    severity: HIGH,CRITICAL
-    ignore-unfixed: true
-    exit-code: "1"
+env:
+  TRIVY_IMAGE: aquasec/trivy:0.65.0@sha256:a22415a38938a56c379387a8163fcb0ce38b10ace73e593475d3658d578b2436
 ```
 
+```yaml
+- name: Scan for fixable HIGH and CRITICAL vulnerabilities
+  run: |
+    mkdir -p "$RUNNER_TEMP/trivy-cache"
+    docker run --rm \
+      --mount "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock,readonly" \
+      --mount "type=bind,source=$RUNNER_TEMP/trivy-cache,target=/root/.cache/trivy" \
+      "$TRIVY_IMAGE" image --no-progress --image-src docker \
+      --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 previa-worker:ci
+```
+
+Docker runs Trivy directly. This avoids the old Action's binary installer, whose
+`trivy_0.65.0_Linux-64bit.tar.gz` release download returned HTTP 404 and failed
+before any image scan. The digest fixes the scanner image content. No extra
+GitHub token or production secret is needed.
+
+The socket mount lets the scanner inspect the runner's local image store.
+`--image-src docker` prevents fallback to a registry for the local tag. The cache
+mount holds the downloaded vulnerability database under the runner's temporary
+directory so the second scan can reuse it. `--rm` removes the scanner container
+after each invocation, and `--no-progress` keeps download progress out of the log.
+
 Trivy inspects the local worker image. The configured failure scope is known
-HIGH/CRITICAL vulnerabilities with available fixes. `ignore-unfixed: true`
+HIGH/CRITICAL vulnerabilities with available fixes. `--ignore-unfixed`
 excludes findings without fixes from this gate; it does not mean they do not
-exist. `exit-code: "1"` makes findings in scope fail the step.
+exist. `--exit-code 1` makes findings in scope fail the step. The scan uses the
+current vulnerability database even though the scanner executable is pinned.
 
 ### 6.4 Scan the server image
 
-The next block repeats those settings for `previa-server:ci` and adds
-`skip-setup-trivy: true`, reusing the Trivy setup within this job.
+The next block repeats the Docker invocation and scan settings for
+`previa-server:ci`. It uses the same pinned image and temporary database cache.
 
 The egress image is built but **has no separate Trivy scan step here**.
 Do not interpret the job label as scanning all three images or all severities.
@@ -566,6 +585,25 @@ Docker prohibition. Fork runs may also require approval under repository setting
 The PostgreSQL block repeats the same image, test credentials, port mapping and
 health options as Checks, on a new runner. Checkout and Go setup repeat too.
 No DB volume or built image is passed from the earlier job.
+
+```yaml
+- name: Prepare host for rootless BuildKit
+  run: |
+    if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+      sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+    fi
+```
+
+On Ubuntu 24.04, the host's AppArmor restriction can prevent RootlessKit from
+creating its user namespace even with the builder container's configured
+security options. This step applies BuildKit's documented prerequisite on the
+disposable runner before the suites start. It skips hosts without that sysctl.
+It is host configuration, not an application env variable; see
+[BuildKit's rootless host requirements](https://github.com/moby/buildkit/blob/master/docs/rootless.md#ubuntu-2404-or-later).
+
+Builder readiness now detects a stopped daemon immediately and includes its
+exit status and up to 4 KiB of the last 20 daemon log lines before cleanup. A
+readiness timeout also preserves the last probe error and startup logs.
 
 ```yaml
 - name: Generate application assets and code
@@ -696,6 +734,16 @@ database values are already declared in YAML.
 5. After a fix, push a new commit. Re-run a failed job when retrying the same
    commit is appropriate, such as a transient download failure.
 
+Check the run's commit SHA against `git rev-parse HEAD` and review `git status`
+before retrying. Uncommitted workflow or application changes are local only.
+GitHub's **Re-run jobs** uses the original commit SHA and ref, so it does not
+pick up fixes from a later commit; see
+[re-running workflows and jobs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs).
+After committing and pushing a fix, open the new run and confirm its SHA matches
+the pushed commit. For the fixes described here, the Docker job should include
+**Prepare host for rootless BuildKit**, and the image scans should invoke
+`docker run` with `TRIVY_IMAGE` instead of installing a Trivy binary.
+
 The run graph shows queued, running, passed, failed, skipped or cancelled jobs.
 A cancelled older run can result from the concurrency setting. A fork-skipped
 Docker suite is not evidence that suite passed.
@@ -742,8 +790,8 @@ assuming every Go command automatically loads `.env`.
 | Race/tests | Test output, detected race and integration prerequisites |
 | Browser | Browser installation, OS dependencies, then failing UI scenario |
 | Image build | Dockerfile stage, dependency download and compile output |
-| Image scan | Action-resolution errors: use the published `v0.33.1` tag; scan errors: image name, CVE, severity and fixed version |
-| Real Docker | The selected suite's logs, Docker/networks, resources and fixture services |
+| Image scan | Scanner-image pull or vulnerability-DB download errors; then image name, CVE, severity and fixed version |
+| Real Docker | Builder exit status/startup logs, rootless host prerequisite, then suite-specific Docker/network/resource errors |
 | Production smoke | First `FAIL` line, captured stack logs and schema expectations for the tested release |
 
 ## 10. What a passing run establishes

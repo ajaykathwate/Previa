@@ -11,6 +11,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
@@ -189,18 +190,58 @@ func (b *Builder) removeStaleBuilder(ctx context.Context, name string) (bool, er
 }
 
 func (s *sandbox) waitReady(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, readyTimeout)
+	readyCtx, cancel := context.WithTimeout(ctx, readyTimeout)
 	defer cancel()
+	var probeErr error
 	for {
-		if _, code, err := dockerx.Exec(ctx, s.docker, s.containerID, "buildctl", "debug", "workers"); err == nil && code == 0 {
+		inspected, err := s.docker.ContainerInspect(readyCtx, s.containerID, client.ContainerInspectOptions{})
+		if err != nil {
+			return fmt.Errorf("inspect builder startup: %w", err)
+		}
+		if state := inspected.Container.State; state != nil && !state.Running && !state.Restarting {
+			return s.startupError(ctx, fmt.Errorf("builder stopped during startup (status %s, exit code %d): %s",
+				state.Status, state.ExitCode, state.Error))
+		}
+		result, err := dockerx.Run(readyCtx, s.docker, s.containerID, "buildctl", "debug", "workers")
+		if err == nil && result.ExitCode == 0 {
 			return nil
 		}
+		probeErr = err
+		if err == nil {
+			probeErr = fmt.Errorf("buildctl readiness probe exited %d: %s", result.ExitCode, result.Stderr)
+		}
 		select {
-		case <-ctx.Done():
-			return errors.New("builder did not become ready")
+		case <-readyCtx.Done():
+			cause := fmt.Errorf("builder did not become ready: %w", errors.Join(readyCtx.Err(), probeErr))
+			if ctx.Err() != nil {
+				return cause
+			}
+			return s.startupError(ctx, cause)
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+}
+
+// startupError captures bounded daemon diagnostics before openSandbox removes
+// the failed builder. No repository build has been submitted at this point.
+func (s *sandbox) startupError(ctx context.Context, cause error) error {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	logs, err := s.docker.ContainerLogs(ctx, s.containerID, client.ContainerLogsOptions{
+		ShowStdout: true, ShowStderr: true, Tail: "20",
+	})
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("read builder startup logs: %w", err))
+	}
+	defer func() { _ = logs.Close() }()
+	output := &dockerx.BoundedBuffer{Limit: 4096}
+	if _, err := stdcopy.StdCopy(output, output, logs); err != nil {
+		return errors.Join(cause, fmt.Errorf("decode builder startup logs: %w", err))
+	}
+	if detail := strings.TrimSpace(output.String()); detail != "" {
+		return fmt.Errorf("%w; builder startup logs: %s", cause, detail)
+	}
+	return cause
 }
 
 // freeDisk reports the bytes available to the builder's state, which lives on
