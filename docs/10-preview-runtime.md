@@ -5,10 +5,13 @@ preview container that nothing routes to yet**. It implements
 `environments.Runtime` by composing source preparation ([06](06-source-and-configuration.md)),
 the image builder ([09](09-image-builds.md)) and repository secrets
 ([07](07-repository-secrets.md)); every lifecycle transaction stays in
-`internal/environments`. The route controller ([11](11-routing-and-https.md)) publishes
-its candidates and its cleanup executor removes them ([12](12-teardown-and-cleanup.md));
-the worker composes it whenever it can build ([21](21-mvp-operations.md)), streaming
-each attempt's output into the build log ([08](08-build-logs.md)).
+`internal/environments`. The route controller ([12](12-routing-and-https.md)) publishes
+its candidates and its cleanup executor removes them ([13](13-teardown-and-cleanup.md));
+the worker composes it whenever it can build ([22](22-mvp-operations.md)), streaming
+each attempt's output into the build log ([08](08-build-logs.md)). A candidate may also
+bring managed PostgreSQL and Redis, a setup command and processes, and receive
+owner-approved outbound connections; those parts and their isolation are in
+[11](11-backend-previews.md).
 
 ## Decisions
 
@@ -38,7 +41,7 @@ each attempt's output into the build log ([08](08-build-logs.md)).
    previews, or the new limits plus every running, restarting or created preview
    (the active one and its candidate both count during a swap) would exceed the host
    budget. The request then waits for capacity instead of failing
-   ([14](14-housekeeping-and-capacity.md)); before admission, `Admit` refuses early
+   ([15](15-housekeeping-and-capacity.md)); before admission, `Admit` refuses early
    when not even the smallest preview would fit.
 5. **Network.** The PR's lifetime network `previa-<instance>-pr-<id>` (internal,
    created once) gets the egress proxy attached. A same-named network this instance
@@ -48,7 +51,7 @@ each attempt's output into the build log ([08](08-build-logs.md)).
    On any failure, also remove the candidate.
 
 The result is `environments.Artifact{ContainerID, ImageTag}`; publication
-([11](11-routing-and-https.md)) decides whether it becomes active.
+([12](12-routing-and-https.md)) decides whether it becomes active.
 
 ## Isolation, concretely
 
@@ -139,7 +142,7 @@ the path into previews never becomes a path out of them. The router has no Docke
 socket, and its API listens only on loopback inside its container. A preview can
 reach the router's public entry points, and through them other previews' public URLs,
 exactly as anyone on the internet can; the direct container-to-container path between
-previews stays blocked ([11](11-routing-and-https.md)).
+previews stays blocked ([12](12-routing-and-https.md)).
 
 ## Configuration
 

@@ -75,3 +75,93 @@ func (q *Queries) ExecutionTarget(ctx context.Context, id int64) (ExecutionTarge
 	)
 	return i, err
 }
+
+const listOutboundPreviews = `-- name: ListOutboundPreviews :many
+SELECT p.id AS pull_request_id, p.repo_id,
+       (NOT p.is_fork AND p.head_repo_id IS NOT NULL AND p.head_repo_id = r.github_repo_id)::boolean AS trusted
+FROM pull_requests p
+JOIN repos r ON r.id = p.repo_id
+JOIN installations i ON i.id = r.installation_id
+LEFT JOIN environments e ON e.pull_request_id = p.id
+LEFT JOIN build_intents b ON b.pull_request_id = p.id
+WHERE p.state = 'open' AND r.accessible AND i.status = 'active'
+  AND (e.container_id IS NOT NULL OR e.pending_container_id IS NOT NULL OR b.state = 'running')
+ORDER BY p.id
+`
+
+type ListOutboundPreviewsRow struct {
+	PullRequestID int64
+	RepoID        int64
+	Trusted       bool
+}
+
+// Pull requests whose preview network may carry outbound connections now: a
+// deployed or pending candidate, or a build starting one, in an accessible
+// repository of an active installation. Only same-repository pull requests
+// are trusted with approved destinations.
+func (q *Queries) ListOutboundPreviews(ctx context.Context) ([]ListOutboundPreviewsRow, error) {
+	rows, err := q.db.Query(ctx, listOutboundPreviews)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOutboundPreviewsRow
+	for rows.Next() {
+		var i ListOutboundPreviewsRow
+		if err := rows.Scan(&i.PullRequestID, &i.RepoID, &i.Trusted); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const recordComponents = `-- name: RecordComponents :exec
+WITH recorded AS (
+    INSERT INTO preview_components (pull_request_id, generation, revision, services, setup, processes, docs_path, outbound, outbound_withheld)
+    VALUES ($1, $2, $3, $4, $5,
+            $6, $7, $8, $9)
+    ON CONFLICT (pull_request_id, generation, revision) DO UPDATE
+    SET services = EXCLUDED.services, setup = EXCLUDED.setup, processes = EXCLUDED.processes, docs_path = EXCLUDED.docs_path,
+        outbound = EXCLUDED.outbound, outbound_withheld = EXCLUDED.outbound_withheld, recorded_at = now()
+    RETURNING pull_request_id
+)
+DELETE FROM preview_components c
+USING environments e
+WHERE c.pull_request_id = $1 AND e.pull_request_id = c.pull_request_id
+  AND (c.generation, c.revision) < ($2::bigint, $3::bigint)
+  AND NOT (c.generation = e.applied_generation AND c.revision = e.applied_revision)
+  AND NOT (c.generation IS NOT DISTINCT FROM e.pending_generation AND c.revision IS NOT DISTINCT FROM e.pending_revision)
+`
+
+type RecordComponentsParams struct {
+	PullRequestID    int64
+	Generation       int64
+	Revision         int64
+	Services         []byte
+	Setup            bool
+	Processes        []byte
+	DocsPath         pgtype.Text
+	Outbound         int32
+	OutboundWithheld bool
+}
+
+// What a ready candidate runs next to its app. Rows of earlier requests that
+// the PR serves neither as its deployed nor as its pending candidate go.
+func (q *Queries) RecordComponents(ctx context.Context, arg RecordComponentsParams) error {
+	_, err := q.db.Exec(ctx, recordComponents,
+		arg.PullRequestID,
+		arg.Generation,
+		arg.Revision,
+		arg.Services,
+		arg.Setup,
+		arg.Processes,
+		arg.DocsPath,
+		arg.Outbound,
+		arg.OutboundWithheld,
+	)
+	return err
+}

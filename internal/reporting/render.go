@@ -45,7 +45,13 @@ func CommentContent(v View) string {
 		if v.PreviewURL != "" {
 			b.WriteString("**Preview:** " + v.PreviewURL + "\n\n")
 		}
+		if v.DocsURL != "" {
+			b.WriteString("**Docs:** " + v.DocsURL + "\n\n")
+		}
 		b.WriteString("Commit " + short(v.Deployed) + ".\n")
+		if v.Backend != "" {
+			b.WriteString("Runs with " + v.Backend + ". Data does not survive a rebuild.\n")
+		}
 	case PhaseWaiting:
 		b.WriteString("Commit " + short(v.HeadSHA) + " builds after five quiet minutes, at " + v.EligibleAt.UTC().Format("15:04 MST") + ".\n")
 	case PhaseQueued:

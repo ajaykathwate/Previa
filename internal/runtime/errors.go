@@ -25,6 +25,11 @@ const (
 	CodeNotOwned     = "not_owned"           // removal refused: not a Previa object
 	CodeMissing      = "missing"             // the candidate no longer exists
 	CodeInUse        = "in_use"              // still used by a container; removal retries later
+	// Backend previews (docs/11-backend-previews.md).
+	CodeServiceUnavailable = "service_unavailable" // a managed service's pinned image could not be pulled
+	CodeServiceFailed      = "service_failed"      // a managed service stopped or was not ready in time
+	CodeSetupFailed        = "setup_failed"        // the setup command failed or timed out
+	CodeProcessFailed      = "process_failed"      // a process stopped before the preview was ready
 )
 
 // Error is a classified runtime failure.

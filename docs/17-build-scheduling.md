@@ -1,10 +1,10 @@
-# 16 · Build scheduling and worker handoff
+# 17 · Build scheduling and worker handoff
 
-How an authorized intent ([15](15-build-policy-and-intents.md)) becomes executable
+How an authorized intent ([16](16-build-policy-and-intents.md)) becomes executable
 work: durable deadlines, River wake-ups, atomic admission, one build per PR, handoff
 to the next request and crash recovery. Everything here is implemented, tested
 with real PostgreSQL and River, and runs in the worker against the real source,
-build, runtime, routing and reporting adapters ([21](21-mvp-operations.md)).
+build, runtime, routing and reporting adapters ([22](22-mvp-operations.md)).
 
 ## What runs in production today
 
@@ -29,7 +29,7 @@ to make execution look available.
    revision in PostgreSQL; otherwise it is superseded.
    When builds are paused (`BUILDS_PAUSED`, the kill switch), the request waits
    here with reason `paused`, before any GitHub or Docker call
-   ([23](23-incident-runbook.md#execution-kill-switch)).
+   ([24](24-incident-runbook.md#execution-kill-switch)).
 2. **A fresh GitHub read** (`WithVerifier`: `VerifyUpstream`), outside every lock and
    transaction. A closed PR or a different head supersedes the request; lost access
    ends it as a permanent failure; an outage is retried; a rate limit snoozes the
@@ -69,7 +69,7 @@ PR lock before a candidate becomes active or a route is accepted.
   Each relevant event advances observed generation and replaces the request/deadline.
   Changing mode alone does not schedule existing PRs.
 - `Broker.RequestBuild` resolves owner access/current SHA, applies the
-  Build/Retry/Rebuild contract ([15](15-build-policy-and-intents.md)), and inserts its
+  Build/Retry/Rebuild contract ([16](16-build-policy-and-intents.md)), and inserts its
   wake-up in the same transaction.
   Manual override is immediate. The low-level `IntentService.Request` remains a
   persistence API; future browser handlers must use the coordinator rather than
@@ -159,13 +159,13 @@ taken, nothing is claimed, the request notes `waiting_reason = 'capacity'` and t
 build job is snoozed (30 seconds doubling to 5 minutes, no attempt spent). A
 `Headroom` (the runtime) can refuse the same way before the claim, and a capacity or
 disk refusal after it keeps the running request and its slot while it waits
-([14](14-housekeeping-and-capacity.md)).
+([15](15-housekeeping-and-capacity.md)).
 
 Migration 9 adds unconditional environment uniqueness by PR. The existing row and
 subdomain survive rebuild, teardown and reopen; fixture tests exercise this lifecycle.
 Admission now provisions the environment, allocating its hostname once, inside the
 claim transaction when the repository is constructed with a hostname allocator
-([11](11-routing-and-https.md)); the worker passes `routing.NewLabel`.
+([12](12-routing-and-https.md)); the worker passes `routing.NewLabel`.
 
 ## Completion, handoff and recovery
 
@@ -193,10 +193,10 @@ complete without creating a preview record. The marker is recorded even when Git
 access was revoked meanwhile, since teardown needs none. A local teardown of an open
 PR (revocation, owner requests and expiry) is recorded with
 `teardown_requested_generation` and started by its own transaction or the teardown
-sweep rather than by a teardown job ([12](12-teardown-and-cleanup.md)).
+sweep rather than by a teardown job ([13](13-teardown-and-cleanup.md)).
 
 Housekeeping's recovery job runs `RecoverScheduling` every minute and at startup
-with bounded batches ([14](14-housekeeping-and-capacity.md)); it resumes an
+with bounded batches ([15](15-housekeeping-and-capacity.md)); it resumes an
 authorized running request after exhausted crash rescue (tested), and adapters make
 the replay safe (images are reused, partial resources are inventoried).
 
@@ -253,4 +253,4 @@ cleanup, worker admission reading GitHub fresh (`TestAdmissionReadsThePRFreshFro
 permanent failures ending after one attempt (`TestPermanentFailuresEndAfterOneAttempt`)
 and a shutdown mid-build that is no failure (`TestAWorkerShutdownMidBuildIsNoFailure`).
 `make test-e2e` runs these workers with the real source, build, runtime, routing and
-reporting adapters ([21](21-mvp-operations.md)).
+reporting adapters ([22](22-mvp-operations.md)).

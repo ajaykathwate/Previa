@@ -1,12 +1,12 @@
-# 22 · Observability and production hardening
+# 23 · Observability and production hardening
 
 How an operator sees what Previa is doing and how it fails, and what protects the
 dashboard and its processes in production: structured, correlated, redacted logs;
 bounded Prometheus metrics; liveness and readiness on an internal listener; a
 Grafana dashboard and alert rules; ingress controls, security headers and
 production mode; the execution kill switch; and dependency checks. What to do when
-an alert fires is in [23](23-incident-runbook.md); how it all runs on a host is in
-[24](24-production-deployment.md).
+an alert fires is in [24](24-incident-runbook.md); how it all runs on a host is in
+[25](25-production-deployment.md).
 
 ## Decisions
 
@@ -53,6 +53,8 @@ collectors are included.
 | `previa_jobs_total` | counter | `kind`, `outcome` (succeeded, failed, snoozed, cancelled) | Every River job worked. |
 | `previa_job_duration_seconds` | histogram | `kind` | Job run time. |
 | `previa_job_queue_wait_seconds` | histogram | `queue` | From a job becoming due to a worker starting it. |
+| `previa_egress_connections_total` | counter | `outcome` (`forwarded`, `unapproved`, `refused_address`, `unresolvable`, `dial_failed`, `limit`, `revoked`, `byte_limit`) | Owner-approved outbound connections the egress proxy forwarded or refused, since it started (worker; read from the proxy every 15 s). |
+| `previa_egress_bytes_total` | counter | `direction` (`up`, `down`) | Bytes forwarded to approved destinations and back. |
 | `previa_housekeeping_actions_total` | counter | `job`, `action` | Recovery wake-ups, orphans scheduled for cleanup, unknown PRs' objects removed, missing previews, confirmed PRs, expired previews, pruned images/workspaces/caches. Dry runs count no deletions. |
 | `previa_github_requests_total` | counter | `status` (2xx…5xx, error) | GitHub API calls through the App. |
 | `previa_github_rate_limit_remaining` | gauge | `resource` | GitHub's rate-limit headroom. |
@@ -92,7 +94,7 @@ age and certificate expiry). `make observability-check` validates the rules,
 runs their tests, checks the Prometheus configuration and parses every dashboard
 query with the pinned promtool. The production Compose file runs both under the
 `observability` profile; delivering alerts needs an Alertmanager the operator
-configures ([24](24-production-deployment.md)).
+configures ([25](25-production-deployment.md)).
 
 | Alert | Fires when |
 | --- | --- |
@@ -115,7 +117,7 @@ configures ([24](24-production-deployment.md)).
 | Security headers | Every response: a nonce-based Content-Security-Policy (`default-src 'self'`, no inline script without the nonce, no `eval`, `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`, forms only to the dashboard and `https://github.com`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Cross-Origin-Opener-Policy: same-origin`, a restrictive `Permissions-Policy`, and HSTS when `APP_BASE_URL` is HTTPS. The browser suite runs under this policy and fails on any violation. |
 | Host validation | Only `APP_BASE_URL`'s host is served (421 otherwise), and through a trusted proxy the forwarded host must match too. Signed webhooks are exempt so they work through a tunnel. The server never builds URLs from request headers. |
 | Trusted proxies | `TRUSTED_PROXIES` (addresses or CIDR ranges): `X-Forwarded-For` is read right to left only while hops are trusted; from anyone else forwarded headers are ignored. In production the router's control-network address is the only trusted proxy. |
-| Request limits | 64 KiB of headers; 256 KiB of form body (the largest form is a 32 KiB secret); webhooks keep their own 2 MiB cap. Timeouts: 5 s headers, 30 s read and write, 60 s idle; event streams have their own caps and per-frame deadlines ([19](19-realtime-updates.md)). |
+| Request limits | 64 KiB of headers; 256 KiB of form body (the largest form is a 32 KiB secret); webhooks keep their own 2 MiB cap. Timeouts: 5 s headers, 30 s read and write, 60 s idle; event streams have their own caps and per-frame deadlines ([20](20-realtime-updates.md)). |
 | Abuse controls | Sign-in and installation callbacks: 20 requests per client at once, then one every 2 s (429 with `Retry-After`; at most 10,000 clients tracked). Webhooks: at most 32 at once; the rest get 503 before anything is recorded, so redelivery and deduplication work as usual. |
 | Outbound timeouts | OAuth and GitHub API clients 10 s; database connects 10 s; webhook processing 8 s; internal listener 10–15 s. |
 | Sessions and cookies | `__Host-` session cookie, `Secure`, `HttpOnly`, `SameSite=Lax`, host-only, so a preview on another subdomain or domain never receives it; CSRF tokens plus an `Origin` check on every mutation (tested in `internal/auth`). The server warns when previews share the dashboard's registrable domain. |
@@ -144,7 +146,7 @@ standard library and `containerd/v2` 2.3.4; the minimum Go version is now 1.26.8
 containerd 2.3.6, and the scan reports none reachable. One advisory remains in a
 required module but is not reachable: `golang.org/x/crypto/openpgp` (deprecated,
 no fix; Previa never imports it). CI runs the scan, and Trivy scans the release
-images for fixable HIGH and CRITICAL vulnerabilities ([24](24-production-deployment.md#ci-and-releases)).
+images for fixable HIGH and CRITICAL vulnerabilities ([25](25-production-deployment.md#ci-and-releases)).
 
 ## What was verified
 
@@ -163,7 +165,7 @@ images for fixable HIGH and CRITICAL vulnerabilities ([24](24-production-deploym
 - The browser suite (30 scenarios) under the real Content-Security-Policy.
 - `make observability-check`: 24 rules, their unit tests, the configuration and
   28 dashboard queries.
-- The production smoke test ([24](24-production-deployment.md#local-staging-smoke-test)):
+- The production smoke test ([25](25-production-deployment.md#local-staging-smoke-test)):
   headers, host validation, rate limits, unpublished internal listeners, readiness,
   metrics, Prometheus scraping all three targets, the alert rules loaded and the
   Grafana dashboard provisioned.
@@ -172,5 +174,5 @@ images for fixable HIGH and CRITICAL vulnerabilities ([24](24-production-deploym
 
 - Alert delivery (an Alertmanager and a receiver are the operator's choice).
 - Optional OpenTelemetry tracing (DESIGN §18 lists it as optional).
-- Every live proof in [21](21-mvp-operations.md#live-proofs-still-required-before-a-public-rollout)
-  and [25](25-release-report.md).
+- Every live proof in [22](22-mvp-operations.md#live-proofs-still-required-before-a-public-rollout)
+  and [26](26-release-report.md).

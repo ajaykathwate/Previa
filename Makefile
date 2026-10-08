@@ -121,10 +121,12 @@ test-routing: egress-image
 
 # Opt-in real end-to-end proof of the worker's own pipeline on the local
 # Docker Engine: a fake GitHub (TLS), real BuildKit builds, hardened previews,
-# Traefik routing, PR reports, logs and teardown, on a throwaway schema.
+# Traefik routing, PR reports, logs and teardown, and a backend preview with
+# managed PostgreSQL and Redis, setup, a worker process and approved outbound
+# connections, on a throwaway schema.
 test-e2e: egress-image
 	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
-	TEST_E2E=1 $(GO) test -count=1 -v -timeout 25m -run '^TestRealEndToEnd$$' ./internal/app
+	TEST_E2E=1 $(GO) test -count=1 -v -timeout 60m -run '^TestReal(EndToEnd|BackendEndToEnd)$$' ./internal/app
 
 # Opt-in real housekeeping on the local Docker Engine: grace periods, dry run,
 # orphans of known and unknown PRs, other instances left alone, and an
@@ -137,7 +139,7 @@ test-housekeeping: egress-image
 # from .env; the DNS credential stays in its own mode-600 file.
 router-up:
 	@$(load_run_env) for v in PREVIEW_BASE_DOMAIN ROUTER_DYNAMIC_DIR ACME_EMAIL ACME_DNS_PROVIDER ACME_DNS_CREDENTIAL_VARIABLE ACME_DNS_CREDENTIAL_FILE; do \
-		eval "val=\$${$$v:-}"; [ -n "$$val" ] || { echo "Set $$v in .env (see docs/11-routing-and-https.md)" >&2; exit 1; }; \
+		eval "val=\$${$$v:-}"; [ -n "$$val" ] || { echo "Set $$v in .env (see docs/12-routing-and-https.md)" >&2; exit 1; }; \
 	done; \
 	case "$$ROUTER_DYNAMIC_DIR" in /mnt/*) echo 'ROUTER_DYNAMIC_DIR must be on a Linux filesystem: Traefik cannot watch /mnt/ paths' >&2; exit 1;; esac; \
 	[ -f "$$ACME_DNS_CREDENTIAL_FILE" ] || { echo 'ACME_DNS_CREDENTIAL_FILE does not exist' >&2; exit 1; }; \

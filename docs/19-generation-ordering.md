@@ -1,17 +1,17 @@
-# 18 · Generation ordering and fencing (implementation)
+# 19 · Generation ordering and fencing (implementation)
 
 How the code guarantees that a newer commit, a close or a deliberate rebuild always
 beats older work, even when jobs retry, overlap or finish late. This is the
-implementation of the decision in [17](17-durable-publication-design.md); the
+implementation of the decision in [18](18-durable-publication-design.md); the
 request revision it carries alongside generation comes from
-[15](15-build-policy-and-intents.md), and admission/handoff from
-[16](16-build-scheduling.md).
+[16](16-build-policy-and-intents.md), and admission/handoff from
+[17](17-build-scheduling.md).
 
 **Status:** generation and revision fencing, guarded results and the database/River
 publication outbox are implemented in `internal/environments` and tested with real
 PostgreSQL and River plus simulated runtime/publication adapters. The worker runs
 the same fences against real Docker, routing, GitHub reporting
-([13](13-pr-feedback.md)) and periodic housekeeping ([14](14-housekeeping-and-capacity.md));
+([14](14-pr-feedback.md)) and periodic housekeeping ([15](15-housekeeping-and-capacity.md));
 `make test-e2e` proves them end to end, including a failed rebuild that cannot
 replace the serving preview and an Automatic burst that builds only the newest
 commit. Migration 9 keeps one
@@ -89,7 +89,7 @@ locking the PR would not protect against a concurrently updated desired state.
 Zero returned rows for an outdated generation means superseded: no environment
 write and no publication intent. A missing active environment for a still-current
 request is an error; admission provisions it (with its hostname) when the
-repository has a hostname allocator ([11](11-routing-and-https.md)), and it is never
+repository has a hostname allocator ([12](12-routing-and-https.md)), and it is never
 silently created here. For successful builds, the transaction stores a pending
 candidate and inserts the route operation and River wake-up atomically. It does not
 set that candidate active until the route controller's operation succeeds and a
@@ -97,14 +97,14 @@ second short guarded transaction finalizes it. `OperationWorker` invokes its
 executor between those transactions, without a PR row lock. The route controller
 enforces the same fence again when it accepts a route version: in one transaction
 it requires the PR to still want exactly `(generation, revision)`, and the route
-version only moves forward ([11](11-routing-and-https.md)).
+version only moves forward ([12](12-routing-and-https.md)).
 
 A teardown (`result_status = torn_down`) takes a third branch: the PR is closed or
 merged, or a local teardown was requested at this generation (revocation now, owner
 requests and expiry later), with revision 0. It locks the PR scope without requiring
 GitHub access, hands the environment's active and pending artifacts to the
 route-removal operation, and records the teardown's generation; a retried teardown
-of the same generation starts nothing new ([12](12-teardown-and-cleanup.md)).
+of the same generation starts nothing new ([13](13-teardown-and-cleanup.md)).
 
 ## Why close and newer commits win
 
@@ -141,7 +141,7 @@ it can enqueue against the completed row. Terminal worker failures use the pinne
 River driver's conditional discarded-state transition with the same handoff;
 ordinary retryable errors retain River's backoff. Exhausted crash recovery still
 uses the bounded `Broker.RecoverScheduling` contract to recreate wake-ups, run
-every minute by housekeeping ([14](14-housekeeping-and-capacity.md)).
+every minute by housekeeping ([15](15-housekeeping-and-capacity.md)).
 
 The tests deliberately run A and B concurrently through the service to verify the
 guard independently of River uniqueness. Production admission ordinarily serializes

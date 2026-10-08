@@ -18,7 +18,7 @@ injected secrets. Nothing writes sample output.
 | Limits (Balanced) | 5 MiB and 20,000 lines per attempt, 8 KiB per line, kept 14 days after the attempt finishes | Bounds database growth while keeping full logs for normal builds (owner decision). |
 | Redaction | Before anything is stored or streamed, using [07](07-repository-secrets.md)'s streaming redactor | A value must never reach the database, the page or the stream. |
 | Build impact | Writes never block a build; if storage falls behind, the excess is dropped, counted and marked | Logs are for diagnosis; they must not stall or fail the build they describe. |
-| Live updates | Server-Sent Events with the log's own cursor; the realtime hub only wakes the stream ([19](19-realtime-updates.md)) | Lossless resume and replacement detection need log positions, not hub positions. |
+| Live updates | Server-Sent Events with the log's own cursor; the realtime hub only wakes the stream ([20](20-realtime-updates.md)) | Lossless resume and replacement detection need log positions, not hub positions. |
 
 ## Storage and attempts
 
@@ -41,7 +41,7 @@ rejected or stale job: nothing above happens; the old logs and epoch stay
   either commits first (and is deleted) or finds the epoch changed and stores nothing.
 - Admission provisions the PR's lifetime environment (with its hostname) in the same
   transaction when the repository has a hostname allocator
-  ([11](11-routing-and-https.md)), so the first attempt already has a stream. Without
+  ([12](12-routing-and-https.md)), so the first attempt already has a stream. Without
   an environment row an attempt gets `Attempt{}` and has no log.
 - `environments.Service.WithBuildLogs` marks the stream finished when execution
   returns, so viewers know no more output is coming.

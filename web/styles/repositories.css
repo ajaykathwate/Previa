@@ -781,7 +781,25 @@ html:not(.js-enabled) .secret-row-remove, html:not(.js-enabled) .secret-add-row,
 .secrets-guidance ul { display: grid; gap: 6px; margin: 10px 0 0 26px; padding: 0; list-style: none; }
 .secrets-guidance code { font-size: 12px; }
 
+/* Backend facts on the PR page: what the preview runs next to its app. */
+.pr-backend { display: grid; gap: 6px; margin: 0 0 14px; font-size: 13px; }
+.pr-backend > div { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 10px; }
+.pr-backend dt { color: var(--text-muted); }
+.pr-backend dd { margin: 0; color: var(--ink-soft); overflow-wrap: anywhere; }
+.pr-backend-note, .pr-backend-offer { color: var(--text-muted); }
+@media (max-width: 760px) { .pr-backend > div { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+
+/* Outbound connections: host and port side by side, the button after them. */
+.outbound-fields { display: grid; grid-template-columns: minmax(0, 3fr) minmax(150px, 1.4fr) auto; gap: 10px 12px; align-items: end; margin: 0; padding: 0; border: 0; min-width: 0; }
+.outbound-field { display: grid; gap: 6px; min-width: 0; }
+.outbound-field label { color: var(--ink-soft); font-size: 12.5px; font-weight: 580; }
+.outbound-field select.secret-input { font-family: var(--font-ui); }
+.outbound-port { color: var(--ink-soft); font-family: var(--font-code); font-size: 12.5px; white-space: nowrap; }
+.outbound-submit svg { width: 16px; height: 16px; }
+
 @media (max-width: 760px) {
+  .outbound-fields { grid-template-columns: minmax(0, 1fr); }
+  .outbound-submit { justify-self: start; }
   .secret-rows-head { display: none; }
   .secret-row { grid-template-columns: minmax(0, 1fr) 34px; }
   .secret-row .secret-name-input { grid-column: 1; grid-row: 1; }

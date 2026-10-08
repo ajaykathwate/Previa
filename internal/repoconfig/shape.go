@@ -7,22 +7,36 @@ import (
 	"github.com/goccy/go-yaml/parser"
 )
 
+// requestedService is one entry of the services mapping as written, with its
+// location for error messages. Version is the scalar's own text, so 17,
+// "17" and 7.4 all read as written.
+type requestedService struct {
+	Kind, Version string
+	Line, Column  int
+}
+
+// shape is what the AST check extracts before decoding.
+type shape struct {
+	services []requestedService
+}
+
 // Check AST types before decoding: YAML libraries may coerce a string or float
 // to an integer or a numeric scalar to a string. This public contract does not.
-func validateShape(data []byte) error {
+func validateShape(data []byte) (shape, error) {
 	// Retain duplicate entries only in the AST so we can report a stable category
 	// without exposing the parser's source-bearing error. Reject before decoding.
 	file, err := parser.ParseBytes(data, 0, parser.AllowDuplicateMapKey())
 	if err != nil {
-		return safeYAMLError(err)
+		return shape{}, safeYAMLError(err)
 	}
 	if len(file.Docs) != 1 {
-		return validationIssue("$", "invalid_document", "Provide exactly one YAML mapping; multiple or empty documents are not supported.")
+		return shape{}, validationIssue("$", "invalid_document", "Provide exactly one YAML mapping; multiple or empty documents are not supported.")
 	}
 	mapping, ok := file.Docs[0].Body.(*ast.MappingNode)
 	if !ok {
-		return validationIssue("$", "invalid_document", "Configuration must be a YAML mapping; use '{}' for defaults.")
+		return shape{}, validationIssue("$", "invalid_document", "Configuration must be a YAML mapping; use '{}' for defaults.")
 	}
+	var found shape
 	var issues []Issue
 	seen := make(map[string]bool)
 	for _, entry := range mapping.Values {
@@ -39,7 +53,7 @@ func validateShape(data []byte) error {
 		seen[field] = true
 		valid := false
 		switch field {
-		case "dockerfile", "health_check_path", "resource_tier":
+		case "dockerfile", "health_check_path", "resource_tier", "docs_path":
 			_, valid = entry.Value.(*ast.StringNode)
 		case "port":
 			_, valid = entry.Value.(*ast.IntegerNode)
@@ -53,8 +67,27 @@ func validateShape(data []byte) error {
 					}
 				}
 			}
+		case "setup":
+			valid = true
+			issues = append(issues, commandShape("setup", entry.Value)...)
+		case "services":
+			services, isMapping := entry.Value.(*ast.MappingNode)
+			valid = isMapping
+			if isMapping {
+				var serviceIssues []Issue
+				found.services, serviceIssues = servicesShape(services)
+				issues = append(issues, serviceIssues...)
+			}
+		case "processes":
+			sequence, isSequence := entry.Value.(*ast.SequenceNode)
+			valid = isSequence
+			if isSequence {
+				for i, value := range sequence.Values {
+					issues = append(issues, processShape(fmt.Sprintf("processes[%d]", i), value)...)
+				}
+			}
 		default:
-			issues = append(issues, shapeIssue("$", "unknown_field", "Unknown key; supported keys are dockerfile, port, env, health_check_path and resource_tier.", entry.Key))
+			issues = append(issues, shapeIssue("$", "unknown_field", "Unknown key; supported keys are dockerfile, port, env, health_check_path, resource_tier, services, setup, processes and docs_path.", entry.Key))
 			continue
 		}
 		if !valid {
@@ -62,9 +95,99 @@ func validateShape(data []byte) error {
 		}
 	}
 	if len(issues) > 0 {
-		return &ValidationError{Issues: issues}
+		return shape{}, &ValidationError{Issues: issues}
 	}
-	return nil
+	return found, nil
+}
+
+// servicesShape reads `kind: version` entries. The kind itself is checked
+// later, against the platform's catalog.
+func servicesShape(mapping *ast.MappingNode) ([]requestedService, []Issue) {
+	var services []requestedService
+	var issues []Issue
+	seen := map[string]bool{}
+	for _, entry := range mapping.Values {
+		key, ok := entry.Key.(*ast.StringNode)
+		if !ok {
+			issues = append(issues, shapeIssue("services", "invalid_key", "Name each service with a plain key, such as postgres or redis.", entry.Key))
+			continue
+		}
+		if seen[key.Value] {
+			issues = append(issues, shapeIssue("services", "duplicate_key", "Each service may be listed only once.", entry.Key))
+			continue
+		}
+		seen[key.Value] = true
+		var version string
+		switch value := entry.Value.(type) {
+		case *ast.StringNode:
+			version = value.Value
+		case *ast.IntegerNode, *ast.FloatNode:
+			version = value.GetToken().Value
+		default:
+			issues = append(issues, shapeIssue("services", "invalid_type", "Give each service a version, such as postgres: 17.", entry.Value))
+			continue
+		}
+		service := requestedService{Kind: key.Value, Version: version}
+		if token := entry.Key.GetToken(); token != nil && token.Position != nil {
+			service.Line, service.Column = token.Position.Line, token.Position.Column
+		}
+		services = append(services, service)
+	}
+	return services, issues
+}
+
+// commandShape requires an argv list: a sequence of strings.
+func commandShape(field string, node ast.Node) []Issue {
+	sequence, ok := node.(*ast.SequenceNode)
+	if !ok {
+		return []Issue{shapeIssue(field, "invalid_type", "Write the command as a list of arguments, such as [\"npm\", \"run\", \"migrate\"].", node)}
+	}
+	var issues []Issue
+	for i, value := range sequence.Values {
+		if _, ok := value.(*ast.StringNode); !ok {
+			issues = append(issues, shapeIssue(fmt.Sprintf("%s[%d]", field, i), "invalid_type", "Each command argument must be a string; quote numbers.", value))
+		}
+	}
+	return issues
+}
+
+// processShape requires a mapping of name, command and an optional
+// resource_tier.
+func processShape(field string, node ast.Node) []Issue {
+	mapping, ok := node.(*ast.MappingNode)
+	if !ok {
+		return []Issue{shapeIssue(field, "invalid_type", "Describe each process as a mapping with name and command.", node)}
+	}
+	var issues []Issue
+	seen := map[string]bool{}
+	for _, entry := range mapping.Values {
+		key, ok := entry.Key.(*ast.StringNode)
+		if !ok {
+			issues = append(issues, shapeIssue(field, "invalid_key", "Use plain keys: name, command and resource_tier.", entry.Key))
+			continue
+		}
+		if seen[key.Value] {
+			issues = append(issues, shapeIssue(field, "duplicate_key", "Remove the duplicate YAML key.", entry.Key))
+			continue
+		}
+		seen[key.Value] = true
+		switch key.Value {
+		case "name", "resource_tier":
+			if _, ok := entry.Value.(*ast.StringNode); !ok {
+				issues = append(issues, shapeIssue(field+"."+key.Value, "invalid_type", "Use a string.", entry.Value))
+			}
+		case "command":
+			issues = append(issues, commandShape(field+".command", entry.Value)...)
+		default:
+			issues = append(issues, shapeIssue(field, "unknown_field", "Unknown key; a process has name, command and resource_tier.", entry.Key))
+		}
+	}
+	for _, required := range []string{"name", "command"} {
+		if !seen[required] {
+			issues = append(issues, shapeIssue(field+"."+required, "missing_field", "Every process needs a name and a command.", node))
+		}
+	}
+	return issues
 }
 
 func shapeIssue(field, code, message string, node ast.Node) Issue {

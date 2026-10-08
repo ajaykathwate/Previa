@@ -1,11 +1,11 @@
-# 11 · Routing and HTTPS
+# 12 · Routing and HTTPS
 
 `internal/routing` gives every pull request a stable public HTTPS hostname and
 publishes healthy candidates from the preview runtime ([10](10-preview-runtime.md))
 through Traefik v3. This document explains the hostname scheme, why routes come from
 a fenced controller instead of Docker labels, how a version becomes served, what is
 guaranteed and what is not, TLS, origin separation and the unknown-host page. The
-worker runs the controller whenever it can build ([21](21-mvp-operations.md)); the
+worker runs the controller whenever it can build ([22](22-mvp-operations.md)); the
 tests listed at the end prove it, and `make test-e2e` proves it inside the whole
 pipeline.
 
@@ -14,7 +14,7 @@ pipeline.
 | Decision | Choice | Why |
 | --- | --- | --- |
 | Route source | **Traefik's file provider fed by Previa's route controller**, not the Docker provider (owner decision; DESIGN §11 updated) | Docker labels are fixed when a container is created, so every candidate would be routed before it was accepted, and labels cannot be fenced by (generation, revision). The file provider also means Traefik needs no Docker socket. |
-| Fence | PostgreSQL row per lifetime environment, moved only forward in (generation, revision) order; removals are kept as tombstones | The durable publication decision's option 2 ([17](17-durable-publication-design.md)): one logical controller, accepted version stored durably, conditional on the PR's current state. |
+| Fence | PostgreSQL row per lifetime environment, moved only forward in (generation, revision) order; removals are kept as tombstones | The durable publication decision's option 2 ([18](18-durable-publication-design.md)): one logical controller, accepted version stored durably, conditional on the PR's current state. |
 | Hostname | `pr-<number>-<GitHub repo ID, base 36>-<8 random chars>.<PREVIEW_BASE_DOMAIN>`, allocated once per lifetime environment (owner decision) | The repository ID is immutable (renames and same-named repositories never collide); the random part keeps private repositories' previews unguessable, which "public by URL obscurity" needs. |
 | Certificates | One wildcard certificate per preview domain, Let's Encrypt **staging by default**, DNS-01 through Traefik's ACME client (lego) | No per-preview issuance or rate limits; staging first proves DNS credentials without risking production limits. |
 | TLS proof here | A local Pebble ACME server with its DNS test server (owner decision) | No domain or DNS token is available in this environment; staging and live issuance stay an explicit pending gate. |
@@ -52,7 +52,7 @@ activate_route operation (outbox)                    remove_route operation
   6. MarkRouteServed                                  4. MarkRouteServed
 then the operation worker records the outcome: activation sets the environment
 running and schedules the previous artifacts' cleanup; removal finishes the teardown
-([12](12-teardown-and-cleanup.md)).
+([13](13-teardown-and-cleanup.md)).
 ```
 
 - **Fence.** `environment_routes` holds one row per lifetime environment: the
@@ -87,7 +87,7 @@ running and schedules the previous artifacts' cleanup; removal finishes the tear
   permanently: the activation fails, the environment keeps its active preview and
   becomes `failed`, the candidate is cleaned up and a failure report is queued.
   Router, Docker, file and database errors and a convergence timeout (30 s) are
-  retryable. Route removal is retried until it succeeds ([12](12-teardown-and-cleanup.md)).
+  retryable. Route removal is retried until it succeeds ([13](13-teardown-and-cleanup.md)).
 
 ### What is guaranteed, and the limits
 

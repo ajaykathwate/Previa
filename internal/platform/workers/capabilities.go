@@ -26,6 +26,9 @@ type Capabilities struct {
 	// worker reports Execution false; together, Paused is true only when no
 	// live worker can build.
 	Paused bool `json:"paused"`
+	// Services are the managed services an execution worker offers, one entry
+	// per kind ("postgres 17, 16"); none when no catalog is configured.
+	Services []string `json:"services,omitempty"`
 }
 
 const (
@@ -66,10 +69,10 @@ func Start(ctx context.Context, pool *pgxpool.Pool, caps Capabilities, logger *s
 func (h *Heartbeat) beat(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if _, err := h.pool.Exec(ctx, `INSERT INTO worker_capabilities (worker_id, execution, routing, reporting, housekeeping, discovery, paused)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	if _, err := h.pool.Exec(ctx, `INSERT INTO worker_capabilities (worker_id, execution, routing, reporting, housekeeping, discovery, paused, services)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (worker_id) DO UPDATE SET seen_at = clock_timestamp()`,
-		h.id, h.caps.Execution, h.caps.Routing, h.caps.Reporting, h.caps.Housekeeping, h.caps.Discovery, h.caps.Paused); err != nil {
+		h.id, h.caps.Execution, h.caps.Routing, h.caps.Reporting, h.caps.Housekeeping, h.caps.Discovery, h.caps.Paused, append([]string{}, h.caps.Services...)); err != nil {
 		return fmt.Errorf("record worker capabilities: %w", err)
 	}
 	if _, err := h.pool.Exec(ctx, "DELETE FROM worker_capabilities WHERE seen_at < clock_timestamp() - $1::bigint * interval '1 second'", int64(forget/time.Second)); err != nil {
@@ -137,12 +140,17 @@ func (r *Reader) Live(ctx context.Context) (Capabilities, int64, error) {
 	var live int64
 	err := r.pool.QueryRow(ctx, `SELECT COALESCE(bool_or(execution), false), COALESCE(bool_or(routing), false),
 		COALESCE(bool_or(reporting), false), COALESCE(bool_or(housekeeping), false), COALESCE(bool_or(discovery), false),
-		COALESCE(bool_or(paused), false), count(*)
+		COALESCE(bool_or(paused), false), count(*),
+		COALESCE((SELECT array_agg(DISTINCT s ORDER BY s) FROM worker_capabilities w, unnest(w.services) s
+		          WHERE w.execution AND w.seen_at >= clock_timestamp() - $1::bigint * interval '1 second'), '{}')
 		FROM worker_capabilities WHERE seen_at >= clock_timestamp() - $1::bigint * interval '1 second'`, int64(Stale/time.Second)).
-		Scan(&c.Execution, &c.Routing, &c.Reporting, &c.Housekeeping, &c.Discovery, &c.Paused, &live)
+		Scan(&c.Execution, &c.Routing, &c.Reporting, &c.Housekeeping, &c.Discovery, &c.Paused, &live, &c.Services)
 	if err != nil {
 		return Capabilities{}, 0, fmt.Errorf("read worker capabilities: %w", err)
 	}
 	c.Paused = c.Paused && !c.Execution
+	if len(c.Services) == 0 {
+		c.Services = nil
+	}
 	return c, live, nil
 }

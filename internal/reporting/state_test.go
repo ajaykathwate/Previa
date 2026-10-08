@@ -195,3 +195,22 @@ func TestCommentShowsExpiryOfALivePreview(t *testing.T) {
 		t.Fatal("a removed preview still announces its expiry")
 	}
 }
+
+func TestReadyCommentNamesTheBackendAndDocs(t *testing.T) {
+	s := Snapshot{PullRequestID: 1, RepoID: 2, Number: 3, HeadSHA: "abcdef1234567", State: "open", Generation: 1, BuildStatus: "open",
+		Intent: &Intent{Generation: 1, Revision: 1, HeadSHA: "abcdef1234567", State: "succeeded"},
+		Environment: &Environment{Status: "running", Hostname: "pr-3-x-abc", DeployedSHA: "abcdef1234567", AppliedGeneration: 1, AppliedRevision: 1,
+			Backend: environments.Backend{Services: []environments.BackendService{{Kind: "postgres", Version: "17"}, {Kind: "redis", Version: "7"}}, Setup: true, Processes: []string{"worker"}, DocsPath: "/docs"}}}
+	v := Derive(s, Settings{PreviewBaseDomain: "preview.example.com"}, false, time.Now())
+	body := CommentContent(v)
+	for _, want := range []string{"**Docs:** https://pr-3-x-abc.preview.example.com/docs", "Runs with PostgreSQL 17 and Redis 7 · setup ran · process worker. Data does not survive a rebuild."} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("comment lacks %q:\n%s", want, body)
+		}
+	}
+	// A preview without a backend renders exactly as before.
+	s.Environment.Backend = environments.Backend{}
+	if body := CommentContent(Derive(s, Settings{PreviewBaseDomain: "preview.example.com"}, false, time.Now())); strings.Contains(body, "Runs with") || strings.Contains(body, "Docs") {
+		t.Fatalf("plain preview comment changed:\n%s", body)
+	}
+}

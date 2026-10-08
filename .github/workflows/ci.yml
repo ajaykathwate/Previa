@@ -1,4 +1,4 @@
-# Continuous integration (docs/24-production-deployment.md#ci-and-releases).
+# Continuous integration (docs/25-production-deployment.md#ci-and-releases).
 # Pull requests, including from forks, run with a read-only token and no
 # secrets. The privileged real-Docker suites run only for code already in
 # this repository (pushes and same-repository pull requests).

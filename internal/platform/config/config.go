@@ -68,6 +68,7 @@ type ServerConfig struct {
 	SharedConfig
 	SecretsConfig
 	EnvironmentConfig
+	OutboundConfig
 	// InternalAddr serves /livez, /readyz and /metrics; never publish it.
 	InternalAddr string `envconfig:"INTERNAL_ADDR" default:"127.0.0.1:9090"`
 	// TrustedProxies may set X-Forwarded-For/-Host (the router, in production).
@@ -95,6 +96,7 @@ type WorkerConfig struct {
 	SharedConfig
 	SecretsConfig
 	EnvironmentConfig
+	OutboundConfig
 	ExecutionConfig
 	RoutingConfig
 	HousekeepingConfig
@@ -176,6 +178,9 @@ func LoadWorker() (WorkerConfig, error) {
 	if err := cfg.RoutingConfig.check(); err != nil {
 		return WorkerConfig{}, fmt.Errorf("validate routing configuration: %w", err)
 	}
+	if err := cfg.checkOutbound(); err != nil {
+		return WorkerConfig{}, err
+	}
 	return cfg, nil
 }
 
@@ -240,6 +245,9 @@ func (c ServerConfig) validate() error {
 		return errors.New("SESSION_SECRET must contain at least 32 characters")
 	}
 	if err := c.SecretsConfig.validate(); err != nil {
+		return err
+	}
+	if err := c.checkOutbound(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(c.PreviewBaseDomain) != "" {

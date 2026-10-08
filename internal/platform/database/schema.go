@@ -11,8 +11,8 @@ import (
 // A process refuses to start against an older schema, and readiness fails
 // if the schema falls behind (for example after a restore from an old
 // backup). A newer schema is accepted: migrations stay backward compatible
-// for one release (docs/24-production-deployment.md).
-const SchemaVersion = 19
+// for one release (docs/25-production-deployment.md).
+const SchemaVersion = 20
 
 // AppliedVersion is the highest Goose migration currently applied. A
 // version's newest row decides, so a rolled-back migration does not count.

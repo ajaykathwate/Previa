@@ -22,7 +22,9 @@ import (
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/dashboard"
+	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	pr "github.com/ajaykathwatee/previa/internal/pullrequests"
@@ -147,6 +149,12 @@ func TestBrowserRegression(t *testing.T) {
 			t.Fatal(err)
 		}
 		secrets.NewHandler(secretService, handler, logger).Mount(r, auth.RequireUser)
+		// Real outbound handler and rules over an in-memory store.
+		outboundService, err := outbound.NewService(&fixtureOutbound{approved: map[int64][]outbound.Approved{}}, []int{5432, 6379})
+		if err != nil {
+			t.Fatal(err)
+		}
+		outbound.NewHandler(outboundService, handler, logger).Mount(r, auth.RequireUser)
 		// Real workspace templates; database ownership is verified in pullrequests.
 		panel := func(r *http.Request, repoID int64) prpages.Page {
 			p := prpages.Page{RepoID: repoID, Name: "fixture-owner/repository-" + strconv.FormatInt(repoID, 10), Mode: sessions.GetString(r.Context(), "fixture-mode"), Available: repoID%2 == 1, DiscoveryEnabled: true, SyncState: "complete", Fetched: 25, LastRefresh: "2026-10-04T10:00:00Z", Number: 1, Pages: 3, Total: 25, State: r.URL.Query().Get("pr_state"), Search: r.URL.Query().Get("pr_q"), WorkspaceQuery: r.URL.RawQuery}
@@ -569,4 +577,55 @@ func fixtureOverview(now time.Time) dashboardpages.Summary {
 				PublishedAt: at(-12 * time.Hour), ExpiresAt: at(36 * time.Hour)},
 		},
 	}
+}
+
+// fixtureOutbound keeps approvals in memory; odd repositories are available.
+type fixtureOutbound struct {
+	mu       sync.Mutex
+	approved map[int64][]outbound.Approved
+	next     int64
+}
+
+func (f *fixtureOutbound) Repository(_ context.Context, _ int64, repoID int64) (outbound.RepositoryView, error) {
+	if repoID <= 0 || repoID > 25 {
+		return outbound.RepositoryView{}, outbound.ErrUnavailable
+	}
+	return outbound.RepositoryView{ID: repoID, FullName: "fixture-owner/repository-" + strconv.FormatInt(repoID, 10), Available: repoID%2 == 1}, nil
+}
+
+func (f *fixtureOutbound) List(_ context.Context, _ int64, repoID int64) ([]outbound.Approved, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]outbound.Approved(nil), f.approved[repoID]...), nil
+}
+
+func (f *fixtureOutbound) Add(_ context.Context, _ int64, repoID int64, d egress.Destination, limit int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if repoID%2 == 0 {
+		return outbound.ErrAccessRemoved
+	}
+	for _, a := range f.approved[repoID] {
+		if a.Port == d.Port {
+			return outbound.ErrPortTaken
+		}
+	}
+	if len(f.approved[repoID]) >= limit {
+		return outbound.ErrLimit
+	}
+	f.next++
+	f.approved[repoID] = append(f.approved[repoID], outbound.Approved{ID: f.next, Host: d.Host, Port: d.Port, CreatedAt: time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)})
+	return nil
+}
+
+func (f *fixtureOutbound) Remove(_ context.Context, _ int64, repoID, id int64) (egress.Destination, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, a := range f.approved[repoID] {
+		if a.ID == id {
+			f.approved[repoID] = append(f.approved[repoID][:i], f.approved[repoID][i+1:]...)
+			return egress.Destination{Host: a.Host, Port: a.Port}, nil
+		}
+	}
+	return egress.Destination{}, outbound.ErrUnavailable
 }

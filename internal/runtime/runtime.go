@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/builds"
@@ -16,6 +19,8 @@ import (
 	"github.com/ajaykathwatee/previa/internal/repoconfig"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/source"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 )
 
@@ -55,6 +60,24 @@ type LogSink interface {
 // may print. It returns an error when the attempt has no log stream.
 type LogOpener func(ctx context.Context, attempt environments.Attempt, redactor *secrets.Redactor) (LogSink, error)
 
+// Destinations reads repositories' owner-approved outbound connections; the
+// outbound feature implements it.
+type Destinations interface {
+	Destinations(ctx context.Context, repoIDs ...int64) (map[int64][]egress.Destination, error)
+}
+
+// OutboundTargets lists the previews whose networks may carry outbound
+// connections now; *TargetStore implements it.
+type OutboundTargets interface {
+	OutboundPreviews(ctx context.Context) ([]OutboundPreview, error)
+}
+
+// ComponentRecorder stores what a ready candidate runs next to its app;
+// *TargetStore implements it.
+type ComponentRecorder interface {
+	RecordComponents(ctx context.Context, c Components) error
+}
+
 // Parts are the runtime's collaborators.
 type Parts struct {
 	// Instance is this database's identity (database.Instance); it names and
@@ -70,6 +93,12 @@ type Parts struct {
 	Builder   Builder
 	Secrets   Secrets
 	Logs      LogOpener
+	// Components records what each ready candidate runs; nil records nothing.
+	Components ComponentRecorder
+	// Destinations and Outbound enable owner-approved outbound connections
+	// (with an egress gateway that forwards); nil leaves them off.
+	Destinations Destinations
+	Outbound     OutboundTargets
 }
 
 // Runtime turns an admitted request into a healthy, hardened preview
@@ -88,6 +117,10 @@ type Runtime struct {
 	policy    Policy
 	logger    *slog.Logger
 	now       func() time.Time
+
+	components      ComponentRecorder
+	destinations    Destinations
+	outboundTargets OutboundTargets
 }
 
 var (
@@ -102,12 +135,16 @@ func New(parts Parts, policy Policy, logger *slog.Logger) (*Runtime, error) {
 	if !dockerx.ValidInstance(parts.Instance) {
 		return nil, errors.New("runtime requires this database's instance identity")
 	}
-	if policy.TmpfsBytes <= 0 || policy.PIDs <= 0 || policy.StartupTimeout <= 0 || policy.MaxPerRepo <= 0 {
+	if policy.TmpfsBytes <= 0 || policy.PIDs <= 0 || policy.StartupTimeout <= 0 || policy.SetupTimeout <= 0 || policy.MaxPerRepo <= 0 {
 		return nil, errors.New("runtime policy is incomplete")
+	}
+	if (parts.Destinations == nil) != (parts.Outbound == nil) {
+		return nil, errors.New("outbound connections need both the approved destinations and the outbound previews")
 	}
 	return &Runtime{
 		instance: parts.Instance, admission: parts.Admission, docker: parts.Docker, egress: parts.Egress, targets: parts.Targets, sources: parts.Sources,
 		builder: parts.Builder, secrets: parts.Secrets, logs: parts.Logs, policy: policy, logger: logger, now: time.Now,
+		components: parts.Components, destinations: parts.Destinations, outboundTargets: parts.Outbound,
 	}, nil
 }
 
@@ -125,7 +162,7 @@ func NewInventory(docker *client.Client, instance string, logger *slog.Logger) (
 func PolicyFrom(c config.PreviewConfig) Policy {
 	return Policy{
 		AllowRoot: c.PreviewAllowRoot, WritableRootfs: c.PreviewWritableRootfs, TmpfsBytes: int64(c.PreviewTmpfsSize),
-		PIDs: c.PreviewPIDs, OCIRuntime: c.PreviewOCIRuntime, StartupTimeout: c.PreviewStartupTimeout,
+		PIDs: c.PreviewPIDs, OCIRuntime: c.PreviewOCIRuntime, StartupTimeout: c.PreviewStartupTimeout, SetupTimeout: c.PreviewSetupTimeout,
 		MemoryBudget: int64(c.PreviewMemoryBudget), CPUBudget: c.PreviewCPUBudget, MaxPerRepo: c.PreviewMaxPerRepository,
 	}
 }
@@ -158,7 +195,15 @@ func (r *Runtime) Build(ctx context.Context, request environments.Request, attem
 		return environments.Artifact{}, failure(CodeSecrets, "Repository secrets could not be decrypted on the worker; the preview was not started.", false, err)
 	}
 	defer env.Wipe()
-	redactor, err := env.Redactor()
+	id := requestIdentity{PullRequestID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, EnvironmentID: attempt.EnvironmentID, HeadSHA: request.HeadSHA}
+	// The candidate's key names its app container; its services' credentials
+	// are generated now so the log redacts them from the first line.
+	key := fmt.Sprintf("previa-%s-pr%d-g%d-r%d-%d", r.instance, id.PullRequestID, id.Generation, id.Revision, r.now().UnixNano())
+	plan, err := planBackend(key, settings)
+	if err != nil {
+		return environments.Artifact{}, failure(CodeUnavailable, "The preview's services could not be prepared.", true, err)
+	}
+	redactor, err := env.Redactor(plan.secrets...)
 	if err != nil {
 		return environments.Artifact{}, failure(CodeSecrets, "Repository secrets could not be prepared for log redaction.", false, err)
 	}
@@ -167,8 +212,11 @@ func (r *Runtime) Build(ctx context.Context, request environments.Request, attem
 	for _, notice := range env.Notices {
 		startLogs.System(notice)
 	}
-	id := requestIdentity{PullRequestID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, EnvironmentID: attempt.EnvironmentID, HeadSHA: request.HeadSHA}
-	containerID, err := r.startCandidate(ctx, id, target, image, settings, env.Environ(), startLogs)
+	appEnv, notice := injectBackend(env.Environ(), plan.env)
+	if notice != "" {
+		startLogs.System(notice)
+	}
+	containerID, err := r.startCandidate(ctx, id, target, image, settings, appEnv, plan, startLogs)
 	if err != nil {
 		startLogs.System("The preview did not start: " + messageOf(err))
 		return environments.Artifact{}, err
@@ -230,11 +278,21 @@ func (r *Runtime) buildImage(ctx context.Context, request environments.Request, 
 	return image, settings, nil
 }
 
-// startCandidate admits, creates and starts the hardened container and waits
-// until it is ready. Any failure removes it after capturing its output.
-func (r *Runtime) startCandidate(ctx context.Context, id requestIdentity, t Target, image builds.Image, settings repoconfig.Config, env []string, logs LogSink) (containerID string, err error) {
-	// Hold the admission lock from the capacity check until the labelled
-	// container exists, so the next admission counts it.
+// startCandidate admits, creates and starts the candidate and waits until it
+// is ready, in order: its managed services answer their protocol, its setup
+// command succeeds, its processes run, and its app passes the readiness
+// check. Any failure removes every container of the candidate after
+// capturing the failing part's output.
+func (r *Runtime) startCandidate(ctx context.Context, id requestIdentity, t Target, image builds.Image, settings repoconfig.Config, env []string, plan backend, logs LogSink) (containerID string, err error) {
+	// Pinned service images are pulled first: a pull can take minutes and
+	// must not hold the admission lock.
+	volumes, err := r.serviceImages(ctx, plan.services, logs)
+	if err != nil {
+		return "", err
+	}
+	cpuMillis, memory := plan.resources(settings)
+	// Hold the admission lock from the capacity check until every labelled
+	// container of the candidate exists, so the next admission counts them.
 	unlock, err := r.admission.Lock(ctx)
 	if err != nil {
 		return "", r.interrupted(ctx, failure(CodeUnavailable, "Preview capacity could not be checked.", true, err))
@@ -245,39 +303,144 @@ func (r *Runtime) startCandidate(ctx context.Context, id requestIdentity, t Targ
 			unlock()
 		}
 	}()
-	if err := r.checkCapacity(ctx, t, settings.Resources.CPUMillis, settings.Resources.MemoryBytes); err != nil {
+	if err := r.checkCapacity(ctx, t, cpuMillis, memory); err != nil {
 		return "", err
 	}
-	networkID, proxyURL, err := r.previewNetwork(ctx, id, t)
+	networkID, egressAddr, err := r.previewNetwork(ctx, id, t)
 	if err != nil {
 		return "", asRuntimeError(err, "The preview network could not be prepared.")
+	}
+	servicesNetworkID := ""
+	if len(plan.services) > 0 {
+		if servicesNetworkID, err = r.servicesNetwork(ctx, id, t); err != nil {
+			return "", asRuntimeError(err, "The services network could not be prepared.")
+		}
+	}
+	destinations, withheld, err := r.outbound(ctx, t, egressAddr)
+	if err != nil {
+		return "", err
 	}
 	inspected, err := r.docker.ImageInspect(ctx, image.ID)
 	if err != nil || inspected.Config == nil {
 		return "", failure(CodeUnavailable, "The built image could not be inspected.", true, err)
 	}
-	name := fmt.Sprintf("previa-%s-pr%d-g%d-r%d-%d", r.instance, id.PullRequestID, id.Generation, id.Revision, r.now().UnixNano())
+	labels := previewLabels(r.instance, t, id, image.Ref, settings.Port, settings.HealthCheckPath, settings.Resources.CPUMillis, settings.Resources.MemoryBytes, r.now())
+	labels[dockerx.LabelCandidate] = plan.key
+	hosts := make([]string, len(destinations))
+	for i, d := range destinations {
+		hosts[i] = d.Host + ":" + egressAddr.String()
+	}
 	config, host, replaced := containerSpec(candidate{
-		Name: name, ImageID: image.ID, ImageUser: inspected.Config.User, Port: settings.Port, Env: env, ProxyURL: proxyURL,
-		CPUMillis: settings.Resources.CPUMillis, Memory: settings.Resources.MemoryBytes, NetworkID: networkID,
-		Labels: previewLabels(r.instance, t, id, image.Ref, settings.Port, settings.HealthCheckPath, settings.Resources.CPUMillis, settings.Resources.MemoryBytes, r.now()),
+		Name: plan.key, ImageID: image.ID, ImageUser: inspected.Config.User, Port: settings.Port, Env: env, ProxyURL: egress.ProxyURL(egressAddr),
+		CPUMillis: settings.Resources.CPUMillis, Memory: settings.Resources.MemoryBytes, NetworkID: networkID, ExtraHosts: hosts, Labels: labels,
 	}, r.policy)
+	var networking *network.NetworkingConfig
+	if servicesNetworkID != "" {
+		networking = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{networkID: {}, servicesNetworkID: {}}}
+	}
 	if replaced {
 		logs.System("The image runs as root, so the preview runs as the unprivileged user 65532 instead.")
 	}
-	created, err := r.docker.ContainerCreate(ctx, client.ContainerCreateOptions{Name: name, Config: config, HostConfig: host})
-	unlock()
-	locked = false
-	if err != nil {
-		return "", r.interrupted(ctx, failure(CodeUnavailable, "The preview container could not be created.", true, err))
+	switch {
+	case len(destinations) > 0:
+		logs.System(fmt.Sprintf("%d approved outbound connection%s reach this preview through the egress proxy.", len(destinations), plural(len(destinations))))
+	case withheld:
+		logs.System("Approved outbound connections were withheld: the pull request comes from a fork or its source could not be verified.")
 	}
+	// Every container is created, labelled and counted now; none starts yet.
+	created := map[string]string{} // component -> container ID ("" is the app)
+	failed := ""                   // the component whose output explains a failure
 	defer func() {
 		if err != nil {
-			r.captureOutput(ctx, created.ID, logs)
-			r.discard(ctx, created.ID)
+			if companion, ok := created[failed]; ok && failed != "" {
+				r.captureOutputOf(ctx, companion, componentTitle(failed, plan)+" output", logs)
+			} else if app, ok := created[""]; ok {
+				r.captureOutput(ctx, app, logs)
+			}
+			r.discardCandidate(ctx, id.PullRequestID, plan.key)
 		}
 	}()
-	if _, err := r.docker.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
+	create := func(component, name string, config *container.Config, host *container.HostConfig, networking *network.NetworkingConfig) error {
+		result, err := r.docker.ContainerCreate(ctx, client.ContainerCreateOptions{Name: name, Config: config, HostConfig: host, NetworkingConfig: networking})
+		if err != nil {
+			return r.interrupted(ctx, failure(CodeUnavailable, "A container of the preview could not be created.", true, err))
+		}
+		created[component] = result.ID
+		return nil
+	}
+	for _, s := range plan.services {
+		serviceLabels := componentLabels(labels, dockerx.KindService, s.Kind, s.profile.cpuMillis, s.profile.memory)
+		serviceLabels[dockerx.LabelVersion] = s.Version
+		c, h, n := serviceSpec(s, volumes[s.Kind], servicesNetworkID, serviceLabels, r.policy)
+		if err := create(s.Kind, plan.key+"-"+s.Kind, c, h, n); err != nil {
+			return "", err
+		}
+	}
+	if len(plan.setup) > 0 {
+		c, h, n := commandSpec(config, host, networking, plan.setup, "setup", container.RestartPolicy{Name: container.RestartPolicyDisabled},
+			componentLabels(labels, dockerx.KindSetup, "setup", settings.Resources.CPUMillis, settings.Resources.MemoryBytes), settings.Resources.CPUMillis, settings.Resources.MemoryBytes)
+		if err := create("setup", plan.key+"-setup", c, h, n); err != nil {
+			return "", err
+		}
+	}
+	processes := map[string]string{}
+	for _, p := range plan.processes {
+		c, h, n := commandSpec(config, host, networking, p.Command, "process-"+p.Name, container.RestartPolicy{Name: container.RestartPolicyOnFailure, MaximumRetryCount: maxRestarts},
+			componentLabels(labels, dockerx.KindProcess, p.Name, p.Resources.CPUMillis, p.Resources.MemoryBytes), p.Resources.CPUMillis, p.Resources.MemoryBytes)
+		if err := create("process:"+p.Name, plan.key+"-"+p.Name, c, h, n); err != nil {
+			return "", err
+		}
+		processes[p.Name] = created["process:"+p.Name]
+	}
+	if err := create("", plan.key, config, host, networking); err != nil {
+		return "", err
+	}
+	unlock()
+	locked = false
+
+	// 1. Services answer their protocol.
+	if len(plan.services) > 0 {
+		services := map[string]string{}
+		for _, s := range plan.services {
+			if _, err := r.docker.ContainerStart(ctx, created[s.Kind], client.ContainerStartOptions{}); err != nil {
+				failed = s.Kind
+				return "", r.interrupted(ctx, failure(CodeServiceFailed, fmt.Sprintf("%s %s could not be started.", s.profile.title, s.Version), true, err))
+			}
+			services[s.Kind] = created[s.Kind]
+		}
+		if err := r.waitServicesReady(ctx, plan.services, services, logs); err != nil {
+			failed = failedService(ctx, r, plan.services, services)
+			return "", err
+		}
+	}
+	// 2. Setup runs once.
+	if len(plan.setup) > 0 {
+		if err := r.runSetup(ctx, created["setup"], plan.setup, logs); err != nil {
+			return "", err
+		}
+		delete(created, "setup")
+	}
+	// 3. Processes run.
+	for _, name := range slices.Sorted(maps.Keys(processes)) {
+		logs.System("Starting the process " + name + ".")
+		if _, err := r.docker.ContainerStart(ctx, processes[name], client.ContainerStartOptions{}); err != nil {
+			failed = "process:" + name
+			return "", r.interrupted(ctx, failure(CodeProcessFailed, "The process "+name+" could not be started.", true, err))
+		}
+	}
+	if len(processes) > 0 {
+		select {
+		case <-ctx.Done():
+			return "", r.interrupted(ctx, failure(CodeCancelled, "The build was cancelled.", false, ctx.Err()))
+		case <-time.After(processSettle):
+		}
+		if err := r.checkProcesses(ctx, processes); err != nil {
+			failed = failedProcess(ctx, r, processes)
+			return "", err
+		}
+	}
+	// 4. The app passes its readiness check.
+	if _, err := r.docker.ContainerStart(ctx, created[""], client.ContainerStartOptions{}); err != nil {
 		return "", r.interrupted(ctx, failure(CodeUnavailable, "The preview container could not be started.", true, err))
 	}
 	check := "for TCP connections"
@@ -285,12 +448,85 @@ func (r *Runtime) startCandidate(ctx context.Context, id requestIdentity, t Targ
 		check = "for HTTP 200-399 from " + settings.HealthCheckPath
 	}
 	logs.System(fmt.Sprintf("Waiting up to %s for the app on port %d %s.", r.policy.StartupTimeout, settings.Port, check))
-	if err := r.waitReady(ctx, created.ID, r.networkName(id.PullRequestID), settings.Port, settings.HealthCheckPath); err != nil {
+	if err := r.waitReady(ctx, created[""], r.networkName(id.PullRequestID), settings.Port, settings.HealthCheckPath); err != nil {
 		return "", err
 	}
-	r.captureOutput(ctx, created.ID, logs)
+	// Everything the app depends on must still be up.
+	if err := r.checkProcesses(ctx, processes); err != nil {
+		failed = failedProcess(ctx, r, processes)
+		return "", err
+	}
+	for _, s := range plan.services {
+		if ok, _, checkErr := r.serviceAnswers(ctx, s, created[s.Kind], true); checkErr != nil || !ok {
+			failed = s.Kind
+			return "", failure(CodeServiceFailed, fmt.Sprintf("%s %s stopped answering while the app started.", s.profile.title, s.Version), false, checkErr)
+		}
+	}
+	if r.components != nil {
+		if err := r.components.RecordComponents(ctx, plan.components(id, settings, len(destinations), withheld)); err != nil {
+			return "", failure(CodeUnavailable, "The preview's components could not be recorded.", true, err)
+		}
+	}
+	r.captureOutput(ctx, created[""], logs)
 	logs.System("The preview is healthy. It is not routed yet.")
-	return created.ID, nil
+	return created[""], nil
+}
+
+// processSettle is how long processes run before they are first checked, so
+// one that exits at once is caught before the app starts.
+const processSettle = 2 * time.Second
+
+func componentTitle(component string, plan backend) string {
+	for _, s := range plan.services {
+		if s.Kind == component {
+			return s.profile.title + " " + s.Version
+		}
+	}
+	if name, ok := strings.CutPrefix(component, "process:"); ok {
+		return "Process " + name
+	}
+	return component
+}
+
+// failedService names the first service that is not running, for its output.
+func failedService(ctx context.Context, r *Runtime, services []serviceRun, ids map[string]string) string {
+	for _, s := range services {
+		inspected, err := r.docker.ContainerInspect(ctx, ids[s.Kind], client.ContainerInspectOptions{})
+		if err != nil || !observedHealth(inspected.Container).Running {
+			return s.Kind
+		}
+	}
+	if len(services) > 0 {
+		return services[0].Kind
+	}
+	return ""
+}
+
+// failedProcess names the first process that is not running.
+func failedProcess(ctx context.Context, r *Runtime, processes map[string]string) string {
+	for _, name := range slices.Sorted(maps.Keys(processes)) {
+		inspected, err := r.docker.ContainerInspect(ctx, processes[name], client.ContainerInspectOptions{})
+		if err != nil {
+			return "process:" + name
+		}
+		if h := observedHealth(inspected.Container); !h.Running || h.Restarts > 0 {
+			return "process:" + name
+		}
+	}
+	return ""
+}
+
+// components describes the ready candidate for the dashboard and reports.
+func (b backend) components(id requestIdentity, settings repoconfig.Config, outbound int, withheld bool) Components {
+	c := Components{PullRequestID: id.PullRequestID, Generation: id.Generation, Revision: id.Revision, Setup: len(b.setup) > 0,
+		DocsPath: settings.DocsPath, Outbound: outbound, OutboundWithheld: withheld}
+	for _, s := range b.services {
+		c.Services = append(c.Services, ServiceComponent{Kind: s.Kind, Version: s.Version})
+	}
+	for _, p := range b.processes {
+		c.Processes = append(c.Processes, p.Name)
+	}
+	return c
 }
 
 // interrupted reports cancellation or timeout instead of fallback when ctx ended.

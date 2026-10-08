@@ -1,5 +1,5 @@
 -- +goose Up
--- Route controller state (docs/11-routing-and-https.md). One row per lifetime
+-- Route controller state (docs/12-routing-and-https.md). One row per lifetime
 -- environment holds the route version the controller accepted, ordered by
 -- (generation, revision). A removal stays as a tombstone, so a late activation
 -- can never bring a removed route back. The served columns record the last

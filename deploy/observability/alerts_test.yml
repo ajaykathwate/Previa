@@ -21,7 +21,7 @@ tests:
           - exp_labels: {severity: critical, job: previa-worker}
             exp_annotations:
               summary: No worker is running; builds, teardown, cleanup and reports wait.
-              runbook: docs/23-incident-runbook.md#server-or-worker-down
+              runbook: docs/24-incident-runbook.md#server-or-worker-down
 
   - interval: 1m
     input_series:
@@ -38,7 +38,7 @@ tests:
           - exp_labels: {severity: critical}
             exp_annotations:
               summary: Housekeeping removed an unexpectedly large number of resources.
-              runbook: docs/23-incident-runbook.md#unexpected-deletions
+              runbook: docs/24-incident-runbook.md#unexpected-deletions
 
   - interval: 1m
     input_series:
@@ -53,7 +53,7 @@ tests:
           - exp_labels: {severity: warning}
             exp_annotations:
               summary: More than half of the last hour's builds failed.
-              runbook: docs/23-incident-runbook.md#build-failures
+              runbook: docs/24-incident-runbook.md#build-failures
 
   - interval: 1m
     input_series:
@@ -81,7 +81,7 @@ tests:
           - exp_labels: {severity: critical}
             exp_annotations:
               summary: No successful database backup in over a day.
-              runbook: docs/23-incident-runbook.md#backup-failed
+              runbook: docs/24-incident-runbook.md#backup-failed
 
   - interval: 1m
     input_series:
@@ -96,11 +96,11 @@ tests:
           - exp_labels: {severity: critical}
             exp_annotations:
               summary: Builds have waited for disk space for fifteen minutes.
-              runbook: docs/23-incident-runbook.md#disk-exhaustion
+              runbook: docs/24-incident-runbook.md#disk-exhaustion
       - eval_time: 20m
         alertname: PreviaDiskLow
         exp_alerts:
           - exp_labels: {severity: warning}
             exp_annotations:
               summary: The Docker host has under 20 GiB free at the last build.
-              runbook: docs/23-incident-runbook.md#disk-exhaustion
+              runbook: docs/24-incident-runbook.md#disk-exhaustion

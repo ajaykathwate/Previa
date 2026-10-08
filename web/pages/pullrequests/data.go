@@ -41,6 +41,40 @@ type PR struct {
 	RemovedNote   string // why the preview was removed (owner, expiry, access)
 	OlderPreview  bool   // the preview serves an earlier commit than the latest
 	Actions       Actions
+	// Backend previews: what the live preview runs next to its app (one
+	// line), its docs address, and its approved outbound connections.
+	Backend          string
+	DocsURL          string
+	Outbound         int
+	OutboundWithheld bool
+	// ServicesOffered are the managed services a running worker offers
+	// ("postgres 17, 16"); ExecutionWorker says whether one runs at all.
+	ServicesOffered []string
+	ExecutionWorker bool
+}
+
+// ServicesLabel says what managed services previews may request here.
+func (pr PR) ServicesLabel() string {
+	switch {
+	case !pr.ExecutionWorker:
+		return "Unknown until a worker that builds is running."
+	case len(pr.ServicesOffered) == 0:
+		return "None: no service catalog is configured on the worker (PREVIEW_SERVICE_CATALOG)."
+	}
+	return strings.Join(pr.ServicesOffered, "; ")
+}
+
+// OutboundLabel describes the live preview's approved outbound connections.
+func (pr PR) OutboundLabel() string {
+	switch {
+	case pr.OutboundWithheld:
+		return "Withheld: the pull request comes from a fork."
+	case pr.Outbound == 1:
+		return "1 approved destination."
+	case pr.Outbound > 1:
+		return strconv.Itoa(pr.Outbound) + " approved destinations."
+	}
+	return ""
 }
 
 // Headline answers "what is happening with this PR's preview?" in one line.

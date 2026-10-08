@@ -45,18 +45,20 @@ type Preparer struct {
 	archives   ArchiveSource
 	workspaces *Workspaces
 	limits     Limits
-	resources  repoconfig.Resources
+	platform   repoconfig.Platform
 	now        func() time.Time
 }
 
-func NewPreparer(archives ArchiveSource, workspaces *Workspaces, limits Limits, resources repoconfig.Resources) (*Preparer, error) {
+// NewPreparer reads each commit's configuration under platform: the
+// operator's resource ceilings and backend service catalog.
+func NewPreparer(archives ArchiveSource, workspaces *Workspaces, limits Limits, platform repoconfig.Platform) (*Preparer, error) {
 	if archives == nil || workspaces == nil {
 		return nil, errors.New("source preparation requires an archive source and workspaces")
 	}
-	if resources.CPUMillis <= 0 || resources.MemoryBytes <= 0 {
+	if platform.Limits.CPUMillis <= 0 || platform.Limits.MemoryBytes <= 0 {
 		return nil, errors.New("source preparation requires positive platform resource ceilings")
 	}
-	return &Preparer{archives: archives, workspaces: workspaces, limits: limits.withDefaults(), resources: resources, now: time.Now}, nil
+	return &Preparer{archives: archives, workspaces: workspaces, limits: limits.withDefaults(), platform: platform, now: time.Now}, nil
 }
 
 // Prepared is an extracted, identity-verified source tree and its configuration.
@@ -107,7 +109,7 @@ func (p *Preparer) Prepare(ctx context.Context, request Request) (prepared *Prep
 	if err != nil {
 		return nil, err
 	}
-	result, err := loadConfig(root, p.resources)
+	result, err := loadConfig(root, p.platform)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +130,7 @@ func (p *Preparer) Release(prepared *Prepared) error {
 // loadConfig reads .previewrc.yaml from the extracted tree with the same parser,
 // defaults, clamping and hash as repoconfig. The file must be a regular file at
 // the root; it is opened without following a link swapped in after the check.
-func loadConfig(root *os.Root, resources repoconfig.Resources) (repoconfig.Result, error) {
+func loadConfig(root *os.Root, platform repoconfig.Platform) (repoconfig.Result, error) {
 	info, err := root.Lstat(repoconfig.Filename)
 	if errors.Is(err, fs.ErrNotExist) {
 		return repoconfig.Result{}, failure(CodeMissingConfig, "Add .previewrc.yaml to the repository root at the requested commit.", nil)
@@ -155,7 +157,7 @@ func loadConfig(root *os.Root, resources repoconfig.Resources) (repoconfig.Resul
 	if len(data) > repoconfig.MaxConfigBytes {
 		return repoconfig.Result{}, failure(CodeInvalidConfig, "Configuration must not exceed 64 KiB.", nil)
 	}
-	result, err := repoconfig.Parse(data, resources)
+	result, err := repoconfig.ParseFor(data, platform)
 	if err != nil {
 		var invalid *repoconfig.ValidationError
 		if errors.As(err, &invalid) {

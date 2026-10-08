@@ -1,6 +1,6 @@
-# 25 · Release report: v0.1.0-rc.1
+# 26 · Release report: v0.1.0-rc.1
 
-The release acceptance checklist from [26](26-roadmap.md#release-acceptance-checklist),
+The release acceptance checklist from [27](27-roadmap.md#release-acceptance-checklist),
 answered item by item with the evidence gathered on 2026-10-05 for the release
 candidate `v0.1.0-rc.1`, built from this repository. Every check below ran on a
 developer workstation with disposable resources; nothing was deployed, published or
@@ -35,7 +35,7 @@ repository that were not available.
 | `make test-browser` | 30/30 under the production Content-Security-Policy. |
 | `make observability-check` | 24 alert rules valid, their unit tests pass, Prometheus configuration valid, 28 dashboard queries parse. |
 | `make release-images`; a clean `--no-cache` rebuild | Built; the rebuilt binaries are bit-for-bit identical. |
-| `make prod-smoke` with an older-schema dump | 43/43 checks ([24](24-production-deployment.md#local-staging-smoke-test)). |
+| `make prod-smoke` with an older-schema dump | 43/43 checks ([25](25-production-deployment.md#local-staging-smoke-test)). |
 | shellcheck on `deploy/`; actionlint on the workflows; `goreleaser check` and a snapshot build | Pass. |
 
 ## Checklist
@@ -44,14 +44,31 @@ repository that were not available.
 | --- | --- | --- |
 | Fresh setup, clean migration and startup from documented commands; real readiness and capability; fail closed on incomplete config | `make prod-smoke`: the production Compose stack becomes healthy in about 20 s, migrations apply once, `/readyz` reports schema, version and capabilities; `check-config` exits 1 on a missing setting; processes refuse an older schema; `setup.sh` passes shellcheck. | Passed locally; **`setup.sh` on a real host pending.** |
 | Real hosted OAuth/App installation and signed GitHub delivery; open-only discovery; close/merge keeps the row; conflicts cannot execute | Local signed fixtures, a real local Git conflict and the discovery, mergeability and lifecycle tests ([05](05-webhooks-and-pr-discovery.md)). | **Pending: hosted GitHub.** |
-| Manual builds the freshly verified SHA; pushes alone do not; Automatic bursts deploy the latest after five quiet minutes; Retry/Rebuild fence old work; duplicates coalesce | `make test-e2e` and the intent, scheduling and action tests ([21](21-mvp-operations.md#what-is-proven-and-by-which-test)). | Passed with a fake GitHub; **real repository pending.** |
+| Manual builds the freshly verified SHA; pushes alone do not; Automatic bursts deploy the latest after five quiet minutes; Retry/Rebuild fence old work; duplicates coalesce | `make test-e2e` and the intent, scheduling and action tests ([22](22-mvp-operations.md#what-is-proven-and-by-which-test)). | Passed with a fake GitHub; **real repository pending.** |
 | A real Dockerfile app builds, becomes healthy, serves stable valid HTTPS, streams redacted logs, one living comment and a valid check; secrets for trusted sources, none for forks | `make test-e2e` (real Docker, BuildKit, Traefik, fake GitHub over TLS, Traefik's default certificate); `make test-routing` (Pebble-issued certificates); `make test-runtime` (fork withholding). | Passed locally; **Let's Encrypt and a real PR pending.** |
 | Successful rebuild swaps without an avoidable gap; failed rebuild keeps the old deployment; stale operations and crashes cannot leave an obsolete final state | `make test-routing`, `make test-e2e`, the ordering, publication and recovery tests. | Passed. |
 | Close, owner teardown, expiry and revocation remove routes and resources durably; reopen follows policy; no recreation loop or orphan; unrelated resources survive | `make test-routing`, `make test-housekeeping`, `make test-e2e` (close and teardown leave no container, image or network). | Passed. |
 | Build and runtime probes cannot reach host, control plane, PostgreSQL, metadata or other previews; limits and capacity races cannot exhaust the host; previews cannot receive dashboard cookies or credentials | `make test-builder`, `make test-runtime` (network probes, limits, atomic admission race); host-only `__Host-` cookies; separate preview domain. | Passed locally; **capacity on the target host's resources pending.** |
 | Browser checks: owner isolation, CSRF, modals, keyboard and mobile navigation, logs reconnect/reset, empty and failure states, no-JavaScript flows | `make test-browser` 30/30 under the CSP; `TestActionsRefuseAnotherOwnersPullRequest`. | Passed. |
-| GitHub, proxy and database outages, disk pressure and abrupt worker restarts recover without losing intent or cleanup; operators see and act on failures | e2e GitHub outage; router restarts (`make test-routing`); disk-pressure and recovery tests; graceful stop and restart in the smoke test; 24 alerts with a runbook ([23](23-incident-runbook.md)). | Passed locally. |
+| GitHub, proxy and database outages, disk pressure and abrupt worker restarts recover without losing intent or cleanup; operators see and act on failures | e2e GitHub outage; router restarts (`make test-routing`); disk-pressure and recovery tests; graceful stop and restart in the smoke test; 24 alerts with a runbook ([24](24-incident-runbook.md)). | Passed locally. |
 | Production images, Compose and CI validate; wildcard TLS verified; backup/restore and upgrade/rollback rehearsed on fresh disposable infrastructure | Images built and reproducible; Compose validated and run by the smoke test; actionlint and `goreleaser check`; the smoke test's backup (encrypted, about 1 s), restore (21 s, with the data-loss window shown), upgrade and rollback, and a migration-16 database restored and upgraded to 18 (21 s). | Passed locally; **wildcard TLS from Let's Encrypt, the workflows on GitHub and a rehearsal on a real host pending.** |
+
+### Backend previews (Prompt 13)
+
+`make test-e2e` (`TestRealBackendEndToEnd`, local Docker Desktop, BuildKit and
+Traefik, 2026-10-06, rerun on 2026-10-08) runs an HTTP API on managed PostgreSQL
+17 and Redis 7 with a migration-and-seed setup command and a queue worker
+([11](11-backend-previews.md)):
+
+| Property | Result |
+| --- | --- |
+| Builds, becomes ready, serves over HTTPS; the worker processes a job; the comment names the backend and docs | passed |
+| A fork's preview gets services but its outbound approvals are withheld | passed |
+| Services reach neither the internet, the egress proxy, the host nor another preview; another preview cannot reach them | passed |
+| The approved destination (`github.com:22`) answers through the egress proxy; unapproved, loopback (`localtest.me`) and metadata (`169.254.169.254.nip.io`) destinations are refused; the fork reaches nothing | passed |
+| A rebuild gets a fresh database; the retired candidate's services are removed | passed |
+| A failing migration fails the build (`setup_failed`) and the earlier preview and its data keep serving | passed |
+| A crashed candidate's leftover service is removed by housekeeping; teardown leaves no container, image, network or volume | passed |
 
 ## Outstanding inputs and pending gates
 

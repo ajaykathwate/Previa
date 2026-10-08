@@ -139,6 +139,11 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 		if row.ExpiresAt.Valid {
 			pr.ExpiresAt = row.ExpiresAt.Time.UTC().Format(time.RFC3339)
 		}
+		backend := environments.ParseBackend(row.BackendServices, row.BackendProcesses, row.BackendSetup, row.BackendDocsPath, row.BackendOutbound, row.BackendOutboundWithheld)
+		pr.Backend, pr.Outbound, pr.OutboundWithheld = backend.Summary(), backend.Outbound, backend.OutboundWithheld
+		if pr.PreviewURL != "" && backend.DocsPath != "" {
+			pr.DocsURL = pr.PreviewURL + backend.DocsPath
+		}
 	} else if row.EnvironmentStatus != "tearing_down" && row.EnvironmentStatus != "torn_down" && row.EnvironmentStatus != "publishing" {
 		// A build in progress or a failed first build has nothing deployed;
 		// the request column carries its state.
@@ -175,6 +180,7 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 			return pages.PR{}, err
 		}
 		pr.NoWorker = !caps.Discovery
+		pr.ServicesOffered, pr.ExecutionWorker = caps.Services, caps.Execution || caps.Paused
 	}
 	actions, err := h.actionsFor(ctx, row, pr.NoWorker)
 	if err != nil {

@@ -366,7 +366,11 @@ func e2eLeftovers(ctx context.Context, docker *client.Client, instance string, p
 		return err
 	}
 	if n := len(containers.Items) + len(images.Items) + len(networks.Items); n > 0 {
-		return fmt.Errorf("%d containers, %d images, %d networks left", len(containers.Items), len(images.Items), len(networks.Items))
+		var names []string
+		for _, network := range networks.Items {
+			names = append(names, network.Name)
+		}
+		return fmt.Errorf("%d containers, %d images, %d networks %v left", len(containers.Items), len(images.Items), len(networks.Items), names)
 	}
 	return nil
 }

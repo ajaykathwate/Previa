@@ -1,5 +1,5 @@
 -- +goose Up
--- The execution kill switch (BUILDS_PAUSED, docs/23-incident-runbook.md): a
+-- The execution kill switch (BUILDS_PAUSED, docs/24-incident-runbook.md): a
 -- paused worker keeps teardown, cleanup, routing, reports and housekeeping
 -- running but starts no build. Requests wait with reason 'paused', and the
 -- worker says it is paused so the dashboard can tell owners why.

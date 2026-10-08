@@ -49,7 +49,7 @@ func TestRealSourcePrepare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	preparer, err := NewPreparer(archives, workspaces, Limits{}, repoconfig.DefaultLimits())
+	preparer, err := NewPreparer(archives, workspaces, Limits{}, repoconfig.Platform{Limits: repoconfig.DefaultLimits()})
 	if err != nil {
 		t.Fatal(err)
 	}

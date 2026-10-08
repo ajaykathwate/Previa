@@ -153,7 +153,7 @@ High. Two credential types, a private key to protect, short-lived tokens to mana
 - **Linking installer to user** relies on the browser redirect; the webhook alone does not say which dashboard user did it, so the two events are matched by installation ID.
 - **Verified linking (approved refinement):** do not trust the redirect's installation ID alone. Use expiring, one-use, session-bound state, then a separate GitHub App user authorization flow. Verify its numeric user identity against dashboard sign-in and verify installation access through GitHub before linking. Keep dashboard OAuth credentials separate from App client credentials; discard the App user token after verification.
 - **Persistence:** owner may be NULL until a verified redirect; unlinked records are hidden. Store status, numeric repository IDs and access flags without deleting history. A callback captures installation revision before GitHub calls and verifies it under a row lock in its final short transaction; lifecycle calls bump revision. Existing ownership cannot be reassigned. Same-owner reinstall can retain repository history only after the old installation is inactive.
-- **Current implementation:** verified redirect linking, token caching, signed lifecycle webhooks and ordering tombstones are implemented. Suspension, deletion and repository removal revoke access, record durable `cleanup_pending` and, in the same transaction, request teardown of every affected PR; the teardown sweep starts those teardowns without GitHub access and clears the marker only when nothing remains ([12-teardown-and-cleanup.md](docs/12-teardown-and-cleanup.md)). See `docs/04-github-sign-in-and-app.md` for configuration, real testing and lifecycle rules.
+- **Current implementation:** verified redirect linking, token caching, signed lifecycle webhooks and ordering tombstones are implemented. Suspension, deletion and repository removal revoke access, record durable `cleanup_pending` and, in the same transaction, request teardown of every affected PR; the teardown sweep starts those teardowns without GitHub access and clears the marker only when nothing remains ([13-teardown-and-cleanup.md](docs/13-teardown-and-cleanup.md)). See `docs/04-github-sign-in-and-app.md` for configuration, real testing and lifecycle rules.
 
 
 ---
@@ -184,6 +184,7 @@ Low to Medium. Parsing is easy; useful validation and safe defaults take care.
 - **Approved contract:** the config file is required, but `{}` is valid when defaults match the app. Explicit invalid/null values do not become defaults. Omitting a health path does not require `/health`; runtime readiness still needs implementation.
 - **Safety:** 64 KiB config / 128 KiB API response envelope; 15-second overall fetch context plus existing HTTP timeouts. GitHub 404 is called missing-file only after the installation can verify the exact commit. Errors expose safe fields/codes/locations rather than YAML/env values or raw API bodies.
 - **Filesystem boundary:** validation is lexical; later source extraction/build adapters must reject unsafe symlinks and enforce actual repository containment.
+- **Backend previews (Prompt 13):** optional `services` (PostgreSQL/Redis versions from the worker's digest-pinned catalog, `PREVIEW_SERVICE_CATALOG`), `setup` (argv), `processes` (at most 3) and `docs_path`, validated against the catalog during preparation (`repoconfig.ParseFor` with a `Platform`) and part of the effective hash. See [11-backend-previews.md](docs/11-backend-previews.md).
 - **Current implementation:** standalone `internal/repoconfig` fetch/parse/effective-limit/hash APIs and fixtures are implemented. Config hash excludes requested tier metadata and uses resolved resources plus sorted unique env entries. No database persistence, webhook/job/UI wiring, health execution or GitHub comments are implemented here. See [06-source-and-configuration.md](docs/06-source-and-configuration.md).
 
 ---
@@ -225,7 +226,7 @@ Medium. Small code, high consequence: authenticity, idempotency and ordering all
   [05-webhooks-and-pr-discovery.md](docs/05-webhooks-and-pr-discovery.md).
 - **Out-of-order delivery:** jobs carry the head SHA; a job whose SHA is no longer the latest for that PR is discarded on start (see feature 13).
 - **Fork PRs:** detect them from the payload and apply the fork policy from feature 10 and 16.
-- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. The worker runs them against the real runtime ([21-mvp-operations.md](docs/21-mvp-operations.md)). See [15-build-policy-and-intents.md](docs/15-build-policy-and-intents.md); see [16-build-scheduling.md](docs/16-build-scheduling.md) for parsed-event coordination, worker admission and interruption.
+- **Decision status:** Manual-default policy, current intent persistence, five-minute durable wake-ups and intent-aware handoff are implemented behind tested interfaces. HTTP ingress and PR discovery/workspace controls are implemented. The worker runs them against the real runtime ([22-mvp-operations.md](docs/22-mvp-operations.md)). See [16-build-policy-and-intents.md](docs/16-build-policy-and-intents.md); see [17-build-scheduling.md](docs/17-build-scheduling.md) for parsed-event coordination, worker admission and interruption.
 
 ---
 
@@ -261,7 +262,7 @@ High. This is the coordination core of the system.
     can do in `worker_capabilities` (a 30-second heartbeat, stale after 90 seconds).
     The server only records work (requests with their wake-ups, teardowns, reports)
     and refuses owner build requests with 503 while no live worker can build. See
-    [21-mvp-operations.md](docs/21-mvp-operations.md).
+    [22-mvp-operations.md](docs/22-mvp-operations.md).
 11. Before admitting a build the worker reads the PR from GitHub again, outside any
     lock; a newer commit or close supersedes the request. Permanent failures end the
     request after one attempt; a worker shutdown mid-build is no failure (the job is
@@ -272,7 +273,7 @@ High. This is the coordination core of the system.
     admits no build and makes no GitHub or Docker call for one; requests wait with
     reason `paused` while teardown, cleanup, routing, reports and housekeeping keep
     running. The worker reports `paused`, so the dashboard says why builds are
-    refused ([23-incident-runbook.md](docs/23-incident-runbook.md#execution-kill-switch)).
+    refused ([24-incident-runbook.md](docs/24-incident-runbook.md#execution-kill-switch)).
 
 ### Design decisions and edge cases
 - **Transactional outbox for free:** the database-backed queue avoids the classic lost-job window.
@@ -280,7 +281,7 @@ High. This is the coordination core of the system.
 - **Intent-aware handoff:** a newer observed PR generation does not itself authorize a successor build. Completion, terminal failure, retries and recovery must consult durable authorized intent and its deadline; teardown remains immediate in either mode.
 - **Request identity:** one current `build_intents` row per PR captures generation/SHA and an independent monotonic revision. Duplicate Build commands coalesce; explicit Retry/Rebuild uses a fresh key and expected revision. Intent transitions use locked PR state plus guarded SQL. Result/publication guards now carry generation and revision, including operation keys/payloads, pending/active state and resource references. External adapters enforce the same version fence; production dispatch runs in the worker described above.
 - **Manual override:** an ownership-checked, CSRF-protected request builds the current PR SHA without the Automatic delay; coalesce matching pending Automatic work and repeated submissions. Mode is platform-owned, not a repo YAML field.
-- **Backpressure:** a waiting request's status is visible in the PR comment, check run and dashboard so waiting is not mistaken for failure: queued, waiting for the quiet period (with its time), waiting for build capacity or for disk space. **Deviation:** no queue position ("position N") is shown. Waiting requests are retried with backoff, not served in a strict order, so a position would be invented; see [14-housekeeping-and-capacity.md](docs/14-housekeeping-and-capacity.md).
+- **Backpressure:** a waiting request's status is visible in the PR comment, check run and dashboard so waiting is not mistaken for failure: queued, waiting for the quiet period (with its time), waiting for build capacity or for disk space. **Deviation:** no queue position ("position N") is shown. Waiting requests are retried with backoff, not served in a strict order, so a position would be invented; see [15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md).
 
 ---
 
@@ -366,6 +367,7 @@ High. This is the security-critical feature.
 - **Crash loops:** a container that keeps restarting is stopped after a small number of restarts and marked failed.
 - **Noisy neighbours:** limits keep one preview from starving others; a per-repo cap on concurrent previews bounds total load.
 - **gVisor** raises the isolation bar substantially and is a low-cost upgrade path if kernel-level escape risk matters.
+- **Backend previews (Prompt 13):** a candidate may bring managed PostgreSQL/Redis (its own, per build revision, with generated credentials, on a per-PR internal services network with no egress or route, data on a size-capped tmpfs), a one-off setup container and up to three processes from the same image. Readiness runs services (protocol check), setup, processes, then the app; every container carries the candidate's key and is counted, inventoried and removed with the app's artifact through the existing cleanup contract. Owner-approved outbound connections reach external databases through the egress proxy, which identifies the repository by the preview's network; forks get none. See [11-backend-previews.md](docs/11-backend-previews.md).
 - **Current implementation:** `internal/runtime` implements `environments.Runtime`: it rechecks that the request is still current and accessible, builds through `internal/builds`, rechecks again, decides secrets (`secrets.Provider`; none for forks or unknown heads), and starts a candidate on the PR's own internal network `previa-pr-<id>`, shared only with the egress proxy and, once published, the router. Candidates run as UID 65532 when the image would run as root, with a read-only root and a bounded `/tmp` tmpfs (server-wide operator opt-outs only), no capabilities, `no-new-privileges`, IPv6 disabled, clamped tier CPU/memory, a PID limit, half CPU weight, a raised OOM score, capped logs and on-failure restarts (3, then a crash loop). Outbound traffic goes only through `previa-egress` (public addresses, ports 80/443). Readiness is probed from inside the egress container (HTTP 200-399 on `health_check_path`, else TCP), within `PREVIEW_STARTUP_TIMEOUT`. Admission keeps previews within 60% of Docker memory, 75% of CPUs and 10 per repository. Inventory and removal verify ownership labels, including the PR (`RemoveResource`, used by cleanup operations: graceful stop, then force; images never forced; idle networks); `Endpoint` re-checks a candidate right before it is routed. gVisor is optional via `PREVIEW_OCI_RUNTIME`. Maintainer approval for forks is not implemented (forks run without secrets). The worker does not dispatch it yet. See [10-preview-runtime.md](docs/10-preview-runtime.md).
 
 ---
@@ -397,7 +399,7 @@ High. Correctness under churn and certificate handling are the hard parts.
 - **Subdomain takeover risk:** stale DNS is not an issue with a wildcard record, and hostnames are never reassigned; containers are fully removed on teardown.
 - **Origins:** the dashboard may not be the preview domain or below it; a separate registrable domain is recommended, and dashboard cookies are `__Host-` prefixed over HTTPS.
 - **Security headers and access:** MVP previews are public by URL obscurity (now real, through the random hostname part); optional access control (login required) is a documented upgrade.
-- **Current implementation:** `internal/routing` (controller, rendering, forward-only file, Traefik adapter, hostnames, unavailable page), the fence in `internal/environments`, `deploy/traefik/compose.yml` and `cmd/route-sync`, verified with real Traefik, Pebble-issued certificates and real previews by `make test-routing`. In production `deploy/production/compose.yml` runs the same router (still no Docker provider) with the dashboard's own route and a TLS-ALPN-01 certificate for it ([24-production-deployment.md](docs/24-production-deployment.md)). See [11-routing-and-https.md](docs/11-routing-and-https.md).
+- **Current implementation:** `internal/routing` (controller, rendering, forward-only file, Traefik adapter, hostnames, unavailable page), the fence in `internal/environments`, `deploy/traefik/compose.yml` and `cmd/route-sync`, verified with real Traefik, Pebble-issued certificates and real previews by `make test-routing`. In production `deploy/production/compose.yml` runs the same router (still no Docker provider) with the dashboard's own route and a TLS-ALPN-01 certificate for it ([25-production-deployment.md](docs/25-production-deployment.md)). See [12-routing-and-https.md](docs/12-routing-and-https.md).
 
 ---
 
@@ -426,7 +428,7 @@ Medium. Simple API calls, but rate limits, race conditions and idempotency matte
 - **Debouncing (changed from the original design):** no timer; collapsing queued reports and skipping unchanged content give the same effect, and the final state is always written.
 - **First report (owner decision):** once a PR has preview work, not on every observed PR.
 - **Rate limiting and permissions:** primary and secondary limits are retried after GitHub's own delay; 403/404 on the repository records `inaccessible` and writes nothing; a refused comment or check write is recorded and does not block the other.
-- **Current implementation:** `internal/reporting` (state, render, GitHub adapter, reporter) and `internal/environments/reports.go`, migration 0015, tested against PostgreSQL and a fake GitHub, with an opt-in live proof (`make test-reporting`, still to run on a real PR). The worker registers the reporter with builds; `make test-e2e` proves the comment and check runs through the whole pipeline. See [13-pr-feedback.md](docs/13-pr-feedback.md).
+- **Current implementation:** `internal/reporting` (state, render, GitHub adapter, reporter) and `internal/environments/reports.go`, migration 0015, tested against PostgreSQL and a fake GitHub, with an opt-in live proof (`make test-reporting`, still to run on a real PR). The worker registers the reporter with builds; `make test-e2e` proves the comment and check runs through the whole pipeline. See [14-pr-feedback.md](docs/14-pr-feedback.md).
 
 ---
 
@@ -455,18 +457,18 @@ High. Concurrency and zero-gap swapping.
 - **Latest wins:** intermediate commits may never deploy; only the newest matters.
 - **Orphan protection:** any container labeled for this PR but not referenced by the current record is removed by the reconciler.
 - **Manual freshness:** a new commit fences an older in-flight result but does not authorize its successor in Manual mode. An already deployed healthy preview stays available and the UI distinguishes its deployed SHA from the latest PR SHA.
-- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [15-build-policy-and-intents.md](docs/15-build-policy-and-intents.md). Scheduling propagates revision through jobs, results and publication; [16-build-scheduling.md](docs/16-build-scheduling.md) records exact SQL and integration limits.
+- **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [16-build-policy-and-intents.md](docs/16-build-policy-and-intents.md). Scheduling propagates revision through jobs, results and publication; [17-build-scheduling.md](docs/17-build-scheduling.md) records exact SQL and integration limits.
 
 Implementation status and the durable publication boundary are kept separate: see
-[the current generation-ordering implementation](docs/18-generation-ordering.md) and
-[the durable publication design](docs/17-durable-publication-design.md). External
+[the current generation-ordering implementation](docs/19-generation-ordering.md) and
+[the durable publication design](docs/18-durable-publication-design.md). External
 routing and reporting calls run outside transactions with generation fencing and
 recovery across crashes. The swap itself is implemented by the route controller
-([11-routing-and-https.md](docs/11-routing-and-https.md)): the new candidate is verified
+([12-routing-and-https.md](docs/12-routing-and-https.md)): the new candidate is verified
 and accepted behind the fence, the router is confirmed to serve it, and only then is
 the environment recorded running and the old container retired; a candidate that
 fails before publication leaves the old preview serving and the environment `failed`.
-The worker runs this pipeline ([21-mvp-operations.md](docs/21-mvp-operations.md));
+The worker runs this pipeline ([22-mvp-operations.md](docs/22-mvp-operations.md));
 `make test-e2e` proves it on real Docker, BuildKit and Traefik, including a failed
 rebuild that keeps the old preview serving and an Automatic burst that builds only
 the newest commit.
@@ -500,7 +502,7 @@ Medium.
 - **Never remove the replacement:** a late teardown after a reopen cannot remove the newer route (tombstone ordering) or its artifacts (reference checks).
 - **Missed webhook:** if the `closed` event is lost, the reconciler (feature 15) catches it by comparing with GitHub's actual PR state.
 - **Logs retention:** build logs may be kept for a short period after teardown for debugging, then deleted.
-- **Current implementation:** see [12-teardown-and-cleanup.md](docs/12-teardown-and-cleanup.md); verified with real Docker and Traefik by `make test-routing`. The worker registers the teardown, route, cleanup and sweep workers; the owner's **Tear down preview** (a CSRF-protected form in a confirmation dialog, on the PR page and per row on Environments) records a teardown with reason `requested` that supersedes unfinished work and runs when a worker does. `make test-e2e` proves it end to end.
+- **Current implementation:** see [13-teardown-and-cleanup.md](docs/13-teardown-and-cleanup.md); verified with real Docker and Traefik by `make test-routing`. The worker registers the teardown, route, cleanup and sweep workers; the owner's **Tear down preview** (a CSRF-protected form in a confirmation dialog, on the PR page and per row on Environments) records a teardown with reason `requested` that supersedes unfinished work and runs when a worker does. `make test-e2e` proves it end to end.
 
 ---
 
@@ -532,7 +534,7 @@ High. Reconciliation logic is subtle, and getting it wrong can delete live envir
 - **Instance identity (added during implementation):** every Docker object is labelled and named with its database's instance (`platform_instance`), so two databases on one Docker host (a test schema next to a development one) never touch each other's objects when PR IDs coincide.
 - **Recovery never authorizes:** re-dispatched work passes the usual policy, deadline, generation and mergeability checks; an expired preview is never rebuilt by recovery.
 - **Disk exhaustion is the most likely real outage;** a build short of disk waits and triggers an emergency prune. Metrics and alerts are Prompt 11.
-- **Current implementation:** `internal/housekeeping` (recovery, resources, PR reconciliation, expiry, prune, River jobs) with capacity in `internal/environments` (build slots, waiting), `internal/runtime` (admission lock, headroom) and `internal/builds` (disk check, caches), migration 0016. The worker registers housekeeping with builds and applies build slots and preview headroom at admission. See [14-housekeeping-and-capacity.md](docs/14-housekeeping-and-capacity.md).
+- **Current implementation:** `internal/housekeeping` (recovery, resources, PR reconciliation, expiry, prune, River jobs) with capacity in `internal/environments` (build slots, waiting), `internal/runtime` (admission lock, headroom) and `internal/builds` (disk check, caches), migration 0016. The worker registers housekeeping with builds and applies build slots and preview headroom at admission. See [15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md).
 
 ---
 
@@ -552,7 +554,8 @@ High. Security-sensitive with subtle leakage paths.
 2. Values are never shown again after saving (write-only in the UI; only key names are listed).
 3. At container start, the worker decrypts the values in memory and injects them as environment variables.
 4. The log pipeline redacts any string matching a known secret value before storing build or runtime output.
-5. **Fork PR policy:** secrets are never injected for PRs from forks, because fork authors control the code.
+5. **Fork PR policy:** secrets are never injected for PRs from forks, because fork authors control the code. The same rule withholds owner-approved outbound connections (Prompt 13).
+5a. **Platform connection settings (Prompt 13):** `DATABASE_URL`, `PG*` and `REDIS_URL` of managed services override YAML and secrets, with a notice naming the replaced names; their generated passwords are registered with the redactor and never stored in PostgreSQL.
 6. Rotating the encryption key is supported by tagging each value with a key version and re-encrypting lazily.
 
 ### Design decisions and edge cases
@@ -605,7 +608,7 @@ Committed changes stream to open repository/PR pages as Server-Sent Events
 (PostgreSQL triggers -> NOTIFY -> one LISTEN session per server -> in-process hub
 -> per-repository stream). Events are invalidation signals with resumable cursors;
 pages refetch through ordinary authorized GETs, defer while search is focused or a
-policy modal is open, and send nothing while idle. See docs/19-realtime-updates.md;
+policy modal is open, and send nothing while idle. See docs/20-realtime-updates.md;
 build-log streaming reuses the same SSE writer with its own sequence replay. PR
 detail shows the latest observed, requested and deployed commits separately, with
 the owner's Build latest commit, Build now (an Automatic request still waiting),
@@ -660,8 +663,8 @@ Medium.
   (after Automatic's quiet period) to its preview serving. `deploy/observability`
   holds the Prometheus configuration, 24 alert rules with promtool tests and a
   provisioned Grafana dashboard. Tracing stays optional and is not built. See
-  [22-observability-and-hardening.md](docs/22-observability-and-hardening.md) and
-  [23-incident-runbook.md](docs/23-incident-runbook.md).
+  [23-observability-and-hardening.md](docs/23-observability-and-hardening.md) and
+  [24-incident-runbook.md](docs/24-incident-runbook.md).
 
 ---
 
@@ -912,6 +915,9 @@ preview/
 │   │   ├── render.go               # comment text, marker, version, digests
 │   │   ├── github.go               # go-github adapter, error classification
 │   │
+│   ├── outbound/                   # FEATURE: owner-approved outbound connections
+│   │   ├── handler.go  outbound.go  repository.go  jobs.go
+│   │
 │   ├── secrets/                    # FEATURE: encrypted env vars for previewed apps
 │   │   ├── handler.go  service.go  repository.go
 │   │   ├── crypto.go               # AES-GCM, key versioning
@@ -1057,7 +1063,7 @@ Shared palette/font tokens live in `web/styles/theme.css`; `site.css` composes
 base, home, workspace, confirmation and motion styles into the same compiled asset.
 Optional `web/tests/browser` regression tooling uses pinned Playwright v1.58.2 and
 Node.js 20+ only for development; the application has no Node.js runtime dependency.
-See `docs/20-ui-architecture.md` for the implemented presentation boundary.
+See `docs/21-ui-architecture.md` for the implemented presentation boundary.
 
 ### sqlc and migrations in a feature-based layout
 

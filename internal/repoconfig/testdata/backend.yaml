@@ -1,0 +1,14 @@
+dockerfile: Dockerfile
+port: 8080
+health_check_path: /health
+services:
+  redis: 7
+  postgres: "17"
+setup: ["/app/bin/api", "migrate", "--seed"]
+processes:
+  - name: worker
+    command: ["/app/bin/api", "worker"]
+  - name: scheduler
+    command: ["/app/bin/api", "schedule"]
+    resource_tier: standard
+docs_path: /docs

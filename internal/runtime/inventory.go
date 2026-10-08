@@ -13,10 +13,14 @@ import (
 )
 
 // Resources lists everything Docker holds for a PR, including leftovers of
-// crashed attempts: preview containers with their images, images no
-// container uses, builder containers, build networks, and the PR's preview
-// network once no preview uses it. Ownership comes from labels set at
-// creation. Build caches are per source repository and pruned by housekeeping.
+// crashed attempts: candidates (an app container with its image, or the
+// companions a candidate left before its app existed), images no container
+// uses, builder containers, build networks, and the PR's preview and services
+// networks once no candidate uses them. A candidate is one resource: its
+// app's artifact stands for its managed services, setup and processes, which
+// are referenced, kept and removed with it. Ownership comes from labels set
+// at creation. Build caches are per source repository and pruned by
+// housekeeping.
 func (r *Runtime) Resources(ctx context.Context, pullRequestID int64) ([]environments.Resource, error) {
 	filter := client.Filters{}.Add("label", dockerx.LabelManaged+"=true", dockerx.LabelInstance+"="+r.instance, dockerx.LabelPR+"="+strconv.FormatInt(pullRequestID, 10))
 	containers, err := r.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: filter})
@@ -25,16 +29,52 @@ func (r *Runtime) Resources(ctx context.Context, pullRequestID int64) ([]environ
 	}
 	var found []environments.Resource
 	used := map[string]bool{}
-	previews := false
-	for _, c := range containers.Items {
-		switch c.Labels[dockerx.LabelKind] {
+	candidates := false
+	apps := map[string]int{}         // candidate key -> index of its resource in found
+	companions := map[string][]int{} // candidate key -> indexes into containers.Items
+	for i, c := range containers.Items {
+		created := time.Unix(c.Created, 0)
+		switch kind := c.Labels[dockerx.LabelKind]; kind {
 		case dockerx.KindPreview:
-			previews = true
+			candidates = true
 			used[c.Labels[dockerx.LabelImage]] = true
-			found = append(found, resource(pullRequestID, c.Labels, environments.Artifact{ContainerID: c.ID, ImageTag: c.Labels[dockerx.LabelImage]}, time.Unix(c.Created, 0)))
+			found = append(found, resource(pullRequestID, c.Labels, environments.Artifact{ContainerID: c.ID, ImageTag: c.Labels[dockerx.LabelImage]}, created))
+			if key := c.Labels[dockerx.LabelCandidate]; key != "" {
+				apps[key] = len(found) - 1
+			}
+		case dockerx.KindService, dockerx.KindSetup, dockerx.KindProcess:
+			candidates = true
+			if image := c.Labels[dockerx.LabelImage]; image != "" {
+				used[image] = true
+			}
+			key := c.Labels[dockerx.LabelCandidate]
+			if key == "" {
+				key = c.ID // a companion without a key stands alone
+			}
+			companions[key] = append(companions[key], i)
 		case dockerx.KindBuilder:
 			found = append(found, resource(pullRequestID, c.Labels, environments.Artifact{ContainerID: c.ID}, time.Unix(c.Created, 0)))
 		}
+	}
+	for key, items := range companions {
+		newest := time.Time{}
+		for _, i := range items {
+			if created := time.Unix(containers.Items[i].Created, 0); created.After(newest) {
+				newest = created
+			}
+		}
+		if at, ok := apps[key]; ok {
+			// The candidate is as young as its youngest container.
+			if newest.After(found[at].CreatedAt) {
+				found[at].CreatedAt = newest
+			}
+			continue
+		}
+		// The app was never created (or is gone): the leftover companions are
+		// one resource, named by one of them; removing it removes them all.
+		first := containers.Items[items[0]]
+		left := resource(pullRequestID, first.Labels, environments.Artifact{ContainerID: first.ID}, newest)
+		found = append(found, left)
 	}
 	networks, err := r.docker.NetworkList(ctx, client.NetworkListOptions{Filters: filter})
 	if err != nil {
@@ -46,8 +86,8 @@ func (r *Runtime) Resources(ctx context.Context, pullRequestID int64) ([]environ
 			network := resource(pullRequestID, n.Labels, environments.Artifact{}, n.Created)
 			network.Network = n.ID
 			found = append(found, network)
-		case dockerx.KindPreviewNetwork:
-			if !previews {
+		case dockerx.KindPreviewNetwork, dockerx.KindServiceNetwork:
+			if !candidates {
 				found = append(found, environments.Resource{PullRequestID: pullRequestID, Network: n.ID, CreatedAt: n.Created})
 			}
 		}
@@ -125,7 +165,7 @@ func (r *Runtime) RemoveContainer(ctx context.Context, id string) error {
 	if err != nil {
 		return failure(CodeUnavailable, "The container could not be inspected.", true, err)
 	}
-	if inspected.Container.Config == nil || !dockerx.OwnedBy(inspected.Container.Config.Labels, r.instance, dockerx.KindPreview, dockerx.KindBuilder) {
+	if inspected.Container.Config == nil || !dockerx.OwnedBy(inspected.Container.Config.Labels, r.instance, append([]string{dockerx.KindBuilder}, dockerx.CandidateKinds...)...) {
 		return failure(CodeNotOwned, "Refusing to remove a container Previa did not create.", false, nil)
 	}
 	if _, err := r.docker.ContainerRemove(ctx, inspected.Container.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !cerrdefs.IsNotFound(err) {

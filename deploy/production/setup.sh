@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prepare a fresh Debian 12 / Ubuntu 24.04 host for Previa
-# (docs/24-production-deployment.md#fresh-host-setup). Run as root from a
+# (docs/25-production-deployment.md#fresh-host-setup). Run as root from a
 # checkout of the release:
 #
 #   sudo deploy/production/setup.sh
@@ -117,7 +117,7 @@ systemctl enable --now previa-backup.timer >/dev/null
 
 cat <<NEXT
 
-Host prepared. Next (docs/24-production-deployment.md):
+Host prepared. Next (docs/25-production-deployment.md):
   1. Put the GitHub App key in $CONFIG/github-app.pem and the DNS token in
      $CONFIG/dns-credential, then rerun this script to fix their modes.
   2. Fill in the remaining values in $CONFIG/previa.env (domains, GitHub App,

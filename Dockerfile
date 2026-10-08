@@ -1,4 +1,4 @@
-# Previa release images (docs/24-production-deployment.md). One build stage
+# Previa release images (docs/25-production-deployment.md). One build stage
 # compiles every command from source with generated templates and CSS; the
 # runtime images hold only static binaries and run as UID 65532.
 #

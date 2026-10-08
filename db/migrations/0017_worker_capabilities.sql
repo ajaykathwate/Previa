@@ -1,6 +1,6 @@
 -- +goose Up
 -- What each running worker process can do, refreshed by a heartbeat
--- (docs/21-mvp-operations.md). The server reads it to tell owners honestly
+-- (docs/22-mvp-operations.md). The server reads it to tell owners honestly
 -- whether builds can run; it never decides execution itself.
 CREATE TABLE worker_capabilities (
     worker_id TEXT PRIMARY KEY CHECK (worker_id ~ '^[a-z0-9]{16,64}$'),

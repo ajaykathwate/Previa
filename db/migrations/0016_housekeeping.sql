@@ -1,5 +1,5 @@
 -- +goose Up
--- Housekeeping, expiry and capacity (docs/14-housekeeping-and-capacity.md).
+-- Housekeeping, expiry and capacity (docs/15-housekeeping-and-capacity.md).
 
 -- The identity this database gives the Docker objects it creates. Every
 -- object carries it as a label (and in its name), and inventory, cleanup and

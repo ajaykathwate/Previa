@@ -24,5 +24,14 @@ templ RepositoryTabs(repoID int64, active string) {
 			@KeyIcon()
 			<span>Secrets</span>
 		</a>
+		<a
+			href={ templ.SafeURL("/repositories/" + strconv.FormatInt(repoID, 10) + "/outbound") }
+			if active == "outbound" {
+				aria-current="page"
+			}
+		>
+			@SendIcon()
+			<span>Outbound</span>
+		</a>
 	</nav>
 }

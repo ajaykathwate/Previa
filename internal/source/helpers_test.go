@@ -102,7 +102,7 @@ func newTestPreparer(t *testing.T, archives ArchiveSource, limits Limits) (*Prep
 	if err != nil {
 		t.Fatal(err)
 	}
-	preparer, err := NewPreparer(archives, workspaces, limits, repoconfig.DefaultLimits())
+	preparer, err := NewPreparer(archives, workspaces, limits, repoconfig.Platform{Limits: repoconfig.DefaultLimits()})
 	if err != nil {
 		t.Fatal(err)
 	}

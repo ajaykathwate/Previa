@@ -1,4 +1,4 @@
-# 20 · UI architecture
+# 21 · UI architecture
 
 How the dashboard is built: server-rendered pages, progressive enhancement, the
 visual system and the browser behaviours layered on top. Screen behaviour from a
@@ -22,7 +22,7 @@ user's point of view is in [03-user-guide.md](03-user-guide.md).
   creates), `ui.js` gives it to the speculation rules it injects, and HTMX is
   configured (`htmx-config` meta) not to inject styles or evaluate code. No inline
   event handlers, inline styles or `eval`. The browser suite runs under the same
-  policy and fails on any violation ([22](22-observability-and-hardening.md)).
+  policy and fails on any violation ([23](23-observability-and-hardening.md)).
 - **Presentation never reaches into the backend.** Templates receive display data;
   they never query, read sessions or authorize.
 
@@ -104,7 +104,7 @@ Making full-page navigation feel instant, without giving up MPA semantics:
   on `HX-Request`/`HX-Target`. An expired session returns `HX-Redirect` to sign-in.
 - Requests to one target share a replacement slot so older responses are discarded.
   Failed requests keep current content and show retry feedback.
-- Live refreshes come from the event stream ([19](19-realtime-updates.md)). A hidden
+- Live refreshes come from the event stream ([20](20-realtime-updates.md)). A hidden
   `[data-live-refresh]` element refetches `#repository-detail` with the current
   URL's filters. While PR search is focused or the policy modal is open, a refresh
   is deferred, then run when the user leaves the field or closes the modal.
@@ -254,7 +254,7 @@ Styles live in `web/styles/logs.css`. See [08](08-build-logs.md).
 ## Preview unavailable page
 
 `web/pages/routing/unavailable.templ` is the public page the router redirects unknown
-and removed preview hostnames to ([11](11-routing-and-https.md)). It uses the base
+and removed preview hostnames to ([12](12-routing-and-https.md)). It uses the base
 layout's signed-out navigation, answers 404, is mounted outside the session/CSRF
 middleware (it reads and sets no cookie), sends `Cache-Control: no-store`,
 `X-Robots-Tag: noindex` and `Referrer-Policy: no-referrer`, and never names the host
@@ -309,4 +309,4 @@ lifetime, both lists without JavaScript), reduced motion and no-JavaScript flows
 | View transitions + prefetch, not `hx-boost` | Smooth navigation while keeping real document loads and no-JS behaviour. | Effects only in supporting browsers. |
 | Command palette as a layer over links | Faster navigation for keyboard users without a second navigation model. | Duplicate entry points to keep in sync. |
 | System fonts, no CDNs | Self-hosted, private, fast first paint. | Less typographic control. |
-| SSE invalidation, refetch via GET | No polling; authorization stays in ordinary handlers ([19](19-realtime-updates.md)). | One connection per open page. |
+| SSE invalidation, refetch via GET | No polling; authorization stays in ordinary handlers ([20](20-realtime-updates.md)). | One connection per open page. |

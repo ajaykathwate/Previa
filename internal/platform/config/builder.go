@@ -106,6 +106,18 @@ type PreviewConfig struct {
 	// PreviewOCIRuntime selects an installed Docker runtime such as runsc
 	// (gVisor); empty uses Docker's default.
 	PreviewOCIRuntime string `envconfig:"PREVIEW_OCI_RUNTIME"`
+	// PreviewServiceCatalog lists the backend services (PostgreSQL, Redis)
+	// previews may request, as kind:version=image@sha256:digest pairs; empty
+	// uses Previa's pinned catalog and "none" offers none.
+	PreviewServiceCatalog string `envconfig:"PREVIEW_SERVICE_CATALOG"`
+	// PreviewSetupTimeout bounds a preview's setup command (migrations, seed
+	// data).
+	PreviewSetupTimeout time.Duration `envconfig:"PREVIEW_SETUP_TIMEOUT" default:"5m"`
+}
+
+// ServiceCatalog parses PREVIEW_SERVICE_CATALOG.
+func (c PreviewConfig) ServiceCatalog() (ServiceCatalog, error) {
+	return ParseServiceCatalog(c.PreviewServiceCatalog)
 }
 
 var runtimeName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -124,8 +136,11 @@ func (c *PreviewConfig) check() error {
 		return errors.New("PREVIEW_MAX_PER_REPOSITORY must be between 1 and 1000")
 	case c.PreviewOCIRuntime != "" && !runtimeName.MatchString(c.PreviewOCIRuntime):
 		return errors.New("PREVIEW_OCI_RUNTIME must be a Docker runtime name such as runsc")
+	case c.PreviewSetupTimeout < 10*time.Second || c.PreviewSetupTimeout > 30*time.Minute:
+		return errors.New("PREVIEW_SETUP_TIMEOUT must be between 10s and 30m")
 	}
-	return nil
+	_, err := c.ServiceCatalog()
+	return err
 }
 
 // ByteSize is a byte count written with an optional binary unit, such as

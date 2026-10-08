@@ -13,7 +13,7 @@ behavior reviewed on **2026-10-06**, not proof that a particular GitHub Release
 or live server has been verified.
 
 Read [CI in action](ci-in-action.md) for the checks before publishing.
-Use [24 · Production deployment](../docs/24-production-deployment.md) for the full
+Use [25 · Production deployment](../docs/25-production-deployment.md) for the full
 DigitalOcean account, Droplet, DNS, secrets, monitoring, Spaces and recovery
 runbook. The commands below explain that existing process; they do not provision
 anything by being documented.
@@ -967,8 +967,8 @@ from Spaces and offline keys, isolate the old host, verify the replacement and
 cut over DNS or its Reserved IP. Rebuild missing previews; their ephemeral
 filesystems and containers are not in the database backup.
 
-Use the [full backup/restore steps](../docs/24-production-deployment.md#backups-and-restore)
-and [rollback procedures](../docs/24-production-deployment.md#upgrades-and-rollback)
+Use the [full backup/restore steps](../docs/25-production-deployment.md#backups-and-restore)
+and [rollback procedures](../docs/25-production-deployment.md#upgrades-and-rollback)
 for these destructive recovery operations.
 
 ## 11. Which credentials go where?
@@ -999,7 +999,7 @@ Compose supplies the selected env explicitly.
 Application configuration is not added to GitHub Actions secrets just because
 Actions publishes images. The current workflows do not deploy that configuration.
 Use [configuration setup](config-setup.md) and the
-[production credential inventory](../docs/24-production-deployment.md#credential-checklist-what-is-generated-supplied-and-kept-offline)
+[production credential inventory](../docs/25-production-deployment.md#credential-checklist-what-is-generated-supplied-and-kept-offline)
 for generation, permissions and rotation.
 
 ## 12. Automation boundaries and troubleshooting
@@ -1072,7 +1072,7 @@ That would be a separate operational/privilege design.
 | [setup.sh](../deploy/production/setup.sh) | Existing host preparation and backup unit installation |
 | [backup.sh](../deploy/production/backup.sh) / [restore.sh](../deploy/production/restore.sh) | Encrypted logical backup and destructive DB recovery |
 | [smoke.sh](../deploy/production/smoke.sh) | Disposable stack rehearsal and coverage described by the CI guide |
-| [production deployment](../docs/24-production-deployment.md) | Full DigitalOcean operational procedure |
+| [production deployment](../docs/25-production-deployment.md) | Full DigitalOcean operational procedure |
 
 The code/configuration and those runbooks take precedence when versions change.
 Adding these guides does not change either workflow, runtime topology or

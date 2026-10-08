@@ -1,4 +1,4 @@
-# 13 · PR feedback: the living comment and check runs
+# 14 · PR feedback: the living comment and check runs
 
 Previa tells reviewers what is happening directly on the pull request: one
 **living comment** that is edited in place, and one **check run per build request**
@@ -7,9 +7,9 @@ truth at the moment they are written, so a late or repeated report can never put
 older state back. This document covers the decisions, what GitHub shows in each
 state, how a report gets from a database change to GitHub, how comments and check
 runs keep a stable identity, ordering and its limits, failures, permissions and what
-was verified. It builds on the durable outbox ([17](17-durable-publication-design.md))
-and generation fences ([18](18-generation-ordering.md)). The worker registers the
-reporter as the report executor whenever it can build ([21](21-mvp-operations.md)),
+was verified. It builds on the durable outbox ([18](18-durable-publication-design.md))
+and generation fences ([19](19-generation-ordering.md)). The worker registers the
+reporter as the report executor whenever it can build ([22](22-mvp-operations.md)),
 and both processes record report work whenever the GitHub App is configured.
 
 ## Decisions
@@ -215,7 +215,7 @@ and slug, used to recognise its own comments, come from the App itself
 
 - The live proof on a real PR (`make test-reporting`) has not run: it needs an
   authorized disposable PR in the `TEST_GITHUB_*` settings
-  ([21](21-mvp-operations.md#live-proofs-still-required-before-a-public-rollout)).
+  ([22](22-mvp-operations.md#live-proofs-still-required-before-a-public-rollout)).
 - Expiry, PR reconciliation (which finds a close missed while webhooks were down)
   and the waiting states come from housekeeping and capacity
-  ([14](14-housekeeping-and-capacity.md)).
+  ([15](15-housekeeping-and-capacity.md)).

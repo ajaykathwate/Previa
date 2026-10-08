@@ -6,7 +6,7 @@ author, so a build is untrusted code execution. This document describes how each
 is isolated, bounded and cleaned up, what was verified, and what remains a limit.
 The builder is tested against a real Docker Engine. The preview runtime
 ([10](10-preview-runtime.md)) builds with it and starts containers from its images;
-the worker runs every admitted build through it ([21](21-mvp-operations.md)), up to
+the worker runs every admitted build through it ([22](22-mvp-operations.md)), up to
 `MAX_CONCURRENT_BUILDS` at once across all workers.
 
 ## Decisions
@@ -106,7 +106,7 @@ takes an address range from Docker's default pools until it is removed.
   (`previa-buildcache-<instance>-r<base>-h<head>`) are trimmed by BuildKit's GC to a
   quarter of the disk budget; housekeeping removes those of repositories that can no
   longer be built and the oldest unused ones beyond `BUILD_CACHE_BUDGET`, and untagged
-  images ([14](14-housekeeping-and-capacity.md)).
+  images ([15](15-housekeeping-and-capacity.md)).
 - Every object carries this database's instance (`io.previa.instance`) in its labels
   and names (`previa/<instance>-pr-<n>:…` images, `previa-builder-<instance>-…`), and
   the builder only reuses or removes objects of its own instance.
@@ -128,7 +128,7 @@ takes an address range from Docker's default pools until it is removed.
 
 Ubuntu 24.04 Docker hosts also need the RootlessKit user-namespace prerequisite:
 see [development setup](02-development-setup.md) for the temporary sysctl command
-and [production deployment](24-production-deployment.md) for persistent host
+and [production deployment](25-production-deployment.md) for persistent host
 configuration. This is a host kernel setting, not `BUILDKIT_IMAGE` or a secret.
 
 A builder that stops before readiness now fails immediately with its status,

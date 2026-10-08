@@ -1,5 +1,5 @@
 -- +goose Up
--- GitHub reporting state (docs/13-pr-feedback.md). One row per reported PR.
+-- GitHub reporting state (docs/14-pr-feedback.md). One row per reported PR.
 -- Every reportable change bumps wanted_version in its own transaction together
 -- with a durable report operation; the reporter renders the PR's current state
 -- and records the version it wrote. The living comment's ID stays in

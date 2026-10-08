@@ -50,6 +50,9 @@ marked *command line* are typed before a `make` command instead.
 | [PREVIEW_CPU_BUDGET](#preview_cpu_budget) | Optional | Previews | `.env` |
 | [PREVIEW_MAX_PER_REPOSITORY](#preview_max_per_repository) | Optional | Previews | `.env` |
 | [PREVIEW_OCI_RUNTIME](#preview_oci_runtime) | Optional | Previews | `.env` |
+| [PREVIEW_SERVICE_CATALOG](#preview_service_catalog) | Optional | Backend previews | `.env` |
+| [PREVIEW_SETUP_TIMEOUT](#preview_setup_timeout) | Optional | Backend previews | `.env` |
+| [PREVIEW_OUTBOUND_PORTS](#preview_outbound_ports) | Optional | Backend previews | `.env` |
 | [PREVIEW_BASE_DOMAIN](#preview_base_domain) | Required | Builds and previews | `.env`, `previa.env` |
 | [ROUTER_DYNAMIC_DIR](#router_dynamic_dir) | Required | Builds and previews | `.env` |
 | [ROUTER_CONTAINER](#router_container) | Optional | Previews | `.env` |
@@ -601,6 +604,40 @@ marked *command line* are typed before a `make` command instead.
   ([gvisor.dev](https://gvisor.dev/docs/user_guide/install/)), register it with Docker
   as `runsc`, then set `runsc`.
 - **Example:** `PREVIEW_OCI_RUNTIME=`
+
+### `PREVIEW_SERVICE_CATALOG`
+
+- **Type:** Optional. Default empty, meaning Previa's pinned catalog: the official
+  PostgreSQL 17 and 16 and Redis 8 and 7 images, each pinned by digest.
+- **What it is:** the managed services pull requests may request in
+  `.previewrc.yaml` (`services: {postgres: 17}`), as `kind:version=image@sha256:digest`
+  pairs separated by commas; `none` offers none.
+- **Where it's used:** the worker, when it validates a commit's configuration and
+  starts its services ([docs/11](../docs/11-backend-previews.md)).
+- **How to get it:** leave it empty. To pin newer images, read each index digest
+  with `docker buildx imagetools inspect postgres:17-alpine` (the `Digest:` line) and
+  write, for example, `postgres:17=docker.io/library/postgres:17-alpine@sha256:<digest>`.
+- **Example:** `PREVIEW_SERVICE_CATALOG=`
+
+### `PREVIEW_SETUP_TIMEOUT`
+
+- **Type:** Optional. Default `5m` (10s to 30m).
+- **What it is:** how long a preview's setup command (migrations, seed data) may run.
+- **Where it's used:** the worker, for every candidate that declares `setup`.
+- **How to get it:** keep the default unless migrations are slow.
+- **Example:** `PREVIEW_SETUP_TIMEOUT=5m`
+
+### `PREVIEW_OUTBOUND_PORTS`
+
+- **Type:** Optional. Default `5432,3306,6379,6380,27017,5671,5672,9092,1433`.
+- **What it is:** the destination ports repository owners may approve on the
+  Outbound tab for external databases and brokers; `none` turns the feature off.
+  At most 16 ports; never 80, 443 (previews already reach HTTP and HTTPS through the
+  proxy) or 3128 (the proxy's own port).
+- **Where it's used:** the server (which approvals it accepts, and the Outbound tab)
+  and the worker (which ports the egress proxy forwards). Set the same value for both.
+- **How to get it:** list the ports of the external services your previews need.
+- **Example:** `PREVIEW_OUTBOUND_PORTS=5432,3306,6379,6380,27017,5671,5672,9092,1433`
 
 ## Preview domain and router
 

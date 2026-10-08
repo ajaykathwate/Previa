@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 19**, **River 007**. After pulling changes, run
+Current schema: **Goose 20**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker.
 
 ## 1. Prerequisites
@@ -45,7 +45,7 @@ fi
 create its namespace; the setting is on the machine running Docker Engine.
 Docker Desktop uses its own Linux VM. CI applies it on its temporary runner.
 This command lasts until reboot; persistent configuration for a dedicated
-production host is in [24 · Production deployment](24-production-deployment.md).
+production host is in [25 · Production deployment](25-production-deployment.md).
 
 ## 2. Code and configuration
 
@@ -112,15 +112,15 @@ pinned tool dependencies correctly.
 | --- | --- | --- | --- |
 | `DATABASE_URL` | server, worker, migrations | Keep the example for the Compose database. | Application data, sessions and River jobs. |
 | `HTTP_ADDR` | server | `127.0.0.1:8080` | Listen address. |
-| `APP_ENV` | server, worker | Optional; `development` (default) or `production`. | Production requires an HTTPS `APP_BASE_URL` and `GITHUB_WEBHOOK_SECRET`, refuses a GitHub App key readable by group or others, and turns the queue-ping tools off ([22](22-observability-and-hardening.md)). |
+| `APP_ENV` | server, worker | Optional; `development` (default) or `production`. | Production requires an HTTPS `APP_BASE_URL` and `GITHUB_WEBHOOK_SECRET`, refuses a GitHub App key readable by group or others, and turns the queue-ping tools off ([23](23-observability-and-hardening.md)). |
 | `LOG_LEVEL` | server, worker, egress | Optional; `debug`, `info` (default), `warn`, `error`. | JSON logs with correlation fields; secrets redacted. |
 | `INTERNAL_ADDR` | server | Optional; default `127.0.0.1:9090`. | `/livez`, `/readyz`, `/metrics`; never publish it. |
 | `TRUSTED_PROXIES` | server | Optional; addresses or CIDR ranges; empty trusts nobody. | Reverse proxies allowed to set `X-Forwarded-For`/`-Host`. |
-| `BACKUP_STATUS_FILE` | server | Optional; set in production Compose. | Its modification time becomes the last-backup metric ([24](24-production-deployment.md#backups-and-restore)). |
+| `BACKUP_STATUS_FILE` | server | Optional; set in production Compose. | Its modification time becomes the last-backup metric ([25](25-production-deployment.md#backups-and-restore)). |
 | `APP_BASE_URL` | server | `http://localhost:8080` | OAuth redirects, CSRF origin checks, cookie security. |
 | `GITHUB_OAUTH_CLIENT_ID` / `_SECRET` | server | **Required** (the server does not start without them). From a GitHub **OAuth App** ([04](04-github-sign-in-and-app.md)). | Dashboard sign-in. |
 | `SESSION_SECRET` | server | `openssl rand -hex 32` | Signs OAuth state; at least 32 characters. |
-| `MAX_CONCURRENT_BUILDS` | worker | `2` | Builds running at once across all workers (and build workers per process); also the ping queue's concurrency ([14](14-housekeeping-and-capacity.md)). |
+| `MAX_CONCURRENT_BUILDS` | worker | `2` | Builds running at once across all workers (and build workers per process); also the ping queue's concurrency ([15](15-housekeeping-and-capacity.md)). |
 | `BUILD_TIMEOUT` | worker | `12m` (max `24h`) | Build execution budget plus a one-minute grace. |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | server, worker | **Required for repositories** (linking, sync, builds). From a GitHub **App** ([04](04-github-sign-in-and-app.md)). | App JWTs; the worker needs only these two for discovery. |
 | `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | server | **Required for repositories.** Same GitHub App. | Installation page and verified linking. |
@@ -134,13 +134,16 @@ pinned tool dependencies correctly.
 | `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT` | worker | Optional; defaults `256MiB`, `512`, `120s`. | Preview `/tmp` size, process limit and readiness deadline. |
 | `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY` | worker | Optional; empty budgets use 60% of Docker memory and 75% of its CPUs; `10`. | What all previews may use together, and per repository. |
 | `PREVIEW_OCI_RUNTIME` | worker | Optional, e.g. `runsc` where gVisor is installed. | Docker runtime for previews. |
+| `PREVIEW_SERVICE_CATALOG` | worker | Optional; empty uses Previa's pinned PostgreSQL 17/16 and Redis 8/7 images, `none` offers none. Entries are `kind:version=image@sha256:digest`. | Managed services previews may request ([11](11-backend-previews.md)). |
+| `PREVIEW_SETUP_TIMEOUT` | worker | Optional, default `5m` (10s–30m). | Limit of a preview's setup command. |
+| `PREVIEW_OUTBOUND_PORTS` | server, worker | Optional, default `5432,3306,6379,6380,27017,5671,5672,9092,1433`; `none` turns the feature off. Never 80, 443 or 3128. | Ports owners may approve for outbound connections (Outbound tab). |
 | `WORKER_INTERNAL_ADDR` | worker | Optional; default `127.0.0.1:9091`. | `/livez`, `/readyz` (with capabilities), `/metrics`. |
-| `BUILDS_PAUSED` | worker | Optional; default `false`. | The execution kill switch: builds wait; teardown, cleanup, routing, reports and housekeeping continue ([23](23-incident-runbook.md#execution-kill-switch)). |
+| `BUILDS_PAUSED` | worker | Optional; default `false`. | The execution kill switch: builds wait; teardown, cleanup, routing, reports and housekeeping continue ([24](24-incident-runbook.md#execution-kill-switch)). |
 | `SOURCE_WORKSPACE_ROOT` | worker | Optional; default `previa-sources` in the system temporary directory. An absolute path on a Linux filesystem. | Where each build's extracted source lives while it builds. |
-| `ENV_TTL_HOURS` | worker | Optional; default `48`, `0` never expires. | Preview lifetime after its latest publication ([14](14-housekeeping-and-capacity.md)). |
+| `ENV_TTL_HOURS` | worker | Optional; default `48`, `0` never expires. | Preview lifetime after its latest publication ([15](15-housekeeping-and-capacity.md)). |
 | `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE` | worker | Optional; defaults `false`, `15m`. | Log housekeeping deletions without making them; the minimum age of an orphan. |
 | `BUILD_CACHE_BUDGET` | worker | Optional; default `40GiB`. | All build caches together; the oldest unused ones are pruned first. |
-| `PREVIEW_BASE_DOMAIN` | server, worker | **Required for builds and previews.** `preview.localtest.me` on one machine, or a domain you control (not the dashboard's host or a parent of it). | Preview hostnames below it ([11](11-routing-and-https.md)); turns routing on in the worker. |
+| `PREVIEW_BASE_DOMAIN` | server, worker | **Required for builds and previews.** `preview.localtest.me` on one machine, or a domain you control (not the dashboard's host or a parent of it). | Preview hostnames below it ([12](12-routing-and-https.md)); turns routing on in the worker. |
 | `APP_BASE_URL` | worker (when routing) | The dashboard origin, as on the server. | Unknown preview hosts are redirected to its `/previews/unavailable`. |
 | `ROUTER_DYNAMIC_DIR` | worker (when routing), router | **Required for builds and previews.** A full path on a Linux filesystem, without `~` (`.env` does not expand it) or a trailing slash; `make router-up` creates it. | Where the route controller writes Traefik's route table. |
 | `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS` | worker | Optional; defaults `previa-router`, `websecure`, `127.0.0.1:8080` (must be loopback). | The router container, its HTTPS entry point and its in-container API. |
@@ -162,7 +165,7 @@ pinned tool dependencies correctly.
   egress image. Otherwise the worker registers no build workers, logs
   `capability unavailable` with the reason, and the dashboard says no worker can
   build; requests wait durably. The full matrix is in
-  [21](21-mvp-operations.md#capability-and-configuration-matrix).
+  [22](22-mvp-operations.md#capability-and-configuration-matrix).
 - The `BUILD*`, `PREVIEW_*` and housekeeping settings (`ENV_TTL_HOURS`,
   `HOUSEKEEPING_*`, `BUILD_CACHE_BUDGET`) have working defaults; the worker validates
   them at start and stops with the variable's name if one is invalid.
@@ -183,7 +186,7 @@ pinned tool dependencies correctly.
 | `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `test-reporting`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e`, `housekeeping-dry-run`, `router-up`, `router-down`, `route-sync` | Yes; falls back to `.env.example` for migrations if `.env` is absent. `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e` and `test-reporting` use `DATABASE_URL` as `TEST_DATABASE_URL` unless that is exported (they create and drop their own schemas). |
 | Direct `go run`, manual Goose commands | No; run `set -a; . ./.env; set +a` once per terminal. |
 | `make build`, `make lint`, `make generate`, `make vuln`, `make observability-check`, `make release-images` | No configuration needed (the last two need Docker). |
-| `make prod-smoke` | No; it writes its own settings into a temporary directory ([24](24-production-deployment.md#local-staging-smoke-test)). |
+| `make prod-smoke` | No; it writes its own settings into a temporary directory ([25](25-production-deployment.md#local-staging-smoke-test)). |
 | `make test` | Database tests need an explicitly exported `TEST_DATABASE_URL`. |
 
 Select another file with `ENV_FILE=.env.local make run-server`. Keep `.env` in
@@ -225,7 +228,7 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0015 | PR feedback state (`pull_request_reports`: wanted/reported report versions, digests, current check run, reporter lease, last error category) and `environments.last_error_code`. |
 | 0016 | This database's instance identity (`platform_instance`), waiting notes on build requests (`waiting_revision`, `waiting_reason`) and `pr_reconciliations`. |
 | 0017 | `worker_capabilities`: what each running worker can do, refreshed every 30 seconds, read by the server. |
-| 0018 | The execution kill switch: build requests may wait with reason `paused`, and workers report `paused` ([22](22-observability-and-hardening.md#execution-kill-switch)). |
+| 0018 | The execution kill switch: build requests may wait with reason `paused`, and workers report `paused` ([23](23-observability-and-hardening.md#execution-kill-switch)). |
 
 Optional check that live updates are wired:
 
@@ -371,15 +374,27 @@ pipeline against a fake GitHub over TLS and a Traefik router with its default
 certificate, on a throwaway schema.
 
 ```sh
-make test-e2e             # about a minute
+make test-e2e             # about 15 minutes; the first run also pulls PostgreSQL and Redis
 ```
+
+It runs `TestRealEndToEnd` and `TestRealBackendEndToEnd`. The backend test compiles
+a small API fixture (`internal/app/testdata/backend`) for the Docker host's
+architecture, uses `github.com:22` as the approved outbound destination and the
+public names `localtest.me` and `169.254.169.254.nip.io` (which resolve to loopback
+and metadata addresses) as refused ones, so it needs internet access.
 
 **Expected:** `TestRealEndToEnd` passes and logs `published pr-7-…preview.test from
 1111111; reported Ready; log has N lines`, `torn down: route removed, containers
 removed, reported` (after `GitHub outage: N report calls rejected; the preview
 published anyway and the report caught up`), `Automatic: the burst built only the newest commit, back at
 pr-7-…; one living comment throughout` and `closed: route, containers, image and
-network removed`. Set `TEST_E2E_LOG=1` for the worker's logs. Anything the run could
+network removed`. `TestRealBackendEndToEnd` passes and logs `backend preview at …:
+database …, 2 items, job processed by the worker`, `isolation: services reach
+neither the internet, the egress proxy, the host nor other previews, and no other
+preview reaches them`, `outbound: approved destination reached; refused the rest`,
+`rebuild: fresh database … replaced …`, `failed migration: setup_failed, the
+earlier preview and its data keep serving` and `teardown: no container, image,
+network or volume of either preview remains`. Set `TEST_E2E_LOG=1` for the worker's logs. Anything the run could
 not remove fails the test. Afterwards only the `previa-egress` container and network
 remain (`docker network ls --filter label=io.previa.managed`).
 
@@ -406,7 +421,7 @@ make prod-smoke PREVIA_VERSION=v0.1.0-rc.1        # about 3 minutes
 **Expected:** a line per check (`ok   dashboard home over HTTPS`, …) ending in
 `smoke test passed: 40 checks` (43 with `SMOKE_OLD_DUMP`, 33 without `age`). Ports used: 127.0.0.1:18080,
 18443 and 13000. What it covers and its options are in
-[24](24-production-deployment.md#local-staging-smoke-test).
+[25](25-production-deployment.md#local-staging-smoke-test).
 
 ### Real housekeeping check (optional)
 
@@ -477,7 +492,7 @@ which writes the accepted route table from PostgreSQL (the worker's route contro
 does the same at start and on every route change); Traefik requests the certificate only once a
 router uses it, and the table's fallback router does. Switch `ACME_CA_SERVER` to
 production and remove the `previa-router_acme` volume only after staging works
-([11](11-routing-and-https.md)).
+([12](12-routing-and-https.md)).
 
 ### Browser regression checks (optional)
 
@@ -502,7 +517,7 @@ make run-server
 ```
 
 **Expected:** `internal listener serving /livez, /readyz and /metrics`,
-`database health check passed` (with `version`, `schema=19` and `environment`), then
+`database health check passed` (with `version`, `schema=20` and `environment`), then
 `HTTP server listening`. Open <http://localhost:8080/> and sign in with GitHub.
 `curl -s localhost:9090/readyz` answers `{"checks":{"database":"ok","schema":"ok"},"status":"ready",...}`.
 The server refuses to start if migrations are behind (`run migrations first`).
@@ -518,7 +533,7 @@ execution=… paused=… reporting=… housekeeping=… discovery=…`, preceded
 unavailable` warning naming each missing dependency. `curl -s localhost:9091/readyz`
 lists its checks and capabilities. The server records work; the
 worker executes it. With App credentials it runs PR discovery and mergeability
-checks; with builds configured ([21](21-mvp-operations.md#capability-and-configuration-matrix))
+checks; with builds configured ([22](22-mvp-operations.md#capability-and-configuration-matrix))
 it also builds, publishes, reports and keeps house. It always runs
 `build_log_prune` at start and hourly. `Ctrl+C` removes the worker's capability row,
 lets running jobs finish for 30 seconds, then cancels them; an interrupted build
@@ -605,7 +620,7 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
 - **Stylesheet missing after a manual build:** run `make assets` before compiling;
   the server embeds assets at build time.
 - **Live indicator never turns green:** apply migrations 0011 and 0013, and make sure
-  any proxy in front of the server does not buffer `text/event-stream` ([19](19-realtime-updates.md)).
+  any proxy in front of the server does not buffer `text/event-stream` ([20](20-realtime-updates.md)).
 - **Builder errors:** `egress proxy image … is not available` means run
   `make egress-image`. `builder did not become ready` usually means user
   namespaces are disabled or Docker is too old for rootless BuildKit. `disk_low`

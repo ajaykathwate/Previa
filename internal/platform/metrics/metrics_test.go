@@ -91,3 +91,32 @@ func TestStateKeepsTheLastGoodSnapshotAndRefreshesLazily(t *testing.T) {
 		t.Fatalf("a failed refresh dropped the snapshot or was not counted: %s", after)
 	}
 }
+
+func TestEgressCountersAreExportedWithBoundedLabels(t *testing.T) {
+	SetEgressSource(func(context.Context) (map[string]int64, int64, int64, error) {
+		return map[string]int64{"forwarded": 3, "refused_address": 2, "an attacker's label": 9}, 100, 200, nil
+	})
+	defer SetEgressSource(nil)
+	families, err := Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]float64{}
+	for _, f := range families {
+		for _, m := range f.GetMetric() {
+			key := f.GetName()
+			for _, l := range m.GetLabel() {
+				key += "/" + l.GetValue()
+			}
+			found[key] = m.GetCounter().GetValue()
+		}
+	}
+	if found["previa_egress_connections_total/forwarded"] != 3 || found["previa_egress_bytes_total/down"] != 200 {
+		t.Fatalf("egress counters %v", found)
+	}
+	for key := range found {
+		if strings.Contains(key, "attacker") {
+			t.Fatalf("an unbounded label was exported: %s", key)
+		}
+	}
+}

@@ -16,9 +16,9 @@ observable (correlated logs, Prometheus metrics, readiness, a Grafana dashboard
 and alerts), hardened for production, and packaged as release images with a
 production Compose file, host setup, encrypted backups with a rehearsed restore,
 CI and releases. Live proofs against hosted GitHub, real DNS and a real host remain
-before a public rollout. See [operating the MVP](docs/21-mvp-operations.md),
-[production deployment](docs/24-production-deployment.md), the
-[release report](docs/25-release-report.md) and the [roadmap](docs/26-roadmap.md). Start with the [documentation index](docs/README.md)
+before a public rollout. See [operating the MVP](docs/22-mvp-operations.md),
+[production deployment](docs/25-production-deployment.md), the
+[release report](docs/26-release-report.md) and the [roadmap](docs/27-roadmap.md). Start with the [documentation index](docs/README.md)
 for a guided reading order. Quick references: [tech stack](technical-docs/tech-stack.md),
 [user guide and manual tests](technical-docs/user-guide.md), and Mermaid
 [class](technical-docs/class-diagram.md) and [database](technical-docs/database-schema-diagram.md) diagrams.
@@ -123,6 +123,11 @@ even if the person who installed it changes their password or leaves the team.
    the dashboard; this policy is stored by the platform, not in PR-controlled YAML.
    Connecting a repository or enabling Automatic does not bulk-build existing PRs.
 
+Backend and API repositories can also declare platform-managed PostgreSQL and
+Redis (`services`), a setup command for migrations and seed data (`setup`), up to
+three unrouted processes such as a queue worker (`processes`) and a docs path
+(`docs_path`); see [backend previews](docs/11-backend-previews.md).
+
 `{}` is a valid minimal file if these defaults match the app. The port describes
 where the app already listens inside its container; it does not change the app's
 listening port. Named tiers are `small` (0.5 vCPU / 512 MiB), `standard` (1 vCPU /
@@ -167,7 +172,7 @@ platform-owned and cannot be set through this YAML.
     the PR's stable hostname (for example `pr-42-k2j4ld-7xq9m2fa.yourpreviewdomain.com`)
     → this container's internal address/port. Previa's route controller accepts the
     mapping behind a generation fence and writes it to the router's configuration
-    ([docs/11-routing-and-https.md](docs/11-routing-and-https.md)).
+    ([docs/12-routing-and-https.md](docs/12-routing-and-https.md)).
 11. The worker calls the GitHub API (using the installation token) to post a
     comment on the PR: "✅ Preview ready: https://pr-42-k2j4ld-7xq9m2fa.yourpreviewdomain.com".
 12. If any step from 7-9 fails, the worker instead posts a comment showing the
@@ -265,7 +270,11 @@ See [03-user-guide.md](docs/03-user-guide.md) for the current browser workflow.
 
 ### 2.5 Explicit MVP boundaries (what's out of scope for v1)
 
-- Multi-service apps (`docker-compose.yml` support) — Dockerfile-only for MVP.
+- Arbitrary multi-service apps (`docker-compose.yml` support). *Narrowed by
+  Prompt 13:* a Dockerfile app may add platform-managed PostgreSQL and Redis from
+  the operator's pinned catalog, a setup command and a few processes from its own
+  image ([docs/11](docs/11-backend-previews.md)); Compose files, service images
+  chosen in a PR, data that survives a rebuild and non-HTTP ingress stay out.
 - Auto-detecting frameworks without a Dockerfile (buildpacks) — not in MVP.
 - Team/role management beyond "whoever installed the app" — no granular
   permissions in MVP.
@@ -367,7 +376,7 @@ This section was chosen purely on the project's technical needs: event-driven, I
 controller rather than from container labels: labels are fixed at container creation
 and cannot be fenced by PR generation, and the Docker provider would need the Docker
 socket in Traefik. The controller materializes a fenced route table that only moves
-forward ([docs/11-routing-and-https.md](docs/11-routing-and-https.md)).
+forward ([docs/12-routing-and-https.md](docs/12-routing-and-https.md)).
 
 **Job queue**
 
@@ -509,8 +518,8 @@ and the server records requests with their wake-ups. Repeated Build requests coa
 failure or Rebuild after success creates a new revision without bumping PR
 generation. Switching to Manual cancels unstarted Automatic intent; running work
 may finish if still current. No historical builds archive is introduced. See
-[15-build-policy-and-intents.md](docs/15-build-policy-and-intents.md) for request semantics and
-[16-build-scheduling.md](docs/16-build-scheduling.md) for atomic admission, wake-up
+[16-build-policy-and-intents.md](docs/16-build-policy-and-intents.md) for request semantics and
+[17-build-scheduling.md](docs/17-build-scheduling.md) for atomic admission, wake-up
 uniqueness, revision fencing, worker admission checks and interruption.
 
 A unique constraint on (repo_id, number) for `pull_requests` and on `subdomain` for `environments` prevents duplicate environments when webhooks arrive twice.
@@ -533,6 +542,7 @@ This system runs other people's code on your machine, so isolation is a core req
 - Never run builds for fork PRs with secrets available; consider requiring maintainer approval for PRs from forks
 - Current implementation: previews run as an unprivileged user with a read-only root, no capabilities and `no-new-privileges` on their own internal network; outbound traffic reaches public addresses only through the egress proxy; probes from a running preview confirm Postgres, the host, metadata and other previews are unreachable. They share the host kernel (see [docs/10-preview-runtime.md](docs/10-preview-runtime.md))
 - Docker socket: only the worker touches it; never mount it into a preview container. The router (Traefik) has no socket either: its routes come from the worker's file and the worker attaches it to preview networks
+- Managed services (PostgreSQL, Redis): the operator's digest-pinned images as their own unprivileged user, read-only root with data on a size-capped tmpfs, no capabilities, on a per-PR services network with no egress and no route; owner-approved outbound connections go only through the egress proxy, which resolves names itself and refuses non-public addresses; forks get none (see [docs/11-backend-previews.md](docs/11-backend-previews.md))
 - Builds: each runs in a fresh rootless BuildKit container with CPU/memory/PID limits on a private network whose only exit is an egress proxy that reaches public addresses only (see [docs/09-image-builds.md](docs/09-image-builds.md))
 
 ### 4.7 Secrets handling
@@ -546,18 +556,19 @@ This system runs other people's code on your machine, so isolation is a core req
 The authoritative list of current settings, and which process needs each one, is
 in [docs/02-development-setup.md](docs/02-development-setup.md); which capability
 each one turns on, and what happens without it, is in
-[docs/21-mvp-operations.md](docs/21-mvp-operations.md).
+[docs/22-mvp-operations.md](docs/22-mvp-operations.md).
 
 - `DATABASE_URL`
-- `APP_ENV` (`development` or `production`), `LOG_LEVEL`, `INTERNAL_ADDR` / `WORKER_INTERNAL_ADDR` (internal health and metrics listeners), `TRUSTED_PROXIES`, `BACKUP_STATUS_FILE` (server), `BUILDS_PAUSED` (worker; the execution kill switch); see [docs/22-observability-and-hardening.md](docs/22-observability-and-hardening.md)
+- `APP_ENV` (`development` or `production`), `LOG_LEVEL`, `INTERNAL_ADDR` / `WORKER_INTERNAL_ADDR` (internal health and metrics listeners), `TRUSTED_PROXIES`, `BACKUP_STATUS_FILE` (server), `BUILDS_PAUSED` (worker; the execution kill switch); see [docs/23-observability-and-hardening.md](docs/23-observability-and-hardening.md)
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
 - `APP_BASE_URL` (server; also the worker once previews are routed: unknown preview hosts redirect to it)
 - `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`; server and worker), `ROUTER_DYNAMIC_DIR`, `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS` (worker; route controller)
 - `SESSION_SECRET` (server); `SECRETS_ENCRYPTION_KEYS`, `SECRETS_ACTIVE_KEY_VERSION` (server and worker; versioned keyring for repository secrets, optional for the worker, which then fails repositories with secrets closed)
-- `MAX_CONCURRENT_BUILDS` (builds at once across all workers), `ENV_TTL_HOURS` (preview lifetime after its latest publication), `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE`, `BUILD_CACHE_BUDGET` (worker; housekeeping and capacity, see [docs/14-housekeeping-and-capacity.md](docs/14-housekeeping-and-capacity.md))
+- `MAX_CONCURRENT_BUILDS` (builds at once across all workers), `ENV_TTL_HOURS` (preview lifetime after its latest publication), `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE`, `BUILD_CACHE_BUDGET` (worker; housekeeping and capacity, see [docs/15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md))
 - `BUILD_TIMEOUT`, `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS`, `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK`, `BUILDKIT_IMAGE`, `SOURCE_WORKSPACE_ROOT` (worker; isolated image builds and exact-commit source workspaces)
 - `EGRESS_IMAGE`, `PREVIEW_ALLOW_ROOT`, `PREVIEW_WRITABLE_ROOTFS`, `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT`, `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY`, `PREVIEW_OCI_RUNTIME` (worker; hardened previews and the shared egress proxy)
+- `PREVIEW_SERVICE_CATALOG`, `PREVIEW_SETUP_TIMEOUT` (worker; managed services and the setup command), `PREVIEW_OUTBOUND_PORTS` (server and worker; owner-approved outbound connections), see [docs/11-backend-previews.md](docs/11-backend-previews.md)
 - `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE`, `ACME_CA_SERVER` (router; Traefik's wildcard certificate over DNS-01, staging by default, the DNS token read from a protected file instead of the originally planned `DNS_PROVIDER_API_TOKEN` variable)
 
 ### 4.9 Infrastructure and deployment
@@ -568,7 +579,7 @@ each one turns on, and what happens without it, is in
 - CI/CD: GitHub Actions for tests and image builds; `goreleaser` for versioned releases
 - Backups: nightly `pg_dump` to object storage
 
-Implemented as [docs/24-production-deployment.md](docs/24-production-deployment.md)
+Implemented as [docs/25-production-deployment.md](docs/25-production-deployment.md)
 describes: `deploy/production/compose.yml` (PostgreSQL, a migration step, server,
 worker, Traefik, optional Prometheus and Grafana), release images from the
 `Dockerfile`, the documented setup script `deploy/production/setup.sh` (Terraform
@@ -591,4 +602,4 @@ object storage through rclone, with a scripted, rehearsed restore.
 - More capacity: run workers on multiple hosts, add a scheduler, or move to Kubernetes via the `Runtime` interface
 - Stronger isolation: Firecracker microVMs
 - Bigger logs: move build logs to S3/MinIO or Loki
-- Multi-service previews: add `docker-compose.yml` support
+- Multi-service previews: more managed service kinds, or `docker-compose.yml` support beyond the managed PostgreSQL and Redis of [docs/11](docs/11-backend-previews.md)

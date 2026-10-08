@@ -269,7 +269,7 @@ On the repository page (pull request list only):
    the address) and a **Previa preview** check run with a success result.
 
 If the button is greyed out, the box beside it says why and how to fix it (see
-[When Previa says no](#18-when-previa-says-no)). On a local setup, the most common
+[When Previa says no](#19-when-previa-says-no)). On a local setup, the most common
 case is **The running worker cannot build previews: it has no preview domain**: set
 `PREVIEW_BASE_DOMAIN=preview.localtest.me` and start the router as described in
 [Before you start](#0-before-you-start), then restart the worker and reload.
@@ -389,7 +389,36 @@ secrets per repository, 32 KiB each; values of 4 characters or more are redacted
 from logs. If the server has no encryption keys, the tab says secrets are not
 configured.
 
-## 15. Builds, Environments and Overview
+## 15. Backend previews and outbound connections
+
+An app that needs a database, a cache, migrations or a background worker declares
+them in `.previewrc.yaml` (details and examples in
+[docs/11](../docs/11-backend-previews.md)):
+
+```yaml
+services: { postgres: 17, redis: 7 }   # versions this server offers
+setup: ["bin/api", "migrate", "--seed"]
+processes:
+  - name: worker
+    command: ["bin/api", "worker"]
+docs_path: /docs
+```
+
+1. Every build gets **its own fresh** PostgreSQL and Redis; the app, the setup
+   command and the processes receive `DATABASE_URL`, `PG*` and `REDIS_URL`.
+   **Data does not survive a rebuild.**
+2. The build log shows each service becoming ready, the setup command's output and
+   the processes starting. If one fails, the build fails with that reason and the
+   previous preview keeps serving.
+3. The pull request page shows **Runs with**, **Docs**, **Outbound** and the
+   **Managed services** the running worker offers ("None" when the operator
+   configured none). The PR comment links the docs path.
+4. To let previews reach an external test database or broker, open the
+   repository's **Outbound** tab, enter the host name, choose an allowed port and
+   **Approve**. **Remove** confirms in a dialog. Pull requests from forks never get
+   these connections.
+
+## 16. Builds, Environments and Overview
 
 - **Builds**: the current or latest request of each pull request across your
   repositories, most recent first: the pull request's title, the requested commit
@@ -403,7 +432,7 @@ configured.
   previews.
 - **Overview**: see [Sign in](#1-sign-in).
 
-## 16. Everyday navigation
+## 17. Everyday navigation
 
 - Sidebar: **Overview**, **Repositories**, **Builds**, **Environments**, **Developer
   tools** (development only) and **FAQ**. On phones, the menu button opens it.
@@ -416,7 +445,7 @@ configured.
   JavaScript (forms submit normally, dialogs still confirm).
 - Sign out: account menu, **Log out…**, confirm. Your GitHub session is unaffected.
 
-## 17. What happens automatically
+## 18. What happens automatically
 
 | Event | What Previa does |
 | --- | --- |
@@ -430,7 +459,7 @@ configured.
 | Operator pauses builds | Requests wait ("Builds paused"); new build clicks are refused with a message |
 | A container disappears | The preview is marked failed (its container went missing); Retry, Rebuild or a new commit brings it back |
 
-## 18. When Previa says no
+## 19. When Previa says no
 
 On a pull request page, a build action that cannot run now stays visible but greyed
 out, and the box beside it shows the message and the fix below.
@@ -452,7 +481,7 @@ out, and the box beside it shows the message and the fix below.
 | The pull request or its build changed meanwhile. Reload and try again. | The page is out of date | Reload |
 | Failure reasons (on the PR page, Builds and the comment) | "The commit could not be prepared" (download or invalid `.previewrc.yaml`), "The image build failed", "The app did not become ready", "The app exited while starting", "The build took longer than allowed", "Repository secrets could not be decrypted", "The preview could not be published" | Open **Build logs**, fix, then **Retry build** or push |
 
-## 19. Uninstall the GitHub App or remove access
+## 20. Uninstall the GitHub App or remove access
 
 On GitHub, open **Manage connections** from Previa (or **Settings → Applications →
 Installed GitHub Apps → Configure**; for an organization, its settings).
@@ -609,6 +638,22 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | H5 | Build a PR whose app prints `API_KEY` when it starts | Build logs show the start-up output with `[redacted]` (secrets are given only when the container starts, never during the image build) |
 | H6 | Build a PR from a **fork** | The preview runs without the secret |
 | H7 | Start the server without `SECRETS_*` keys | The tab says secrets are not configured |
+
+### H2. Backend previews and outbound connections
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| HB1 | Build a PR whose `.previewrc.yaml` declares `services: {postgres: 17, redis: 7}`, a `setup` command and a `worker` process | The log shows PostgreSQL and Redis ready, the setup output and the worker starting; the preview serves |
+| HB2 | Open the PR page | **Runs with** PostgreSQL 17 and Redis 7 · setup ran · process worker; **Docs** links to the docs path; the PR comment says the same |
+| HB3 | Write data in the preview, then **Rebuild preview** | The new preview starts with a fresh, seeded database |
+| HB4 | Push a commit whose setup command fails | The build fails with "The setup command … failed"; the previous preview and its data keep serving |
+| HB5 | Declare `postgres: 9` (not offered) | Preparation fails naming the versions this server offers |
+| HB6 | Start the worker with `PREVIEW_SERVICE_CATALOG=none` | The PR page says no managed services are configured; a commit declaring services fails with that reason |
+| HB7 | **Outbound** tab: approve `db.example.com` on port 5432; try `10.0.0.1` and a second host on 5432 | Approved and listed; the address and the second host on a used port are refused with reasons |
+| HB8 | Rebuild, then connect from the app to the approved host | Works, with TLS verified against the real name; other hosts and ports are refused |
+| HB9 | **Remove** the destination (confirm in the dialog) | Running previews lose it within a minute |
+| HB10 | Build a PR from a fork | No outbound connections; the PR page says they were withheld |
+| HB11 | Start the server with `PREVIEW_OUTBOUND_PORTS=none` | The tab says outbound connections are turned off and offers no form |
 
 ### I. Build logs
 

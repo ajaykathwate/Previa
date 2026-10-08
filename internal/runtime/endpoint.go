@@ -10,6 +10,7 @@ import (
 
 	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 	"github.com/ajaykathwatee/previa/internal/platform/egress"
+	"github.com/ajaykathwatee/previa/internal/repoconfig"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -80,6 +81,9 @@ func (r *Runtime) Endpoint(ctx context.Context, want Expected) (Endpoint, error)
 		}
 		err := r.egress.Probe(ctx, netip.AddrPortFrom(addr, uint16(port)), c.Config.Labels[dockerx.LabelHealthPath], probeTimeout)
 		if err == nil {
+			if err := r.companionsReady(ctx, want.PullRequestID, c.Config.Labels[dockerx.LabelCandidate]); err != nil {
+				return Endpoint{}, err
+			}
 			return Endpoint{Name: strings.TrimPrefix(c.Name, "/"), Port: port, NetworkID: endpoint.NetworkID}, nil
 		}
 		var notReady *egress.ProbeFailure
@@ -96,4 +100,38 @@ func candidateMatches(labels map[string]string, want Expected) bool {
 		labels[dockerx.LabelGeneration] == strconv.FormatInt(want.Generation, 10) &&
 		labels[dockerx.LabelRevision] == strconv.FormatInt(want.Revision, 10) &&
 		labels[dockerx.LabelImage] == want.ImageTag
+}
+
+// companionsReady requires the candidate's processes to be running and its
+// managed services to answer their protocol right before it is routed. A
+// candidate from before backend previews has no companions.
+func (r *Runtime) companionsReady(ctx context.Context, pullRequestID int64, key string) error {
+	if key == "" {
+		return nil
+	}
+	listed, err := r.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.Add("label",
+		dockerx.LabelManaged+"=true", dockerx.LabelInstance+"="+r.instance, dockerx.LabelPR+"="+strconv.FormatInt(pullRequestID, 10),
+		dockerx.LabelCandidate+"="+key)})
+	if err != nil {
+		return failure(CodeUnavailable, "The candidate's services and processes could not be listed.", true, err)
+	}
+	for _, c := range listed.Items {
+		component := c.Labels[dockerx.LabelComponent]
+		switch c.Labels[dockerx.LabelKind] {
+		case dockerx.KindProcess:
+			if c.State != container.StateRunning {
+				return failure(CodeProcessFailed, "The process "+component+" stopped before the preview was published.", false, nil)
+			}
+		case dockerx.KindService:
+			profile, ok := serviceProfiles[component]
+			if !ok || c.State != container.StateRunning {
+				return failure(CodeServiceFailed, "A managed service stopped before the preview was published.", false, nil)
+			}
+			run := serviceRun{BackendService: repoconfig.BackendService{Kind: component, Version: c.Labels[dockerx.LabelVersion]}, profile: profile}
+			if ready, _, err := r.serviceAnswers(ctx, run, c.ID, false); err != nil || !ready {
+				return failure(CodeServiceFailed, profile.title+" stopped answering before the preview was published.", err != nil, err)
+			}
+		}
+	}
+	return nil
 }

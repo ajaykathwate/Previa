@@ -3,7 +3,7 @@
 Everything that happens between "this PR may be built" and "here is a directory to
 build": confirm the PR with GitHub right now, download exactly that commit, unpack
 it without trusting it, and read `.previewrc.yaml` from the same tree. None of this
-builds or runs code; image builds start in the next phase ([26-roadmap.md](26-roadmap.md)).
+builds or runs code; image builds start in the next phase ([27-roadmap.md](27-roadmap.md)).
 
 The PR author controls everything in the archive, including the config file, so
 all of it is treated as hostile input: identity is verified, paths are confined,
@@ -16,7 +16,7 @@ moves even without a push. So immediately before manual authorization and before
 executing eligible work, `pullrequests.SyncService.VerifyUpstream` re-reads the PR
 from GitHub. It implements the consumer-owned `environments.UpstreamVerifier`
 interface. The owner's Build, Retry and Rebuild call it before recording a request,
-and the worker calls it again before admitting a build ([16](16-build-scheduling.md)).
+and the worker calls it again before admitting a build ([17](17-build-scheduling.md)).
 
 1. A short transaction captures the installation revision, the repository
    observation version and the PR generation. A locally closed PR fails closed
@@ -147,6 +147,7 @@ resource_tier: standard
 | `env` | List of `NAME=value` strings | Empty list |
 | `health_check_path` | Local absolute HTTP path string | No configured HTTP health endpoint |
 | `resource_tier` | `small`, `standard` or `large` string | `standard` |
+| `services`, `setup`, `processes`, `docs_path` | Backend previews: managed PostgreSQL/Redis from the worker's catalog, a setup argv, up to 3 processes, a docs path | None; see [11](11-backend-previews.md) |
 
 The file itself is required: a missing file is an actionable acquisition error.
 `{}` is a valid minimal file. A blank file, explicit nulls or incorrect field types
@@ -158,7 +159,7 @@ publication when no HTTP endpoint is declared.
 Only one YAML mapping/document is supported. Unknown/duplicate keys, tags, anchors,
 aliases, merges and complex keys are rejected. Numeric resource objects, build mode
 and Automatic debounce settings are not allowed in repository YAML. Build policy
-is owner-controlled platform data; see [15](15-build-policy-and-intents.md).
+is owner-controlled platform data; see [16](16-build-policy-and-intents.md).
 
 ### Resource tiers and ceilings
 

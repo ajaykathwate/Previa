@@ -9,7 +9,7 @@ This guide explains the checked-in [ci.yml](../.github/workflows/ci.yml) block b
 block, including the Makefile targets and test harnesses it calls. It describes
 configuration, not evidence that a particular GitHub run has passed. See
 [CD in action](cd-in-action.md) for release publishing and manual deployment, and
-[production deployment](../docs/24-production-deployment.md) for host operations.
+[production deployment](../docs/25-production-deployment.md) for host operations.
 Source behavior was reviewed on **2026-10-06**.
 
 ## Contents
@@ -681,7 +681,7 @@ the replacement procedure, not compatibility between two different releases.
 The optional older-schema restore needs `SMOKE_OLD_DUMP`, which CI does not supply.
 
 The initial migration, upgrade and optional older-backup restore checks assert
-Goose schema **19**, matching
+Goose schema **20**, matching
 [schema.go](../internal/platform/database/schema.go). Update these three
 expectations when a release adds a migration, and rerun the smoke test against
 that release's images. The earlier release report's smoke result is historical;
@@ -807,7 +807,7 @@ against their runner environments and fixtures. It does not establish:
 - Every image/severity was scanned, or every UI/production path has a test.
 
 The documented live proofs remain separate in the
-[release report](../docs/25-release-report.md) and
-[deployment runbook](../docs/24-production-deployment.md). Continue with
+[release report](../docs/26-release-report.md) and
+[deployment runbook](../docs/25-production-deployment.md). Continue with
 [CD in action](cd-in-action.md) to follow the exact boundary between checking a
 commit, publishing its artifacts and installing them on the production host.

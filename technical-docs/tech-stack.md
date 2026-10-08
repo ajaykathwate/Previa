@@ -64,39 +64,41 @@ flowchart LR
 | Layer | Technology (version) | Used for | Where in the code | Read more |
 | --- | --- | --- | --- | --- |
 | Language and runtime | Go 1.26 (1.26.8 or newer) | Both processes, the migrator, maintenance commands, the egress proxy | `cmd/*`, `internal/*` | [01](../docs/01-system-overview.md) |
-| HTTP routing | chi v5.3.2 | Routes and middleware | `internal/platform/httpx`, each feature's `routes.go`/`handler.go` | [20](../docs/20-ui-architecture.md) |
-| Server-rendered UI | templ v0.3.1020 | Every page and HTMX fragment | `web/pages/*`, `web/layouts`, `web/components` | [20](../docs/20-ui-architecture.md) |
-| Interactivity | HTMX 2.0.11 (vendored) + one `ui.js` | Partial page updates, live search, modals; works without JavaScript | `web/static/htmx.min.js`, `web/static/js/ui.js` | [20](../docs/20-ui-architecture.md) |
-| Styling | Tailwind CSS v4.1.18 standalone (checksum-pinned), templUI v1.13.2 components | The "signal" theme, light and dark | `web/styles/*`, `web/components`, `deploy/install-tailwind.sh` | [20](../docs/20-ui-architecture.md) |
-| Live updates | Server-Sent Events + PostgreSQL `LISTEN/NOTIFY` (7 triggers) | Repository pages and build logs update without polling | `internal/platform/realtime`, migrations 0011 and 0013 | [19](../docs/19-realtime-updates.md) |
+| HTTP routing | chi v5.3.2 | Routes and middleware | `internal/platform/httpx`, each feature's `routes.go`/`handler.go` | [21](../docs/21-ui-architecture.md) |
+| Server-rendered UI | templ v0.3.1020 | Every page and HTMX fragment | `web/pages/*`, `web/layouts`, `web/components` | [21](../docs/21-ui-architecture.md) |
+| Interactivity | HTMX 2.0.11 (vendored) + one `ui.js` | Partial page updates, live search, modals; works without JavaScript | `web/static/htmx.min.js`, `web/static/js/ui.js` | [21](../docs/21-ui-architecture.md) |
+| Styling | Tailwind CSS v4.1.18 standalone (checksum-pinned), templUI v1.13.2 components | The "signal" theme, light and dark | `web/styles/*`, `web/components`, `deploy/install-tailwind.sh` | [21](../docs/21-ui-architecture.md) |
+| Live updates | Server-Sent Events + PostgreSQL `LISTEN/NOTIFY` (7 triggers) | Repository pages and build logs update without polling | `internal/platform/realtime`, migrations 0011 and 0013 | [20](../docs/20-realtime-updates.md) |
 | Database | PostgreSQL 17 (17.11 in production images) | Application data, sessions, the job queue, change notifications | `db/migrations`, `deploy/docker-compose.yml` | [database-schema.md](database-schema.md) |
 | Database driver | pgx v5.10.0 | Connection pool, transactions | `internal/platform/database` | [01](../docs/01-system-overview.md) |
 | SQL | sqlc v1.31.1 | Type-safe Go from each feature's SQL | `internal/*/queries.sql` to `internal/*/dbgen`, `sqlc.yaml` | [02](../docs/02-development-setup.md) |
-| Migrations | Goose v3.28.0 | Schema changes 0001–0019; CLI for development, embedded library in release images | `db/migrations`, `db/migrations.go`, `cmd/migrate` | [24](../docs/24-production-deployment.md) |
-| Job queue | River v0.47.0 (riverpgxv5) | Builds, teardowns, wake-ups, routes, reports, cleanup, discovery, housekeeping, log pruning | `internal/platform/queue`, `internal/environments/{jobs,scheduler,worker,operation_worker}.go`, `internal/housekeeping/jobs.go` | [16](../docs/16-build-scheduling.md) |
+| Migrations | Goose v3.28.0 | Schema changes 0001–0020; CLI for development, embedded library in release images | `db/migrations`, `db/migrations.go`, `cmd/migrate` | [25](../docs/25-production-deployment.md) |
+| Job queue | River v0.47.0 (riverpgxv5) | Builds, teardowns, wake-ups, routes, reports, cleanup, discovery, housekeeping, log pruning | `internal/platform/queue`, `internal/environments/{jobs,scheduler,worker,operation_worker}.go`, `internal/housekeeping/jobs.go` | [17](../docs/17-build-scheduling.md) |
 | Sessions | SCS v2.9.0 + pgxstore | Server-side sessions, `__Host-` cookie | `internal/auth/session.go` | [04](../docs/04-github-sign-in-and-app.md) |
 | Sign-in | golang.org/x/oauth2 v0.37.0 | GitHub OAuth App sign-in; GitHub App user authorization | `internal/auth`, `internal/installations/authorization.go` | [04](../docs/04-github-sign-in-and-app.md) |
-| GitHub API | go-github v91 | PRs, repositories, archives, comments, check runs | `internal/platform/githubapp`, `internal/pullrequests/github.go`, `internal/source/github.go`, `internal/reporting/github.go` | [05](../docs/05-webhooks-and-pr-discovery.md), [13](../docs/13-pr-feedback.md) |
+| GitHub API | go-github v91 | PRs, repositories, archives, comments, check runs | `internal/platform/githubapp`, `internal/pullrequests/github.go`, `internal/source/github.go`, `internal/reporting/github.go` | [05](../docs/05-webhooks-and-pr-discovery.md), [14](../docs/14-pr-feedback.md) |
 | GitHub App auth | ghinstallation v2.18.0 | App JWTs and cached installation tokens | `internal/platform/githubapp` | [04](../docs/04-github-sign-in-and-app.md) |
 | Configuration | envconfig v1.4.0 | Environment settings, validated at start | `internal/platform/config` | [.env.example](../.env.example) |
 | Repository config | goccy/go-yaml v1.19.2, validator v10.30.5 | `.previewrc.yaml` parsing and strict validation | `internal/repoconfig` | [06](../docs/06-source-and-configuration.md) |
 | Docker | moby client v0.6.1 (Engine API 1.56) | Containers, networks, images, exec | `internal/platform/dockerx`, `internal/runtime`, `internal/builds`, `internal/routing/traefik.go`, `internal/platform/egress` | [10](../docs/10-preview-runtime.md) |
+| Managed services | Official `postgres` and `redis` images pinned by digest (PostgreSQL 17/16, Redis 8/7 by default) | Per-candidate databases and caches of backend previews | `internal/runtime/backend.go`, `internal/platform/config/backend.go` | [11](../docs/11-backend-previews.md) |
+| Outbound forwarding | Go TCP relay in `previa-egress` (allow files per preview network) | Owner-approved connections to external databases and brokers | `internal/platform/egress/forward.go`, `internal/outbound` | [11](../docs/11-backend-previews.md) |
 | Image builds | BuildKit client v0.33.0 + rootless `moby/buildkit:v0.33.1-rootless` (pinned), fsutil | One isolated builder per build; build context streamed from the worker | `internal/builds` | [09](../docs/09-image-builds.md) |
 | Egress proxy | previa-egress (own Go binary, scratch image) | The only route out of build and preview networks; readiness probes | `cmd/egress`, `internal/platform/egress`, `deploy/egress/Dockerfile` | [09](../docs/09-image-builds.md), [10](../docs/10-preview-runtime.md) |
-| Router and TLS | Traefik v3.7.13 (pinned), Let's Encrypt over lego (DNS-01 wildcard for previews, TLS-ALPN-01 for the dashboard) | HTTPS for the dashboard and every preview; routes from a file | `internal/routing`, `deploy/traefik/compose.yml`, `deploy/production/compose.yml` | [11](../docs/11-routing-and-https.md) |
+| Router and TLS | Traefik v3.7.13 (pinned), Let's Encrypt over lego (DNS-01 wildcard for previews, TLS-ALPN-01 for the dashboard) | HTTPS for the dashboard and every preview; routes from a file | `internal/routing`, `deploy/traefik/compose.yml`, `deploy/production/compose.yml` | [12](../docs/12-routing-and-https.md) |
 | Secrets at rest | Go `crypto/aes` + `crypto/cipher` (AES-256-GCM), versioned keys | Repository secrets given to previews | `internal/secrets` | [07](../docs/07-repository-secrets.md) |
 | Optional sandbox | gVisor (`runsc`) through `PREVIEW_OCI_RUNTIME` | An extra kernel boundary for previews | `internal/runtime` | [10](../docs/10-preview-runtime.md) |
-| Logs | `log/slog` JSON + redaction and correlation | Every process's logs | `internal/platform/logging` | [22](../docs/22-observability-and-hardening.md) |
-| Metrics | prometheus/client_golang v1.24.1 | Bounded metrics on internal listeners | `internal/platform/metrics`, `internal/app/observe.go` | [22](../docs/22-observability-and-hardening.md) |
-| Monitoring | Prometheus v3.5.0, Grafana 12.1.1 (pinned) | Scraping, 24 alert rules, a provisioned dashboard | `deploy/observability` | [22](../docs/22-observability-and-hardening.md), [23](../docs/23-incident-runbook.md) |
-| Ingress hardening | golang.org/x/time/rate v0.16.0 and own middleware | Rate limits, host checks, CSP nonce, body limits | `internal/platform/httpx/ingress.go` | [22](../docs/22-observability-and-hardening.md) |
-| Packaging | Docker multi-stage build: `golang:1.26.8-bookworm` to distroless static (UID 65532) | Release images `previa-server`, `previa-worker`, `previa-egress` | `Dockerfile`, `.dockerignore` | [24](../docs/24-production-deployment.md) |
-| Orchestration | Docker Compose | Local PostgreSQL; the whole production stack | `deploy/docker-compose.yml`, `deploy/production/compose.yml` | [24](../docs/24-production-deployment.md) |
-| Backups | `pg_dump`, age (encryption), rclone (object storage), systemd timer | Nightly encrypted backups and restore | `deploy/production/{backup,restore,setup}.sh` | [24](../docs/24-production-deployment.md#backups-and-restore) |
-| CI/CD | GitHub Actions, GoReleaser v2, Trivy, actionlint | Checks, tests, image scans, tag-driven releases | `.github/workflows`, `.goreleaser.yaml` | [24](../docs/24-production-deployment.md#ci-and-releases) |
+| Logs | `log/slog` JSON + redaction and correlation | Every process's logs | `internal/platform/logging` | [23](../docs/23-observability-and-hardening.md) |
+| Metrics | prometheus/client_golang v1.24.1 | Bounded metrics on internal listeners | `internal/platform/metrics`, `internal/app/observe.go` | [23](../docs/23-observability-and-hardening.md) |
+| Monitoring | Prometheus v3.5.0, Grafana 12.1.1 (pinned) | Scraping, 24 alert rules, a provisioned dashboard | `deploy/observability` | [23](../docs/23-observability-and-hardening.md), [24](../docs/24-incident-runbook.md) |
+| Ingress hardening | golang.org/x/time/rate v0.16.0 and own middleware | Rate limits, host checks, CSP nonce, body limits | `internal/platform/httpx/ingress.go` | [23](../docs/23-observability-and-hardening.md) |
+| Packaging | Docker multi-stage build: `golang:1.26.8-bookworm` to distroless static (UID 65532) | Release images `previa-server`, `previa-worker`, `previa-egress` | `Dockerfile`, `.dockerignore` | [25](../docs/25-production-deployment.md) |
+| Orchestration | Docker Compose | Local PostgreSQL; the whole production stack | `deploy/docker-compose.yml`, `deploy/production/compose.yml` | [25](../docs/25-production-deployment.md) |
+| Backups | `pg_dump`, age (encryption), rclone (object storage), systemd timer | Nightly encrypted backups and restore | `deploy/production/{backup,restore,setup}.sh` | [25](../docs/25-production-deployment.md#backups-and-restore) |
+| CI/CD | GitHub Actions, GoReleaser v2, Trivy, actionlint | Checks, tests, image scans, tag-driven releases | `.github/workflows`, `.goreleaser.yaml` | [25](../docs/25-production-deployment.md#ci-and-releases) |
 | Developer tools | Air v1.67.4, golangci-lint v2.14.0, govulncheck v1.8.0, sqlc, templ, Goose (all pinned in `tools/go.mod`), shellcheck, promtool | Live reload, linting, vulnerability scans, generation | `tools/go.mod`, `.air.toml`, `Makefile` | [02](../docs/02-development-setup.md) |
 | Browser tests | Playwright 1.58.2 (Node 20+), Chromium | 30 UI scenarios under the production CSP | `web/tests/browser` | [web/tests/browser/README.md](../web/tests/browser/README.md) |
-| Test infrastructure | Go `testing` (race detector), real Docker/BuildKit/Traefik suites, Pebble (test ACME), a fake GitHub over TLS | Unit, PostgreSQL, real-Docker and end-to-end tests | `*_test.go`, `internal/app/e2e_*_test.go` | [21](../docs/21-mvp-operations.md#what-is-proven-and-by-which-test) |
+| Test infrastructure | Go `testing` (race detector), real Docker/BuildKit/Traefik suites, Pebble (test ACME), a fake GitHub over TLS | Unit, PostgreSQL, real-Docker and end-to-end tests | `*_test.go`, `internal/app/e2e_*_test.go` | [22](../docs/22-mvp-operations.md#what-is-proven-and-by-which-test) |
 
 Design and code diagrams: [class-diagram.md](class-diagram.md) and
 [database-schema-diagram.md](database-schema-diagram.md) (Mermaid).
@@ -191,7 +193,7 @@ inside the containers.
 | `deploy/observability/` | `prometheus.yml`, `alerts.yml` + `alerts_test.yml`, Grafana provisioning and dashboard |
 | `deploy/egress/Dockerfile` | Development egress image (`make egress-image`) |
 | `.github/workflows/ci.yml`, `release.yml`, `.goreleaser.yaml` | CI and releases |
-| `db/migrations/*.sql` | Schema migrations 0001–0019 |
+| `db/migrations/*.sql` | Schema migrations 0001–0020 |
 | A repository's `.previewrc.yaml` | How its previews build and run: port, health path, resources, environment ([06](../docs/06-source-and-configuration.md)) |
 
 ## Deployment setups
@@ -201,7 +203,7 @@ inside the containers.
 | Local development | Working on the dashboard, sign-in, linking, discovery, policies, secrets, logs | `docker compose -f deploy/docker-compose.yml up -d`, `make migrate-up`, `make run-server` + `make run-worker` (or `make dev`) ([02](../docs/02-development-setup.md)) |
 | Local previews without a domain | Building and opening previews on your machine | Add `PREVIEW_BASE_DOMAIN=preview.localtest.me` and a `ROUTER_DYNAMIC_DIR`, start the router with `make router-up` (see [user-guide.md](user-guide.md#0-before-you-start)); browsers warn about Traefik's default certificate |
 | Local staging of the production stack | Checking release images, Compose, backups, upgrades | `make release-images PREVIA_VERSION=x` then `make prod-smoke PREVIA_VERSION=x` |
-| Production (one VPS) | Real use | `deploy/production/setup.sh`, then the production Compose file ([24](../docs/24-production-deployment.md)) |
+| Production (one VPS) | Real use | `deploy/production/setup.sh`, then the production Compose file ([25](../docs/25-production-deployment.md)) |
 
 ## Testing
 
@@ -228,14 +230,14 @@ Manual, end-user test cases are in [user-guide.md](user-guide.md#manual-test-che
 | Apply migrations | `make migrate-up` (development); `previa-migrate up` runs automatically in production |
 | Check settings before starting | `previa-server check-config`, `previa-worker check-config` |
 | Is a process ready? | `/readyz` on the internal listener, or `previa-server healthcheck` |
-| Pause all builds (kill switch) | `BUILDS_PAUSED=true`, restart the worker ([23](../docs/23-incident-runbook.md#execution-kill-switch)) |
+| Pause all builds (kill switch) | `BUILDS_PAUSED=true`, restart the worker ([24](../docs/24-incident-runbook.md#execution-kill-switch)) |
 | Rotate the secrets key | add a key version, switch `SECRETS_ACTIVE_KEY_VERSION`, restart, `make secrets-reencrypt` ([07](../docs/07-repository-secrets.md)) |
 | Rewrite the router's route file | `make route-sync` |
 | See what housekeeping would delete | `make housekeeping-dry-run` |
 | River migration status | `make river-status` |
 | Back up / restore | `deploy/production/backup.sh` (nightly timer), `deploy/production/restore.sh --identity KEY --yes DUMP` |
-| Upgrade / roll back | change `PREVIA_VERSION`, `docker compose … up -d --wait` ([24](../docs/24-production-deployment.md#upgrades-and-rollback)) |
-| Incidents | [23-incident-runbook.md](../docs/23-incident-runbook.md) |
+| Upgrade / roll back | change `PREVIA_VERSION`, `docker compose … up -d --wait` ([25](../docs/25-production-deployment.md#upgrades-and-rollback)) |
+| Incidents | [24-incident-runbook.md](../docs/24-incident-runbook.md) |
 
 ## Security model in brief
 
@@ -251,4 +253,4 @@ Manual, end-user test cases are in [user-guide.md](user-guide.md#manual-test-che
 - Credentials (App key, DNS token, keyring) are files or settings, never logged,
   never in job payloads or URLs.
 
-Details: [22](../docs/22-observability-and-hardening.md), [10](../docs/10-preview-runtime.md), [07](../docs/07-repository-secrets.md).
+Details: [23](../docs/23-observability-and-hardening.md), [10](../docs/10-preview-runtime.md), [07](../docs/07-repository-secrets.md).

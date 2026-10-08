@@ -88,7 +88,7 @@ the PostgreSQL test covers persisted sessions across restarts.
    Previa starts it explicitly after verifying the setup redirect.
 6. Repository permissions: **Contents: read** (source archives), **Pull requests:
    write** (the living PR comment), **Checks: write** (exact-commit check runs);
-   GitHub adds **Metadata: read**. See [13](13-pr-feedback.md#required-github-app-permissions)
+   GitHub adds **Metadata: read**. See [14](14-pr-feedback.md#required-github-app-permissions)
    for what each is used for and what happens if one is withdrawn.
 7. Webhooks: enable, set a secret and a public HTTPS URL ending in
    `/webhooks/github`, subscribe to **Pull request** ([05](05-webhooks-and-pr-discovery.md#enable-github-deliveries-locally)).
@@ -146,7 +146,7 @@ The setup redirect's `installation_id` is never trusted on its own
 - Suspension, deletion and repository removal record durable `cleanup_pending` and,
   in the same transaction, a teardown request for each affected PR with a live
   preview or unfinished build. Teardown and cleanup never need the App's token
-  ([12](12-teardown-and-cleanup.md)).
+  ([13](13-teardown-and-cleanup.md)).
 - Installation tokens are cached per installation (via `ghinstallation` v2.18.0,
   refreshed a minute before expiry) behind a mutex-protected transport.
 

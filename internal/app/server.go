@@ -16,6 +16,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/dashboard"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
+	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/githubapp"
@@ -133,7 +134,7 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// Ingress controls (docs/22-observability-and-hardening.md): only the
+	// Ingress controls (docs/23-observability-and-hardening.md): only the
 	// dashboard's host is served, except signed webhooks that may arrive
 	// through a tunnel; bodies are capped (webhooks cap their own); sign-in
 	// and installation callbacks are rate limited per client.
@@ -193,6 +194,17 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	secretHandler := secrets.NewHandler(secretService, authHandler, logger)
+	// Owner-approved outbound connections; a change wakes the worker's
+	// refresh so a removal reaches running previews within seconds.
+	outboundPorts, err := cfg.OutboundPorts()
+	if err != nil {
+		return err
+	}
+	outboundService, err := outbound.NewService(outbound.NewRepository(pool, producer), outboundPorts)
+	if err != nil {
+		return err
+	}
+	outboundHandler := outbound.NewHandler(outboundService, authHandler, logger)
 	logHandler := buildlogs.NewHandler(logStore, authHandler, logger).WithLiveUpdates(hub, realtime.DefaultStreamOptions)
 	router.Group(func(r chi.Router) {
 		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
@@ -204,6 +216,7 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		installationHandler.Mount(r, auth.RequireUser)
 		prs.Mount(r, auth.RequireUser)
 		secretHandler.Mount(r, auth.RequireUser)
+		outboundHandler.Mount(r, auth.RequireUser)
 		logHandler.Mount(r, auth.RequireUser)
 		if !cfg.Production() {
 			dashboard.MountPing(r, pings, auth.RequireUser, logger)

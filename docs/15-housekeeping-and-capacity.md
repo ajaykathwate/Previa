@@ -1,4 +1,4 @@
-# 14 · Housekeeping, expiry and capacity
+# 15 · Housekeeping, expiry and capacity
 
 Previa keeps the real world matching the database without anyone watching it:
 lost River jobs, crashed workers, missed webhooks, forgotten previews, orphaned
@@ -7,11 +7,11 @@ builds and previews never take more of the host than it can give. This document
 covers the owner decisions, the jobs, what each crash point leaves behind and who
 resumes it, expiry and its feedback, orphan detection, PR reconciliation with
 GitHub, pruning, capacity controls, dry runs, configuration and what was verified.
-It extends the environments contracts ([16](16-build-scheduling.md),
-[17](17-durable-publication-design.md), [12](12-teardown-and-cleanup.md)); the
+It extends the environments contracts ([17](17-build-scheduling.md),
+[18](18-durable-publication-design.md), [13](13-teardown-and-cleanup.md)); the
 code is `internal/housekeeping` plus capacity in `internal/environments`,
 `internal/runtime` and `internal/builds`. The worker registers it whenever it can
-build ([21](21-mvp-operations.md)); `make housekeeping-dry-run` runs it as a
+build ([22](22-mvp-operations.md)); `make housekeeping-dry-run` runs it as a
 diagnostic.
 
 ## Decisions
@@ -69,7 +69,7 @@ policy, deadline, generation, mergeability).
 - The living comment of a live preview says *"The preview expires at 14:05 UTC on
   7 Oct 2026 unless a newer one is published."* After expiry it reads *Preview
   expired* with how to bring it back; an unfinished check run is stopped
-  ([13](13-pr-feedback.md)).
+  ([14](14-pr-feedback.md)).
 - A preview whose PR has a pending, queued or running request is left until that
   request publishes (and sets a new expiry) or ends.
 - After expiry, recovery never rebuilds it. A new commit on an Automatic
@@ -110,7 +110,7 @@ categories in `pr_reconciliations` (`current`, `changed`, `closed`, `blocked`,
 that PR first in line. PRs of suspended installations or inaccessible
 repositories are not read; an `inaccessible` answer tears nothing down, because
 installation lifecycle events and repository sync are the authority on access
-([04](04-github-sign-in-and-app.md), [12](12-teardown-and-cleanup.md)).
+([04](04-github-sign-in-and-app.md), [13](13-teardown-and-cleanup.md)).
 
 ## Pruning
 
@@ -131,6 +131,7 @@ installation lifecycle events and repository sync are the authority on access
 | Global build concurrency (`MAX_CONCURRENT_BUILDS`, across every worker) | Admission takes a transaction-scoped advisory lock and counts running requests. A running request holds its slot from admission until its final attempt ends, across River retries and restarts. When all slots are taken the request stays queued, notes that it waits, and its job is snoozed. |
 | Preview CPU, memory and per-repository previews | A session advisory lock (`runtime.AdmissionLock`) is held from the capacity check until the candidate container exists with its labels, so concurrent admissions on any worker see each other. Usage is read from the containers' labels: the active preview and its candidate both count during a swap, and capacity is released only when a container is actually removed. The per-repository limit counts PRs, so a PR's own swap never competes with its active preview. A worker that crashes loses its connection and with it the lock; there are no reservations to leak or reconcile. |
 | Before admission | The runtime's `Admit` checks that at least the smallest preview (0.5 CPU, 512 MiB) would fit; if not, the request waits queued instead of building an image it could not start. |
+| Backend previews | A candidate counts its app, processes, managed services and setup container together, all created (and counted) under the admission lock before any starts ([11](11-backend-previews.md)). |
 | Disk | The builder requires `BUILD_MIN_FREE_DISK` plus `BUILD_DISK_BUDGET` for every other running build of this instance; builders exist before they measure, so two starting together count each other. A shortage is a wait (*Waiting for disk space*) and triggers an emergency prune. |
 | After admission | If the preview budget fills while the image built, or disk runs short, the admitted request keeps its slot, says it waits and is retried; no failure is recorded and an image already built is reused. |
 | Cleanup stays responsive | Route removal, cleanup and housekeeping each have their own queues; waiting builds never hold them up. |
@@ -209,7 +210,7 @@ the waiting reason and the expiry on PR pages, Builds and Environments.
 ## Not done yet
 
 - Capacity and disk pressure on a target host's real resources with
-  `MAX_CONCURRENT_BUILDS` concurrent builds ([21](21-mvp-operations.md)).
+  `MAX_CONCURRENT_BUILDS` concurrent builds ([22](22-mvp-operations.md)).
 - A queue position for waiting requests: waits are retried with backoff, not served
   in strict order, so none is shown.
 - Metrics and alerts for disk pressure and stuck work (Prompt 11).

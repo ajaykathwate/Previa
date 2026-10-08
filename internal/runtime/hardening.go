@@ -32,8 +32,9 @@ type Policy struct {
 	PIDs           int64
 	OCIRuntime     string
 	StartupTimeout time.Duration
-	MemoryBudget   int64   // 0: derived from the Docker host
-	CPUBudget      float64 // CPUs; 0: derived from the Docker host
+	SetupTimeout   time.Duration // a preview's setup command
+	MemoryBudget   int64         // 0: derived from the Docker host
+	CPUBudget      float64       // CPUs; 0: derived from the Docker host
 	MaxPerRepo     int
 }
 
@@ -48,7 +49,10 @@ type candidate struct {
 	CPUMillis int64
 	Memory    int64
 	NetworkID string
-	Labels    map[string]string
+	// ExtraHosts map approved destinations' names to the egress proxy
+	// (host:address), so the app keeps using the real name.
+	ExtraHosts []string
+	Labels     map[string]string
 }
 
 // runAs keeps a non-root image user and replaces root, or an unset user (which
@@ -135,6 +139,7 @@ func containerSpec(c candidate, p Policy) (*container.Config, *container.HostCon
 		OomScoreAdj: oomPriority,
 		LogConfig:   container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "2"}},
 		Runtime:     p.OCIRuntime,
+		ExtraHosts:  c.ExtraHosts,
 	}
 	return config, host, replaced
 }

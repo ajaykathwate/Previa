@@ -25,7 +25,7 @@ triggers) are in [database-schema.md](database-schema.md).
 
 ```mermaid
 ---
-title: "Previa database schema (Goose 0001-0019, River 001-007)"
+title: "Previa database schema (Goose 0001-0020, River 001-007)"
 ---
 erDiagram
 
@@ -306,10 +306,31 @@ erDiagram
     timestamptz started_at
     timestamptz seen_at
     boolean paused "BUILDS_PAUSED on that worker (migration 0018)"
+    text_array services "Managed services it offers (migration 0020)"
+  }
+  preview_components {
+    bigint pull_request_id PK,FK "The PR"
+    bigint generation PK
+    bigint revision PK
+    jsonb services "Managed services (kind, version), never credentials"
+    boolean setup "A setup command ran"
+    jsonb processes "Process names"
+    text docs_path "Docs path on the preview host"
+    integer outbound "Approved destinations given to it"
+    boolean outbound_withheld "Withheld: a fork"
+    timestamptz recorded_at
+  }
+  repository_destinations {
+    bigint id PK
+    bigint repo_id FK "Approved for this repository"
+    text host "DNS name, never an address"
+    integer port "One destination per port"
+    bigint created_by FK
+    timestamptz created_at
   }
 
   %% ===== Library =====
-  %% goose_db_version: Goose's migration history. The newest row per version_id decides whether that migration is applied; processes require version 19.
+  %% goose_db_version: Goose's migration history. The newest row per version_id decides whether that migration is applied; processes require version 20.
   goose_db_version {
     integer id PK
     bigint version_id
@@ -373,6 +394,9 @@ erDiagram
   environments ||--o| build_log_streams : "environment_id"
   environments ||--o{ build_logs : "environment_id"
   repos ||--o{ env_secrets : "repo_id"
+  repos ||--o{ repository_destinations : "repo_id"
+  users ||--o{ repository_destinations : "created_by"
+  pull_requests ||--o{ preview_components : "pull_request_id"
   pull_requests ||--o{ environment_operations : "pull_request_id"
   environments ||--o| environment_routes : "environment_id"
   pull_requests ||--o| environment_routes : "pull_request_id"

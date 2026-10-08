@@ -1,14 +1,14 @@
-# 12 · Teardown and cleanup
+# 13 · Teardown and cleanup
 
 When a pull request closes or merges, or GitHub access to it is revoked, Previa
 withdraws its preview's route and removes every Docker object it created for that
 PR, durably and without GitHub. This document covers the triggers, the states, the
 order of removal, what is kept, how revocation works, why an old teardown can never
 remove a newer preview, and how each step resumes after a crash. It extends the
-existing teardown job, outbox and cleanup contracts ([17](17-durable-publication-design.md),
-[18](18-generation-ordering.md)); there is no second teardown queue. The worker
+existing teardown job, outbox and cleanup contracts ([18](18-durable-publication-design.md),
+[19](19-generation-ordering.md)); there is no second teardown queue. The worker
 registers the teardown, route, cleanup and sweep workers whenever it can build
-([21](21-mvp-operations.md)); a teardown recorded while none runs waits durably.
+([22](22-mvp-operations.md)); a teardown recorded while none runs waits durably.
 
 ## Decisions
 
@@ -26,11 +26,11 @@ registers the teardown, route, cleanup and sweep workers whenever it can build
 ```
 close/merge webhook ──► teardown job ──► Service.Teardown ─┐
 revocation webhook ──► teardown requests (same tx) ──► sweep ┤   one short transaction, no external call:
-owner request (dashboard) / expiry ([14](14-housekeeping-and-capacity.md)) ─► RequestTeardown ─┘   environment ─► tearing_down at generation g;
+owner request (dashboard) / expiry ([15](15-housekeeping-and-capacity.md)) ─► RequestTeardown ─┘   environment ─► tearing_down at generation g;
                                                                 its active and pending artifacts move into
                                                                 remove_route(g, 0) in the outbox
 remove_route ──► route controller: tombstone (g, 0) unless a newer route exists;
-                 file written; router confirms the host is gone ([11](11-routing-and-https.md))
+                 file written; router confirms the host is gone ([12](12-routing-and-https.md))
              ──► environment ─► torn_down (only if still in teardown g);
                  cleanup_artifact for every artifact the teardown took over
 cleanup_artifact ──► runtime.RemoveResource: inspect, verify labels, stop, remove;
@@ -71,6 +71,10 @@ cleanup_artifact ──► runtime.RemoveResource: inspect, verify labels, stop,
   preview or builder is attached; the router and egress proxy are disconnected first.
   The preview network goes as soon as the PR's last preview is removed, and the next
   build recreates it.
+- **Candidates (backend previews):** a candidate's managed services, setup and
+  process containers carry its key and are removed with its app container, in
+  one cleanup; the PR's services network goes with its preview network once idle
+  ([11](11-backend-previews.md)).
 - **No global prune**, ever. Unrelated containers and images, and another PR's
   labelled objects, survive (verified).
 
@@ -138,12 +142,12 @@ records nothing new. A teardown needs no running worker to be recorded. Building
 again brings the preview back at the same address.
 
 The periodic sweep and reconciler run as housekeeping jobs
-([14](14-housekeeping-and-capacity.md)); build caches of revoked repositories and
+([15](15-housekeeping-and-capacity.md)); build caches of revoked repositories and
 source-workspace leftovers are pruned there.
 
 ## Verified
 
-`make test-routing` (real Traefik, previews and PostgreSQL; see [11](11-routing-and-https.md)):
+`make test-routing` (real Traefik, previews and PostgreSQL; see [12](12-routing-and-https.md)):
 
 | Scenario | Result |
 | --- | --- |

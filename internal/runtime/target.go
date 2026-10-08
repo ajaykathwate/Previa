@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/runtime/dbgen"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -80,4 +82,63 @@ func currentTarget(row dbgen.ExecutionTargetRow, request environments.Request) (
 		PullRequestID: row.PullRequestID, RepoID: row.RepoID, Number: row.Number, InstallationID: row.GithubInstallationID,
 		BaseRepoID: row.GithubRepoID.Int64, HeadRepoID: head, Fork: row.IsFork || head != row.GithubRepoID.Int64,
 	}, nil
+}
+
+// Components is what a ready candidate runs next to its app, for the
+// dashboard and reports. It never holds credentials.
+type Components struct {
+	PullRequestID, Generation, Revision int64
+	Services                            []ServiceComponent
+	Setup                               bool
+	Processes                           []string
+	DocsPath                            string
+	Outbound                            int  // approved destinations given to it
+	OutboundWithheld                    bool // approvals exist but its source is untrusted
+}
+
+// ServiceComponent is one managed service of a candidate.
+type ServiceComponent struct {
+	Kind    string `json:"kind"`
+	Version string `json:"version"`
+}
+
+// RecordComponents stores what a ready candidate runs, dropping rows of
+// earlier requests the PR no longer serves.
+func (s *TargetStore) RecordComponents(ctx context.Context, c Components) error {
+	services, err := json.Marshal(append([]ServiceComponent{}, c.Services...))
+	if err != nil {
+		return err
+	}
+	processes, err := json.Marshal(append([]string{}, c.Processes...))
+	if err != nil {
+		return err
+	}
+	if err := dbgen.New(s.pool).RecordComponents(ctx, dbgen.RecordComponentsParams{
+		PullRequestID: c.PullRequestID, Generation: c.Generation, Revision: c.Revision, Services: services, Setup: c.Setup,
+		Processes: processes, DocsPath: pgtype.Text{String: c.DocsPath, Valid: c.DocsPath != ""},
+		Outbound: int32(c.Outbound), OutboundWithheld: c.OutboundWithheld,
+	}); err != nil {
+		return fmt.Errorf("record preview components: %w", err)
+	}
+	return nil
+}
+
+// OutboundPreview is a pull request whose preview network may carry outbound
+// connections now.
+type OutboundPreview struct {
+	PullRequestID, RepoID int64
+	Trusted               bool // a same-repository pull request
+}
+
+// OutboundPreviews lists them.
+func (s *TargetStore) OutboundPreviews(ctx context.Context) ([]OutboundPreview, error) {
+	rows, err := dbgen.New(s.pool).ListOutboundPreviews(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list previews with outbound connections: %w", err)
+	}
+	previews := make([]OutboundPreview, len(rows))
+	for i, row := range rows {
+		previews[i] = OutboundPreview{PullRequestID: row.PullRequestID, RepoID: row.RepoID, Trusted: row.Trusted}
+	}
+	return previews, nil
 }

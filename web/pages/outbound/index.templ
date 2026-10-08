@@ -1,0 +1,200 @@
+package outbound
+
+import (
+	"strconv"
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/button"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+templ Index(username, csrf string, p Page) {
+	@layouts.App("Outbound connections", username, csrf, components.NavRepositories) {
+		<div class="repository-workspace secrets-page outbound-page">
+			<header class="pr-panel-heading">
+				<div class="pr-heading-text">
+					<nav aria-label="Repository location" class="pr-location">
+						<a href="/repositories" class="text-link pr-directory-link">
+							@components.ArrowLeft()
+							Repositories
+						</a>
+						<div class="pr-title-row">
+							<span class="pr-repo-icon" aria-hidden="true">
+								@components.RepositoryIcon()
+							</span>
+							<h1 class="pr-breadcrumb">
+								<a href="/repositories" title={ p.Owner() }>{ p.Owner() }</a>
+								<span aria-hidden="true">/</span>
+								<a href={ templ.SafeURL("/repositories/" + strconv.FormatInt(p.RepoID, 10)) } title={ p.RepositoryName() }>{ p.RepositoryName() }</a>
+							</h1>
+						</div>
+					</nav>
+				</div>
+			</header>
+			@components.RepositoryTabs(p.RepoID, "outbound")
+			if p.Notice != "" {
+				<p class="connection-notice tone-ok" role="status">
+					@components.CheckIcon()
+					{ p.Notice }
+				</p>
+			}
+			if !p.Enabled {
+				<p class="connection-notice tone-warn" role="status" data-outbound-off>
+					@components.AlertIcon()
+					Outbound connections are turned off on this server (PREVIEW_OUTBOUND_PORTS=none). Approved destinations stay listed but no preview receives them.
+				</p>
+			} else if !p.Available {
+				<p class="connection-notice tone-warn" role="status">
+					@components.AlertIcon()
+					GitHub access to this repository was removed. You can remove destinations, but not add them.
+				</p>
+			}
+			<section class="workspace-panel secrets-list" aria-labelledby="outbound-title">
+				<header class="secrets-panel-header">
+					<div>
+						<h2 id="outbound-title">Approved destinations</h2>
+						<p>Previews of this repository may connect to these hosts and ports, and to nothing else outside HTTP and HTTPS.</p>
+					</div>
+					<div class="secrets-panel-actions">
+						<span class="badge tone-neutral">{ p.CountLabel() }</span>
+					</div>
+				</header>
+				if len(p.Destinations) == 0 {
+					<div class="repository-empty">
+						<span class="empty-source-icon" aria-hidden="true">
+							@components.SendIcon()
+						</span>
+						<h3>No destinations approved</h3>
+						<p>Approve an external database or message broker your previews need, such as a test database on a cloud provider.</p>
+					</div>
+				} else {
+					<div class="repository-table-scroll" tabindex="0" role="region" aria-label="Approved destinations">
+						<table class="pr-table secrets-table outbound-table">
+							<thead>
+								<tr>
+									<th>Host</th>
+									<th>Port</th>
+									<th>Approved</th>
+									<th><span class="sr-only">Actions</span></th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, d := range p.Destinations {
+									<tr>
+										<td class="secret-name" data-label="Host"><code>{ d.Host }</code></td>
+										<td class="outbound-port" data-label="Port">{ PortLabel(d.Port) }</td>
+										<td class="secret-updated" data-label="Approved">
+											@components.Time(d.CreatedISO(), d.CreatedLabel())
+										</td>
+										<td class="secret-actions">
+											<button type="button" class="text-link danger-link" commandfor={ "remove-destination-" + strconv.FormatInt(d.ID, 10) } command="show-modal" data-open-dialog={ "remove-destination-" + strconv.FormatInt(d.ID, 10) } aria-haspopup="dialog" aria-label={ "Remove " + d.Address() }>Remove</button>
+										</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</section>
+			<section id="add-destination" class="workspace-panel secrets-form" aria-labelledby="destination-form-title">
+				<header class="secrets-form-header">
+					<h2 id="destination-form-title">Approve a destination</h2>
+					<p class="secrets-form-help">
+						A host name and one of the ports this server allows ({ p.PortsLabel() }); one destination per port.
+						if len(p.Ports) == 0 {
+							None are allowed now.
+						}
+					</p>
+				</header>
+				if p.Error != "" {
+					<p class="connection-notice tone-danger" role="alert" id="destination-form-error">
+						@components.AlertIcon()
+						{ p.Error }
+					</p>
+				}
+				<form method="post" action={ templ.SafeURL("/repositories/" + strconv.FormatInt(p.RepoID, 10) + "/outbound") } class="outbound-form" autocomplete="off" data-outbound-form>
+					<input type="hidden" name="csrf_token" value={ csrf }/>
+					<fieldset class="outbound-fields" disabled?={ !p.CanAdd() }>
+						<legend class="sr-only">Destination to approve</legend>
+						<div class="outbound-field">
+							<label for="destination-host">Host</label>
+							<input
+								id="destination-host"
+								type="text"
+								name="host"
+								class="secret-input"
+								value={ p.Host }
+								maxlength="253"
+								spellcheck="false"
+								autocapitalize="none"
+								placeholder="db.example.com"
+								required
+								if p.HostError != "" {
+									aria-invalid="true"
+									aria-describedby="destination-host-error"
+								}
+							/>
+							if p.HostError != "" {
+								<p class="field-error" id="destination-host-error">{ p.HostError }</p>
+							}
+						</div>
+						<div class="outbound-field">
+							<label for="destination-port">Port</label>
+							<select
+								id="destination-port"
+								name="port"
+								class="secret-input"
+								required
+								if p.PortError != "" {
+									aria-invalid="true"
+									aria-describedby="destination-port-error"
+								}
+							>
+								for _, port := range p.FreePorts() {
+									<option value={ strconv.Itoa(port) } selected?={ p.Port == strconv.Itoa(port) }>{ PortLabel(port) }</option>
+								}
+							</select>
+							if p.PortError != "" {
+								<p class="field-error" id="destination-port-error">{ p.PortError }</p>
+							}
+						</div>
+						@button.Button(button.Props{Type: button.TypeSubmit, Disabled: !p.CanAdd(), Class: "outbound-submit"}) {
+							@components.PlusIcon()
+							Approve
+						}
+					</fieldset>
+				</form>
+				if p.Enabled && len(p.Destinations) >= p.Limit {
+					<p class="field-help">The limit of { strconv.Itoa(p.Limit) } destinations is reached; remove one to approve another.</p>
+				} else if p.Enabled && p.Available && len(p.FreePorts()) == 0 {
+					<p class="field-help">Every allowed port already has a destination.</p>
+				}
+			</section>
+			<details class="policy-hint secrets-guidance" open?={ len(p.Destinations) == 0 }>
+				<summary>
+					@components.InfoIcon()
+					How outbound connections work
+				</summary>
+				<ul>
+					<li><strong>Never for forks.</strong> Only pull requests from this repository's own branches receive these connections, the same rule as secrets.</li>
+					<li><strong>Your app keeps the real name.</strong> Inside the preview the host name points at Previa's egress proxy, which resolves it itself, connects only to public addresses and passes the bytes through, so TLS works end to end. Apps must look names up through the system resolver.</li>
+					<li><strong>Changes.</strong> A new destination reaches previews started after you approve it (rebuild running ones); a removed one stops working within a minute.</li>
+					<li><strong>Limits.</strong> Each preview holds at most 32 connections at once; each lasts at most an hour, moves at most 1 GiB and closes after 10 idle minutes.</li>
+					<li><strong>Preview data only.</strong> Previews run pull request code. Approve test or staging systems, never production.</li>
+				</ul>
+			</details>
+			for _, d := range p.Destinations {
+				@components.ConfirmationDialog("remove-destination-"+strconv.FormatInt(d.ID, 10), "Remove "+d.Address()+"?", "Running previews lose this connection within a minute, and previews started later never get it.") {
+					<form method="post" action={ templ.SafeURL("/repositories/" + strconv.FormatInt(p.RepoID, 10) + "/outbound/" + strconv.FormatInt(d.ID, 10) + "/remove") } class="dialog-actions">
+						<input type="hidden" name="csrf_token" value={ csrf }/>
+						@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "remove-destination-" + strconv.FormatInt(d.ID, 10), "command": "close", "data-close-dialog": true}}) {
+							Cancel
+						}
+						@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantDestructive}) {
+							Remove destination
+						}
+					</form>
+				}
+			}
+		</div>
+	}
+}

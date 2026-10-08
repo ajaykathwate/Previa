@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -62,17 +63,20 @@ func (r *Runtime) budget(ctx context.Context) (budget, error) {
 	return b, nil
 }
 
-// usage sums the limits recorded on preview containers' labels. The host
-// budget counts every Previa preview on the Docker host, whichever instance
-// created it; the repository count only this instance's.
+// usage sums the limits recorded on candidate containers' labels: apps and
+// their managed services, setup and processes. The host budget counts every
+// Previa preview on the Docker host, whichever instance created it; the
+// repository count only this instance's.
 func (r *Runtime) usage(ctx context.Context, baseRepoID int64) (usage, error) {
-	listed, err := r.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.Add("label",
-		dockerx.LabelManaged+"=true", dockerx.LabelKind+"="+dockerx.KindPreview)})
+	listed, err := r.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.Add("label", dockerx.LabelManaged+"=true")})
 	if err != nil {
 		return usage{}, fmt.Errorf("list running previews: %w", err)
 	}
 	u := usage{repoPRs: map[string]bool{}}
 	for _, c := range listed.Items {
+		if !slices.Contains(dockerx.CandidateKinds, c.Labels[dockerx.LabelKind]) {
+			continue
+		}
 		if c.State != container.StateRunning && c.State != container.StateRestarting && c.State != container.StateCreated {
 			continue
 		}

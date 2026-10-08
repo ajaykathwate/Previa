@@ -1,24 +1,24 @@
-# 17 · Design: durable, generation-fenced publication
+# 18 · Design: durable, generation-fenced publication
 
 This document records the architecture decision for safely publishing preview
 environment changes when PostgreSQL, River, Docker, the routing layer, and GitHub
 can fail independently. It covers only that consistency problem. Product
 requirements remain in [README.md](../README.md), feature implementation details
 remain in [DESIGN.md](../DESIGN.md), and the current generation implementation and
-tests are in [18-generation-ordering.md](18-generation-ordering.md).
+tests are in [19-generation-ordering.md](19-generation-ordering.md).
 
 ## Decision
 
 Build authorization follows the
-[Manual/Automatic policy](15-build-policy-and-intents.md). Policy, current intent
+[Manual/Automatic policy](16-build-policy-and-intents.md). Policy, current intent
 and scheduling are implemented behind tested interfaces; production runtime
 dispatch remains unconnected. PR observation is distinct from authorized work: Manual waits for an owner
 request; Automatic persists a five-minute trailing deadline. The publication
 protocol below applies only to authorized builds. Generation fencing remains
 independent of scheduling mode; close/merge still requests immediate teardown.
 Build intent adds an independent request revision for same-generation
-Retry/Rebuild ([15](15-build-policy-and-intents.md)); scheduling carries it into
-operation keys/payloads, finalization, reporting and cleanup ([16](16-build-scheduling.md)).
+Retry/Rebuild ([16](16-build-policy-and-intents.md)); scheduling carries it into
+operation keys/payloads, finalization, reporting and cleanup ([17](17-build-scheduling.md)).
 All version/fencing/idempotency references below apply to the ordered tuple
 `(generation, revision)`: generation dominates; revision distinguishes deliberate
 requests for the same observed commit. Generation-only examples below describe
@@ -67,10 +67,10 @@ The repository now has the database-only foundation for the target lifecycle:
    in another short generation-checked transaction. The route controller
    (`internal/routing`, option 2 below) executes activations and removals; the
    runtime's cleanup executor removes containers, images and networks after
-   verifying their labels ([11](11-routing-and-https.md), [12](12-teardown-and-cleanup.md)).
+   verifying their labels ([12](12-routing-and-https.md), [13](13-teardown-and-cleanup.md)).
    The reporter (`internal/reporting`) executes report operations: it renders the PR's
    current state into one living comment and per-request check runs
-   ([13](13-pr-feedback.md)).
+   ([14](14-pr-feedback.md)).
 6. `Reconciler` recovers due operation wake-ups, schedules cleanup for unreferenced
    resources from the real Docker inventory and, with `WithRoutes`, rewrites the
    router's configuration from the accepted route table. No periodic runner is wired
@@ -230,7 +230,7 @@ superseded and the latest generation remains queued for activation. Do not retir
 the prior container until the replacement's active state is committed and route
 convergence is confirmed.
 
-**Selected and implemented: option 2** ([11](11-routing-and-https.md)). Traefik's
+**Selected and implemented: option 2** ([12](12-routing-and-https.md)). Traefik's
 Docker provider cannot fence (labels are fixed at creation, so every candidate
 would be routed before acceptance) and would need the Docker socket, so DESIGN §11
 changed to Traefik's file provider fed by Previa's route controller:
@@ -268,7 +268,7 @@ report operation renders the PR's current persisted state, under a per-PR lease,
 an obsolete operation simply writes (or skips) the latest state. The comment's
 stored ID plus a stable marker, and each check run's external ID, are the stable
 identities that make a retried create safe. Details and limits:
-[13](13-pr-feedback.md).
+[14](14-pr-feedback.md).
 
 ### Cleanup worker and reconciler
 
@@ -417,9 +417,9 @@ Implemented and verified against real systems:
 - **Docker/build integration:** deterministic PR/generation/revision labels,
   discoverable partial builds, candidate startup and health checks, owner-verified
   cleanup, cancellation and resource limits ([09](09-image-builds.md),
-  [10](10-preview-runtime.md), [12](12-teardown-and-cleanup.md)).
+  [10](10-preview-runtime.md), [13](13-teardown-and-cleanup.md)).
 - **Routing integration:** the fenced route controller above, convergence checks and
-  the rule for retiring old containers ([11](11-routing-and-https.md)).
+  the rule for retiring old containers ([12](12-routing-and-https.md)).
 - **Crash recovery against actual systems:** a restarted controller rewrites the
   file from PostgreSQL and resumes interrupted operations; a restarted Traefik reloads
   routes and its certificate; cleanup resumes after a crash between a removal and its
@@ -429,14 +429,14 @@ Implemented and verified against real systems:
   building, against real Traefik, previews and PostgreSQL (`make test-routing`).
 - **GitHub reporting:** stable comment and check run identity, latest-state rendering
   instead of per-generation rules, rate limits, ambiguous creates and the per-PR lease
-  ([13](13-pr-feedback.md)).
+  ([14](14-pr-feedback.md)).
 
 - **Periodic recovery and reconciliation:** startup and periodic housekeeping jobs
   recover wake-ups, leases, sweeps and route drift, inventory Docker objects with a
-  grace period and confirm live PRs with GitHub ([14](14-housekeeping-and-capacity.md)).
+  grace period and confirm live PRs with GitHub ([15](15-housekeeping-and-capacity.md)).
 
 The worker composes all of them from validated settings
-([21](21-mvp-operations.md)); `make test-e2e` proves the chain on real Docker,
+([22](22-mvp-operations.md)); `make test-e2e` proves the chain on real Docker,
 BuildKit and Traefik with a fake GitHub.
 
 ## Guarantees and explicit limits
@@ -460,7 +460,7 @@ traffic path; an ordinary asynchronous config push is not enough.
 ## Related code and documents
 
 - Current implementation and its SQL/test evidence: `internal/environments/`,
-  `internal/webhooks/`, and [18-generation-ordering.md](18-generation-ordering.md).
+  `internal/webhooks/`, and [19-generation-ordering.md](19-generation-ordering.md).
 - Product workflow and original queue/rebuild/teardown requirements:
   [DESIGN.md Sections 7, 13, 14, and 15](../DESIGN.md).
 - Process/configuration, build timeouts, and local database setup:

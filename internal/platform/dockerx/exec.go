@@ -29,7 +29,13 @@ type ExecResult struct {
 
 // Run runs cmd in a container and returns its output and exit code.
 func Run(ctx context.Context, docker *client.Client, containerID string, cmd ...string) (ExecResult, error) {
-	created, err := docker.ExecCreate(ctx, containerID, client.ExecCreateOptions{AttachStdout: true, AttachStderr: true, Cmd: cmd})
+	return RunWithEnv(ctx, docker, containerID, nil, cmd...)
+}
+
+// RunWithEnv runs cmd with extra environment variables, which keep values
+// such as a password out of the command line.
+func RunWithEnv(ctx context.Context, docker *client.Client, containerID string, env []string, cmd ...string) (ExecResult, error) {
+	created, err := docker.ExecCreate(ctx, containerID, client.ExecCreateOptions{AttachStdout: true, AttachStderr: true, Env: env, Cmd: cmd})
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("create exec: %w", err)
 	}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly Previa backup (docs/24-production-deployment.md#backups-and-restore).
+# Nightly Previa backup (docs/25-production-deployment.md#backups-and-restore).
 #
 # 1. pg_dump of the whole database (custom format: one consistent snapshot).
 # 2. The router's ACME state (account key and certificates).

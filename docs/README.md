@@ -15,22 +15,23 @@ run and use Previa, the rest explain how and why it works.
 | 08 | [Build logs](08-build-logs.md) | Current-attempt logs, epochs, limits, redaction, live streaming and retention. |
 | 09 | [Image builds](09-image-builds.md) | Isolated BuildKit builders, the egress proxy, caches, limits and what was verified. |
 | 10 | [Preview runtime](10-preview-runtime.md) | Hardened, isolated preview containers: secrets, readiness, capacity, cleanup and what was verified. |
-| 11 | [Routing and HTTPS](11-routing-and-https.md) | Stable preview hostnames, the fenced route controller, Traefik, wildcard certificates, origins and convergence limits. |
-| 12 | [Teardown and cleanup](12-teardown-and-cleanup.md) | Close, revocation and local teardown; route removal; ownership-verified cleanup that survives crashes and revoked access. |
-| 13 | [PR feedback](13-pr-feedback.md) | The living PR comment and exact-commit check runs: states, identity, ordering limits, failures, permissions and the live proof. |
-| 14 | [Housekeeping, expiry and capacity](14-housekeeping-and-capacity.md) | Recovery jobs, expiry, orphan cleanup with grace periods, PR reconciliation, pruning, build and preview capacity, dry runs. |
-| 15 | [Build policy and build intent](15-build-policy-and-intents.md) | Manual vs Automatic, observed state vs authorized intent, idempotency. |
-| 16 | [Build scheduling](16-build-scheduling.md) | Deadlines, wake-ups, atomic admission, handoff, recovery. |
-| 17 | [Durable publication design](17-durable-publication-design.md) | The decision record for publishing safely across PostgreSQL, Docker, routing and GitHub. |
-| 18 | [Generation ordering](18-generation-ordering.md) | The SQL fences and races that make newer work always win. |
-| 19 | [Realtime updates](19-realtime-updates.md) | Live dashboard updates with triggers, LISTEN/NOTIFY and SSE. |
-| 20 | [UI architecture](20-ui-architecture.md) | Templ/HTMX structure, theme, navigation, progressive enhancement. |
-| 21 | [Operating the MVP](21-mvp-operations.md) | What server and worker do, the capability and configuration matrix, queues and draining, running the full pipeline, what is proven and the live proofs still required. |
-| 22 | [Observability and hardening](22-observability-and-hardening.md) | Logs, metrics, readiness, dashboards and alerts; ingress controls, production mode, the kill switch and dependency checks. |
-| 23 | [Incident runbook](23-incident-runbook.md) | What to do for each alert: outages, backlogs, failures, disk, backups, certificates, key rotation. |
-| 24 | [Production deployment](24-production-deployment.md) | Release images, host setup, GitHub and DNS, staged certificates, backups and restore, upgrades and rollback, CI and releases, the smoke test. |
-| 25 | [Release report](25-release-report.md) | Evidence for each release acceptance item: what passed, how, and what is still pending. |
-| 26 | [Roadmap](26-roadmap.md) | Prompts 1–12, the planned Prompts 13 (backend previews) and 14 (missed uninstall detection), and the release checklist. |
+| 11 | [Backend previews](11-backend-previews.md) | Managed PostgreSQL and Redis per candidate, setup command, processes, docs path, and owner-approved outbound connections: contract, isolation, lifecycle and limits. |
+| 12 | [Routing and HTTPS](12-routing-and-https.md) | Stable preview hostnames, the fenced route controller, Traefik, wildcard certificates, origins and convergence limits. |
+| 13 | [Teardown and cleanup](13-teardown-and-cleanup.md) | Close, revocation and local teardown; route removal; ownership-verified cleanup that survives crashes and revoked access. |
+| 14 | [PR feedback](14-pr-feedback.md) | The living PR comment and exact-commit check runs: states, identity, ordering limits, failures, permissions and the live proof. |
+| 15 | [Housekeeping, expiry and capacity](15-housekeeping-and-capacity.md) | Recovery jobs, expiry, orphan cleanup with grace periods, PR reconciliation, pruning, build and preview capacity, dry runs. |
+| 16 | [Build policy and build intent](16-build-policy-and-intents.md) | Manual vs Automatic, observed state vs authorized intent, idempotency. |
+| 17 | [Build scheduling](17-build-scheduling.md) | Deadlines, wake-ups, atomic admission, handoff, recovery. |
+| 18 | [Durable publication design](18-durable-publication-design.md) | The decision record for publishing safely across PostgreSQL, Docker, routing and GitHub. |
+| 19 | [Generation ordering](19-generation-ordering.md) | The SQL fences and races that make newer work always win. |
+| 20 | [Realtime updates](20-realtime-updates.md) | Live dashboard updates with triggers, LISTEN/NOTIFY and SSE. |
+| 21 | [UI architecture](21-ui-architecture.md) | Templ/HTMX structure, theme, navigation, progressive enhancement. |
+| 22 | [Operating the MVP](22-mvp-operations.md) | What server and worker do, the capability and configuration matrix, queues and draining, running the full pipeline, what is proven and the live proofs still required. |
+| 23 | [Observability and hardening](23-observability-and-hardening.md) | Logs, metrics, readiness, dashboards and alerts; ingress controls, production mode, the kill switch and dependency checks. |
+| 24 | [Incident runbook](24-incident-runbook.md) | What to do for each alert: outages, backlogs, failures, disk, backups, certificates, key rotation. |
+| 25 | [Production deployment](25-production-deployment.md) | Release images, host setup, GitHub and DNS, staged certificates, backups and restore, upgrades and rollback, CI and releases, the smoke test. |
+| 26 | [Release report](26-release-report.md) | Evidence for each release acceptance item: what passed, how, and what is still pending. |
+| 27 | [Roadmap](27-roadmap.md) | Prompts 1–13 (13: backend previews), the planned Prompt 14 (missed uninstall detection), and the release checklist. |
 
 Related files outside this folder:
 

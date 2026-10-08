@@ -467,6 +467,45 @@ test('owner builds once and tears a preview down only after confirming in a moda
   assert.equal(await page.getByRole('button', {name: 'Tear down preview'}).count(), 0);
 });
 
+test('owners approve outbound destinations and remove them only after confirming in a modal', async () => {
+  await login();
+  await page.goto(`${origin}/repositories/1/outbound`);
+  assert.equal(await page.getByRole('link', {name: 'Outbound', exact: true}).getAttribute('aria-current'), 'page');
+  assert.match(await page.locator('main').innerText(), /No destinations approved/);
+  // Addresses are refused with the reason, next to the field.
+  await page.getByLabel('Host').fill('10.0.0.1');
+  await page.getByRole('button', {name: 'Approve', exact: true}).click();
+  await page.waitForSelector('#destination-host-error');
+  assert.match(await page.locator('#destination-host-error').innerText(), /not an IP address/);
+  assert.equal(await page.getByLabel('Host').getAttribute('aria-invalid'), 'true');
+  await page.getByLabel('Host').fill('db.example.com');
+  await page.getByLabel('Port').selectOption('5432');
+  await page.getByRole('button', {name: 'Approve', exact: true}).click();
+  await page.waitForFunction(() => /Approved db\.example\.com:5432/.test(document.querySelector('main')?.innerText || ''));
+  assert.match(await page.locator('.outbound-table').innerText(), /db\.example\.com/);
+  // A used port is no longer offered.
+  assert.deepEqual(await page.getByLabel('Port').locator('option').evaluateAll((options) => options.map((o) => o.value)), ['6379']);
+  for (const width of [320, 390, 768]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+  await page.setViewportSize({width: 1440, height: 900});
+  const remove = page.getByRole('button', {name: 'Remove db.example.com:5432', exact: true});
+  await remove.click();
+  await page.waitForFunction(() => document.querySelector('dialog[id^="remove-destination-"]')?.matches(':modal'));
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('dialog[id^="remove-destination-"]').open);
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent.trim()), 'Remove', 'focus returns to the trigger');
+  await remove.click();
+  await page.locator('dialog[id^="remove-destination-"]').getByRole('button', {name: 'Remove destination', exact: true}).click();
+  await page.waitForFunction(() => /Removed db\.example\.com:5432/.test(document.querySelector('main')?.innerText || ''));
+  assert.equal(await page.locator('.outbound-table').count(), 0);
+  // A repository without GitHub access says why and cannot add.
+  await page.goto(`${origin}/repositories/2/outbound`);
+  assert.match(await page.locator('main').innerText(), /GitHub access to this repository was removed/);
+  assert.equal(await page.getByRole('button', {name: 'Approve', exact: true}).isDisabled(), true);
+});
+
 test('unavailable repository PRs offer no actions and say why', async () => {
   await login();
   await page.goto(`${origin}/repositories/2/pull-requests/1`);

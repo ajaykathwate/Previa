@@ -81,6 +81,14 @@ sql:
         sql_package: pgx/v5
   - engine: postgresql
     schema: db/migrations
+    queries: internal/outbound/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: internal/outbound/dbgen
+        sql_package: pgx/v5
+  - engine: postgresql
+    schema: db/migrations
     queries: internal/housekeeping/queries.sql
     gen:
       go:

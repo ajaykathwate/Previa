@@ -354,6 +354,7 @@ templ PRDetail(p Page, pr PR, csrf string) {
 					@components.CopyButton(pr.PreviewURL, "Copy the preview address")
 				</div>
 			}
+			@backendFacts(pr)
 			<div class="pr-detail-actions">
 				if pr.Live() {
 					@button.Button(button.Props{Href: pr.PreviewURL, Target: "_blank", Attributes: templ.Attributes{"rel": "noopener noreferrer"}}) {
@@ -853,4 +854,34 @@ templ ActivityIndex(username, csrf string, p Activity) {
 			</section>
 		</div>
 	}
+}
+
+// backendFacts shows what the live preview runs next to its app, its docs
+// address and outbound connections, and which managed services this server
+// offers (labelled when none are).
+templ backendFacts(pr PR) {
+	<dl class="pr-backend" data-backend>
+		if pr.Live() && pr.Backend != "" {
+			<div>
+				<dt>Runs with</dt>
+				<dd>{ pr.Backend }. <span class="pr-backend-note">Data does not survive a rebuild.</span></dd>
+			</div>
+		}
+		if pr.Live() && pr.DocsURL != "" {
+			<div>
+				<dt>Docs</dt>
+				<dd><a class="text-link" href={ templ.SafeURL(pr.DocsURL) } target="_blank" rel="noopener noreferrer" data-docs-url>{ pr.DocsURL }</a></dd>
+			</div>
+		}
+		if pr.Live() && pr.OutboundLabel() != "" {
+			<div>
+				<dt>Outbound</dt>
+				<dd>{ pr.OutboundLabel() }</dd>
+			</div>
+		}
+		<div>
+			<dt>Managed services</dt>
+			<dd class="pr-backend-offer" data-services-offered>{ pr.ServicesLabel() }</dd>
+		</div>
+	</dl>
 }

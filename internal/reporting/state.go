@@ -63,6 +63,8 @@ type Environment struct {
 	AppliedRevision   int64
 	LastErrorCode     string
 	ExpiresAt         time.Time // zero: the preview does not expire
+	// Backend is what the deployed preview runs next to its app.
+	Backend environments.Backend
 }
 
 // View is what the living comment and the check run say.
@@ -72,6 +74,8 @@ type View struct {
 	Revision   int64     // the current request's revision, when there is one
 	Deployed   string    // commit the live preview runs, when live
 	PreviewURL string    // only for a live, published preview
+	DocsURL    string    // the live preview's docs path, when it declares one
+	Backend    string    // what the live preview runs next to its app, one line
 	LogsURL    string    // only when a log page exists and the dashboard URL is known
 	Failure    string    // safe sentence for a failed request
 	Blocked    string    // why a requested build cannot start
@@ -115,7 +119,11 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 		v.Deployed, v.ExpiresAt = env.DeployedSHA, env.ExpiresAt
 		if settings.PreviewBaseDomain != "" && env.Hostname != "" {
 			v.PreviewURL = "https://" + env.Hostname + "." + settings.PreviewBaseDomain
+			if env.Backend.DocsPath != "" {
+				v.DocsURL = v.PreviewURL + env.Backend.DocsPath
+			}
 		}
+		v.Backend = env.Backend.Summary()
 	}
 	if env != nil && settings.AppBaseURL != "" {
 		v.LogsURL = fmt.Sprintf("%s/repositories/%d/pull-requests/%d/logs", settings.AppBaseURL, s.RepoID, s.Number)
@@ -130,7 +138,7 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 	switch {
 	case s.State != "open" || s.TeardownRequested:
 		v.Phase = removalPhase(s, env)
-		v.Deployed, v.PreviewURL, v.ExpiresAt = "", "", time.Time{}
+		v.Deployed, v.PreviewURL, v.ExpiresAt, v.DocsURL, v.Backend = "", "", time.Time{}, "", ""
 		if v.Phase == PhaseRemoving && live {
 			v.Deployed = env.DeployedSHA
 		}

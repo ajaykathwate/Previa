@@ -6,7 +6,7 @@
 # - The API listens on 127.0.0.1 inside this container only (not published,
 #   not on any network). The worker reads it with docker exec.
 # - ACME_CA_SERVER defaults to Let's Encrypt staging. Switch to production
-#   only after a staging certificate was issued (docs/11-routing-and-https.md).
+#   only after a staging certificate was issued (docs/12-routing-and-https.md).
 # - The DNS provider credential is a Docker secret file, not an environment
 #   value, and acme.json lives on a persistent volume with mode 600.
 name: previa-router

@@ -642,11 +642,15 @@ SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.cr
  coalesce(e.head_sha,'') AS deployed_sha, coalesce(e.subdomain,'')::text AS hostname,
  e.expires_at, e.last_active_at AS published_at, coalesce(e.last_error_code,'')::text AS failure_code,
  coalesce(e.applied_generation = b.generation AND e.applied_revision = b.revision, false)::boolean AS failure_current,
- (p.teardown_requested_generation = p.generation)::boolean AS teardown_requested
+ (p.teardown_requested_generation = p.generation)::boolean AS teardown_requested,
+ pc.services AS backend_services, coalesce(pc.setup, false)::boolean AS backend_setup, pc.processes AS backend_processes,
+ coalesce(pc.docs_path, '')::text AS backend_docs_path, coalesce(pc.outbound, 0)::integer AS backend_outbound,
+ coalesce(pc.outbound_withheld, false)::boolean AS backend_outbound_withheld
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN users u ON u.id=b.requested_by
 LEFT JOIN environments e ON e.pull_request_id=p.id
+LEFT JOIN preview_components pc ON pc.pull_request_id=p.id AND pc.generation=e.applied_generation AND pc.revision=e.applied_revision
 WHERE r.id=$1 AND i.owner_user_id=$2 AND p.number=$3
 `
 
@@ -701,6 +705,12 @@ type OwnedPRRow struct {
 	FailureCode                 string
 	FailureCurrent              bool
 	TeardownRequested           bool
+	BackendServices             []byte
+	BackendSetup                bool
+	BackendProcesses            []byte
+	BackendDocsPath             string
+	BackendOutbound             int32
+	BackendOutboundWithheld     bool
 }
 
 // The PR's three lifecycle columns (observed, requested, deployed) and what
@@ -753,6 +763,12 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 		&i.FailureCode,
 		&i.FailureCurrent,
 		&i.TeardownRequested,
+		&i.BackendServices,
+		&i.BackendSetup,
+		&i.BackendProcesses,
+		&i.BackendDocsPath,
+		&i.BackendOutbound,
+		&i.BackendOutboundWithheld,
 	)
 	return i, err
 }

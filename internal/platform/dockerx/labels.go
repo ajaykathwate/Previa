@@ -22,6 +22,13 @@ const (
 	LabelCPUMillis   = "io.previa.cpu-millis"   // a preview's CPU limit
 	LabelMemory      = "io.previa.memory-bytes" // a preview's memory limit
 	LabelStarted     = "io.previa.started-at"
+	// LabelCandidate groups one candidate's containers: its app (the preview)
+	// and its companions, the backend services, setup and processes. The value
+	// is the app container's name, chosen before anything is created.
+	LabelCandidate = "io.previa.candidate"
+	// LabelComponent names a companion: postgres, redis, setup or a process.
+	LabelComponent = "io.previa.component"
+	LabelVersion   = "io.previa.service-version" // a backend service's version
 
 	KindImage          = "image"
 	KindBuilder        = "builder"
@@ -30,7 +37,18 @@ const (
 	KindEgress         = "egress"
 	KindPreview        = "preview"
 	KindPreviewNetwork = "preview-network"
+	// Companions of a candidate: removed, counted and inventoried with it.
+	KindService        = "service"         // a managed PostgreSQL or Redis container
+	KindSetup          = "setup"           // the one-off setup container
+	KindProcess        = "process"         // an unrouted process from the app's image
+	KindServiceNetwork = "service-network" // the PR's network shared with its services
 )
+
+// CandidateKinds are the container kinds that belong to a candidate.
+var CandidateKinds = []string{KindPreview, KindService, KindSetup, KindProcess}
+
+// CompanionKinds are a candidate's containers other than its app.
+var CompanionKinds = []string{KindService, KindSetup, KindProcess}
 
 var instancePattern = regexp.MustCompile(`^[a-z0-9]{8,32}$`)
 

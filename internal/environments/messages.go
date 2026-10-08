@@ -42,6 +42,14 @@ func FailureMessage(code string) string {
 		return "The app did not become ready."
 	case "crashed":
 		return "The app exited while starting."
+	case "service_unavailable":
+		return "A managed service's image could not be pulled on the server."
+	case "service_failed":
+		return "A managed service (PostgreSQL or Redis) did not become ready or stopped."
+	case "setup_failed":
+		return "The setup command (migrations or seed data) failed or ran out of time."
+	case "process_failed":
+		return "A process declared next to the app stopped before the preview was ready."
 	case "preview_missing":
 		return "The preview's container disappeared. Retry, rebuild or push a commit to start a new one."
 	case "timeout":

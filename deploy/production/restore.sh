@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Restore Previa's database from a backup.sh dump, then bring the schema to
-# this release (docs/24-production-deployment.md#backups-and-restore).
+# this release (docs/25-production-deployment.md#backups-and-restore).
 #
 #   restore.sh --identity /path/to/age-key.txt --yes previa-20261005T020000Z.dump.age
 #

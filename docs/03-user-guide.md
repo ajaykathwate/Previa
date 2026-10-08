@@ -3,7 +3,7 @@
 A walk through the working screens: sign in, connect repositories, track pull
 requests, choose a build policy, build and tear down previews, manage secrets and
 read build logs. Setup commands are in [02-development-setup.md](02-development-setup.md);
-what a worker needs before it can build is in [21](21-mvp-operations.md). The screens
+what a worker needs before it can build is in [22](22-mvp-operations.md). The screens
 show real saved state only.
 
 ## Before you start
@@ -16,7 +16,7 @@ show real saved state only.
 - Repository secrets need `SECRETS_ENCRYPTION_KEYS` and `SECRETS_ACTIVE_KEY_VERSION`
   on the server and the worker ([02](02-development-setup.md), [07](07-repository-secrets.md)).
 - Building previews needs a worker started with the App settings, Docker, a preview
-  domain and a running router ([21](21-mvp-operations.md)). Without one, build
+  domain and a running router ([22](22-mvp-operations.md)). Without one, build
   controls are replaced by a sentence saying so.
 
 ## Moving around
@@ -175,13 +175,13 @@ reopening. Opening the address of a preview that does not exist (never published
 closed, torn down, expired or revoked) shows **Preview not found or expired** on the
 dashboard's site.
 
-**On the pull request** ([13](13-pr-feedback.md)), Previa keeps
+**On the pull request** ([14](14-pr-feedback.md)), Previa keeps
 one comment up to date and adds a check run per build request: queued, waiting for
 capacity or disk space, building, ready (with the address and when it expires,
 48 hours after the latest publication by default), failed with a short reason,
 removed or expired. An expired preview comes back at the same address with the next
 commit on an Automatic repository, or when you request a build
-([14](14-housekeeping-and-capacity.md)).
+([15](15-housekeeping-and-capacity.md)).
 
 Direct POSTs get the same checks: HTTP 409 with the reason for a closed PR, Checking,
 Conflicts, Refresh required or a changed request, HTTP 503 when no worker can build
@@ -220,6 +220,32 @@ Good to know:
 - Up to 100 secrets per repository. If GitHub access to the repository was removed
   you can delete secrets but not add or replace them. If the server has no
   encryption keys, the tab says so and only lists existing names.
+
+## Backend previews and outbound connections
+
+A repository whose app needs a database, a cache, migrations or a background
+worker declares them in `.previewrc.yaml` ([11](11-backend-previews.md)):
+`services` (PostgreSQL and Redis versions the server offers), `setup` (a command
+run once before the app starts, such as migrations and seed data), `processes`
+(up to three, such as a queue worker) and `docs_path` (for example `/docs`).
+Previa starts a fresh database and cache for every build and passes
+`DATABASE_URL`, the `PG*` variables and `REDIS_URL` to the app; **data does not
+survive a rebuild**.
+
+On a pull request's page, **Runs with** lists what the live preview runs next to its
+app, **Docs** links to its docs path, **Outbound** says how many approved
+connections it has (or that a fork's were withheld) and **Managed services** says
+what the running worker offers, or that none are configured. The build log shows
+each service becoming ready, the setup command's output and the processes
+starting; a failure names the part that failed (setup, a service or a process)
+and the previous preview keeps serving.
+
+The repository's **Outbound** tab lists external destinations its previews may
+connect to, such as a test database at `db.example.com:5432`. Enter a host name
+and choose one of the ports the server allows, then **Approve**; **Remove** asks
+for confirmation in a dialog. Pull requests from forks never receive these
+connections. New approvals reach previews started afterwards; removals stop
+working within a minute. If the operator turned the feature off, the tab says so.
 
 ## Read build logs
 

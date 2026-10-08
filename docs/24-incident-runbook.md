@@ -1,9 +1,9 @@
-# 23 · Incident runbook
+# 24 · Incident runbook
 
 What to do when something goes wrong on a production host. Each alert in
 `deploy/observability/alerts.yml` links to one section here. The metrics and
-endpoints are described in [22](22-observability-and-hardening.md); the host
-layout in [24](24-production-deployment.md).
+endpoints are described in [23](23-observability-and-hardening.md); the host
+layout in [25](25-production-deployment.md).
 
 ## First steps for any incident
 
@@ -77,7 +77,7 @@ and `dc up -d worker`.
    resumes due jobs and housekeeping's recovery (every minute) re-creates lost
    wake-ups and expired leases. Nothing needs replaying by hand.
 3. If the data is damaged, restore the last backup
-   ([24](24-production-deployment.md#backups-and-restore)).
+   ([25](25-production-deployment.md#backups-and-restore)).
 
 ## Queue backlog
 
@@ -88,7 +88,7 @@ PreviaBuildsWaitingForCapacity.
 2. Builds waiting for capacity are normal under load: at most
    `MAX_CONCURRENT_BUILDS` run at once and the preview budget is bounded. Raise
    `MAX_CONCURRENT_BUILDS` only if the host has room
-   ([14](14-housekeeping-and-capacity.md)).
+   ([15](15-housekeeping-and-capacity.md)).
 3. Jobs failing repeatedly: `dc logs worker | grep '"job_kind":"<kind>"'` shows the
    error. Fix the cause; retries and recovery continue on their own.
 4. A queue with work but no worker: see [Server or worker down](#server-or-worker-down).
@@ -109,7 +109,7 @@ PreviaBuildsWaitingForCapacity.
 
 **Alerts:** PreviaOperationsFailed, PreviaCleanupBacklog.
 
-Operations are routes, reports and cleanups ([17](17-durable-publication-design.md)).
+Operations are routes, reports and cleanups ([18](18-durable-publication-design.md)).
 
 1. Grafana "Operations by kind and state".
 2. `activate_route`/`remove_route` failing: is the router healthy (`dc ps router`)?

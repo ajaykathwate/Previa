@@ -1,19 +1,18 @@
-# 26 · Roadmap: remaining MVP work
+# 27 · Roadmap: remaining MVP work
 
 The MVP work, as **12 sequential tasks**. All twelve are done: Previa builds and
 serves real previews, is observable and hardened, and is packaged and rehearsed for
 production on local staging infrastructure. The release acceptance checklist at
-the end is answered item by item in [25](25-release-report.md); its live checks on
+the end is answered item by item in [26](26-release-report.md); its live checks on
 hosted GitHub, real DNS and a real host are still pending. Each task is written as
 a self-contained prompt (for a developer or a coding agent) with its acceptance
 boundary. Run one task at a time with the shared
 instructions below. This plan does not certify the current application for
 production; the release checklist at the end does.
 
-**Prompts 13 and 14** are planned and not started:
-- **Prompt 13** extends the MVP so that backend and API repositories (an app with a
-  database, a cache, migrations and background workers) preview as well as web
-  frontends do.
+**Prompt 13 is done** ([11](11-backend-previews.md)): backend and API repositories
+(an app with a database, a cache, migrations and background workers) preview as well
+as web frontends do. **Prompt 14** is planned and not started:
 - **Prompt 14** closes a gap: Previa misses an uninstall, a suspension or a
   repository removal whose webhook never arrived.
 
@@ -55,7 +54,7 @@ production; the release checklist at the end does.
   default, secret-file credentials and persistent ACME storage
   (`deploy/traefik/compose.yml`, `make router-up`, `cmd/route-sync`); `__Host-`
   cookies and origin checks. Verified with `make test-routing`
-  ([11](11-routing-and-https.md)). Let's Encrypt staging/live issuance is pending a
+  ([12](12-routing-and-https.md)). Let's Encrypt staging/live issuance is pending a
   domain and DNS token.
 - **Prompt 7 done:** teardown for close, revocation (requested in the lifecycle
   transaction, started by `TeardownSweeper`) and future local requests through the
@@ -63,7 +62,7 @@ production; the release checklist at the end does.
   owner-verified cleanup (graceful stop, unforced images, idle networks); removal and
   cleanup retried until done; idempotent retries; old teardowns never remove a
   reopened PR's replacement. Verified with real Docker/Traefik in `make test-routing`
-  ([12](12-teardown-and-cleanup.md)). Workers, the periodic sweep and the owner's
+  ([13](13-teardown-and-cleanup.md)). Workers, the periodic sweep and the owner's
   teardown action are connected since Prompt 10.
 - **Prompt 8 done:** `internal/reporting` renders each PR's persisted state into one
   living comment (stored ID, App-owned marker, bounded discovery for deleted comments
@@ -73,7 +72,7 @@ production; the release checklist at the end does.
   the latest state, so stale or duplicate reports cannot remain final. Rate limits,
   permission changes and safe error categories are handled; deployments never wait
   for GitHub. Prompt 10 enabled `WithReports` and registered the reporter
-  ([13](13-pr-feedback.md)). The hosted proof (`make test-reporting`) needs an
+  ([14](14-pr-feedback.md)). The hosted proof (`make test-reporting`) needs an
   authorized disposable PR.
 - **Prompt 9 done:** `internal/housekeeping` startup and periodic River jobs (owner
   decisions: `ENV_TTL_HOURS` lifetime from the latest publication, deletion only
@@ -86,7 +85,7 @@ production; the release checklist at the end does.
   active plus candidate, a disk check across running builds; `make
   housekeeping-dry-run`. Every Docker object now carries its database's instance
   (migration 0016). Verified with PostgreSQL/River tests and `make test-housekeeping`
-  / `make test-runtime` on real Docker ([14](14-housekeeping-and-capacity.md)).
+  / `make test-runtime` on real Docker ([15](15-housekeeping-and-capacity.md)).
 - **Prompt 10 done:** the worker composes the whole pipeline in
   `internal/app/pipeline.go` from validated dependencies only (owner decisions:
   `worker_capabilities` heartbeat in migration 0017; an optional worker secrets
@@ -103,8 +102,8 @@ production; the release checklist at the end does.
   failure reasons, preview address, expiry and worker capabilities. Proven by
   `make test-e2e` on real Docker, BuildKit and Traefik with a fake GitHub over TLS,
   plus DB and browser regressions; the capability matrix, proof matrix and the
-  remaining live proofs are in [21](21-mvp-operations.md).
-- **Prompt 11 done** ([22](22-observability-and-hardening.md), [23](23-incident-runbook.md)):
+  remaining live proofs are in [22](22-mvp-operations.md).
+- **Prompt 11 done** ([23](23-observability-and-hardening.md), [24](24-incident-runbook.md)):
   correlated, redacted JSON logs; bounded Prometheus metrics with the headline
   request-to-preview latency and scrape-time state exported by the server;
   `/livez`, `/readyz` and `/metrics` on internal listeners with `healthcheck` and
@@ -114,7 +113,7 @@ production; the release checklist at the end does.
   and a webhook concurrency cap; `APP_ENV=production` checks; the
   `BUILDS_PAUSED` kill switch (migration 0018); govulncheck (Go 1.26.8 and
   containerd 2.3.6 remove every reachable finding); an incident runbook.
-- **Prompt 12 done** ([24](24-production-deployment.md), [25](25-release-report.md)):
+- **Prompt 12 done** ([25](25-production-deployment.md), [26](26-release-report.md)):
   reproducible multi-stage release images (distroless, non-root, health checks,
   cross-compiled); production Compose with a migration step, resource limits,
   stop budgets and the router's dashboard route; `cmd/migrate` with embedded
@@ -128,7 +127,7 @@ production; the release checklist at the end does.
   tracked close/merge retention, bounded mergeability checks and build refusal for
   Checking/Conflicts ([05](05-webhooks-and-pr-discovery.md)).
 - Implemented: live dashboard updates over SSE from PostgreSQL triggers through
-  `internal/platform/realtime` ([19](19-realtime-updates.md)); reuse it for live logs.
+  `internal/platform/realtime` ([20](20-realtime-updates.md)); reuse it for live logs.
 - Implemented: repository/PR pages, owner policy controls, build and teardown
   actions, and current Builds/Environments views. The approved presentation and
   no-JavaScript flows exist.
@@ -138,12 +137,12 @@ production; the release checklist at the end does.
 - Production worker wiring registers ping, build-log retention, App-configured
   discovery/mergeability and, with a validated preview domain, Docker and router,
   every build, wake, teardown, route, report, cleanup, sweep and housekeeping
-  worker ([21](21-mvp-operations.md)). The dashboard reads which capabilities a
+  worker ([22](22-mvp-operations.md)). The dashboard reads which capabilities a
   live worker provides and refuses build requests with 503 when none can build.
 - Live proofs remain pending: hosted GitHub webhooks and discovery, real source
   through `codeload.github.com`, PR feedback on a real PR, Let's Encrypt
   staging/production over real DNS, the whole pipeline and capacity on a target
-  host ([21](21-mvp-operations.md#live-proofs-still-required-before-a-public-rollout)).
+  host ([22](22-mvp-operations.md#live-proofs-still-required-before-a-public-rollout)).
   Local fixtures and a real local Git conflict are evidence, but do not prove hosted
   webhook delivery.
 
@@ -159,10 +158,10 @@ README's older illustrative tree. Keep backend files flat within each feature,
 presentation in web/, and construction in internal/app. Use small consumer-owned
 interfaces; do not create global handler/store layers or speculative frameworks.
 
-Preserve [15-build-policy-and-intents.md](15-build-policy-and-intents.md),
-[16-build-scheduling.md](16-build-scheduling.md),
-[17-durable-publication-design.md](17-durable-publication-design.md) and
-[18-generation-ordering.md](18-generation-ordering.md). Every executable
+Preserve [16-build-policy-and-intents.md](16-build-policy-and-intents.md),
+[17-build-scheduling.md](17-build-scheduling.md),
+[18-durable-publication-design.md](18-durable-publication-design.md) and
+[19-generation-ordering.md](19-generation-ordering.md). Every executable
 request and external artifact/operation carries PR identity, exact SHA and the
 ordered (generation, revision) fence. Same-SHA Retry/Rebuild changes revision.
 Observation/discovery/reconciliation alone never authorizes a Manual build.
@@ -176,7 +175,7 @@ ambiguous external success and process crashes. Persist cleanup/outbox intent;
 never substitute a no-op adapter or claim missing-resource cleanup succeeded
 without checking it. Credentials stay out of job payloads, URLs, logs and errors.
 
-Preserve the "signal" theme and UI patterns in [20-ui-architecture.md](20-ui-architecture.md),
+Preserve the "signal" theme and UI patterns in [21-ui-architecture.md](21-ui-architecture.md),
 accessible modal confirmations, CSRF, scoped queries, useful links, bounded lists,
 focus-preserving HTMX and ordinary GET/form fallbacks. Show actual work and
 deployed state separately. One lifetime environment/current intent per PR;
@@ -222,7 +221,7 @@ for live proofs require an explicitly authorized disposable repository.
 
 Prompts 1–9 exercised adapters using isolated test harnesses with normal preview
 dispatch disabled. Prompt 10 connected the complete pipeline in a controlled
-local/staging configuration ([21](21-mvp-operations.md)). Public production rollout requires the
+local/staging configuration ([22](22-mvp-operations.md)). Public production rollout requires the
 observed release checks in Prompt 12, including isolation, recovery and restore.
 Prompts 13 and 14 do not depend on the pending live checks or on each other, so they
 can run in either order. Like Prompt 10, each is accepted on local/staging
@@ -397,7 +396,7 @@ infrastructure, and neither may weaken a release check that has already passed.
 ## Prompt 6 — Stable HTTPS routing and fenced blue/green publication
 
 > Implement DESIGN Sections 11 and 13 and the route boundary in
-> docs/17-durable-publication-design.md. Read existing operation leases, candidate/
+> docs/18-durable-publication-design.md. Read existing operation leases, candidate/
 > active artifacts and finalization SQL before adding internal/routing adapters.
 > Preserve Traefik v3; do not replace the router or add a second orchestrator.
 >
@@ -643,6 +642,14 @@ infrastructure, and neither may weaken a release check that has already passed.
 > verdict. Production-ready is conditional on all mandatory checks actually passing.
 
 ## Prompt 13 — Backend previews: managed services, setup, processes and outbound connections
+
+**Done.** See [11](11-backend-previews.md) for the contract, isolation, lifecycle
+and limits, and [26](26-release-report.md) for the end-to-end evidence. Deviations:
+services use a per-PR services network rather than the PR's preview network (so a
+service can never use the egress proxy); one destination per port and name-based
+approvals only (the egress proxy tells destinations apart by port); approvals
+reach apps through `/etc/hosts`, so an app must resolve names through the system
+resolver.
 
 > Make backend and API repositories as previewable as web frontends. Today a preview
 > is one container whose only outbound route is HTTP(S) on ports 80/443 through the

@@ -24,7 +24,7 @@ func safeErrorCode(code string) string {
 }
 
 // WithReports makes reportable changes enqueue durable report operations
-// (docs/13-pr-feedback.md). Leave it off until a reporter executes them.
+// (docs/14-pr-feedback.md). Leave it off until a reporter executes them.
 func (r *Repository) WithReports() *Repository {
 	r.reports = true
 	return r

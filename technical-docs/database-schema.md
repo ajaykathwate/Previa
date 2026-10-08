@@ -1,6 +1,6 @@
 # Database schema
 
-The complete PostgreSQL schema of Previa after every migration (Goose `0001`–`0019`, River `001`–`007`), generated from a freshly migrated database, so it matches what `previa-migrate up` / `make migrate-up` create. The full annotated diagram, as Mermaid code to paste into [mermaid.live](https://mermaid.live), is [database-schema-diagram.md](database-schema-diagram.md). Migrations: [`db/migrations/`](../db/migrations/); each feature's queries: `internal/<feature>/*queries.sql` (sqlc generates `internal/<feature>/dbgen`).
+The complete PostgreSQL schema of Previa after every migration (Goose `0001`–`0020`, River `001`–`007`), generated from a freshly migrated database, so it matches what `previa-migrate up` / `make migrate-up` create. The full annotated diagram, as Mermaid code to paste into [mermaid.live](https://mermaid.live), is [database-schema-diagram.md](database-schema-diagram.md). Migrations: [`db/migrations/`](../db/migrations/); each feature's queries: `internal/<feature>/*queries.sql` (sqlc generates `internal/<feature>/dbgen`).
 
 **26 tables** (19 owned by Previa, the rest by Goose, SCS and River), 235 columns, 153 constraints, 57 indexes, 7 triggers.
 
@@ -9,7 +9,7 @@ The complete PostgreSQL schema of Previa after every migration (Goose `0001`–`
 - An **owner** (`users`) links GitHub App **installations**, which grant **repos**. Webhooks and discovery record **pull_requests**; a webhook is accepted once (`webhook_deliveries`).
 - A Build click or an Automatic deadline writes the PR's one **build_intents** row. The worker admits it, builds and runs a candidate, and records it on the PR's one **environments** row.
 - Everything external goes through **environment_operations** (the outbox): routes (fenced by **environment_routes** and **route_table**), GitHub reports (**pull_request_reports**) and cleanup.
-- Build output lands in **build_logs** under the current **build_log_streams** epoch. Owner secrets live encrypted in **env_secrets**.
+- Build output lands in **build_logs** under the current **build_log_streams** epoch. Owner secrets live encrypted in **env_secrets**. A ready backend candidate's managed services, setup, processes and docs path are recorded in **preview_components**; owner-approved outbound connections live in **repository_destinations**.
 - Housekeeping uses **pr_reconciliations** and **platform_instance**; the dashboard reads **worker_capabilities**. Jobs are **river_job** rows.
 - Seven triggers (`*_realtime`) send `NOTIFY previa_events` on changes to `repos`, `pull_requests`, `pr_syncs`, `build_intents`, `environments`, `installations` and `build_log_streams`; the server turns them into live page updates.
 
@@ -22,6 +22,9 @@ erDiagram
     environments ||--o| build_log_streams : "environment_id"
     environments ||--o{ build_logs : "environment_id"
     repos ||--o{ env_secrets : "repo_id"
+    repos ||--o{ repository_destinations : "repo_id"
+    users ||--o{ repository_destinations : "created_by"
+    pull_requests ||--o{ preview_components : "pull_request_id"
     pull_requests ||--o{ environment_operations : "pull_request_id"
     environments ||--o| environment_routes : "environment_id"
     pull_requests ||--o| environment_routes : "pull_request_id"
@@ -269,6 +272,27 @@ erDiagram
         timestamptz started_at
         timestamptz seen_at
         boolean paused
+        text_array services
+    }
+    preview_components {
+        bigint pull_request_id PK,FK
+        bigint generation PK
+        bigint revision PK
+        jsonb services
+        boolean setup
+        jsonb processes
+        text docs_path
+        integer outbound
+        boolean outbound_withheld
+        timestamptz recorded_at
+    }
+    repository_destinations {
+        bigint id PK
+        bigint repo_id FK
+        text host
+        integer port
+        bigint created_by FK
+        timestamptz created_at
     }
 ```
 
@@ -284,6 +308,7 @@ erDiagram
 | Routing | [`environment_routes`](#environment_routes), [`route_table`](#route_table) |
 | Logs | [`build_log_streams`](#build_log_streams), [`build_logs`](#build_logs) |
 | Secrets | [`env_secrets`](#env_secrets) |
+| Backend previews | [`preview_components`](#preview_components), [`repository_destinations`](#repository_destinations) |
 | Feedback | [`pull_request_reports`](#pull_request_reports) |
 | Housekeeping | [`pr_reconciliations`](#pr_reconciliations) |
 | Platform | [`platform_instance`](#platform_instance), [`worker_capabilities`](#worker_capabilities) |
@@ -817,6 +842,40 @@ erDiagram
 - check `platform_instance_instance_check`: `CHECK ((instance ~ '^[a-z0-9]{8,32}$'::text))`
 - check `platform_instance_singleton_check`: `CHECK (singleton)`
 
+### preview_components
+
+*Backend previews.* What a candidate ran next to its app when it became ready (migration 0020): managed services, whether setup ran, processes, docs path and approved outbound destinations given (or withheld for a fork). The dashboard and PR comment read the row of the deployed (generation, revision); older rows the PR no longer serves are dropped. Never holds credentials.
+
+| Column | Type | Null | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `pull_request_id` | bigint | no |  | PK; FK → `pull_requests.id` (cascade) |
+| `generation` | bigint | no |  | PK |
+| `revision` | bigint | no |  | PK |
+| `services` | jsonb | no | `'[]'::jsonb` | `[{"kind","version"}]` |
+| `setup` | boolean | no | `false` |  |
+| `processes` | jsonb | no | `'[]'::jsonb` | Process names |
+| `docs_path` | text | yes |  |  |
+| `outbound` | integer | no | `0` |  |
+| `outbound_withheld` | boolean | no | `false` |  |
+| `recorded_at` | timestamptz | no | `now()` |  |
+
+### repository_destinations
+
+*Backend previews.* Outbound connections a repository's owner approved for its previews (migration 0020): DNS names only, one per port, at most 10 per repository (enforced by the service). Forks never receive them.
+
+| Column | Type | Null | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | bigint | no |  | PK |
+| `repo_id` | bigint | no |  | FK → `repos.id` (cascade) |
+| `host` | text | no |  | Checked DNS name, at most 253 characters |
+| `port` | integer | no |  | 1–65535 |
+| `created_by` | bigint | yes |  | FK → `users.id` (set null) |
+| `created_at` | timestamptz | no | `now()` |  |
+
+**Constraints**
+
+- unique `repository_destinations_repo_id_port_key`: `UNIQUE (repo_id, port)`
+
 ### worker_capabilities
 
 *Platform.* One row per running worker: what it can do (execution, routing, reporting, housekeeping, discovery), whether builds are paused, and its heartbeat (`seen_at`, every 30 s; stale after 90 s).
@@ -832,6 +891,7 @@ erDiagram
 | `started_at` | timestamptz | no | `clock_timestamp()` |  |
 | `seen_at` | timestamptz | no | `clock_timestamp()` |  |
 | `paused` | boolean | no | `false` | BUILDS_PAUSED on that worker (migration 0018). |
+| `services` | text[] | no | `'{}'::text[]` | Managed services the worker offers, one entry per kind ("postgres 17, 16"); empty without a catalog (migration 0020). |
 
 **Constraints**
 
@@ -843,7 +903,7 @@ erDiagram
 
 ### goose_db_version
 
-*Library.* Goose's migration history. The newest row per `version_id` decides whether that migration is applied; processes require version 19.
+*Library.* Goose's migration history. The newest row per `version_id` decides whether that migration is applied; processes require version 20.
 
 | Column | Type | Null | Default | Notes |
 | --- | --- | --- | --- | --- |

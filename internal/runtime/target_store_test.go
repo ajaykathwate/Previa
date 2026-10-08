@@ -158,3 +158,53 @@ func TestAdmissionLockSerializesAndSurvivesCancellation(t *testing.T) {
 	}
 	final()
 }
+
+func TestRecordComponentsKeepsOnlyServedRows(t *testing.T) {
+	pool := isolatedPool(t)
+	ctx := t.Context()
+	store := NewTargetStore(pool)
+	var user, installation, repo, pr int64
+	for _, q := range []struct {
+		sql  string
+		dest *int64
+		args []any
+	}{
+		{"INSERT INTO users(github_id, username) VALUES (91, 'c') RETURNING id", &user, nil},
+		{"INSERT INTO installations(github_installation_id, owner_user_id) VALUES (91, $1) RETURNING id", &installation, []any{&user}},
+		{"INSERT INTO repos(installation_id, full_name, github_repo_id) VALUES ($1, 'c/r', 91) RETURNING id", &repo, []any{&installation}},
+		{"INSERT INTO pull_requests(repo_id, number, head_sha, state, generation) VALUES ($1, 1, 'sha', 'open', 3) RETURNING id", &pr, []any{&repo}},
+	} {
+		args := make([]any, len(q.args))
+		for i, a := range q.args {
+			args[i] = *(a.(*int64))
+		}
+		if err := pool.QueryRow(ctx, q.sql, args...).Scan(q.dest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, "INSERT INTO environments(pull_request_id, subdomain, status, applied_generation, applied_revision) VALUES ($1, 'pr-1-c-1', 'running', 1, 1)", pr); err != nil {
+		t.Fatal(err)
+	}
+	record := func(generation, revision int64) {
+		t.Helper()
+		if err := store.RecordComponents(ctx, Components{PullRequestID: pr, Generation: generation, Revision: revision, Services: []ServiceComponent{{Kind: "postgres", Version: "17"}}, Setup: true, Processes: []string{"worker"}, DocsPath: "/docs", Outbound: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(1, 1) // deployed
+	record(2, 1) // superseded, never deployed
+	record(3, 1) // the newest
+	var rows []string
+	r, err := pool.Query(ctx, "SELECT generation || '.' || revision FROM preview_components WHERE pull_request_id = $1 ORDER BY 1", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for r.Next() {
+		var row string
+		_ = r.Scan(&row)
+		rows = append(rows, row)
+	}
+	if strings.Join(rows, ",") != "1.1,3.1" {
+		t.Fatalf("rows kept: %v", rows)
+	}
+}

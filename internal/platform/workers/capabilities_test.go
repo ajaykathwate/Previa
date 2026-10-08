@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +65,7 @@ func TestCapabilitiesComeFromLiveWorkersOnly(t *testing.T) {
 	p := pool(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	reader := NewReader(p)
-	if c, err := reader.Current(t.Context()); err != nil || c != (Capabilities{}) {
+	if c, err := reader.Current(t.Context()); err != nil || !reflect.DeepEqual(c, Capabilities{}) {
 		t.Fatalf("no workers: %+v %v", c, err)
 	}
 	discovery, err := Start(t.Context(), p, Capabilities{Discovery: true}, logger)
@@ -91,7 +92,7 @@ func TestCapabilitiesComeFromLiveWorkersOnly(t *testing.T) {
 	if err := discovery.Stop(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := reader.Current(t.Context()); c != (Capabilities{}) {
+	if c, _ := reader.Current(t.Context()); !reflect.DeepEqual(c, Capabilities{}) {
 		t.Fatalf("stopped workers still count: %+v", c)
 	}
 }

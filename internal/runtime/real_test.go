@@ -596,8 +596,12 @@ func TestRealRuntimeAdmitsConcurrentCandidatesAtomically(t *testing.T) {
 		if i == 1 {
 			sink = secondLogs
 		}
+		plan, err := planBackend(fmt.Sprintf("previa-%s-pr%d-g1-r1-%d", r.instance, target.PullRequestID, time.Now().UnixNano()), settings)
+		if err != nil {
+			t.Fatal(err)
+		}
 		go func() {
-			_, err := r.startCandidate(buildCtx(t), id, target, image, settings, nil, sink)
+			_, err := r.startCandidate(buildCtx(t), id, target, image, settings, nil, plan, sink)
 			results <- err
 		}()
 	}

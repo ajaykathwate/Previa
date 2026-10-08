@@ -12,10 +12,12 @@ import (
 	"github.com/ajaykathwatee/previa/internal/builds"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/housekeeping"
+	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
+	"github.com/ajaykathwatee/previa/internal/platform/metrics"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/repoconfig"
@@ -142,6 +144,18 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 	if err != nil {
 		return err
 	}
+	// The worker owns owner-approved outbound forwarding on the egress proxy.
+	outboundPorts, err := cfg.OutboundPorts()
+	if err != nil {
+		return err
+	}
+	if err := gateway.ManageForwarding(outboundPorts); err != nil {
+		return err
+	}
+	metrics.SetEgressSource(func(ctx context.Context) (map[string]int64, int64, int64, error) {
+		s, err := gateway.Stats(ctx)
+		return s.Connections, s.BytesUp, s.BytesDown, err
+	})
 	var keyring *secrets.Keyring
 	if cfg.SecretsConfigured() {
 		if keyring, err = secrets.ParseKeyring(cfg.SecretsEncryptionKeys, cfg.SecretsActiveKeyVersion); err != nil {
@@ -162,7 +176,11 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 	if err != nil {
 		return err
 	}
-	preparer, err := source.NewPreparer(archives, workspaces, source.DefaultLimits(), repoconfig.DefaultLimits())
+	catalog, err := cfg.ServiceCatalog()
+	if err != nil {
+		return err
+	}
+	preparer, err := source.NewPreparer(archives, workspaces, source.DefaultLimits(), repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: catalog})
 	if err != nil {
 		return err
 	}
@@ -171,9 +189,11 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		return err
 	}
 	logStore := buildlogs.NewStore(pool)
+	targets := runtime.NewTargetStore(pool)
 	rt, err := runtime.New(runtime.Parts{
 		Instance: instance, Admission: runtime.NewAdmissionLock(pool), Docker: in.docker, Egress: gateway,
-		Targets: runtime.NewTargetStore(pool), Sources: preparer, Builder: builder, Secrets: provider,
+		Targets: targets, Sources: preparer, Builder: builder, Secrets: provider,
+		Components: targets, Destinations: outbound.NewRepository(pool, nil), Outbound: targets,
 		Logs: func(ctx context.Context, attempt environments.Attempt, redactor *secrets.Redactor) (runtime.LogSink, error) {
 			return logStore.Open(ctx, buildlogs.Binding{EnvironmentID: attempt.EnvironmentID, Epoch: attempt.LogEpoch}, redactor, buildlogs.DefaultLimits())
 		},
@@ -248,6 +268,10 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 	}
 	p.addDiscovery(sync)
 	p.capabilities.Execution, p.capabilities.Routing, p.capabilities.Reporting, p.capabilities.Housekeeping = true, true, true, true
+	p.capabilities.Services = catalog.Offers()
+	if catalog.Empty() {
+		p.unavailable = append(p.unavailable, "PREVIEW_SERVICE_CATALOG is none: previews cannot request managed PostgreSQL or Redis")
+	}
 	if cfg.BuildsPaused {
 		// The kill switch: everything stays registered so teardown, cleanup,
 		// routing, reports and housekeeping keep working; builds wait.
@@ -272,6 +296,7 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		rc.Queues[environments.CleanupOperationQueue] = river.QueueConfig{MaxWorkers: cleanupWorkers}
 		rc.Queues[environments.TeardownSweepQueue] = river.QueueConfig{MaxWorkers: 1}
 		keeper.Register(rc)
+		outbound.Register(rc, rt)
 	})
 	p.startup = append(p.startup,
 		func(ctx context.Context) error {

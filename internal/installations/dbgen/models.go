@@ -172,6 +172,19 @@ type PrSync struct {
 	Message       string
 }
 
+type PreviewComponent struct {
+	PullRequestID    int64
+	Generation       int64
+	Revision         int64
+	Services         []byte
+	Setup            bool
+	Processes        []byte
+	DocsPath         pgtype.Text
+	Outbound         int32
+	OutboundWithheld bool
+	RecordedAt       pgtype.Timestamptz
+}
+
 type PullRequest struct {
 	ID                          int64
 	RepoID                      int64
@@ -227,6 +240,15 @@ type Repo struct {
 	ObservationVersion int64
 }
 
+type RepositoryDestination struct {
+	ID        int64
+	RepoID    int64
+	Host      string
+	Port      int32
+	CreatedBy pgtype.Int8
+	CreatedAt pgtype.Timestamptz
+}
+
 type RouteTable struct {
 	Singleton bool
 	Version   int64
@@ -263,4 +285,5 @@ type WorkerCapability struct {
 	StartedAt    pgtype.Timestamptz
 	SeenAt       pgtype.Timestamptz
 	Paused       bool
+	Services     []string
 }

@@ -221,7 +221,7 @@ Every library and tool, and the step of the flow where it acts.
 | Tailwind CSS | v4.1.18 standalone | Build time only | Compiles `web/styles` into `web/static/css/app.css` |
 | [pgx](https://github.com/jackc/pgx) | v5.10.0 | Every database call | PostgreSQL driver and pool; dedicated `LISTEN` connection |
 | [sqlc](https://sqlc.dev) | pinned in `tools/go.mod` | Build time | Generates typed Go from each feature's `queries.sql` |
-| [Goose](https://github.com/pressly/goose) | v3.28.0 | `make migrate-up`, `previa-migrate` | Schema migrations 0001–0019, embedded in release images |
+| [Goose](https://github.com/pressly/goose) | v3.28.0 | `make migrate-up`, `previa-migrate` | Schema migrations 0001–0020, embedded in release images |
 | [River](https://riverqueue.com) | v0.47.0 | Every background step | PostgreSQL job queue: transactional inserts, retries, uniqueness, periodic jobs, leader election |
 | [SCS](https://github.com/alexedwards/scs) + pgxstore | v2.9.0 | Sign-in, every page | Server-side sessions stored in PostgreSQL |
 | [golang.org/x/oauth2](https://pkg.go.dev/golang.org/x/oauth2) | v0.37.0 | Sign-in, installation verification | OAuth code exchange with GitHub |

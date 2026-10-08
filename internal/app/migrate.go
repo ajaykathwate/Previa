@@ -21,7 +21,7 @@ import (
 // RunMigrations applies (up) or reports (status) the embedded Goose
 // migrations and River's own, in that order, from DATABASE_URL: the release
 // image's one-shot migration step. Migrations only move forward here;
-// rolling back is a restore (docs/24-production-deployment.md).
+// rolling back is a restore (docs/25-production-deployment.md).
 func RunMigrations(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) != 1 || (args[0] != "up" && args[0] != "status") {
 		return errors.New("usage: migrate <up|status>; the connection comes from DATABASE_URL")

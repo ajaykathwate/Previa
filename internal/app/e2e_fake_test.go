@@ -46,6 +46,8 @@ type fakeGitHub struct {
 	// GitHub outage); rejected counts them.
 	reportsDown bool
 	rejected    int
+	// forks are further PRs whose head lives in another repository.
+	forks map[int]string // PR number -> head commit
 }
 
 type fakeRun struct {
@@ -104,6 +106,22 @@ func (f *fakeGitHub) push(commit string, files map[string]string) {
 	defer f.mu.Unlock()
 	f.head, f.updated = commit, time.Now().UTC().Truncate(time.Second)
 	f.archives[commit] = out.Bytes()
+}
+
+// pushFork makes commit the head of PR number, opened from a fork, and serves
+// files as its tarball.
+func (f *fakeGitHub) pushFork(number int, commit string, files map[string]string) {
+	f.mu.Lock()
+	head := f.head
+	f.mu.Unlock()
+	f.push(commit, files)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.head = head // PR 7 keeps its own head
+	if f.forks == nil {
+		f.forks = map[int]string{}
+	}
+	f.forks[number] = commit
 }
 
 // setReportsDown starts or ends an outage of GitHub's comment and check-run API.
@@ -186,6 +204,12 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case strings.HasPrefix(path, repoPath+"/pulls/") && f.forks[atoi(strings.TrimPrefix(path, repoPath+"/pulls/"))] != "":
+		number := atoi(strings.TrimPrefix(path, repoPath+"/pulls/"))
+		write(200, map[string]any{"number": number, "state": "open", "title": "From a fork", "html_url": "https://github.com/octo/app/pull/" + strconv.Itoa(number),
+			"user": map[string]any{"login": "outsider"}, "mergeable": true, "mergeable_state": "clean", "updated_at": f.updated.Format(time.RFC3339),
+			"head": map[string]any{"sha": f.forks[number], "ref": "feature", "repo": map[string]any{"id": e2eRepoID + 1}},
+			"base": map[string]any{"ref": "main", "repo": map[string]any{"id": e2eRepoID}}})
 	case path == "/repositories/"+strconv.Itoa(e2eRepoID):
 		write(200, map[string]any{"id": e2eRepoID, "name": e2eRepo, "owner": map[string]any{"login": e2eOwner}})
 	case path == repoPath+"/pulls/"+strconv.Itoa(e2ePRNumber):
@@ -274,3 +298,8 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fakeGitHub) String() string { return fmt.Sprintf("fake GitHub at %s", f.server.URL) }
+
+func atoi(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
+}

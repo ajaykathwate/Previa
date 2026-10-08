@@ -1,4 +1,4 @@
-# Prometheus for one Previa host (docs/22-observability-and-hardening.md).
+# Prometheus for one Previa host (docs/23-observability-and-hardening.md).
 # Targets are the internal listeners on the Compose network; none is
 # published on the host. Alerting rules are in alerts.yml.
 global:
@@ -9,7 +9,7 @@ rule_files:
   - /etc/prometheus/alerts.yml
 
 # Uncomment and point at your Alertmanager to deliver alerts
-# (docs/23-incident-runbook.md lists what each alert means).
+# (docs/24-incident-runbook.md lists what each alert means).
 # alerting:
 #   alertmanagers:
 #     - static_configs:

@@ -155,7 +155,8 @@ templ previewLifetime() {
 
 templ backendApps() {
 	<p>Yes, as long as it serves HTTP: an API's preview address answers requests just like a website's does, and it can call public services over HTTPS through my proxy.</p>
-	<p>Managed databases, caches and background workers for previews are planned, not built yet.</p>
+	<p>It can also ask for a fresh PostgreSQL and Redis for every build, run a setup command for migrations and seed data, keep a queue worker running and link its API docs, all declared in <code>.previewrc.yaml</code>. Data does not survive a rebuild.</p>
+	<p>To reach an external test database or broker, the repository's owner approves its host and port on the Outbound tab; pull requests from forks never get those connections.</p>
 }
 
 templ buildDisabled() {

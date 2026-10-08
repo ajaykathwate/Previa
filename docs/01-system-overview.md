@@ -16,7 +16,7 @@ per-feature design lives in [DESIGN.md](../DESIGN.md).
 | Open-only PR discovery, sync and mergeability checks | Working |
 | Manual/Automatic build policy, durable build intent, five-minute debounce | Working end to end: the server records requests and wake-ups, the worker admits and builds |
 | Repository/PR dashboard with live updates (SSE) | Working |
-| Build/teardown orchestration, durable publication outbox, reconciler | Working: registered by the worker when its dependencies validate ([21](21-mvp-operations.md)) |
+| Build/teardown orchestration, durable publication outbox, reconciler | Working: registered by the worker when its dependencies validate ([22](22-mvp-operations.md)) |
 | Fresh upstream verification before authorization/execution | Working: before the owner's request is recorded and again at worker admission, outside locks |
 | Exact-commit source fetch, safe extraction, `.previewrc.yaml` from the same tree | Working; every build starts with it (real GitHub check: `make test-source`) |
 | Repository secrets: encrypted storage, Secrets tab, key rotation, fork withholding, redaction | Working for owners; the preview runtime injects them for trusted sources |
@@ -28,16 +28,16 @@ per-feature design lives in [DESIGN.md](../DESIGN.md).
 | PR feedback: one living comment and exact-commit check runs, rendered from persisted state | Working against a fake GitHub (`make test-e2e`); the live proof on a real PR (`make test-reporting`) is still to run |
 | Housekeeping: recovery, expiry, orphan cleanup with grace periods, PR reconciliation, pruning; build slots and atomic preview capacity | Working; tested against PostgreSQL, River and real Docker (`make test-housekeeping`, `make test-runtime`); dry-run diagnostics (`make housekeeping-dry-run`) |
 | Worker capabilities, Build/Retry/Rebuild/Tear down controls, Builds/Environments/Overview with real state | Working; the whole pipeline proven on real Docker, BuildKit and Traefik with a fake GitHub, including a GitHub reporting outage (`make test-e2e`) |
-| Observability: correlated redacted logs, bounded metrics, readiness on internal listeners, Grafana dashboard, 24 alert rules | Working; rules unit-tested (`make observability-check`) ([22](22-observability-and-hardening.md)) |
-| Hardening: nonce CSP and security headers, host and trusted-proxy validation, body and rate limits, production mode, execution kill switch | Working; browser suite runs under the CSP; incident runbook ([23](23-incident-runbook.md)) |
-| Release images, production Compose, host setup, encrypted backups and restore, upgrades and rollback, CI and releases | Working on local staging (`make prod-smoke`: 43 checks); a real host, DNS and hosted GitHub are pending ([24](24-production-deployment.md), [25](25-release-report.md)) |
+| Observability: correlated redacted logs, bounded metrics, readiness on internal listeners, Grafana dashboard, 24 alert rules | Working; rules unit-tested (`make observability-check`) ([23](23-observability-and-hardening.md)) |
+| Hardening: nonce CSP and security headers, host and trusted-proxy validation, body and rate limits, production mode, execution kill switch | Working; browser suite runs under the CSP; incident runbook ([24](24-incident-runbook.md)) |
+| Release images, production Compose, host setup, encrypted backups and restore, upgrades and rollback, CI and releases | Working on local staging (`make prod-smoke`: 43 checks); a real host, DNS and hosted GitHub are pending ([25](25-production-deployment.md), [26](26-release-report.md)) |
 
 This is an operational MVP, packaged and rehearsed for production on local staging
 infrastructure. What each capability needs and what is proven by which test are
-in [21](21-mvp-operations.md); running it on a host is [24](24-production-deployment.md);
+in [22](22-mvp-operations.md); running it on a host is [25](25-production-deployment.md);
 the evidence for every release acceptance item, and the live checks still pending
-before a public rollout, are in [25](25-release-report.md);
-[26-roadmap.md](26-roadmap.md) lists the work in order.
+before a public rollout, are in [26](26-release-report.md);
+[27-roadmap.md](27-roadmap.md) lists the work in order.
 
 ## Architecture
 
@@ -71,7 +71,7 @@ flowchart LR
   runs one rootless BuildKit container per build on a private network; the preview
   runtime ([10](10-preview-runtime.md)) runs each PR's hardened preview on its own
   internal network. The only exit from either is the shared `previa-egress` proxy
-  container. Traefik ([11](11-routing-and-https.md)) serves the healthy preview at
+  container. Traefik ([12](12-routing-and-https.md)) serves the healthy preview at
   its stable HTTPS address.
 
 ## Code layout
@@ -97,14 +97,14 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
 | `internal/routing` | Stable hostnames, the route controller (Traefik file provider), forward-only route table file, router control through Docker, the unavailable page. |
 | `internal/dashboard` | Home, overview, session and developer-tools pages; queue ping. |
 | `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub, SSE, stream limiter), `workers` (capability heartbeat), `logging` (correlation, redaction), `metrics` (Prometheus), `version`, `dockerx` (Docker client, shared labels), `egress` (the egress proxy, readiness probe and its container). |
-| `internal/reporting` | PR feedback: state derivation, comment and check run rendering, the GitHub adapter and the leased reporter ([13](13-pr-feedback.md)). |
-| `internal/housekeeping` | Startup and periodic River jobs: recovery, resource inventory with grace periods, PR reconciliation, expiry, pruning, dry runs ([14](14-housekeeping-and-capacity.md)). |
+| `internal/reporting` | PR feedback: state derivation, comment and check run rendering, the GitHub adapter and the leased reporter ([14](14-pr-feedback.md)). |
+| `internal/housekeeping` | Startup and periodic River jobs: recovery, resource inventory with grace periods, PR reconciliation, expiry, pruning, dry runs ([15](15-housekeeping-and-capacity.md)). |
 | `web/` | `pages/<feature>`, `layouts`, `components`, `styles` (Tailwind), `static` (HTMX, compiled CSS, `ui.js`), browser tests. |
-| `db/migrations` | Goose migrations 0001–0019 (embedded by `db/migrations.go`); sqlc generates typed queries into each feature's `dbgen/`. |
+| `db/migrations` | Goose migrations 0001–0020 (embedded by `db/migrations.go`); sqlc generates typed queries into each feature's `dbgen/`. |
 | `deploy/egress` | Dockerfile for the egress proxy and prober image (`make egress-image`). |
 | `deploy/traefik` | The development router's Compose file (`make router-up`): file provider, loopback API, staging ACME, secret-file DNS credential. |
-| `deploy/production`, `Dockerfile` | Release images; production Compose; host setup, backup, restore and smoke-test scripts ([24](24-production-deployment.md)). |
-| `deploy/observability` | Prometheus configuration, alert rules and their tests, the Grafana dashboard ([22](22-observability-and-hardening.md)). |
+| `deploy/production`, `Dockerfile` | Release images; production Compose; host setup, backup, restore and smoke-test scripts ([25](25-production-deployment.md)). |
+| `deploy/observability` | Prometheus configuration, alert rules and their tests, the Grafana dashboard ([23](23-observability-and-hardening.md)). |
 | `.github/workflows`, `.goreleaser.yaml` | CI (checks, browser, images, real Docker suites) and tag-driven releases. |
 | `tools/go.mod` | Pinned dev tools: templ, sqlc, Goose, Air, golangci-lint. |
 
@@ -168,12 +168,12 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
   ([05](05-webhooks-and-pr-discovery.md)).
 - **Stale work finishing late.** Every job captures the PR generation and request
   revision; result writes lock the PR row and refuse anything not current
-  ([18](18-generation-ordering.md)).
+  ([19](19-generation-ordering.md)).
 - **Same-commit retries.** Rebuilding an unchanged SHA advances the intent revision,
-  so old operations cannot collide with new ones ([15](15-build-policy-and-intents.md)).
+  so old operations cannot collide with new ones ([16](16-build-policy-and-intents.md)).
 - **No transactions across systems.** Desired state commits in PostgreSQL with a
   durable operation row; external calls run outside transactions and a reconciler
-  repairs partial failures ([17](17-durable-publication-design.md)).
+  repairs partial failures ([18](18-durable-publication-design.md)).
 - **Long locks versus slow IO.** GitHub/Docker calls never run while a row lock or
   transaction is open; revisions are captured before IO and rechecked after.
 - **Asynchronous mergeability.** Unknown results trigger a bounded, fenced recheck
@@ -198,13 +198,13 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
   of every affected PR in the same transaction (a new generation fences in-flight
   work) and set `cleanup_pending`; a sweep starts the teardowns without GitHub access
   and clears the marker only when PostgreSQL and Docker show nothing left
-  ([12](12-teardown-and-cleanup.md)).
+  ([13](13-teardown-and-cleanup.md)).
 - **Stale routes.** Route versions only move forward behind a PostgreSQL fence, removals
   are tombstones, and the router's file only moves forward; old containers retire only
-  after the router confirms the newer version ([11](11-routing-and-https.md)).
+  after the router confirms the newer version ([12](12-routing-and-https.md)).
 - **Live UI without missed updates.** SSE streams carry resumable cursors; the page
   cursor is read before page state, so a commit in between is replayed
-  ([19](19-realtime-updates.md)).
+  ([20](20-realtime-updates.md)).
 
 ## Glossary
 

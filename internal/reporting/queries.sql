@@ -14,13 +14,17 @@ SELECT pr.id, pr.number, pr.head_sha, pr.state, pr.generation, pr.build_status, 
        e.last_error_code, e.expires_at,
        (SELECT count(*) FROM env_secrets s WHERE s.repo_id = r.id)::bigint AS secret_count,
        rep.wanted_version, rep.reported_version, rep.comment_digest, rep.check_head_sha,
-       rep.check_revision, rep.check_run_id, rep.check_open, rep.check_digest
+       rep.check_revision, rep.check_run_id, rep.check_open, rep.check_digest,
+       pc.services AS backend_services, COALESCE(pc.setup, false)::boolean AS backend_setup,
+       pc.processes AS backend_processes, pc.docs_path AS backend_docs_path
 FROM pull_requests pr
 JOIN repos r ON r.id = pr.repo_id
 JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = pr.id
 LEFT JOIN environments e ON e.pull_request_id = pr.id
 LEFT JOIN pull_request_reports rep ON rep.pull_request_id = pr.id
+LEFT JOIN preview_components pc ON pc.pull_request_id = pr.id
+    AND pc.generation = e.applied_generation AND pc.revision = e.applied_revision
 WHERE pr.id = $1;
 
 -- name: AcquireReportLease :one

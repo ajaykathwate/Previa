@@ -1,4 +1,4 @@
-# 21 · Operating the MVP: capabilities, configuration and live proofs
+# 22 · Operating the MVP: capabilities, configuration and live proofs
 
 With Prompt 10 every piece is connected: a pull request goes from its exact commit
 through configuration, an isolated image build and a hardened, healthy candidate to
@@ -7,10 +7,10 @@ document says what each process does, what each capability needs and what happen
 when it is missing, how the work is queued and stopped, how to run the whole
 pipeline locally or on staging, what is proven by which test, and every live proof
 still required before a public rollout. Observability and hardening are in
-[22](22-observability-and-hardening.md), incidents in [23](23-incident-runbook.md),
-production deployment in [24](24-production-deployment.md) and the release evidence
-in [25](25-release-report.md). Nothing here authorizes public production use before
-the pending live checks pass ([26](26-roadmap.md)).
+[23](23-observability-and-hardening.md), incidents in [24](24-incident-runbook.md),
+production deployment in [25](25-production-deployment.md) and the release evidence
+in [26](26-release-report.md). Nothing here authorizes public production use before
+the pending live checks pass ([27](27-roadmap.md)).
 
 ## Who does what
 
@@ -30,8 +30,8 @@ the pending live checks pass ([26](26-roadmap.md)).
 | PR comment and check runs | Part of builds; the App's ID and slug are read from GitHub (`GET /app`) at start | Part of builds. |
 | Housekeeping (recovery, expiry, orphans, PR reconciliation, pruning) | Part of builds; `ENV_TTL_HOURS`, `HOUSEKEEPING_*`, `BUILD_CACHE_BUDGET` | Part of builds. |
 | Build, Retry, Rebuild and teardown controls (server) | The five server App settings, and a worker with builds seen within 90 seconds | The PR page explains why; the endpoint answers 503 and records nothing. Teardown is recorded without a worker and runs when one starts. |
-| Builds paused (kill switch) | `BUILDS_PAUSED=true` | Off by default. When on, builds wait (reason `paused`) and the dashboard refuses new requests saying builds are paused; teardown, cleanup, routing, reports and housekeeping continue ([23](23-incident-runbook.md#execution-kill-switch)). |
-| Health and metrics | `INTERNAL_ADDR` (server), `WORKER_INTERNAL_ADDR` (worker) | Always on, loopback by default; `/readyz` lists failing dependencies ([22](22-observability-and-hardening.md)). |
+| Builds paused (kill switch) | `BUILDS_PAUSED=true` | Off by default. When on, builds wait (reason `paused`) and the dashboard refuses new requests saying builds are paused; teardown, cleanup, routing, reports and housekeeping continue ([24](24-incident-runbook.md#execution-kill-switch)). |
+| Health and metrics | `INTERNAL_ADDR` (server), `WORKER_INTERNAL_ADDR` (worker) | Always on, loopback by default; `/readyz` lists failing dependencies ([23](23-observability-and-hardening.md)). |
 | Source workspaces | `SOURCE_WORKSPACE_ROOT` (default `previa-sources` in the system temporary directory; keep it on a Linux filesystem) | Defaulted. |
 
 The worker's startup log states it: `River worker started execution=true
@@ -55,7 +55,7 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 - **Retries.** A permanent failure (invalid configuration, failing Dockerfile, app
   never ready, time limit) ends the request after one attempt and is reported once.
   Transient failures get up to five attempts in all, with backoff. Lack of capacity or
-  disk is a wait, not a failure ([14](14-housekeeping-and-capacity.md)). A GitHub
+  disk is a wait, not a failure ([15](15-housekeeping-and-capacity.md)). A GitHub
   rate limit waits for GitHub's own delay. None of these spend an attempt.
 - **Freshness.** The server reads the PR from GitHub before recording a request; the
   worker reads it again before admitting the build, and the runtime rechecks access
@@ -69,10 +69,10 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 
 ## Running the whole pipeline (local or staging)
 
-1. `make migrate-up` (Goose 17) and `make egress-image`.
+1. `make migrate-up` (Goose 20) and `make egress-image`.
 2. A domain whose wildcard record points at the Docker host, a DNS token in a
    `chmod 600` file, and the routing and `ACME_*` settings in `.env`; then
-   `make router-up` (Let's Encrypt **staging** first, [11](11-routing-and-https.md)).
+   `make router-up` (Let's Encrypt **staging** first, [12](12-routing-and-https.md)).
 3. In `.env`, for the worker: the two App settings, `PREVIEW_BASE_DOMAIN`,
    `APP_BASE_URL`, `ROUTER_DYNAMIC_DIR`, the secrets keyring if repositories use
    secrets; optionally `ENV_TTL_HOURS` and the housekeeping settings.
@@ -89,7 +89,7 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 Without a domain and DNS token the router cannot obtain a certificate, so builds
 stay unavailable; `make test-e2e` proves the whole pipeline on this machine without
 them (a router with Traefik's default certificate). For a production host use the
-release images and Compose file instead ([24](24-production-deployment.md)).
+release images and Compose file instead ([25](25-production-deployment.md)).
 
 ## What is proven, and by which test
 
@@ -117,7 +117,7 @@ release images and Compose file instead ([24](24-production-deployment.md)).
 | Execution kill switch | `TestPausedBuildsWaitWithoutTouchingGitHubOrDocker`, `TestPausedWorkersSayWhyNothingBuilds`, `TestBuildIsUnavailableWithoutAWorkerThatCanBuild` |
 | Ingress controls, security headers, internal endpoints, redaction, bounded metrics | `internal/platform/httpx`, `logging`, `metrics` tests; browser suite under the CSP |
 | Alerts | `make observability-check` (promtool rule unit tests) |
-| Production stack, backup and restore, upgrade and rollback, older-schema restore | `make prod-smoke` ([24](24-production-deployment.md#local-staging-smoke-test)) |
+| Production stack, backup and restore, upgrade and rollback, older-schema restore | `make prod-smoke` ([25](25-production-deployment.md#local-staging-smoke-test)) |
 
 ## Live proofs still required before a public rollout
 
@@ -137,7 +137,7 @@ Each needs something this environment does not have; none is claimed.
 7. **gVisor** (`PREVIEW_OCI_RUNTIME=runsc`) if the threat model requires it.
 8. **The production stack on the target host**: `setup.sh`, the release images,
    staged certificates, the backup timer with a real object-storage remote, a
-   restore rehearsal there, and an upgrade ([24](24-production-deployment.md)).
+   restore rehearsal there, and an upgrade ([25](25-production-deployment.md)).
    `make prod-smoke` rehearses all of it on local staging.
 9. **CI and releases on GitHub**: the workflows have not run on GitHub yet, the
    protected `release` environment and its reviewers need configuring, and

@@ -1,4 +1,4 @@
-# 24 · Production deployment
+# 25 · Production deployment
 
 Use **one DigitalOcean Droplet running Ubuntu 24.04, Docker Engine and Docker
 Compose**, **PostgreSQL 17 in Docker on that Droplet**, **DigitalOcean Spaces for
@@ -19,7 +19,7 @@ if you choose a different database or automated deployment. **A commit to `main`
 does not deploy Previa. A release tag publishes artifacts; the operator deploys
 them.**
 
-The [release report](25-release-report.md) records local evidence and pending live
+The [release report](26-release-report.md) records local evidence and pending live
 checks. It does not establish that a real production host is already running.
 Examples below use reserved example domains and illustrative version tags;
 replace them with your domains and an existing, tested release. Run commands one
@@ -152,7 +152,7 @@ procedure; deleting/recreating the Droplet does not perform a managed-DB restore
 For the commands below, use the provided **PostgreSQL 17 Compose service**.
 PostgreSQL for each *previewed application* is a different matter: automatic per-PR databases,
 Redis, setup commands and extra app processes remain planned features in the
-[roadmap](26-roadmap.md). Previa's own production database is never a database
+[roadmap](27-roadmap.md). Previa's own production database is never a database
 that an untrusted preview may connect to.
 
 ### What to create, and where to configure it
@@ -857,7 +857,7 @@ Expected behavior:
 
 1. PostgreSQL initializes its persistent volume and becomes healthy.
 2. `migrate` applies this release's embedded Goose schema and River schema, then
-   exits successfully. The code reviewed here requires **Goose 19**; the release's
+   exits successfully. The code reviewed here requires **Goose 20**; the release's
    migration status reports the River count as well.
 3. `router-config` writes the dashboard route and exits 0; Traefik starts and
    watches the route directory.
@@ -1319,8 +1319,8 @@ Alertmanager delivery. Prometheus and Alertmanager on the same failed VPS cannot
 report that whole-host outage. PostgreSQL/node/container exporters and Loki are
 not currently in the supplied stack; deployment of those is an additional choice.
 
-Use [22 · Observability](22-observability-and-hardening.md) for metric details and
-[23 · Incident runbook](23-incident-runbook.md) to respond to a firing alert.
+Use [23 · Observability](23-observability-and-hardening.md) for metric details and
+[24 · Incident runbook](24-incident-runbook.md) to respond to a firing alert.
 
 ## Backups and restore
 
@@ -2114,7 +2114,7 @@ U5. There is no automatic rollback controller in this repository.
 
 Do not use development `make migrate-down` as a production rollback substitute.
 Database restoration and binary rollback have different data-loss consequences.
-Use [23 · Incident runbook](23-incident-runbook.md) for diagnosis before selecting
+Use [24 · Incident runbook](24-incident-runbook.md) for diagnosis before selecting
 one of them.
 
 ### Preserve preview networks when recreating Traefik
@@ -2452,7 +2452,7 @@ drill. `SMOKE_KEEP=1` retains the isolated stack for inspection rather than norm
 cleanup. Use disposable data and a separate host; the harness is not a production
 backup or acceptance substitute.
 
-The tracked `smoke.sh` asserts Goose schema **19** after initial migration,
+The tracked `smoke.sh` asserts Goose schema **20** after initial migration,
 upgrade and an optional older-backup restore, matching
 `internal/platform/database/schema.go` and the current migration set. When adding
 a migration, update those three expectations alongside the application's schema
@@ -2511,9 +2511,9 @@ passed.
 | [Backup](../deploy/production/backup.sh), [restore](../deploy/production/restore.sh) | Local PostgreSQL target, encrypted artifacts, retention, destructive restore and paused startup. |
 | [Migration runner](../internal/app/migrate.go), [schema requirement](../internal/platform/database/schema.go) | Forward-only embedded migrations and the current schema gate. |
 | [CI](../.github/workflows/ci.yml), [Release](../.github/workflows/release.yml) | Exact triggers, jobs, tokens, draft artifacts and absence of deployment automation. |
-| [Smoke harness](../deploy/production/smoke.sh), [release report](25-release-report.md) | Candidate rehearsal, historical local evidence and live acceptance work. |
+| [Smoke harness](../deploy/production/smoke.sh), [release report](26-release-report.md) | Candidate rehearsal, historical local evidence and live acceptance work. |
 
-For daily actions use [21 · Operating the MVP](21-mvp-operations.md); for response
-to failures use [23 · Incident runbook](23-incident-runbook.md). This runbook expands
+For daily actions use [22 · Operating the MVP](22-mvp-operations.md); for response
+to failures use [24 · Incident runbook](24-incident-runbook.md). This runbook expands
 the implemented deployment; it does not change its architecture, add deployment
 code, or claim that any external infrastructure has been provisioned.
