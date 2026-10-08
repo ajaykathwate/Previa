@@ -606,6 +606,27 @@ exit status and up to 4 KiB of the last 20 daemon log lines before cleanup. A
 readiness timeout also preserves the last probe error and startup logs.
 
 ```yaml
+- name: Free runner disk
+  run: |
+    df -h /
+    sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+    df -h /
+```
+
+A fresh `ubuntu-24.04` runner leaves only about 10 GiB free on `/` once Go
+modules and images are in place. This job builds images, runs previews with
+PostgreSQL/Redis services, builds the three release images and starts the
+production stack, so it deletes preinstalled SDKs it never uses. The two `df`
+lines show the space before and after in the step log.
+
+The real build suites also lower the build admission floor for their own tiny
+images: `make test-builder` uses a 1 GiB free-disk floor and a 4 GiB per-build
+budget, and `make test-e2e` a 1 GiB floor. With the production defaults
+(`BUILD_MIN_FREE_DISK=15GiB`, `BUILD_DISK_BUDGET=20GiB`), a runner refuses builds
+with `disk_low`, for example "with 1 other builds running, a build needs at
+least 21.0 GiB". A worker always uses its configured values.
+
+```yaml
 - name: Generate application assets and code
   run: make assets generate
 ```

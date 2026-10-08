@@ -66,8 +66,10 @@ Last updated: 2026-10-08
   Trivy via digest-pinned aquasec/trivy:0.65.0; Ubuntu 24.04 runner sets
   apparmor_restrict_unprivileged_userns=0 for rootless BuildKit; sandbox.go reports
   exited builders with bounded startup logs.
-- Push, then confirm a new GitHub run tests the pushed SHA (re-running an old job
-  uses the old commit).
+- Run on ee7c85e failed in test-builder: runner had 10.4 GiB free, the fixture
+  needed 1 + 20 GiB for two concurrent builds (disk_low). Fixed (not yet pushed): real
+  builder fixture DiskBudget 4 GiB, e2e BuildMinFreeDisk 1 GiB, CI step "Free
+  runner disk". Push, then confirm a new run tests the pushed SHA.
 
 ## Prompt 13: backend previews (docs/11)
 - .previewrc.yaml: services {postgres|redis: version} from PREVIEW_SERVICE_CATALOG

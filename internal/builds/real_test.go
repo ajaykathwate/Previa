@@ -75,7 +75,10 @@ func newRealFixture(t *testing.T, tweak func(*Config)) *realFixture {
 		t.Fatal(err)
 	}
 	cfg := ConfigFrom(settings.BuilderConfig, "tb"+strconv.FormatInt(time.Now().UnixNano(), 36), 10*time.Minute)
+	// These builds are tiny. Production disk thresholds would refuse the
+	// concurrent pair below on a CI runner with about 10 GiB free.
 	cfg.MinFreeDisk = 1 << 30
+	cfg.DiskBudget = 4 << 30
 	if tweak != nil {
 		tweak(&cfg)
 	}

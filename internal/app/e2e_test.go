@@ -85,6 +85,9 @@ func TestRealEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	execution.SourceWorkspaceRoot = t.TempDir()
+	// The fixture's images are tiny; the production free-disk floor (15 GiB)
+	// would refuse every build on a CI runner.
+	execution.BuildMinFreeDisk = 1 << 30
 	router := startE2ERouter(t, docker)
 	github := newFakeGitHub(t)
 	github.push(e2eCommit1, e2eApp(e2eMarker))

@@ -624,7 +624,10 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
 - **Builder errors:** `egress proxy image … is not available` means run
   `make egress-image`. `builder did not become ready` usually means user
   namespaces are disabled or Docker is too old for rootless BuildKit. `disk_low`
-  means less than `BUILD_MIN_FREE_DISK` is free on Docker's storage. Repeated pull
+  means less than `BUILD_MIN_FREE_DISK` is free on Docker's storage (plus
+  `BUILD_DISK_BUDGET` for each build already running). `make test-builder` and
+  `make test-e2e` lower the floor to 1 GiB for their tiny images, so they run on a
+  machine or CI runner with about 10 GiB free; the worker keeps your values. Repeated pull
   failures for public images can be Docker Hub's anonymous rate limit ([09](09-image-builds.md)).
 - **Editor says templ components are undefined:** run `make generate && go build ./...`;
   generated `*_templ.go` files are ignored and must exist locally. If the build

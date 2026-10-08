@@ -152,6 +152,13 @@ jobs:
           if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+      - name: Free runner disk
+        # The runner image's unused SDKs leave about 10 GiB for builds,
+        # previews, release images and the production stack.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
       - name: Generate application assets and code
         run: make assets generate
       - name: Egress image
