@@ -715,7 +715,7 @@ sequenceDiagram
     Web->>Web: Verify signature and check delivery ID
     Web->>DB: Upsert PR state and increment generation
     alt Repository is Manual (default)
-        Note over Web,DB: Observe PR; no automatic build intent
+        Note over Web,DB: Observe PR, no automatic build intent
     else Repository is Automatic
         Web->>DB: Persist five-minute deadline and authorized intent
         Web->>Q: Schedule durable wake-up in same transaction
@@ -772,7 +772,7 @@ sequenceDiagram
     Dev->>GH: Push new commit
     GH->>Web: Webhook pull_request synchronize
     Web->>DB: Update head SHA and increment generation
-    Note over Web,Q: Manual waits for owner request; Automatic resets five-minute deadline
+    Note over Web,Q: Manual waits for owner request, Automatic resets five-minute deadline
     Note over Web,Q: Only current authorized eligible work may proceed below
     Q->>W: Deliver rebuild job
     W->>W: Cancel or skip superseded build if any
