@@ -39,7 +39,7 @@ func TestHeadlineSaysWhatMattersMostFirst(t *testing.T) {
 			r.DeployedSha, r.EnvironmentStatus = "head-commit", "running"
 			p.DeployedSHA, p.Environment = "head-commit", "running"
 		}, "Preview is live", "tone-ok"},
-		"live on an older commit": {func(r *dbgen.OwnedPRRow, p *pages.PR) {
+		"live on an older commit": {func(_ *dbgen.OwnedPRRow, p *pages.PR) {
 			p.DeployedSHA, p.Environment, p.OlderPreview = "older", "running", true
 		}, "Preview live on an earlier commit", "tone-warn"},
 		"conflicts": {func(r *dbgen.OwnedPRRow, _ *pages.PR) { r.BuildStatus = "conflicts" }, "Blocked by merge conflicts", "tone-warn"},

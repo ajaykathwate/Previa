@@ -188,7 +188,7 @@ func TestGitHubResponseBoundsAndFileShape(t *testing.T) {
 }
 
 func TestCancellationAndRequestValidation(t *testing.T) {
-	fetcher := apiFetcher(t, func(w http.ResponseWriter, r *http.Request) {
+	fetcher := apiFetcher(t, func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)

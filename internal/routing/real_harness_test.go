@@ -510,11 +510,11 @@ func (h *harness) awaitCertificate(ctx context.Context) error {
 			}
 		}
 		if h.roots != nil {
-			if _, err := h.certificate("probe." + baseDomain); err == nil {
+			_, err := h.certificate("probe." + baseDomain)
+			if err == nil {
 				return nil
-			} else {
-				last = err
 			}
+			last = err
 		}
 		time.Sleep(time.Second)
 	}

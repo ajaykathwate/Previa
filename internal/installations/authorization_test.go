@@ -27,12 +27,13 @@ func TestAppUserAuthorizationIdentityAccessAndPagination(t *testing.T) {
 						body = `{"id":42}`
 					}
 				case "/user/installations":
-					if r.URL.Query().Get("page") == "1" {
+					switch {
+					case r.URL.Query().Get("page") == "1":
 						w.Header().Set("Link", fmt.Sprintf(`<http://%s/user/installations?page=2>; rel="next"`, r.Host))
 						body = `{"installations":[]}`
-					} else if scenario == "no installation access" {
+					case scenario == "no installation access":
 						body = `{"installations":[]}`
-					} else {
+					default:
 						body = `{"installations":[{"id":99}]}`
 					}
 				case "/user/installations/99/repositories":

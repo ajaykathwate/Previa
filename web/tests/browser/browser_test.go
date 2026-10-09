@@ -85,7 +85,7 @@ func TestBrowserRegression(t *testing.T) {
 	logs := &fixtureLogs{}
 	logs.seed()
 	publishLogs := func() { hub.Publish(buildlogs.Topic(fixtureLogEnvironment), "build_logs") }
-	router.Post("/__fixture/logs/seed", func(w http.ResponseWriter, r *http.Request) {
+	router.Post("/__fixture/logs/seed", func(w http.ResponseWriter, _ *http.Request) {
 		logs.seed()
 		publishLogs()
 		w.WriteHeader(http.StatusNoContent)

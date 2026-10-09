@@ -445,11 +445,12 @@ func TestIntentConcurrentRequestsAndSameSHARetries(t *testing.T) {
 	close(results)
 	var succeeded, conflicted int
 	for err := range results {
-		if err == nil {
+		switch {
+		case err == nil:
 			succeeded++
-		} else if errors.Is(err, env.ErrIntentConflict) {
+		case errors.Is(err, env.ErrIntentConflict):
 			conflicted++
-		} else {
+		default:
 			t.Fatal(err)
 		}
 	}

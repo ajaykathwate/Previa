@@ -254,6 +254,13 @@ make test     # go test ./...; database tests skip without TEST_DATABASE_URL
 make observability-check   # alert rules and their tests, Prometheus config, dashboard queries (Docker)
 ```
 
+`make lint` uses [.golangci.yml](../.golangci.yml): golangci-lint's default
+linters plus `gocognit` (a function above cognitive complexity 30 must be split
+into named steps), `nestif`, `gocritic` and a set of `revive` style rules
+(package comments, error strings, unused parameters, context first after
+`*testing.T`). Tests are exempt from the two complexity checks. A finding fails
+the command and CI; fix the code rather than raising the limits.
+
 Run the PostgreSQL-backed tests after migrating:
 
 ```sh

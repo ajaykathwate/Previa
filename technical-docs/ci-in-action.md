@@ -347,8 +347,10 @@ start a persistent production server. The Tailwind download is checked by
 
 This also ensures assets/generated code exist, then runs `go vet ./...` and the
 tools-module `golangci-lint run`. Vet checks suspicious Go constructs; the
-configured linters check their selected correctness/style rules. A reported
-issue fails this step rather than being automatically repaired.
+linters configured in [.golangci.yml](../.golangci.yml) check correctness, a
+cognitive-complexity ceiling of 30 per function (tests exempt), nesting depth
+and selected style rules. A reported issue fails this step rather than being
+automatically repaired.
 
 ### 4.9 Known Go vulnerabilities
 

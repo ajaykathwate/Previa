@@ -115,7 +115,7 @@ func TestArchivesFetchExactCommitWithoutForwardingCredentials(t *testing.T) {
 
 func TestArchivesRejectUnsafeLocationsAndRedirects(t *testing.T) {
 	var evilHits atomic.Int32
-	evil := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	evil := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		evilHits.Add(1)
 		if r.Header.Get("Authorization") != "" {
 			t.Error("credentials reached a disallowed host")

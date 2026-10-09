@@ -199,7 +199,7 @@ func TestLimitConcurrency(t *testing.T) {
 func TestInternalEndpoints(t *testing.T) {
 	failing := errors.New("dial postgres://user:pw@db/previa: refused")
 	broken := false
-	h := Internal([]Check{{Name: "database", Run: func(ctx context.Context) error {
+	h := Internal([]Check{{Name: "database", Run: func(context.Context) error {
 		if broken {
 			return failing
 		}

@@ -25,7 +25,8 @@ func TestGitHubExchangeAndIdentity(t *testing.T) {
 			g.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				calls++
 				body := `{"access_token":"temporary-token","token_type":"bearer"}`
-				if r.URL.Host == "github.com" && r.URL.Path == "/login/oauth/access_token" {
+				switch {
+				case r.URL.Host == "github.com" && r.URL.Path == "/login/oauth/access_token":
 					if err := r.ParseForm(); err != nil {
 						t.Fatal(err)
 					}
@@ -39,7 +40,7 @@ func TestGitHubExchangeAndIdentity(t *testing.T) {
 					if scenario == "exchange-down" {
 						return nil, errors.New("exchange unavailable")
 					}
-				} else if r.URL.Host == "api.github.com" && r.URL.Path == "/user" {
+				case r.URL.Host == "api.github.com" && r.URL.Path == "/user":
 					if r.Header.Get("Authorization") != "Bearer temporary-token" {
 						t.Fatal("identity request did not use exchanged token")
 					}
@@ -50,7 +51,7 @@ func TestGitHubExchangeAndIdentity(t *testing.T) {
 					if scenario == "invalid-identity" {
 						body = `{"id":0,"login":""}`
 					}
-				} else {
+				default:
 					t.Fatalf("unexpected request: %s", r.URL)
 				}
 				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil

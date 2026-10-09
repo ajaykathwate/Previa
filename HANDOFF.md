@@ -52,30 +52,21 @@ Last updated: 2026-10-08
 - Router: router-config writes previa-dashboard.yml into the route dir; TLS-ALPN-01.
 
 ## UX pass (2026-10-05, docs/21: PR page, Overview, Secrets tab, conversations)
-- Blocked build actions show disabled with reason and fix; PR status panel with
-  address, actions and failed-log tail; secrets multi-line editor + .env import;
-  sync never spins forever (worker notice, stalled after 5m); mergeability gives
-  up after 8 attempts (migration 0019, "Unknown").
-- .env.example: every line labelled; optional lines hold the defaults
-  (config/example_test.go). technical-docs/config-setup.md explains each setting.
-- Home How it works + FAQ conversations (static copy: keep answers true);
-  Overview pipeline (initOverview); technical-docs/inside-previa.md (the book).
+- Disabled actions say why and the fix; PR status panel; secrets editor + .env
+  import; sync stalls after 5m; mergeability "Unknown" after 8 tries (0019).
+- .env.example lines all labelled (config/example_test.go); config-setup.md;
+  home/FAQ conversations (keep answers true); technical-docs/inside-previa.md.
 
 ## CI (commits de40bb3..ee7c85e; guides technical-docs/ci-in-action.md, cd-in-action.md)
-- Templates before tidy, tools tidy from tools/, executable production scripts;
-  Trivy via digest-pinned aquasec/trivy:0.65.0; Ubuntu 24.04 runner sets
-  apparmor_restrict_unprivileged_userns=0 for rootless BuildKit; sandbox.go reports
-  exited builders with bounded startup logs.
-- Run on ee7c85e failed in test-builder: runner had 10.4 GiB free, the fixture
-  needed 1 + 20 GiB for two concurrent builds (disk_low). Fixed (not yet pushed): real
-  builder fixture DiskBudget 4 GiB, e2e BuildMinFreeDisk 1 GiB, CI step "Free
-  runner disk". Push, then confirm a new run tests the pushed SHA.
+- Trivy via digest-pinned image; runner allows unprivileged userns for rootless
+  BuildKit; "Free runner disk" step; build tests use small disk thresholds (the
+  ee7c85e run failed disk_low). Not pushed yet: confirm a run tests the pushed SHA.
 
 ## Prompt 13: backend previews (docs/11)
 - .previewrc.yaml: services {postgres|redis: version} from PREVIEW_SERVICE_CATALOG
   (empty = pinned PG 17/16, Redis 8/7 by digest; none = off), setup argv, <=3
   processes, docs_path (repoconfig.ParseFor + Platform; source.NewPreparer).
-- Runtime (internal/runtime/backend.go): per-candidate services on the PR's
+- Runtime (internal/runtime backend/candidate/services.go): per-candidate services on the PR's
   internal "-services" network (no egress/router), generated credentials (redacted,
   never stored), tmpfs data, readiness services -> setup -> processes -> app; all
   containers labelled io.previa.candidate and removed/inventoried/counted with the
@@ -86,10 +77,17 @@ Last updated: 2026-10-08
   /etc/hosts maps names to the proxy; forks get none. previa-egress is replaced
   when EGRESS_IMAGE changes; ports are runtime state, not container spec.
 - Metrics previa_egress_connections_total{outcome}, previa_egress_bytes_total.
-- Restored 2026-10-08 from a stash onto ee7c85e (CI work kept; doc links
-  renumbered; smoke.sh and docs expect Goose 20). Verified on a throwaway Goose-20
-  DB: go test -race (35 packages), lint 0, browser 36/36, all 5 real suites
-  incl. both e2e tests, govulncheck, promtool, actionlint, links, 48 Mermaid diagrams.
+- Committed d612277 (feature), 6174a28 (CI disk fix), 3e055a1 (DESIGN diagram).
+
+## Code quality pass (2026-10-08; behavior unchanged)
+- .golangci.yml adds gocognit (30, tests exempt), nestif, gocritic and revive style
+  rules; make lint must stay at 0 issues (docs/02). Split rather than raise limits.
+- Long functions became named steps (environments operation_finalize.go, Apply,
+  Build, finishJob; runtime candidate.go/services.go/outbound.go; app execution.go,
+  process.go; pullrequests capture/record/decide). Shared rules: cleanupFence,
+  lockOwnerIntentScope, transitionAllowed, judgeObservation (table tests added).
+- webhooks delivery SQL moved to sqlc (queries.sql); cmd mains return exit codes so
+  defers run; state/status constants (environments.StateOpen, Status*).
 
 ## Pending (docs/26)
 - A real host (setup.sh, stack, backups to object storage, restore, upgrade);

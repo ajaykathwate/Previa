@@ -55,7 +55,7 @@ func newGatedRuntime() *gatedRuntime {
 	return &gatedRuntime{fakeRuntime: newRuntime(), gates: map[int64]chan struct{}{}, started: make(chan int64, 20), refuse: map[int64]error{}}
 }
 
-func (r *gatedRuntime) Build(ctx context.Context, request env.Request, attempt env.Attempt) (env.Artifact, error) {
+func (r *gatedRuntime) Build(ctx context.Context, request env.Request, _ env.Attempt) (env.Artifact, error) {
 	r.mu.Lock()
 	gate, refusal := r.gates[request.PullRequestID], r.refuse[request.PullRequestID]
 	r.mu.Unlock()
