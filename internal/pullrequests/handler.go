@@ -333,12 +333,10 @@ func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool) pages.Act
 	if deployments {
 		out.State = row.EnvironmentStatus
 	}
-	live := row.DeployedSha != "" && (row.EnvironmentStatus == "running" || row.EnvironmentStatus == "failed" || row.EnvironmentStatus == "publishing")
+	live := previewDeployed(row.DeployedSha, row.EnvironmentStatus)
 	if live {
 		out.OlderPreview = row.DeployedSha != row.HeadSha
-		if h.actions != nil && h.actions.PreviewBaseDomain != "" && row.Hostname != "" {
-			out.PreviewURL = "https://" + row.Hostname + "." + h.actions.PreviewBaseDomain
-		}
+		out.PreviewURL = h.previewURL(row.Hostname)
 		if row.ExpiresAt.Valid {
 			out.ExpiresAt = row.ExpiresAt.Time.UTC().Format(time.RFC3339)
 		}

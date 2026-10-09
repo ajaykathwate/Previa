@@ -172,7 +172,7 @@ the dialog with and without JavaScript.
 | Path | Role |
 | --- | --- |
 | `internal/environments/teardown.go`, `teardown_queries.sql` | Teardown requests, the start transition, revocation, the sweep. |
-| `internal/environments/operation_worker.go` | Removal relevance and completion, superseded and failed outcomes, retry-until-done. |
+| `internal/environments/operation_worker.go`, `operation_finalize.go` | The operation worker; removal relevance and completion, superseded and failed outcomes, retry-until-done. |
 | `internal/environments/repository.go` | Access-free teardown in `Apply`; reference protection in cleanup scheduling. |
 | `internal/runtime/cleanup.go`, `inventory.go` | Owner-verified removal and the cleanup executor; inventory including networks. |
 | `internal/webhooks/delivery.go` | Revocation requests inside the lifecycle transaction. |

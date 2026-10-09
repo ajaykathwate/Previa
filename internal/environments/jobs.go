@@ -22,6 +22,13 @@ import (
 const BuildQueue = "build"
 const TeardownQueue = "teardown"
 
+// PR states a Request carries, as the pull_requests table stores them.
+const (
+	StateOpen   = "open"
+	StateClosed = "closed"
+	StateMerged = "merged"
+)
+
 // Request captures observed state plus the authorized intent revision. Only PRKey
 // participates in executable River uniqueness. Newer eligible intent is handed
 // off atomically; future deadlines live in separate coordination wake-ups.
@@ -39,7 +46,7 @@ func NewRequest(id, generation int64, sha, state string) Request {
 }
 
 func (r Request) validate() error {
-	if r.PullRequestID <= 0 || r.Generation < 0 || r.Revision < 0 || r.HeadSHA == "" || r.PRKey != fmt.Sprintf("environment:pr:%d", r.PullRequestID) || (r.State != "open" && r.State != "closed" && r.State != "merged") {
+	if r.PullRequestID <= 0 || r.Generation < 0 || r.Revision < 0 || r.HeadSHA == "" || r.PRKey != fmt.Sprintf("environment:pr:%d", r.PullRequestID) || (r.State != StateOpen && r.State != StateClosed && r.State != StateMerged) {
 		return errors.New("invalid environment job request")
 	}
 	return nil
@@ -109,11 +116,7 @@ func (b *Broker) EnqueueTx(ctx context.Context, tx pgx.Tx, request Request) (int
 		return 0, ErrExecutionUnavailable
 	}
 	q := dbgen.New(tx)
-	owner, err := q.FindPROwner(ctx, request.PullRequestID)
-	if err != nil {
-		return 0, fmt.Errorf("find enqueue owner: %w", err)
-	}
-	scope, err := lockIntentScope(ctx, q, owner.Int64, request.PullRequestID)
+	scope, err := lockOwnerIntentScope(ctx, q, request.PullRequestID, "enqueue")
 	if err != nil {
 		return 0, err
 	}
@@ -124,7 +127,7 @@ func (b *Broker) EnqueueTx(ctx context.Context, tx pgx.Tx, request Request) (int
 	if scope.pr.Generation != request.Generation || scope.pr.HeadSha != request.HeadSHA || scope.pr.State != request.State {
 		return 0, nil
 	}
-	if request.State == "open" && (i == nil || i.Revision != request.Revision) {
+	if request.State == StateOpen && (i == nil || i.Revision != request.Revision) {
 		return 0, nil
 	}
 	return b.dispatchLockedTx(ctx, tx, scope, i)
@@ -139,31 +142,20 @@ func finishJob[T river.JobArgs](ctx context.Context, broker *Broker, request Req
 	}
 	err := database.InTransaction(ctx, broker.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
-		owner, err := q.FindPROwner(ctx, request.PullRequestID)
-		if err != nil {
-			return fmt.Errorf("find handoff owner: %w", err)
-		}
 		// Locks do not require current access here: revocation must not strand a
 		// running River row. The successor admission below rechecks authorization.
-		scope, accessErr := lockIntentScope(ctx, q, owner.Int64, request.PullRequestID)
+		scope, accessErr := lockOwnerIntentScope(ctx, q, request.PullRequestID, "handoff")
 		if accessErr != nil && !errors.Is(accessErr, ErrIntentUnavailable) {
 			return accessErr
 		}
-		_, err = q.LockRequest(ctx, request.PullRequestID)
-		if err != nil {
+		if _, err := q.LockRequest(ctx, request.PullRequestID); err != nil {
 			return fmt.Errorf("lock PR for job handoff: %w", err)
 		}
-		if workErr != nil {
-			if err := discardJob(ctx, broker, tx, job.JobRow, workErr); err != nil {
-				return err
-			}
-		} else {
-			if _, err := river.JobCompleteTx[*riverpgxv5.Driver](ctx, tx, job); err != nil {
-				return fmt.Errorf("complete PR job: %w", err)
-			}
+		if err := settleJobTx(ctx, broker, tx, job, workErr); err != nil {
+			return err
 		}
 		// A started teardown is recorded whatever the access: it needs none.
-		if request.State != "open" && workErr == nil {
+		if request.State != StateOpen && workErr == nil {
 			if _, err := q.CompleteTeardownRequest(ctx, dbgen.CompleteTeardownRequestParams{ID: request.PullRequestID, Generation: request.Generation}); err != nil {
 				return fmt.Errorf("complete teardown intent: %w", err)
 			}
@@ -171,32 +163,54 @@ func finishJob[T river.JobArgs](ctx context.Context, broker *Broker, request Req
 		if accessErr != nil {
 			return nil
 		}
-		if request.State == "open" {
-			next := "succeeded"
-			if workErr != nil {
-				next = "failed"
-			}
-			if _, err := q.FinishBuildIntent(ctx, dbgen.FinishBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, NextState: next}); err != nil {
-				return fmt.Errorf("finish build intent: %w", err)
-			}
-			// A final failure is reported only now, after the last attempt.
-			if err := broker.reportTx(ctx, tx, request.PullRequestID); err != nil {
+		if request.State == StateOpen {
+			if err := finishBuildIntentTx(ctx, broker, tx, request, workErr); err != nil {
 				return err
 			}
 		}
-		current, err := readLockedIntent(ctx, q, request.PullRequestID)
-		if err != nil {
-			return err
-		}
-		if _, err := broker.dispatchLockedTx(ctx, tx, scope, current); err != nil {
-			return err
-		}
-		if scope.pr.State == "open" && current != nil && current.State == IntentPending && broker.now().Before(current.AvailableAt) {
-			return broker.wakeTx(ctx, tx, NewRequest(scope.pr.ID, scope.pr.Generation, scope.pr.HeadSha, scope.pr.State), current)
-		}
-		return nil
+		return broker.handOffTx(ctx, tx, scope)
 	})
 	return errors.Join(workErr, err)
+}
+
+// settleJobTx completes the River job, or discards it after its final failure.
+func settleJobTx[T river.JobArgs](ctx context.Context, broker *Broker, tx pgx.Tx, job *river.Job[T], workErr error) error {
+	if workErr != nil {
+		return discardJob(ctx, broker, tx, job.JobRow, workErr)
+	}
+	if _, err := river.JobCompleteTx[*riverpgxv5.Driver](ctx, tx, job); err != nil {
+		return fmt.Errorf("complete PR job: %w", err)
+	}
+	return nil
+}
+
+// finishBuildIntentTx ends the request's build intent as succeeded or failed.
+// A final failure is reported only now, after the last attempt.
+func finishBuildIntentTx(ctx context.Context, broker *Broker, tx pgx.Tx, request Request, workErr error) error {
+	next := string(IntentSucceeded)
+	if workErr != nil {
+		next = string(IntentFailed)
+	}
+	if _, err := dbgen.New(tx).FinishBuildIntent(ctx, dbgen.FinishBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, NextState: next}); err != nil {
+		return fmt.Errorf("finish build intent: %w", err)
+	}
+	return broker.reportTx(ctx, tx, request.PullRequestID)
+}
+
+// handOffTx admits the PR's current eligible intent as the successor job, or
+// schedules a wake-up for a pending intent whose deadline is still ahead.
+func (b *Broker) handOffTx(ctx context.Context, tx pgx.Tx, scope intentScope) error {
+	current, err := readLockedIntent(ctx, dbgen.New(tx), scope.pr.ID)
+	if err != nil {
+		return err
+	}
+	if _, err := b.dispatchLockedTx(ctx, tx, scope, current); err != nil {
+		return err
+	}
+	if scope.pr.State == StateOpen && current != nil && current.State == IntentPending && b.now().Before(current.AvailableAt) {
+		return b.wakeTx(ctx, tx, NewRequest(scope.pr.ID, scope.pr.Generation, scope.pr.HeadSha, scope.pr.State), current)
+	}
+	return nil
 }
 
 // Terminal failures need the same handoff as successful/stale completions.

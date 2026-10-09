@@ -50,19 +50,9 @@ func (r *Runtime) Endpoint(ctx context.Context, want Expected) (Endpoint, error)
 		return Endpoint{}, failure(CodeUnavailable, "The candidate could not be inspected.", true, err)
 	}
 	c := inspected.Container
-	if c.Config == nil || !dockerx.OwnedBy(c.Config.Labels, r.instance, dockerx.KindPreview) || !candidateMatches(c.Config.Labels, want) {
-		return Endpoint{}, failure(CodeNotOwned, "The container is not this request's candidate.", false, nil)
-	}
-	health := observedHealth(c)
-	switch {
-	case health.CrashLoop || health.State == string(container.StateExited) || health.State == string(container.StateDead):
-		return Endpoint{}, failure(CodeCrashed, "The candidate stopped before it was published.", false, nil)
-	case !health.Running:
-		return Endpoint{}, failure(CodeUnhealthy, "The candidate is restarting.", true, nil)
-	}
-	port, err := strconv.Atoi(c.Config.Labels[dockerx.LabelPort])
-	if err != nil || port <= 0 || port > 65535 {
-		return Endpoint{}, failure(CodeNotOwned, "The candidate has no valid port label.", false, nil)
+	port, err := r.publishable(c, want)
+	if err != nil {
+		return Endpoint{}, err
 	}
 	network := r.networkName(want.PullRequestID)
 	addr, ok := candidateAddress(c, network)
@@ -70,29 +60,58 @@ func (r *Runtime) Endpoint(ctx context.Context, want Expected) (Endpoint, error)
 	if !ok || endpoint == nil || endpoint.NetworkID == "" {
 		return Endpoint{}, failure(CodeUnavailable, "The candidate has no address on its preview network.", true, nil)
 	}
+	if err := r.probeEndpoint(ctx, netip.AddrPortFrom(addr, uint16(port)), c.Config.Labels[dockerx.LabelHealthPath]); err != nil {
+		return Endpoint{}, err
+	}
+	if err := r.companionsReady(ctx, want.PullRequestID, c.Config.Labels[dockerx.LabelCandidate]); err != nil {
+		return Endpoint{}, err
+	}
+	return Endpoint{Name: strings.TrimPrefix(c.Name, "/"), Port: port, NetworkID: endpoint.NetworkID}, nil
+}
+
+// publishable checks that the container is this request's candidate and is
+// running, and returns the port it serves on.
+func (r *Runtime) publishable(c container.InspectResponse, want Expected) (int, error) {
+	if c.Config == nil || !dockerx.OwnedBy(c.Config.Labels, r.instance, dockerx.KindPreview) || !candidateMatches(c.Config.Labels, want) {
+		return 0, failure(CodeNotOwned, "The container is not this request's candidate.", false, nil)
+	}
+	health := observedHealth(c)
+	switch {
+	case health.CrashLoop || health.State == string(container.StateExited) || health.State == string(container.StateDead):
+		return 0, failure(CodeCrashed, "The candidate stopped before it was published.", false, nil)
+	case !health.Running:
+		return 0, failure(CodeUnhealthy, "The candidate is restarting.", true, nil)
+	}
+	port, err := strconv.Atoi(c.Config.Labels[dockerx.LabelPort])
+	if err != nil || port <= 0 || port > 65535 {
+		return 0, failure(CodeNotOwned, "The candidate has no valid port label.", false, nil)
+	}
+	return port, nil
+}
+
+// probeEndpoint runs the candidate's readiness check from the egress
+// container, a few times, until it passes.
+func (r *Runtime) probeEndpoint(ctx context.Context, target netip.AddrPort, path string) error {
 	reason := "it did not answer"
 	for attempt := range endpointProbes {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return Endpoint{}, failure(CodeUnavailable, "The readiness check was interrupted.", true, ctx.Err())
+				return failure(CodeUnavailable, "The readiness check was interrupted.", true, ctx.Err())
 			case <-time.After(probeInterval):
 			}
 		}
-		err := r.egress.Probe(ctx, netip.AddrPortFrom(addr, uint16(port)), c.Config.Labels[dockerx.LabelHealthPath], probeTimeout)
+		err := r.egress.Probe(ctx, target, path, probeTimeout)
 		if err == nil {
-			if err := r.companionsReady(ctx, want.PullRequestID, c.Config.Labels[dockerx.LabelCandidate]); err != nil {
-				return Endpoint{}, err
-			}
-			return Endpoint{Name: strings.TrimPrefix(c.Name, "/"), Port: port, NetworkID: endpoint.NetworkID}, nil
+			return nil
 		}
 		var notReady *egress.ProbeFailure
 		if !errors.As(err, &notReady) {
-			return Endpoint{}, failure(CodeUnavailable, "The readiness check could not run.", true, err)
+			return failure(CodeUnavailable, "The readiness check could not run.", true, err)
 		}
 		reason = notReady.Reason
 	}
-	return Endpoint{}, failure(CodeUnhealthy, "The candidate failed its readiness check before publication: "+reason+".", false, nil)
+	return failure(CodeUnhealthy, "The candidate failed its readiness check before publication: "+reason+".", false, nil)
 }
 
 func candidateMatches(labels map[string]string, want Expected) bool {

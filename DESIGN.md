@@ -1095,13 +1095,14 @@ Now a feature can only call queries it owns. If `dashboard` needs data from `env
 
 ### The composition root
 
-All the wiring lives in `internal/app`: `server.go` assembles the HTTP side and
-`pipeline.go` assembles the worker's pipeline, so it is obvious in two files how
-each process is put together. The worker builds a stage only from dependencies
-that validated, and records why the rest is unavailable:
+All the wiring lives in `internal/app`: `server.go` assembles the HTTP side,
+`pipeline.go` decides which stages the worker runs and `execution.go` composes its
+build-and-publish chain, so a few files show how each process is put together. The
+worker builds a stage only from dependencies that validated, and records why the
+rest is unavailable:
 
 ```go
-// internal/app/pipeline.go (abridged)
+// internal/app/pipeline.go and execution.go (abridged)
 if !cfg.RoutingConfigured() {
     p.addDiscovery(discovery) // requests and wake-ups still wait durably
     p.unavailable = append(p.unavailable, "PREVIEW_BASE_DOMAIN is not set: ...")

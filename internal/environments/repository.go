@@ -19,6 +19,17 @@ type Artifact struct {
 	ImageTag    string `json:"image_tag,omitempty"`
 }
 
+func (a Artifact) empty() bool { return a.ContainerID == "" && a.ImageTag == "" }
+
+// Environment statuses (environments.status). A build reports running or
+// failed as its Result; a teardown reports torn_down.
+const (
+	StatusRunning     = "running"
+	StatusFailed      = "failed"
+	StatusTearingDown = "tearing_down"
+	StatusTornDown    = "torn_down"
+)
+
 type Result struct {
 	Status    string   `json:"status"`
 	Artifact  Artifact `json:"artifact,omitempty"`
@@ -70,6 +81,22 @@ func NewRepository(pool *pgxpool.Pool, operations ...*OperationBroker) *Reposito
 	return r
 }
 
+// matches reports whether the snapshot is still at the request's generation,
+// state and commit, and for an open PR its intent revision.
+func (s Snapshot) matches(r Request) bool {
+	return s.Generation == r.Generation && s.State == r.State && s.HeadSHA == r.HeadSHA &&
+		(r.State != StateOpen || s.Revision == r.Revision)
+}
+
+// built reports whether the request's candidate already exists: it is the
+// active preview, or the pending one with its artifact recorded.
+func (s Snapshot) built(r Request) bool {
+	active := s.AppliedGeneration == r.Generation && s.AppliedRevision == r.Revision && s.Status == StatusRunning
+	pending := s.PendingGeneration == r.Generation && s.PendingRevision == r.Revision &&
+		s.PendingArtifact.ContainerID != "" && s.PendingArtifact.ImageTag != ""
+	return active || pending
+}
+
 // Snapshot is an optimization only. Apply always performs its own locked SQL guard.
 func (r *Repository) Snapshot(ctx context.Context, id int64) (Snapshot, error) {
 	q := dbgen.New(r.pool)
@@ -109,7 +136,7 @@ func (r *Repository) Apply(ctx context.Context, request Request, result Result) 
 	if err := request.validate(); err != nil {
 		return false, err
 	}
-	if result.Status != "running" && result.Status != "failed" && result.Status != "torn_down" {
+	if result.Status != StatusRunning && result.Status != StatusFailed && result.Status != StatusTornDown {
 		return false, errors.New("invalid environment result status")
 	}
 	if r.operations == nil {
@@ -117,34 +144,16 @@ func (r *Repository) Apply(ctx context.Context, request Request, result Result) 
 	}
 	err = database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
-		if result.Status == "torn_down" {
-			// Teardown never needs GitHub access; revocation must not block it.
-			if _, err := lockTeardownScope(ctx, q, request.PullRequestID); err != nil {
-				return err
-			}
+		if result.Status == StatusTornDown {
 			// A retried or duplicate teardown of this generation already started:
 			// its route-removal operation carries the artifacts it took over.
-			if started, err := teardownStarted(ctx, q, request); err != nil || started {
+			started, err := lockTeardownResult(ctx, q, request)
+			if err != nil || started {
 				applied = started
 				return err
 			}
-		} else {
-			owner, err := q.FindPROwner(ctx, request.PullRequestID)
-			if err != nil {
-				return fmt.Errorf("find result owner: %w", err)
-			}
-			scope, err := lockIntentScope(ctx, q, owner.Int64, request.PullRequestID)
-			if err != nil {
-				if errors.Is(err, ErrIntentUnavailable) {
-					return nil
-				}
-				return err
-			}
-			if request.State == "open" {
-				if _, err := q.ClaimBuildIntent(ctx, dbgen.ClaimBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, HeadSha: request.HeadSHA, BuildMode: scope.mode, NowAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}}); err != nil {
-					return fmt.Errorf("admit completion intent: %w", err)
-				}
-			}
+		} else if admitted, err := admitBuildResult(ctx, q, request); err != nil || !admitted {
+			return err
 		}
 		// Take the PR lock before executing the SQL: a same-generation Retry
 		// may have changed the intent while this transaction was waiting.
@@ -157,24 +166,13 @@ func (r *Repository) Apply(ctx context.Context, request Request, result Result) 
 			ErrorCode:    text(safeErrorCode(result.ErrorCode)),
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
-			latest, readErr := q.ReadRequest(ctx, request.PullRequestID)
-			if readErr != nil {
-				return fmt.Errorf("read rejected result generation: %w", readErr)
-			}
-			current, err := q.ReadBuildIntent(ctx, request.PullRequestID)
-			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("read rejected result revision: %w", err)
-			}
-			if latest.Generation == request.Generation && latest.State == request.State && latest.HeadSha == request.HeadSHA && (request.State != "open" || (current.Revision == request.Revision && (current.State == "running" || current.State == "succeeded"))) {
-				return errors.New("no active environment provisioned for current request")
-			}
-			return nil
+			return rejectedResult(ctx, q, request)
 		}
 		if err != nil {
 			return fmt.Errorf("apply guarded environment result: %w", err)
 		}
 		applied = true
-		if request.State == "open" {
+		if request.State == StateOpen {
 			// A result ends any wait for capacity or disk.
 			if _, err := q.ClearIntentWaiting(ctx, dbgen.ClearIntentWaitingParams{PullRequestID: request.PullRequestID, Revision: request.Revision}); err != nil {
 				return fmt.Errorf("clear build wait: %w", err)
@@ -191,6 +189,56 @@ func (r *Repository) Apply(ctx context.Context, request Request, result Result) 
 	return applied, nil
 }
 
+// lockTeardownResult takes a teardown result's locks, which need no GitHub
+// access (revocation must not block a teardown), and reports whether this
+// generation's teardown already started.
+func lockTeardownResult(ctx context.Context, q *dbgen.Queries, request Request) (started bool, err error) {
+	if _, err := lockTeardownScope(ctx, q, request.PullRequestID); err != nil {
+		return false, err
+	}
+	return teardownStarted(ctx, q, request)
+}
+
+// admitBuildResult takes a build result's locks on behalf of the PR's owner
+// and, for an open PR, re-admits the request's intent. It reports false when
+// access is gone: the result is then dropped, and revocation tears down.
+func admitBuildResult(ctx context.Context, q *dbgen.Queries, request Request) (bool, error) {
+	scope, err := lockOwnerIntentScope(ctx, q, request.PullRequestID, "result")
+	if errors.Is(err, ErrIntentUnavailable) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if request.State == StateOpen {
+		if _, err := q.ClaimBuildIntent(ctx, dbgen.ClaimBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, HeadSha: request.HeadSHA, BuildMode: scope.mode, NowAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}}); err != nil {
+			return false, fmt.Errorf("admit completion intent: %w", err)
+		}
+	}
+	return true, nil
+}
+
+// rejectedResult explains a result the guarded update refused. A stale
+// request is simply dropped (nil); a request that is still current but found
+// no environment to apply to is an error.
+func rejectedResult(ctx context.Context, q *dbgen.Queries, request Request) error {
+	latest, err := q.ReadRequest(ctx, request.PullRequestID)
+	if err != nil {
+		return fmt.Errorf("read rejected result generation: %w", err)
+	}
+	current, err := q.ReadBuildIntent(ctx, request.PullRequestID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("read rejected result revision: %w", err)
+	}
+	sameRequest := latest.Generation == request.Generation && latest.State == request.State && latest.HeadSha == request.HeadSHA
+	currentIntent := request.State != StateOpen ||
+		(current.Revision == request.Revision && (current.State == string(IntentRunning) || current.State == string(IntentSucceeded)))
+	if sameRequest && currentIntent {
+		return errors.New("no active environment provisioned for current request")
+	}
+	return nil
+}
+
 // teardownStarted reports whether the environment is already in, or finished,
 // the teardown of the request's generation.
 func teardownStarted(ctx context.Context, q *dbgen.Queries, request Request) (bool, error) {
@@ -201,8 +249,8 @@ func teardownStarted(ctx context.Context, q *dbgen.Queries, request Request) (bo
 	if err != nil {
 		return false, fmt.Errorf("read environment teardown: %w", err)
 	}
-	inTeardown := env.Status == "tearing_down" && env.TeardownGeneration.Valid && env.TeardownGeneration.Int64 == request.Generation
-	finished := env.Status == "torn_down" && env.AppliedGeneration >= request.Generation
+	inTeardown := env.Status == StatusTearingDown && env.TeardownGeneration.Valid && env.TeardownGeneration.Int64 == request.Generation
+	finished := env.Status == StatusTornDown && env.AppliedGeneration >= request.Generation
 	return inTeardown || finished, nil
 }
 
@@ -216,14 +264,14 @@ func (r *Repository) enqueueResultTx(ctx context.Context, tx pgx.Tx, request Req
 	var kind OperationKind
 	payload := OperationPayload{Request: request, Result: result, Previous: prior}
 	switch result.Status {
-	case "running":
+	case StatusRunning:
 		kind = ActivateRoute
 		payload.Artifact = result.Artifact
 		payload.PreviousPending = priorPending
-	case "failed":
+	case StatusFailed:
 		// Reporting renders the failure from the environment once the request
 		// is final (reportTx); nothing else is needed here.
-	case "torn_down":
+	case StatusTornDown:
 		kind = RemoveRoute
 		payload.Artifact = priorPending
 	}
@@ -258,44 +306,19 @@ var errDryRun = errors.New("dry run")
 func (r *Repository) scheduleResourceCleanup(ctx context.Context, request Request, resources []Resource, dryRun bool) (planned []Resource, err error) {
 	err = database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		planned = nil
-		q := dbgen.New(tx)
-		latest, err := q.LockRequest(ctx, request.PullRequestID)
-		if err != nil {
-			return fmt.Errorf("lock PR to schedule resource cleanup: %w", err)
-		}
-		env, err := q.ReadEnvironment(ctx, request.PullRequestID)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("read active resources before cleanup: %w", err)
-		}
-		current := NewRequest(latest.ID, latest.Generation, latest.HeadSha, latest.State)
-		i, err := q.ReadBuildIntent(ctx, current.PullRequestID)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("read cleanup request revision: %w", err)
-		}
-		current.Revision = i.Revision
-		keep, err := referencedArtifacts(ctx, q, request.PullRequestID, env)
+		fence, err := readCleanupFence(ctx, dbgen.New(tx), request.PullRequestID)
 		if err != nil {
 			return err
 		}
-		// The current request's own build may still be creating its resources;
-		// only that build itself (or a later pass) may clean them up.
-		inFlight := current.State == "open" && (i.State == string(IntentQueued) || i.State == string(IntentRunning)) &&
-			(request.Generation != current.Generation || request.Revision != current.Revision)
 		for _, resource := range resources {
-			if resource.PullRequestID != request.PullRequestID || resource.Generation < 0 || resource.Revision < 0 || resource.Generation > current.Generation || (resource.Generation == current.Generation && resource.Revision > current.Revision) {
-				continue
-			}
-			if inFlight && resource.Generation == current.Generation && resource.Revision == current.Revision {
-				continue
-			}
-			if resourceReferenced(resource, keep) {
+			if !fence.allows(resource, request) {
 				continue
 			}
 			planned = append(planned, resource)
 			if dryRun {
 				continue
 			}
-			if err := r.enqueueCleanupTx(ctx, tx, current, resource); err != nil {
+			if err := r.enqueueCleanupTx(ctx, tx, fence.current, resource); err != nil {
 				return err
 			}
 		}
@@ -311,6 +334,55 @@ func (r *Repository) scheduleResourceCleanup(ctx context.Context, request Reques
 		return nil, err
 	}
 	return planned, nil
+}
+
+// cleanupFence is what decides, under the PR lock, whether a PR's resource
+// may be removed: the PR's current request, its build intent's state, and
+// every artifact something still references.
+type cleanupFence struct {
+	current     Request
+	intentState string
+	keep        []Artifact
+}
+
+func readCleanupFence(ctx context.Context, q *dbgen.Queries, pullRequestID int64) (cleanupFence, error) {
+	pr, err := q.LockRequest(ctx, pullRequestID)
+	if err != nil {
+		return cleanupFence{}, fmt.Errorf("lock PR for resource cleanup: %w", err)
+	}
+	intent, err := q.ReadBuildIntent(ctx, pullRequestID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return cleanupFence{}, fmt.Errorf("read cleanup request revision: %w", err)
+	}
+	env, err := q.ReadEnvironment(ctx, pullRequestID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return cleanupFence{}, fmt.Errorf("read active resources before cleanup: %w", err)
+	}
+	keep, err := referencedArtifacts(ctx, q, pullRequestID, env)
+	if err != nil {
+		return cleanupFence{}, err
+	}
+	current := NewRequest(pr.ID, pr.Generation, pr.HeadSha, pr.State)
+	current.Revision = intent.Revision
+	return cleanupFence{current: current, intentState: intent.State, keep: keep}, nil
+}
+
+// allows reports whether cleanup that scheduledBy scheduled may remove
+// resource: it is the PR's, no newer than the current request, nothing
+// references it, and the current request's build is not still creating it
+// (only that build itself, or a later pass, may clean those up).
+func (f cleanupFence) allows(resource Resource, scheduledBy Request) bool {
+	c := f.current
+	if resource.PullRequestID != c.PullRequestID || resource.Generation < 0 || resource.Revision < 0 ||
+		resource.Generation > c.Generation || (resource.Generation == c.Generation && resource.Revision > c.Revision) {
+		return false
+	}
+	building := c.State == StateOpen && (f.intentState == string(IntentQueued) || f.intentState == string(IntentRunning)) &&
+		(scheduledBy.Generation != c.Generation || scheduledBy.Revision != c.Revision)
+	if building && resource.Generation == c.Generation && resource.Revision == c.Revision {
+		return false
+	}
+	return !resourceReferenced(resource, f.keep)
 }
 
 // referencedArtifacts is everything cleanup must keep for a PR: the active and
@@ -363,7 +435,7 @@ func listProtectedArtifacts(ctx context.Context, q *dbgen.Queries, pullRequestID
 }
 
 func (r *Repository) enqueueCleanupTx(ctx context.Context, tx pgx.Tx, request Request, resource Resource) error {
-	if resource.Artifact.ContainerID == "" && resource.Artifact.ImageTag == "" && resource.Network == "" {
+	if resource.Artifact.empty() && resource.Network == "" {
 		return nil
 	}
 	discriminator := fmt.Sprintf("generation:%d:revision:%d:container:%s:image:%s", resource.Generation, resource.Revision, resource.Artifact.ContainerID, resource.Artifact.ImageTag)

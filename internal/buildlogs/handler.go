@@ -131,28 +131,15 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 		StatusLabel: st.Label, StatusTone: st.Tone, Summary: st.Summary, StreamSHA: st.SHA, Notices: st.Notices,
 		Empty: st.Empty, Epoch: st.Epoch, HasOutput: hasStream && stream.Lines > 0,
 	}
+	view.Tail = !hasStream
 	if hasStream {
-		lines, tail, more, err := h.window(r, stream)
-		if err != nil {
-			if errors.Is(err, errBadPage) {
-				http.Error(w, "Invalid log position.", http.StatusBadRequest)
-				return
-			}
+		if err := h.fillLines(r, &view, stream); errors.Is(err, errBadPage) {
+			http.Error(w, "Invalid log position.", http.StatusBadRequest)
+			return
+		} else if err != nil {
 			h.unavailable(w, r, err)
 			return
 		}
-		view.Tail, view.More = tail, more
-		view.Before, view.After = 0, 0
-		for _, l := range lines {
-			view.Lines = append(view.Lines, buildpages.LogLine{Sequence: l.Sequence, System: l.System, Text: l.Text})
-		}
-		if len(lines) > 0 {
-			view.Before, view.After = lines[0].Sequence, lines[len(lines)-1].Sequence+1
-		} else if tail {
-			view.After = stream.Lines
-		}
-	} else {
-		view.Tail = true
 	}
 	if view.Tail && h.live != nil {
 		view.EventsURL = pages.LogsURL(target.RepoID, target.Number) + "/events"
@@ -163,6 +150,26 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 }
 
 var errBadPage = errors.New("invalid log page")
+
+// fillLines adds the requested window of lines and where it sits in the
+// stream, for paging and for resuming the live tail.
+func (h *Handler) fillLines(r *http.Request, view *buildpages.LogPage, stream Stream) error {
+	lines, tail, more, err := h.window(r, stream)
+	if err != nil {
+		return err
+	}
+	view.Tail, view.More = tail, more
+	for _, l := range lines {
+		view.Lines = append(view.Lines, buildpages.LogLine{Sequence: l.Sequence, System: l.System, Text: l.Text})
+	}
+	switch {
+	case len(lines) > 0:
+		view.Before, view.After = lines[0].Sequence, lines[len(lines)-1].Sequence+1
+	case tail:
+		view.After = stream.Lines
+	}
+	return nil
+}
 
 // download sends the current attempt's whole output as a text file, in
 // bounded reads. Lines were redacted before they were stored.

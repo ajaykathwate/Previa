@@ -69,6 +69,47 @@ func (r *Repository) BuildPolicy(ctx context.Context, userID, repoID int64) (Bui
 	return BuildPolicy{RepositoryID: row.ID, Mode: BuildMode(row.BuildMode)}, nil
 }
 
+// lockPolicyScope locks the repository's installation, which the user must
+// own, then the repository itself.
+func lockPolicyScope(ctx context.Context, q *dbgen.Queries, userID, repoID int64) error {
+	installationID, err := q.FindPolicyInstallation(ctx, repoID)
+	if err != nil {
+		return policyAccessError("find policy installation", err)
+	}
+	if _, err := q.LockPolicyInstallation(ctx, dbgen.LockPolicyInstallationParams{InstallationID: installationID, UserID: pgtype.Int8{Int64: userID, Valid: true}}); err != nil {
+		return policyAccessError("lock policy installation", err)
+	}
+	if _, err := q.LockPolicyRepository(ctx, dbgen.LockPolicyRepositoryParams{RepoID: repoID, InstallationID: installationID}); err != nil {
+		return policyAccessError("lock policy repository", err)
+	}
+	return nil
+}
+
+// cancelAutomaticTx cancels the repository's Automatic requests that have not
+// started, reporting each affected PR, and returns how many it cancelled.
+func (r *Repository) cancelAutomaticTx(ctx context.Context, tx pgx.Tx, q *dbgen.Queries, repoID int64) (int64, error) {
+	cancelled, err := q.CancelUnstartedAutomaticIntents(ctx, repoID)
+	if err != nil {
+		return 0, fmt.Errorf("cancel automatic intent: %w", err)
+	}
+	if r.reports != nil {
+		for _, pullRequestID := range cancelled {
+			if err := r.reports.RecordReportTx(ctx, tx, pullRequestID); err != nil {
+				return 0, fmt.Errorf("report cancelled request: %w", err)
+			}
+		}
+	}
+	return int64(len(cancelled)), nil
+}
+
+// policyAccessError reports a missing or foreign row as ErrPolicyUnavailable.
+func policyAccessError(step string, err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrPolicyUnavailable
+	}
+	return fmt.Errorf("%s: %w", step, err)
+}
+
 // SetBuildMode locks installation → repository → PRs → intents, matching the
 // future coordinator. Mode change and cancellation commit together. Running work
 // and deployed environments are untouched. Relinking upserts preserve this field.
@@ -80,45 +121,19 @@ func (r *Repository) SetBuildMode(ctx context.Context, userID, repoID int64, mod
 		return result, ErrInvalidBuildMode
 	}
 	err = r.transaction(ctx, func(tx pgx.Tx, q *dbgen.Queries) error {
-		installationID, err := q.FindPolicyInstallation(ctx, repoID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrPolicyUnavailable
-		}
-		if err != nil {
-			return fmt.Errorf("find policy installation: %w", err)
-		}
-		if _, err := q.LockPolicyInstallation(ctx, dbgen.LockPolicyInstallationParams{InstallationID: installationID, UserID: pgtype.Int8{Int64: userID, Valid: true}}); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrPolicyUnavailable
-			}
-			return fmt.Errorf("lock policy installation: %w", err)
-		}
-		if _, err := q.LockPolicyRepository(ctx, dbgen.LockPolicyRepositoryParams{RepoID: repoID, InstallationID: installationID}); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrPolicyUnavailable
-			}
-			return fmt.Errorf("lock policy repository: %w", err)
+		if err := lockPolicyScope(ctx, q, userID, repoID); err != nil {
+			return err
 		}
 		if err := q.SetRepositoryBuildMode(ctx, dbgen.SetRepositoryBuildModeParams{ID: repoID, BuildMode: string(mode)}); err != nil {
 			return fmt.Errorf("set build mode: %w", err)
 		}
 		result = BuildPolicy{RepositoryID: repoID, Mode: mode}
-		if mode == ManualBuilds {
-			cancelled, err := q.CancelUnstartedAutomaticIntents(ctx, repoID)
-			if err != nil {
-				return fmt.Errorf("cancel automatic intent: %w", err)
-			}
-			result.CancelledAutomatic = int64(len(cancelled))
-			for _, pullRequestID := range cancelled {
-				if r.reports == nil {
-					break
-				}
-				if err := r.reports.RecordReportTx(ctx, tx, pullRequestID); err != nil {
-					return fmt.Errorf("report cancelled request: %w", err)
-				}
-			}
+		if mode != ManualBuilds {
+			return nil
 		}
-		return nil
+		cancelled, err := r.cancelAutomaticTx(ctx, tx, q, repoID)
+		result.CancelledAutomatic = cancelled
+		return err
 	})
 	if err != nil {
 		return BuildPolicy{}, err

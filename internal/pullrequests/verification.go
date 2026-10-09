@@ -37,28 +37,11 @@ func (s *SyncService) VerifyUpstream(ctx context.Context, pullRequestID int64) (
 	if !ok {
 		return environments.UpstreamSnapshot{}, environments.ErrUpstreamUnavailable
 	}
-	var before scope
-	var captured dbgen.PullRequest
-	err := database.InTransaction(ctx, s.pool, func(tx pgx.Tx) error {
-		q := dbgen.New(tx)
-		identity, err := q.FindPRIdentity(ctx, pullRequestID)
-		if err != nil {
-			return scopeError(err)
-		}
-		before, err = lockScope(ctx, tx, identity.RepoID, 0)
-		if err != nil {
-			return err
-		}
-		captured, err = q.LockPR(ctx, dbgen.LockPRParams(identity))
-		if err != nil {
-			return scopeError(err)
-		}
-		return nil
-	})
+	before, captured, err := s.captureVerification(ctx, pullRequestID)
 	if err != nil {
 		return environments.UpstreamSnapshot{}, verificationScopeError(err)
 	}
-	if captured.State != "open" {
+	if captured.State != environments.StateOpen {
 		return environments.UpstreamSnapshot{}, environments.ErrUpstreamClosed
 	}
 
@@ -75,68 +58,18 @@ func (s *SyncService) VerifyUpstream(ctx context.Context, pullRequestID int64) (
 	var snapshot environments.UpstreamSnapshot
 	var outcome error
 	err = database.InTransaction(ctx, s.pool, func(tx pgx.Tx) error {
-		after, err := lockScope(ctx, tx, captured.RepoID, 0)
+		rec, err := s.recordUpstreamTx(ctx, tx, before, captured, upstream)
 		if err != nil {
 			return err
 		}
-		if before.install.Revision != after.install.Revision || before.repo.ObservationVersion != after.repo.ObservationVersion {
-			return environments.ErrUpstreamChanged
-		}
-		q := dbgen.New(tx)
-		pr, err := q.LockPR(ctx, dbgen.LockPRParams{RepoID: captured.RepoID, Number: captured.Number})
-		if err != nil {
-			return scopeError(err)
-		}
-		if pr.Generation != captured.Generation {
-			return environments.ErrUpstreamChanged // A concurrent observation won; read again.
-		}
-		authorized, err := q.HasAutomaticIntent(ctx, dbgen.HasAutomaticIntentParams{PullRequestID: pr.ID, Generation: pr.Generation})
-		if err != nil {
-			return fmt.Errorf("check existing automatic authorization: %w", err)
-		}
-		if _, err := ObserveTx(ctx, tx, captured.RepoID, upstream.Observation, false, s.observer); err != nil {
-			return err
-		}
-		saved, err := q.LockPR(ctx, dbgen.LockPRParams{RepoID: captured.RepoID, Number: captured.Number})
-		if err != nil {
-			return scopeError(err)
-		}
-		if saved.Generation != pr.Generation {
-			// A recorded change fences any in-flight discovery page snapshot.
-			if err := q.BumpObservation(ctx, captured.RepoID); err != nil {
-				return fmt.Errorf("fence discovery after verification: %w", err)
-			}
-			if authorized && s.observer != nil {
-				if _, err := s.observer.ObserveTx(ctx, tx, environments.NewRequest(saved.ID, saved.Generation, saved.HeadSha, saved.State)); err != nil {
-					return err
-				}
+		outcome = verificationOutcome(rec.saved, upstream)
+		if errors.Is(outcome, environments.ErrPRChecking) && rec.saved.BuildStatus == "checking" && s.jobs != nil {
+			// Still checking mergeability: make sure a check is coming.
+			if err := s.RefreshMergeabilityTx(ctx, tx, captured.RepoID, rec.saved.Number, rec.authorized); err != nil {
+				return err
 			}
 		}
-		switch {
-		case saved.State != "open":
-			outcome = environments.ErrUpstreamClosed
-		case saved.HeadSha != upstream.SHA:
-			outcome = environments.ErrUpstreamChanged // Older or ambiguous upstream view; never guess.
-		default:
-			if blocked := environments.BuildBlockReason(saved.BuildStatus, saved.NeedsRefresh); blocked != nil {
-				outcome = blocked
-				if saved.BuildStatus == "checking" && !saved.NeedsRefresh && s.jobs != nil {
-					if err := s.RefreshMergeabilityTx(ctx, tx, captured.RepoID, saved.Number, authorized); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		headRepoID := int64(0)
-		if saved.HeadRepoID.Valid {
-			headRepoID = saved.HeadRepoID.Int64
-		}
-		snapshot = environments.UpstreamSnapshot{
-			PullRequestID: saved.ID, Number: saved.Number, Generation: saved.Generation, HeadSHA: saved.HeadSha,
-			InstallationID: after.install.GithubInstallationID, BaseRepoID: after.repo.GithubRepoID.Int64,
-			HeadRepoID: headRepoID, Fork: saved.IsFork || headRepoID != after.repo.GithubRepoID.Int64,
-			Owner: upstream.Owner, Repository: upstream.Repository,
-		}
+		snapshot = upstreamSnapshot(rec, upstream)
 		return nil
 	})
 	if err != nil {
@@ -146,6 +79,106 @@ func (s *SyncService) VerifyUpstream(ctx context.Context, pullRequestID int64) (
 		return environments.UpstreamSnapshot{}, outcome
 	}
 	return snapshot, nil
+}
+
+// captureVerification reads, under the usual locks, the PR and the
+// installation and repository revisions that recording checks later.
+func (s *SyncService) captureVerification(ctx context.Context, pullRequestID int64) (before scope, captured dbgen.PullRequest, err error) {
+	err = database.InTransaction(ctx, s.pool, func(tx pgx.Tx) error {
+		q := dbgen.New(tx)
+		identity, err := q.FindPRIdentity(ctx, pullRequestID)
+		if err != nil {
+			return scopeError(err)
+		}
+		if before, err = lockScope(ctx, tx, identity.RepoID, 0); err != nil {
+			return err
+		}
+		if captured, err = q.LockPR(ctx, dbgen.LockPRParams(identity)); err != nil {
+			return scopeError(err)
+		}
+		return nil
+	})
+	return before, captured, err
+}
+
+// recorded is a PR as verification recorded it, with the scope it was
+// recorded in and whether Automatic intent already authorized its build.
+type recorded struct {
+	after      scope
+	saved      dbgen.PullRequest
+	authorized bool
+}
+
+// recordUpstreamTx records GitHub's view of the PR unless the installation,
+// repository or PR changed since it was captured. A recorded change fences
+// in-flight discovery and carries existing Automatic authorization over.
+func (s *SyncService) recordUpstreamTx(ctx context.Context, tx pgx.Tx, before scope, captured dbgen.PullRequest, upstream Upstream) (recorded, error) {
+	after, err := lockScope(ctx, tx, captured.RepoID, 0)
+	if err != nil {
+		return recorded{}, err
+	}
+	if !after.unchanged(before) {
+		return recorded{}, environments.ErrUpstreamChanged
+	}
+	q := dbgen.New(tx)
+	key := dbgen.LockPRParams{RepoID: captured.RepoID, Number: captured.Number}
+	pr, err := q.LockPR(ctx, key)
+	if err != nil {
+		return recorded{}, scopeError(err)
+	}
+	if pr.Generation != captured.Generation {
+		return recorded{}, environments.ErrUpstreamChanged // A concurrent observation won; read again.
+	}
+	authorized, err := q.HasAutomaticIntent(ctx, dbgen.HasAutomaticIntentParams{PullRequestID: pr.ID, Generation: pr.Generation})
+	if err != nil {
+		return recorded{}, fmt.Errorf("check existing automatic authorization: %w", err)
+	}
+	if _, err := ObserveTx(ctx, tx, captured.RepoID, upstream.Observation, false, s.observer); err != nil {
+		return recorded{}, err
+	}
+	saved, err := q.LockPR(ctx, key)
+	if err != nil {
+		return recorded{}, scopeError(err)
+	}
+	if saved.Generation != pr.Generation {
+		// A recorded change fences any in-flight discovery page snapshot.
+		if err := q.BumpObservation(ctx, captured.RepoID); err != nil {
+			return recorded{}, fmt.Errorf("fence discovery after verification: %w", err)
+		}
+		if authorized && s.observer != nil {
+			if _, err := s.observer.ObserveTx(ctx, tx, environments.NewRequest(saved.ID, saved.Generation, saved.HeadSha, saved.State)); err != nil {
+				return recorded{}, err
+			}
+		}
+	}
+	return recorded{after: after, saved: saved, authorized: authorized}, nil
+}
+
+// verificationOutcome refuses a recorded PR that may not build now: closed,
+// at another commit than GitHub showed (an older or ambiguous view; never
+// guess), or blocked by its mergeability.
+func verificationOutcome(saved dbgen.PullRequest, upstream Upstream) error {
+	switch {
+	case saved.State != environments.StateOpen:
+		return environments.ErrUpstreamClosed
+	case saved.HeadSha != upstream.SHA:
+		return environments.ErrUpstreamChanged
+	}
+	return environments.BuildBlockReason(saved.BuildStatus, saved.NeedsRefresh)
+}
+
+func upstreamSnapshot(rec recorded, upstream Upstream) environments.UpstreamSnapshot {
+	saved, base := rec.saved, rec.after.repo.GithubRepoID.Int64
+	headRepoID := int64(0)
+	if saved.HeadRepoID.Valid {
+		headRepoID = saved.HeadRepoID.Int64
+	}
+	return environments.UpstreamSnapshot{
+		PullRequestID: saved.ID, Number: saved.Number, Generation: saved.Generation, HeadSHA: saved.HeadSha,
+		InstallationID: rec.after.install.GithubInstallationID, BaseRepoID: base,
+		HeadRepoID: headRepoID, Fork: saved.IsFork || headRepoID != base,
+		Owner: upstream.Owner, Repository: upstream.Repository,
+	}
 }
 
 func verificationScopeError(err error) error {

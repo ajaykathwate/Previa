@@ -30,6 +30,30 @@ type correlation struct {
 	RepoID        int64  `json:"repo_id"`
 }
 
+// attrs are the correlation fields a job's arguments carry.
+func (c correlation) attrs() []slog.Attr {
+	var attrs []slog.Attr
+	if c.PullRequestID > 0 {
+		attrs = append(attrs, slog.Int64("pr_id", c.PullRequestID))
+	}
+	if c.Generation != nil {
+		attrs = append(attrs, slog.Int64("generation", *c.Generation))
+	}
+	if c.Revision != nil {
+		attrs = append(attrs, slog.Int64("revision", *c.Revision))
+	}
+	if len(c.HeadSHA) >= 7 && len(c.HeadSHA) <= 64 {
+		attrs = append(attrs, slog.String("sha", c.HeadSHA))
+	}
+	if c.OperationID > 0 {
+		attrs = append(attrs, slog.Int64("operation_id", c.OperationID))
+	}
+	if c.RepoID > 0 {
+		attrs = append(attrs, slog.Int64("repo_id", c.RepoID))
+	}
+	return attrs
+}
+
 func (*observeJobs) Work(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) error {
 	if job.AttemptedAt != nil {
 		metrics.JobStarted(job.Queue, job.AttemptedAt.Sub(job.ScheduledAt))
@@ -37,24 +61,7 @@ func (*observeJobs) Work(ctx context.Context, job *rivertype.JobRow, doInner fun
 	attrs := []slog.Attr{slog.Int64("job_id", job.ID), slog.String("job_kind", job.Kind), slog.Int("job_attempt", job.Attempt)}
 	var c correlation
 	if json.Unmarshal(job.EncodedArgs, &c) == nil {
-		if c.PullRequestID > 0 {
-			attrs = append(attrs, slog.Int64("pr_id", c.PullRequestID))
-		}
-		if c.Generation != nil {
-			attrs = append(attrs, slog.Int64("generation", *c.Generation))
-		}
-		if c.Revision != nil {
-			attrs = append(attrs, slog.Int64("revision", *c.Revision))
-		}
-		if len(c.HeadSHA) >= 7 && len(c.HeadSHA) <= 64 {
-			attrs = append(attrs, slog.String("sha", c.HeadSHA))
-		}
-		if c.OperationID > 0 {
-			attrs = append(attrs, slog.Int64("operation_id", c.OperationID))
-		}
-		if c.RepoID > 0 {
-			attrs = append(attrs, slog.Int64("repo_id", c.RepoID))
-		}
+		attrs = append(attrs, c.attrs()...)
 	}
 	start := time.Now()
 	err := doInner(logging.With(ctx, attrs...))

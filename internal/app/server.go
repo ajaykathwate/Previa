@@ -18,7 +18,6 @@ import (
 	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
-	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/githubapp"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
@@ -32,8 +31,11 @@ import (
 	"github.com/ajaykathwatee/previa/web"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
 	"github.com/alexedwards/scs/pgxstore"
+	"github.com/alexedwards/scs/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 )
 
 const (
@@ -53,43 +55,85 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		return fmt.Errorf("configure server: %w", err)
 	}
 	cfg.ApplicationName = "previa-server"
-	pool, err := database.NewPool(ctx, cfg.SharedConfig)
+	pool, err := openDatabase(ctx, cfg.SharedConfig, "server", cfg.AppEnv, logger)
 	if err != nil {
-		return fmt.Errorf("initialize server database: %w", err)
+		return err
 	}
 	defer pool.Close()
-	if err := database.CheckSchema(ctx, pool); err != nil {
-		return err
-	}
-	logger.Info("database health check passed", "version", version.Version, "schema", database.SchemaVersion, "environment", cfg.AppEnv)
 	store := pgxstore.New(pool)
 	defer store.StopCleanup()
-	sessions := auth.NewSessionManager(store, strings.HasPrefix(strings.ToLower(cfg.AppBaseURL), "https://"), logger)
-	authHandler := auth.NewHandler(cfg, sessions, auth.NewRepository(pool), auth.NewGitHubOAuth(cfg), logger)
+	// One LISTEN session per process feeds committed-change events to live pages.
+	hub := realtime.NewHub()
+	listenCtx, stopListening := context.WithCancel(ctx)
+	defer stopListening()
+	go realtime.Listen(listenCtx, func(ctx context.Context) (*pgx.Conn, error) {
+		return pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
+	}, hub, logger)
+	features, err := newServerFeatures(cfg, pool, store, hub, logger)
+	if err != nil {
+		return err
+	}
+	router, err := features.routes(cfg, logger)
+	if err != nil {
+		return err
+	}
+	server := newHTTPServer(cfg.HTTPAddr, router, logger)
+	// Event streams outlive WriteTimeout by design; closing the hub ends them so
+	// graceful shutdown does not wait for browsers to disconnect.
+	server.RegisterOnShutdown(hub.Close)
+	registerServerState(pool, features.environments, features.capabilities, cfg.BackupStatusFile, logger)
+	stopInternal, err := httpx.ServeInternal(cfg.InternalAddr, httpx.Internal(databaseChecks(pool),
+		func() map[string]any { return map[string]any{"version": version.Version} }), logger)
+	if err != nil {
+		return err
+	}
+	defer stopWithin(stopInternal, 5*time.Second)
+	return serveHTTP(ctx, server, logger)
+}
+
+// serverFeatures is every feature the server serves, wired to one database
+// and queue. The server records observations, owner requests and teardowns
+// with their durable wake-ups and operations; workers execute them.
+type serverFeatures struct {
+	sessions      *scs.SessionManager
+	auth          *auth.Handler
+	installations *installations.Handler
+	prs           *pullrequests.Handler
+	secrets       *secrets.Handler
+	outbound      *outbound.Handler
+	logs          *buildlogs.Handler
+	deliveries    *webhooks.DeliveryService
+	pings         *queue.Service
+	summary       dashboard.SummaryReader
+	environments  *environments.Repository
+	capabilities  *workers.Reader
+}
+
+func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
+	f := &serverFeatures{capabilities: workers.NewReader(pool)}
+	f.sessions = auth.NewSessionManager(store, strings.HasPrefix(strings.ToLower(cfg.AppBaseURL), "https://"), logger)
+	f.auth = auth.NewHandler(cfg, f.sessions, auth.NewRepository(pool), auth.NewGitHubOAuth(cfg), logger)
 	producer, err := queue.NewProducer(pool, logger)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	pings := queue.NewService(pool, producer)
-
-	// The server records observations, owner requests and teardowns with
-	// their durable wake-ups and operations; workers execute them.
+	f.pings = queue.NewService(pool, producer)
 	operations, err := environments.NewOperationBroker(producer)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	environmentRepo := environments.NewRepository(pool, operations)
+	f.environments = environments.NewRepository(pool, operations)
 	coordinator := environments.NewRequestBroker(pool, producer)
 	var appClient *githubapp.Client
 	var upstream pullrequests.Source
 	if cfg.GitHubAppID != 0 {
 		if appClient, err = githubapp.New(cfg); err != nil {
-			return fmt.Errorf("initialize GitHub App: %w", err)
+			return nil, fmt.Errorf("initialize GitHub App: %w", err)
 		}
 		upstream = pullrequests.NewGitHubSource(appClient)
 		// With the App, workers can report: record report work for PR changes.
-		environmentRepo.WithReports()
-		coordinator.WithReports(environmentRepo)
+		f.environments.WithReports()
+		coordinator.WithReports(f.environments)
 	}
 	syncService := pullrequests.NewSyncService(pool, producer, upstream, coordinator)
 	var invalidate func(int64)
@@ -98,16 +142,48 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		invalidate = appClient.Invalidate
 		service = installations.NewService(installations.NewRepository(pool, syncService), appClient, installations.NewGitHubAuthorization(cfg), nil)
 	}
-	installationHandler := installations.NewHandler(service, authHandler, sessions, cfg.GitHubAppSlug, logger)
+	f.installations = installations.NewHandler(service, f.auth, f.sessions, cfg.GitHubAppSlug, logger)
+	f.deliveries = webhooks.NewDeliveryService(pool, coordinator, invalidate, syncService)
+	policyStore := installations.NewRepository(pool)
+	if appClient != nil {
+		policyStore.WithReports(coordinator) // a switch to Manual updates cancelled PRs' reports
+	}
+	policy, err := installations.NewBuildPolicyService(policyStore)
+	if err != nil {
+		return nil, err
+	}
+	logStore := buildlogs.NewStore(pool)
 	prRepository := pullrequests.NewRepository(pool)
-	capabilities := workers.NewReader(pool)
-	var prs *pullrequests.Handler // set below; the Overview reads its highlights
-	summaryReader := func(ctx context.Context, userID int64) (dashboardpages.Summary, error) {
+	f.prs = pullrequests.NewHandler(prRepository, syncService, policy, f.auth, logger, cfg.GitHubAppID > 0).
+		WithLiveUpdates(hub).WithLogTail(logStore)
+	if appClient != nil {
+		// Builds need fresh GitHub reads; without the App the controls say so.
+		f.prs.WithActions(pullrequests.Actions{
+			Builds: coordinator, Verifier: syncService, Teardowns: f.environments, Capabilities: f.capabilities,
+			PreviewBaseDomain: cfg.PreviewBaseDomain,
+		})
+	}
+	f.installations.WithNavigator(f.prs)
+	f.summary = overviewSummary(service, prRepository, f.capabilities, f.prs)
+	if f.secrets, err = newSecretsHandler(cfg, pool, f.auth, logger); err != nil {
+		return nil, err
+	}
+	if f.outbound, err = newOutboundHandler(cfg, pool, producer, f.auth, logger); err != nil {
+		return nil, err
+	}
+	f.logs = buildlogs.NewHandler(logStore, f.auth, logger).WithLiveUpdates(hub, realtime.DefaultStreamOptions)
+	return f, nil
+}
+
+// overviewSummary reads the Overview's counts, worker capabilities and
+// latest builds and previews.
+func overviewSummary(service *installations.Service, prs *pullrequests.Repository, capabilities *workers.Reader, highlights *pullrequests.Handler) dashboard.SummaryReader {
+	return func(ctx context.Context, userID int64) (dashboardpages.Summary, error) {
 		summary, err := service.Summary(ctx, userID)
 		if err != nil {
 			return dashboardpages.Summary{}, err
 		}
-		delivery, err := prRepository.Delivery(ctx, userID)
+		delivery, err := prs.Delivery(ctx, userID)
 		if err != nil {
 			return dashboardpages.Summary{}, err
 		}
@@ -115,7 +191,7 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		if err != nil {
 			return dashboardpages.Summary{}, err
 		}
-		builds, previews, err := prs.Highlights(ctx, userID, dashboardpages.HighlightRows)
+		builds, previews, err := highlights.Highlights(ctx, userID, dashboardpages.HighlightRows)
 		if err != nil {
 			return dashboardpages.Summary{}, err
 		}
@@ -126,18 +202,54 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 			Builds:  builds, Previews: previews,
 		}, nil
 	}
+}
+
+// newSecretsHandler serves repository secrets; without an encryption key
+// the page says secrets are unavailable.
+func newSecretsHandler(cfg config.ServerConfig, pool *pgxpool.Pool, users *auth.Handler, logger *slog.Logger) (*secrets.Handler, error) {
+	var keyring *secrets.Keyring
+	if cfg.SecretsConfigured() {
+		var err error
+		if keyring, err = secrets.ParseKeyring(cfg.SecretsEncryptionKeys, cfg.SecretsActiveKeyVersion); err != nil {
+			return nil, fmt.Errorf("configure repository secrets: %w", err)
+		}
+	}
+	service, err := secrets.NewService(secrets.NewRepository(pool), keyring)
+	if err != nil {
+		return nil, err
+	}
+	return secrets.NewHandler(service, users, logger), nil
+}
+
+// newOutboundHandler serves owner-approved outbound connections; a change
+// wakes the worker's refresh so a removal reaches running previews within
+// seconds.
+func newOutboundHandler(cfg config.ServerConfig, pool *pgxpool.Pool, producer *river.Client[pgx.Tx], users *auth.Handler, logger *slog.Logger) (*outbound.Handler, error) {
+	ports, err := cfg.OutboundPorts()
+	if err != nil {
+		return nil, err
+	}
+	service, err := outbound.NewService(outbound.NewRepository(pool, producer), ports)
+	if err != nil {
+		return nil, err
+	}
+	return outbound.NewHandler(service, users, logger), nil
+}
+
+// routes is the server's HTTP surface. Ingress controls
+// (docs/23-observability-and-hardening.md): only the dashboard's host is
+// served, except signed webhooks that may arrive through a tunnel; bodies are
+// capped (webhooks cap their own); sign-in and installation callbacks are
+// rate limited per client.
+func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (http.Handler, error) {
 	appURL, err := url.Parse(cfg.AppBaseURL)
 	if err != nil {
-		return fmt.Errorf("parse APP_BASE_URL: %w", err)
+		return nil, fmt.Errorf("parse APP_BASE_URL: %w", err)
 	}
 	proxies, err := config.ParseTrustedProxies(cfg.TrustedProxies)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// Ingress controls (docs/23-observability-and-hardening.md): only the
-	// dashboard's host is served, except signed webhooks that may arrive
-	// through a tunnel; bodies are capped (webhooks cap their own); sign-in
-	// and installation callbacks are rate limited per client.
 	router := httpx.New(logger, httpx.Options{
 		AppHost: appURL.Host, HostExempt: []string{webhookPath},
 		Secure: appURL.Scheme == "https", TrustedProxies: proxies,
@@ -152,79 +264,32 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 	if cfg.PreviewBaseDomain != "" && config.PreviewSameSite(cfg.PreviewBaseDomain, cfg.AppBaseURL) {
 		logger.Warn("previews share the dashboard's registrable domain; a separate domain isolates them fully", "preview_base_domain", cfg.PreviewBaseDomain)
 	}
-	deliveries := webhooks.NewDeliveryService(pool, coordinator, invalidate, syncService)
 	// A bounded number of deliveries run at once; the rest get 503 before
 	// anything is recorded, so redelivery and deduplication work as usual.
-	router.Post(webhookPath, httpx.LimitConcurrency(webhookConcurrency, webhooks.NewHandler(cfg.GitHubWebhookSecret, deliveries, logger)).ServeHTTP)
-	policyStore := installations.NewRepository(pool)
-	if appClient != nil {
-		policyStore.WithReports(coordinator) // a switch to Manual updates cancelled PRs' reports
-	}
-	policy, err := installations.NewBuildPolicyService(policyStore)
-	if err != nil {
-		return err
-	}
-	// One LISTEN session per process feeds committed-change events to live pages.
-	hub := realtime.NewHub()
-	listenCtx, stopListening := context.WithCancel(ctx)
-	defer stopListening()
-	go realtime.Listen(listenCtx, func(ctx context.Context) (*pgx.Conn, error) {
-		return pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
-	}, hub, logger)
-	logStore := buildlogs.NewStore(pool)
-	prs = pullrequests.NewHandler(prRepository, syncService, policy, authHandler, logger, cfg.GitHubAppID > 0).
-		WithLiveUpdates(hub).WithLogTail(logStore)
-	if appClient != nil {
-		// Builds need fresh GitHub reads; without the App the controls say so.
-		prs.WithActions(pullrequests.Actions{
-			Builds: coordinator, Verifier: syncService, Teardowns: environmentRepo, Capabilities: capabilities,
-			PreviewBaseDomain: cfg.PreviewBaseDomain,
-		})
-	}
-	installationHandler.WithNavigator(prs)
-	var keyring *secrets.Keyring
-	if cfg.SecretsConfigured() {
-		keyring, err = secrets.ParseKeyring(cfg.SecretsEncryptionKeys, cfg.SecretsActiveKeyVersion)
-		if err != nil {
-			return fmt.Errorf("configure repository secrets: %w", err)
-		}
-	}
-	secretService, err := secrets.NewService(secrets.NewRepository(pool), keyring)
-	if err != nil {
-		return err
-	}
-	secretHandler := secrets.NewHandler(secretService, authHandler, logger)
-	// Owner-approved outbound connections; a change wakes the worker's
-	// refresh so a removal reaches running previews within seconds.
-	outboundPorts, err := cfg.OutboundPorts()
-	if err != nil {
-		return err
-	}
-	outboundService, err := outbound.NewService(outbound.NewRepository(pool, producer), outboundPorts)
-	if err != nil {
-		return err
-	}
-	outboundHandler := outbound.NewHandler(outboundService, authHandler, logger)
-	logHandler := buildlogs.NewHandler(logStore, authHandler, logger).WithLiveUpdates(hub, realtime.DefaultStreamOptions)
+	router.Post(webhookPath, httpx.LimitConcurrency(webhookConcurrency, webhooks.NewHandler(cfg.GitHubWebhookSecret, f.deliveries, logger)).ServeHTTP)
 	router.Group(func(r chi.Router) {
-		r.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
-		authHandler.Mount(r)
+		r.Use(f.sessions.LoadAndSave, f.auth.LoadUser, f.auth.CSRF)
+		f.auth.Mount(r)
 		// Queue diagnostics are for development; production does not serve them.
-		dashboard.MountWithSummary(r, authHandler, auth.RequireUser, dashboard.Options{
-			Summary: summaryReader, Identity: authHandler.UserIDs, DeveloperTools: !cfg.Production(),
+		dashboard.MountWithSummary(r, f.auth, auth.RequireUser, dashboard.Options{
+			Summary: f.summary, Identity: f.auth.UserIDs, DeveloperTools: !cfg.Production(),
 		})
-		installationHandler.Mount(r, auth.RequireUser)
-		prs.Mount(r, auth.RequireUser)
-		secretHandler.Mount(r, auth.RequireUser)
-		outboundHandler.Mount(r, auth.RequireUser)
-		logHandler.Mount(r, auth.RequireUser)
+		f.installations.Mount(r, auth.RequireUser)
+		f.prs.Mount(r, auth.RequireUser)
+		f.secrets.Mount(r, auth.RequireUser)
+		f.outbound.Mount(r, auth.RequireUser)
+		f.logs.Mount(r, auth.RequireUser)
 		if !cfg.Production() {
-			dashboard.MountPing(r, pings, auth.RequireUser, logger)
+			dashboard.MountPing(r, f.pings, auth.RequireUser, logger)
 		}
 	})
-	server := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           router,
+	return router, nil
+}
+
+func newHTTPServer(addr string, handler http.Handler, logger *slog.Logger) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -232,22 +297,10 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		MaxHeaderBytes:    64 << 10,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
-	// Event streams outlive WriteTimeout by design; closing the hub ends them so
-	// graceful shutdown does not wait for browsers to disconnect.
-	server.RegisterOnShutdown(hub.Close)
-	registerServerState(pool, environmentRepo, capabilities, cfg.BackupStatusFile, logger)
-	stopInternal, err := httpx.ServeInternal(cfg.InternalAddr, httpx.Internal([]httpx.Check{
-		{Name: "database", Run: func(ctx context.Context) error { return database.HealthCheck(ctx, pool) }},
-		{Name: "schema", Run: func(ctx context.Context) error { return database.CheckSchema(ctx, pool) }},
-	}, func() map[string]any { return map[string]any{"version": version.Version} }), logger)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = stopInternal(ctx)
-	}()
+}
+
+// serveHTTP serves until ctx ends, then shuts the server down gracefully.
+func serveHTTP(ctx context.Context, server *http.Server, logger *slog.Logger) error {
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		return fmt.Errorf("listen for HTTP: %w", err)

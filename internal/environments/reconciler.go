@@ -111,54 +111,59 @@ func (r *Reconciler) Inventory(ctx context.Context) (InventoryPass, error) {
 		return pass, nil
 	}
 	for _, row := range rows {
-		request := NewRequest(row.ID, row.Generation, row.HeadSha, row.State)
-		// Read the environment before listing Docker: an active container
-		// absent from a later listing really is gone.
-		before, err := r.repo.Snapshot(ctx, row.ID)
-		if err != nil {
-			return pass, fmt.Errorf("read environment of PR %d: %w", row.ID, err)
+		if err := r.inspect(ctx, NewRequest(row.ID, row.Generation, row.HeadSha, row.State), &pass); err != nil {
+			return pass, err
 		}
-		resources, err := r.inventory.Resources(ctx, row.ID)
-		if err != nil {
-			return pass, fmt.Errorf("inspect resources for PR %d: %w", row.ID, err)
-		}
-		if active := before.Artifact.ContainerID; before.Status == "running" && active != "" && !listsContainer(resources, active) {
-			r.logger.WarnContext(ctx, "active preview container is missing", "dry_run", r.dryRun, "pr_id", row.ID, "container_id", active)
-			pass.Missing = append(pass.Missing, row.ID)
-			if !r.dryRun {
-				if _, err := r.repo.MarkActiveMissing(ctx, row.ID, active); err != nil {
-					return pass, err
-				}
-			}
-		}
-		old := resources[:0:0]
-		for _, resource := range resources {
-			if r.grace > 0 && (resource.CreatedAt.IsZero() || r.now().Sub(resource.CreatedAt) < r.grace) {
-				pass.Young++
-				continue
-			}
-			old = append(old, resource)
-		}
-		var orphans []Resource
-		if r.dryRun {
-			orphans, err = r.repo.PlanResourceCleanup(ctx, request, old)
-		} else {
-			orphans, err = r.repo.scheduleResourceCleanup(ctx, request, old, false)
-		}
-		if err != nil {
-			return pass, fmt.Errorf("schedule orphan cleanup for PR %d: %w", row.ID, err)
-		}
-		for _, o := range orphans {
-			r.logger.InfoContext(ctx, "orphaned resource", "dry_run", r.dryRun, "pr_id", o.PullRequestID, "generation", o.Generation,
-				"revision", o.Revision, "container_id", o.Artifact.ContainerID, "image", o.Artifact.ImageTag, "network", o.Network)
-		}
-		pass.Orphans = append(pass.Orphans, orphans...)
 		pass.Inspected++
 		r.afterID = row.ID
 	}
 	r.logger.InfoContext(ctx, "environment reconciliation pass completed", "last_pr_id", r.afterID, "prs_inspected", pass.Inspected,
 		"orphans", len(pass.Orphans), "within_grace", pass.Young, "dry_run", r.dryRun)
 	return pass, nil
+}
+
+// inspect reconciles one PR: it records a vanished active preview, then
+// schedules cleanup (or, in a dry run, only plans it) of the PR's resources
+// past the grace period that nothing references.
+func (r *Reconciler) inspect(ctx context.Context, request Request, pass *InventoryPass) error {
+	id := request.PullRequestID
+	// Read the environment before listing Docker: an active container
+	// absent from a later listing really is gone.
+	before, err := r.repo.Snapshot(ctx, id)
+	if err != nil {
+		return fmt.Errorf("read environment of PR %d: %w", id, err)
+	}
+	resources, err := r.inventory.Resources(ctx, id)
+	if err != nil {
+		return fmt.Errorf("inspect resources for PR %d: %w", id, err)
+	}
+	if active := before.Artifact.ContainerID; before.Status == StatusRunning && active != "" && !listsContainer(resources, active) {
+		r.logger.WarnContext(ctx, "active preview container is missing", "dry_run", r.dryRun, "pr_id", id, "container_id", active)
+		pass.Missing = append(pass.Missing, id)
+		if !r.dryRun {
+			if _, err := r.repo.MarkActiveMissing(ctx, id, active); err != nil {
+				return err
+			}
+		}
+	}
+	old := resources[:0:0]
+	for _, resource := range resources {
+		if r.grace > 0 && (resource.CreatedAt.IsZero() || r.now().Sub(resource.CreatedAt) < r.grace) {
+			pass.Young++
+			continue
+		}
+		old = append(old, resource)
+	}
+	orphans, err := r.repo.scheduleResourceCleanup(ctx, request, old, r.dryRun)
+	if err != nil {
+		return fmt.Errorf("schedule orphan cleanup for PR %d: %w", id, err)
+	}
+	for _, o := range orphans {
+		r.logger.InfoContext(ctx, "orphaned resource", "dry_run", r.dryRun, "pr_id", o.PullRequestID, "generation", o.Generation,
+			"revision", o.Revision, "container_id", o.Artifact.ContainerID, "image", o.Artifact.ImageTag, "network", o.Network)
+	}
+	pass.Orphans = append(pass.Orphans, orphans...)
+	return nil
 }
 
 func listsContainer(resources []Resource, id string) bool {

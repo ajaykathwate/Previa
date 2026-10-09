@@ -70,6 +70,13 @@ type scope struct {
 	repo    dbgen.LockRepositoryRow
 }
 
+// unchanged reports whether nothing that fences a GitHub read changed since
+// before was captured: the installation's revision and the repository's
+// observation version.
+func (s scope) unchanged(before scope) bool {
+	return s.install.Revision == before.install.Revision && s.repo.ObservationVersion == before.repo.ObservationVersion
+}
+
 func lockScope(ctx context.Context, tx pgx.Tx, repoID, userID int64) (scope, error) {
 	q := dbgen.New(tx)
 	id, err := q.FindScope(ctx, repoID)
@@ -108,28 +115,13 @@ func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webh
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("lock observed PR: %w", err)
 	}
-	if !exists && o.State != "open" {
-		return false, nil // A close can only finish a PR we tracked while open.
-	}
-	o.BuildStatus = MergeabilityStatus(o.Mergeable, o.MergeableState)
-	// Rows created before source timestamps existed need an authoritative baseline
-	// before a conflicting open observation can replace their known state.
-	if exists && !old.SourceUpdatedAt.Valid && webhook &&
-		(old.HeadSha != o.SHA || old.State != o.State) && (old.State != "open" || o.State == "open") {
+	switch judgeObservation(old, exists, o, webhook) {
+	case ignoreObservation:
+		return false, nil
+	case fenceObservation:
 		return false, requireRefreshTx(ctx, tx, q, old, observer)
 	}
-	if exists && old.SourceUpdatedAt.Valid {
-		if o.UpdatedAt.Before(old.SourceUpdatedAt.Time) {
-			return false, nil
-		}
-		conflicting := old.HeadSha != o.SHA || old.State != o.State
-		if webhook && o.UpdatedAt.Equal(old.SourceUpdatedAt.Time) && old.NeedsRefresh && !conflicting {
-			return false, nil
-		}
-		if webhook && o.UpdatedAt.Equal(old.SourceUpdatedAt.Time) && conflicting && (old.State != "open" || o.State == "open") {
-			return false, requireRefreshTx(ctx, tx, q, old, observer)
-		}
-	}
+	o.BuildStatus = MergeabilityStatus(o.Mergeable, o.MergeableState)
 	generation := old.Generation
 	changed := !exists || old.HeadSha != o.SHA || old.State != o.State || old.BuildStatus != o.BuildStatus || old.NeedsRefresh
 	if webhook || (exists && changed) {
@@ -154,6 +146,49 @@ func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webh
 		}
 	}
 	return true, nil
+}
+
+// verdict is what ObserveTx does with an observation.
+type verdict int
+
+const (
+	applyObservation  verdict = iota
+	ignoreObservation         // stale, or nothing to add
+	fenceObservation          // conflicting: fence the PR until an authoritative read
+)
+
+// judgeObservation orders an observation against the PR as recorded. Older
+// observations are ignored. A webhook that conflicts with what is recorded at
+// the same source time (or with a row from before source timestamps existed)
+// cannot be ordered, so it fences the PR, unless it closes an open PR.
+func judgeObservation(old dbgen.PullRequest, exists bool, o Observation, webhook bool) verdict {
+	if !exists {
+		if o.State != environments.StateOpen {
+			return ignoreObservation // A close can only finish a PR we tracked while open.
+		}
+		return applyObservation
+	}
+	conflicting := old.HeadSha != o.SHA || old.State != o.State
+	closesOpen := old.State == environments.StateOpen && o.State != environments.StateOpen
+	if !old.SourceUpdatedAt.Valid {
+		// Rows created before source timestamps existed need an authoritative
+		// baseline before a conflicting observation can replace their state.
+		if webhook && conflicting && !closesOpen {
+			return fenceObservation
+		}
+		return applyObservation
+	}
+	switch {
+	case o.UpdatedAt.Before(old.SourceUpdatedAt.Time):
+		return ignoreObservation
+	case !webhook || !o.UpdatedAt.Equal(old.SourceUpdatedAt.Time):
+		return applyObservation
+	case old.NeedsRefresh && !conflicting:
+		return ignoreObservation
+	case conflicting && !closesOpen:
+		return fenceObservation
+	}
+	return applyObservation
 }
 
 // requireRefreshTx fences a conflicting observation until an authoritative

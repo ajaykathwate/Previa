@@ -88,7 +88,7 @@ func (b *Broker) ObserveTx(ctx context.Context, tx pgx.Tx, request Request) (Req
 
 func (b *Broker) wakeTx(ctx context.Context, tx pgx.Tx, request Request, intent *BuildIntent) error {
 	at := b.now()
-	if request.State == "open" {
+	if request.State == StateOpen {
 		if intent == nil || (intent.State != IntentPending && intent.State != IntentQueued && intent.State != IntentRunning) {
 			return nil
 		}
@@ -118,7 +118,7 @@ func (b *Broker) RequestBuild(ctx context.Context, command IntentCommand) (outco
 			return e
 		}
 		i := outcome.Intent
-		r := NewRequest(i.PullRequestID, i.Generation, i.HeadSHA, "open")
+		r := NewRequest(i.PullRequestID, i.Generation, i.HeadSHA, StateOpen)
 		r.Revision = i.Revision
 		if err := b.wakeTx(ctx, tx, r, &i); err != nil {
 			return err
@@ -145,11 +145,7 @@ func (b *Broker) Dispatch(ctx context.Context, wake WakeArgs) error {
 	}
 	return database.InTransaction(ctx, b.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
-		owner, err := q.FindPROwner(ctx, wake.PullRequestID)
-		if err != nil {
-			return fmt.Errorf("find dispatch owner: %w", err)
-		}
-		scope, err := lockIntentScope(ctx, q, owner.Int64, wake.PullRequestID)
+		scope, err := lockOwnerIntentScope(ctx, q, wake.PullRequestID, "dispatch")
 		if errors.Is(err, ErrIntentUnavailable) {
 			return nil
 		}
@@ -163,7 +159,7 @@ func (b *Broker) Dispatch(ctx context.Context, wake WakeArgs) error {
 		if scope.pr.Generation != wake.Generation {
 			return nil
 		}
-		if scope.pr.State == "open" && (i == nil || i.Revision != wake.Revision) {
+		if scope.pr.State == StateOpen && (i == nil || i.Revision != wake.Revision) {
 			return nil
 		}
 		_, err = b.dispatchLockedTx(ctx, tx, scope, i)
@@ -175,30 +171,56 @@ func (b *Broker) dispatchLockedTx(ctx context.Context, tx pgx.Tx, scope intentSc
 	if !b.enabled {
 		return 0, ErrExecutionUnavailable
 	}
-	q := dbgen.New(tx)
 	r := NewRequest(scope.pr.ID, scope.pr.Generation, scope.pr.HeadSha, scope.pr.State)
-	if r.State == "open" {
-		if i == nil || i.Generation != r.Generation || i.HeadSHA != r.HeadSHA || (i.State != IntentPending && i.State != IntentQueued && i.State != IntentRunning) || (i.Source == "automatic" && scope.mode != "automatic" && i.State != IntentRunning) {
-			return 0, nil
-		}
-		if err := BuildBlockReason(scope.pr.BuildStatus, scope.pr.NeedsRefresh); err != nil {
+	if r.State == StateOpen {
+		ready, err := b.buildReady(scope, i)
+		if err != nil || !ready {
 			return 0, err
 		}
-		if b.now().Before(i.AvailableAt) {
-			return 0, nil
-		}
 		r.Revision = i.Revision
-	} else {
-		pr, err := q.LockSchedulingPR(ctx, r.PullRequestID)
-		if err != nil {
-			return 0, fmt.Errorf("read teardown eligibility: %w", err)
-		}
-		if pr.TeardownCompletedGeneration >= pr.Generation {
-			return 0, nil
-		}
+	} else if pending, err := teardownPending(ctx, dbgen.New(tx), r.PullRequestID); err != nil || !pending {
+		return 0, err
 	}
+	return b.insertJobTx(ctx, tx, r)
+}
+
+// buildReady reports whether the open PR's intent is due for a build job.
+func (b *Broker) buildReady(scope intentScope, i *BuildIntent) (bool, error) {
+	if !i.dispatchable(scope) {
+		return false, nil
+	}
+	if err := BuildBlockReason(scope.pr.BuildStatus, scope.pr.NeedsRefresh); err != nil {
+		return false, err
+	}
+	return !b.now().Before(i.AvailableAt), nil
+}
+
+// dispatchable reports whether the intent is the locked PR's and still wants
+// work. An automatic intent also needs the repository still in Automatic
+// mode, unless it already runs.
+func (i *BuildIntent) dispatchable(scope intentScope) bool {
+	if !i.forHead(scope) || (i.State != IntentPending && i.State != IntentQueued && i.State != IntentRunning) {
+		return false
+	}
+	return i.allowedIn(scope.mode)
+}
+
+// teardownPending reports whether the closed PR's current generation has not
+// been torn down yet.
+func teardownPending(ctx context.Context, q *dbgen.Queries, pullRequestID int64) (bool, error) {
+	pr, err := q.LockSchedulingPR(ctx, pullRequestID)
+	if err != nil {
+		return false, fmt.Errorf("read teardown eligibility: %w", err)
+	}
+	return pr.TeardownCompletedGeneration < pr.Generation, nil
+}
+
+// insertJobTx inserts the request's build or teardown job; River's uniqueness
+// keeps one active job per PR. When it admitted this very request, the
+// request's intent becomes queued and the PR is reported.
+func (b *Broker) insertJobTx(ctx context.Context, tx pgx.Tx, r Request) (int64, error) {
 	var args river.JobArgs = BuildArgs(r)
-	if r.State != "open" {
+	if r.State != StateOpen {
 		args = TeardownArgs(r)
 	}
 	result, err := b.client.InsertTx(ctx, tx, args, nil)
@@ -212,15 +234,16 @@ func (b *Broker) dispatchLockedTx(ctx context.Context, tx pgx.Tx, scope intentSc
 	if err := json.Unmarshal(result.Job.EncodedArgs, &captured); err != nil {
 		return 0, fmt.Errorf("decode admitted request: %w", err)
 	}
-	if captured.Generation == r.Generation && captured.Revision == r.Revision && captured.State == r.State && r.State == "open" {
-		queued, err := q.QueueCurrentIntent(ctx, dbgen.QueueCurrentIntentParams{PullRequestID: r.PullRequestID, Revision: r.Revision})
-		if err != nil {
-			return 0, fmt.Errorf("mark admitted intent queued: %w", err)
-		}
-		if queued > 0 {
-			if err := b.reportTx(ctx, tx, r.PullRequestID); err != nil {
-				return 0, err
-			}
+	if captured.Generation != r.Generation || captured.Revision != r.Revision || captured.State != r.State || r.State != StateOpen {
+		return result.Job.ID, nil
+	}
+	queued, err := dbgen.New(tx).QueueCurrentIntent(ctx, dbgen.QueueCurrentIntentParams{PullRequestID: r.PullRequestID, Revision: r.Revision})
+	if err != nil {
+		return 0, fmt.Errorf("mark admitted intent queued: %w", err)
+	}
+	if queued > 0 {
+		if err := b.reportTx(ctx, tx, r.PullRequestID); err != nil {
+			return 0, err
 		}
 	}
 	return result.Job.ID, nil
@@ -246,11 +269,7 @@ func (b *Broker) RecoverScheduling(ctx context.Context, batchSize int32) (int, e
 	for _, id := range rows {
 		err := database.InTransaction(ctx, b.pool, func(tx pgx.Tx) error {
 			q := dbgen.New(tx)
-			owner, err := q.FindPROwner(ctx, id)
-			if err != nil {
-				return fmt.Errorf("find recovery owner: %w", err)
-			}
-			scope, err := lockIntentScope(ctx, q, owner.Int64, id)
+			scope, err := lockOwnerIntentScope(ctx, q, id, "recovery")
 			if errors.Is(err, ErrIntentUnavailable) {
 				return nil
 			}

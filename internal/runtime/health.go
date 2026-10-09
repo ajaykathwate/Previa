@@ -62,6 +62,43 @@ func (r *Runtime) Health(ctx context.Context, containerID string) (Health, error
 	return observedHealth(inspected.Container), nil
 }
 
+// probeApp checks a starting app once. A crash loop fails it; a running app
+// is probed on its address, and a failed probe says why. A check that fails
+// only because the deadline passed is no error: the caller reports the
+// timeout.
+func (r *Runtime) probeApp(deadline context.Context, containerID, network string, port int, path string) (ready bool, why string, err error) {
+	inspected, err := r.docker.ContainerInspect(deadline, containerID, client.ContainerInspectOptions{})
+	if err != nil {
+		if deadline.Err() == nil {
+			return false, "", failure(CodeUnavailable, "The preview could not be inspected while starting.", true, err)
+		}
+		return false, "", nil
+	}
+	h := observedHealth(inspected.Container)
+	if h.CrashLoop {
+		message := fmt.Sprintf("The app exited %d times while starting (last exit code %d).", h.Restarts+1, h.ExitCode)
+		if h.OOMKilled {
+			message = fmt.Sprintf("The app ran out of memory while starting and exited %d times.", h.Restarts+1)
+		}
+		return false, "", failure(CodeCrashed, message, false, nil)
+	}
+	addr, ok := candidateAddress(inspected.Container, network)
+	if !ok || !h.Running {
+		return false, "", nil
+	}
+	err = r.egress.Probe(deadline, netip.AddrPortFrom(addr, uint16(port)), path, probeTimeout)
+	var notReady *egress.ProbeFailure
+	switch {
+	case err == nil:
+		return true, "", nil
+	case errors.As(err, &notReady):
+		return false, notReady.Reason, nil
+	case deadline.Err() == nil:
+		return false, "", failure(CodeUnavailable, "The readiness probe could not run.", true, err)
+	}
+	return false, "", nil
+}
+
 // waitReady polls the candidate until a probe succeeds, it crash-loops, or the
 // startup deadline passes. Probes run from the egress container, which shares
 // only the preview's network, against the candidate's own address and port.
@@ -70,32 +107,12 @@ func (r *Runtime) waitReady(ctx context.Context, containerID, network string, po
 	defer cancel()
 	reason := "it never accepted connections"
 	for {
-		inspected, err := r.docker.ContainerInspect(deadline, containerID, client.ContainerInspectOptions{})
-		if err != nil && deadline.Err() == nil {
-			return failure(CodeUnavailable, "The preview could not be inspected while starting.", true, err)
+		ready, why, err := r.probeApp(deadline, containerID, network, port, path)
+		if err != nil || ready {
+			return err
 		}
-		if err == nil {
-			h := observedHealth(inspected.Container)
-			if h.CrashLoop {
-				message := fmt.Sprintf("The app exited %d times while starting (last exit code %d).", h.Restarts+1, h.ExitCode)
-				if h.OOMKilled {
-					message = fmt.Sprintf("The app ran out of memory while starting and exited %d times.", h.Restarts+1)
-				}
-				return failure(CodeCrashed, message, false, nil)
-			}
-			if addr, ok := candidateAddress(inspected.Container, network); ok && h.Running {
-				err := r.egress.Probe(deadline, netip.AddrPortFrom(addr, uint16(port)), path, probeTimeout)
-				if err == nil {
-					return nil
-				}
-				var notReady *egress.ProbeFailure
-				switch {
-				case errors.As(err, &notReady):
-					reason = notReady.Reason
-				case deadline.Err() == nil:
-					return failure(CodeUnavailable, "The readiness probe could not run.", true, err)
-				}
-			}
+		if why != "" {
+			reason = why
 		}
 		select {
 		case <-deadline.Done():

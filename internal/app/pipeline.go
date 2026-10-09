@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
@@ -14,17 +13,11 @@ import (
 	"github.com/ajaykathwatee/previa/internal/housekeeping"
 	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
-	"github.com/ajaykathwatee/previa/internal/platform/database"
-	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
-	"github.com/ajaykathwatee/previa/internal/platform/metrics"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
-	"github.com/ajaykathwatee/previa/internal/repoconfig"
-	"github.com/ajaykathwatee/previa/internal/reporting"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/runtime"
-	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/source"
 	"github.com/google/go-github/v91/github"
 	"github.com/jackc/pgx/v5"
@@ -128,154 +121,28 @@ func (p *pipeline) addDiscovery(sync *pullrequests.SyncService) {
 	})
 }
 
-// addExecution composes the full pipeline. Every dependency is checked here,
-// at startup: a misconfigured worker refuses to start rather than fail builds.
+// addExecution adds the full pipeline: builds, previews, routing, reports,
+// teardown and housekeeping. Every dependency is checked at startup: a
+// misconfigured worker refuses to start rather than fail builds.
 func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.GitHubSource) error {
-	cfg, log, pool := in.cfg, in.logger, in.pool
-	instance, err := database.Instance(ctx, pool)
+	x, err := newExecution(ctx, in, upstream)
 	if err != nil {
 		return err
 	}
-	identity, err := in.github.App(ctx)
-	if err != nil {
-		return fmt.Errorf("read the GitHub App's identity for PR reports: %w", err)
-	}
-	gateway, err := egress.NewGateway(in.docker, cfg.EgressImage)
-	if err != nil {
-		return err
-	}
-	// The worker owns owner-approved outbound forwarding on the egress proxy.
-	outboundPorts, err := cfg.OutboundPorts()
-	if err != nil {
-		return err
-	}
-	if err := gateway.ManageForwarding(outboundPorts); err != nil {
-		return err
-	}
-	metrics.SetEgressSource(func(ctx context.Context) (map[string]int64, int64, int64, error) {
-		s, err := gateway.Stats(ctx)
-		return s.Connections, s.BytesUp, s.BytesDown, err
-	})
-	var keyring *secrets.Keyring
-	if cfg.SecretsConfigured() {
-		if keyring, err = secrets.ParseKeyring(cfg.SecretsEncryptionKeys, cfg.SecretsActiveKeyVersion); err != nil {
-			return fmt.Errorf("configure repository secrets: %w", err)
-		}
-	} else {
+	cfg := in.cfg
+	if !cfg.SecretsConfigured() {
 		p.unavailable = append(p.unavailable, "SECRETS_ENCRYPTION_KEYS is not set: repositories with secrets cannot start previews")
 	}
-	provider, err := secrets.NewProvider(secrets.NewRepository(pool), keyring)
-	if err != nil {
-		return err
-	}
-	archives, err := source.NewGitHubArchives(in.github, in.archiveOptions...)
-	if err != nil {
-		return err
-	}
-	workspaces, err := source.NewWorkspaces(cfg.SourceWorkspaceRoot)
-	if err != nil {
-		return err
-	}
-	catalog, err := cfg.ServiceCatalog()
-	if err != nil {
-		return err
-	}
-	preparer, err := source.NewPreparer(archives, workspaces, source.DefaultLimits(), repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: catalog})
-	if err != nil {
-		return err
-	}
-	builder, err := builds.NewBuilder(in.docker, gateway, builds.ConfigFrom(cfg.BuilderConfig, instance, cfg.BuildTimeout), log)
-	if err != nil {
-		return err
-	}
-	logStore := buildlogs.NewStore(pool)
-	targets := runtime.NewTargetStore(pool)
-	rt, err := runtime.New(runtime.Parts{
-		Instance: instance, Admission: runtime.NewAdmissionLock(pool), Docker: in.docker, Egress: gateway,
-		Targets: targets, Sources: preparer, Builder: builder, Secrets: provider,
-		Components: targets, Destinations: outbound.NewRepository(pool, nil), Outbound: targets,
-		Logs: func(ctx context.Context, attempt environments.Attempt, redactor *secrets.Redactor) (runtime.LogSink, error) {
-			return logStore.Open(ctx, buildlogs.Binding{EnvironmentID: attempt.EnvironmentID, Epoch: attempt.LogEpoch}, redactor, buildlogs.DefaultLimits())
-		},
-	}, runtime.PolicyFrom(cfg.PreviewConfig), log)
-	if err != nil {
-		return err
-	}
-	operations, err := environments.NewOperationBroker(in.producer)
-	if err != nil {
-		return err
-	}
-	repo := environments.NewRepository(pool, operations).WithHostnames(routing.NewLabel).WithReports().
-		WithLifetime(cfg.PreviewLifetime()).WithBuildSlots(cfg.MaxConcurrentBuilds)
-	settings := routing.Settings{
-		BaseDomain: cfg.PreviewBaseDomain, EntryPoint: cfg.RouterEntryPoint,
-		UnavailableURL: strings.TrimSuffix(cfg.AppBaseURL, "/") + routing.UnavailablePath,
-	}
-	traefik, err := routing.NewTraefik(in.docker, cfg.RouterContainer, cfg.RouterAPIAddress)
-	if err != nil {
-		return err
-	}
-	file, err := routing.NewFile(cfg.RouterDynamicDir)
-	if err != nil {
-		return err
-	}
-	backends := routing.BackendFunc(func(ctx context.Context, c routing.Candidate) (routing.Backend, error) {
-		endpoint, err := rt.Endpoint(ctx, runtime.Expected(c))
-		if err != nil {
-			return routing.Backend{}, runtime.AsOperationFailure(err)
-		}
-		return routing.Backend(endpoint), nil
-	})
-	controller, err := routing.NewController(repo, backends, traefik, file, settings, log)
-	if err != nil {
-		return err
-	}
-	api, err := reporting.NewGitHubAPI(in.github, identity.GetID(), identity.GetSlug())
-	if err != nil {
-		return err
-	}
-	reporter, err := reporting.NewReporter(pool, api, reporting.Settings{
-		AppBaseURL: strings.TrimSuffix(cfg.AppBaseURL, "/"), PreviewBaseDomain: cfg.PreviewBaseDomain,
-	}, log)
-	if err != nil {
-		return err
-	}
-	executors := environments.Executors{
-		environments.ActivateRoute: controller, environments.RemoveRoute: controller,
-		environments.CleanupArtifact: rt.CleanupExecutor(), environments.ReportStatus: reporter,
-	}
-	operationWorker, err := environments.NewOperationWorker(repo, executors, log, operationLease, operationTimeouts)
-	if err != nil {
-		return err
-	}
-	service, err := environments.NewService(repo, rt, log, cfg.BuildTimeout)
-	if err != nil {
-		return err
-	}
-	broker, err := environments.NewExecutionBroker(pool, in.producer, service, operationWorker, nil)
-	if err != nil {
-		return err
-	}
-	sync := pullrequests.NewSyncService(pool, in.producer, upstream, broker)
-	service.WithVerifier(sync).WithHeadroom(rt).WithBuildLogs(logStore)
-	sweeper, err := environments.NewTeardownSweeper(repo, rt, log, 50)
-	if err != nil {
-		return err
-	}
-	keeper, err := newHousekeeper(cfg, pool, log, repo, broker, sweeper, controller, rt, sync, builder, workspaces)
-	if err != nil {
-		return err
-	}
-	p.addDiscovery(sync)
+	p.addDiscovery(x.sync)
 	p.capabilities.Execution, p.capabilities.Routing, p.capabilities.Reporting, p.capabilities.Housekeeping = true, true, true, true
-	p.capabilities.Services = catalog.Offers()
-	if catalog.Empty() {
+	p.capabilities.Services = x.catalog.Offers()
+	if x.catalog.Empty() {
 		p.unavailable = append(p.unavailable, "PREVIEW_SERVICE_CATALOG is none: previews cannot request managed PostgreSQL or Redis")
 	}
 	if cfg.BuildsPaused {
 		// The kill switch: everything stays registered so teardown, cleanup,
 		// routing, reports and housekeeping keep working; builds wait.
-		service.Paused()
+		x.service.Paused()
 		p.capabilities.Execution, p.capabilities.Paused = false, true
 		p.unavailable = append(p.unavailable, "BUILDS_PAUSED is set: new builds wait; teardown, cleanup, routing, reports and housekeeping continue")
 	}
@@ -285,9 +152,9 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		return err
 	}})
 	p.register = append(p.register, func(rc *river.Config) {
-		environments.RegisterWorkers(rc.Workers, service, broker)
-		river.AddWorker(rc.Workers, operationWorker)
-		river.AddWorker(rc.Workers, &environments.TeardownSweepWorker{Sweeper: sweeper})
+		environments.RegisterWorkers(rc.Workers, x.service, x.broker)
+		river.AddWorker(rc.Workers, x.operations)
+		river.AddWorker(rc.Workers, &environments.TeardownSweepWorker{Sweeper: x.sweeper})
 		rc.Queues[environments.BuildQueue] = river.QueueConfig{MaxWorkers: cfg.MaxConcurrentBuilds}
 		rc.Queues[environments.TeardownQueue] = river.QueueConfig{MaxWorkers: teardownWorkers}
 		rc.Queues[environments.CoordinationQueue] = river.QueueConfig{MaxWorkers: coordinationWorkers}
@@ -295,18 +162,18 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		rc.Queues[environments.ReportOperationQueue] = river.QueueConfig{MaxWorkers: reportWorkers}
 		rc.Queues[environments.CleanupOperationQueue] = river.QueueConfig{MaxWorkers: cleanupWorkers}
 		rc.Queues[environments.TeardownSweepQueue] = river.QueueConfig{MaxWorkers: 1}
-		keeper.Register(rc)
-		outbound.Register(rc, rt)
+		x.keeper.Register(rc)
+		outbound.Register(rc, x.runtime)
 	})
 	p.startup = append(p.startup,
 		func(ctx context.Context) error {
-			if _, err := gateway.Ensure(ctx); err != nil {
+			if _, err := x.gateway.Ensure(ctx); err != nil {
 				return fmt.Errorf("start the egress proxy (make egress-image): %w", err)
 			}
 			return nil
 		},
 		// The router's file always reflects the accepted table before work starts.
-		controller.Sync,
+		x.controller.Sync,
 	)
 	return nil
 }

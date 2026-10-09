@@ -174,6 +174,7 @@ table above.
 | Path | Role |
 | --- | --- |
 | `internal/runtime/runtime.go` | `Runtime.Build`: recheck, build, recheck, secrets, start; interfaces for its parts. |
+| `internal/runtime/candidate.go` | Starting a candidate: capacity under the admission lock, its containers, ordered start, readiness, discard on failure. |
 | `internal/runtime/target.go`, `queries.sql` | The access, freshness and fork recheck. |
 | `internal/runtime/hardening.go` | User policy, environment, the hardened container specification. |
 | `internal/runtime/capacity.go`, `health.go` | Admission; readiness and observed health. |

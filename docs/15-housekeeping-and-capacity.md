@@ -173,7 +173,7 @@ Dry run for instance 40faee5f0a2d (nothing was changed):
 
 ## Wiring
 
-`internal/app/pipeline.go` composes it: `Repository.WithLifetime(cfg.PreviewLifetime()).WithBuildSlots(cfg.MaxConcurrentBuilds)`;
+`internal/app/execution.go` composes it: `Repository.WithLifetime(cfg.PreviewLifetime()).WithBuildSlots(cfg.MaxConcurrentBuilds)`;
 `Service.WithHeadroom(runtime)`; `runtime.Parts{Instance, Admission: runtime.NewAdmissionLock(pool)}`
 and `builds.ConfigFrom(…, instance, …)` with `instance` from `database.Instance`;
 `housekeeping.NewRecovery(broker, repo, sweeper, controller)`,

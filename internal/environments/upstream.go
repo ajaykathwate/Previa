@@ -25,7 +25,7 @@ type UpstreamSnapshot struct {
 // Matches reports whether the snapshot still describes the captured request.
 // A mismatch means the request is superseded, never that it should be retried.
 func (s UpstreamSnapshot) Matches(r Request) bool {
-	return s.PullRequestID == r.PullRequestID && s.Generation == r.Generation && s.HeadSHA == r.HeadSHA && r.State == "open"
+	return s.PullRequestID == r.PullRequestID && s.Generation == r.Generation && s.HeadSHA == r.HeadSHA && r.State == StateOpen
 }
 
 // UpstreamVerifier refreshes one tracked PR from GitHub immediately before manual

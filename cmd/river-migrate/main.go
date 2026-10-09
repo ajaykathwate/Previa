@@ -1,3 +1,5 @@
+// Command previa-river-migrate applies River's queue schema migrations to
+// DATABASE_URL.
 package main
 
 import (
@@ -11,10 +13,17 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+// run returns the exit code; its deferred cleanup runs before the process
+// exits.
+func run() int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := app.RunRiverMigration(ctx, os.Args[1:], os.Stdout); err != nil {
 		slog.Error("River migration failed", "error", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

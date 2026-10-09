@@ -150,7 +150,30 @@ func (b *OperationBroker) EnqueueTx(ctx context.Context, tx pgx.Tx, spec Operati
 		return 0, fmt.Errorf("encode operation payload: %w", err)
 	}
 	q := dbgen.New(tx)
-	op, err := q.CreateOperation(ctx, dbgen.CreateOperationParams{
+	op, created, err := findOrCreateOperation(ctx, q, spec, payload)
+	if err != nil {
+		return 0, err
+	}
+	if !created && spec.Kind == CleanupArtifact && OperationState(op.State) == OperationFailed {
+		// Scheduling the same resource again retries a cleanup that failed.
+		if _, err := q.RearmCleanupOperation(ctx, op.ID); err != nil {
+			return 0, fmt.Errorf("rearm failed cleanup operation: %w", err)
+		}
+		op.State = string(OperationPending)
+	}
+	if !created && !OperationState(op.State).unfinished() {
+		return op.ID, nil
+	}
+	if err := b.enqueueJobTx(ctx, tx, op.ID, spec.Kind); err != nil {
+		return 0, err
+	}
+	return op.ID, nil
+}
+
+// findOrCreateOperation creates the operation, or finds the one its
+// idempotency key already names, which must be the same work.
+func findOrCreateOperation(ctx context.Context, q *dbgen.Queries, spec OperationSpec, payload []byte) (op dbgen.EnvironmentOperation, created bool, err error) {
+	op, err = q.CreateOperation(ctx, dbgen.CreateOperationParams{
 		PullRequestID:  spec.Request.PullRequestID,
 		Generation:     spec.Request.Generation,
 		Revision:       spec.Request.Revision,
@@ -158,34 +181,25 @@ func (b *OperationBroker) EnqueueTx(ctx context.Context, tx pgx.Tx, spec Operati
 		IdempotencyKey: spec.IdempotencyKey,
 		Payload:        payload,
 	})
-	created := err == nil
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return 0, fmt.Errorf("create environment operation: %w", err)
+	if err == nil {
+		return op, true, nil
 	}
-	if !created {
-		op, err = q.FindOperationByKey(ctx, spec.IdempotencyKey)
-		if err != nil {
-			return 0, fmt.Errorf("read existing environment operation: %w", err)
-		}
-		if op.PullRequestID != spec.Request.PullRequestID || op.Generation != spec.Request.Generation || op.Revision != spec.Request.Revision || op.Kind != string(spec.Kind) || !sameJSON(op.Payload, payload) {
-			return 0, errors.New("environment operation idempotency key conflicts with different work")
-		}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return op, false, fmt.Errorf("create environment operation: %w", err)
 	}
-	id := op.ID
-	if !created && spec.Kind == CleanupArtifact && OperationState(op.State) == OperationFailed {
-		// Scheduling the same resource again retries a cleanup that failed.
-		if _, err := q.RearmCleanupOperation(ctx, id); err != nil {
-			return 0, fmt.Errorf("rearm failed cleanup operation: %w", err)
-		}
-		op.State = string(OperationPending)
+	op, err = q.FindOperationByKey(ctx, spec.IdempotencyKey)
+	if err != nil {
+		return op, false, fmt.Errorf("read existing environment operation: %w", err)
 	}
-	if !created && OperationState(op.State) != OperationPending && OperationState(op.State) != OperationRetryable && OperationState(op.State) != OperationRunning {
-		return id, nil
+	if op.PullRequestID != spec.Request.PullRequestID || op.Generation != spec.Request.Generation || op.Revision != spec.Request.Revision || op.Kind != string(spec.Kind) || !sameJSON(op.Payload, payload) {
+		return op, false, errors.New("environment operation idempotency key conflicts with different work")
 	}
-	if err := b.enqueueJobTx(ctx, tx, id, spec.Kind); err != nil {
-		return 0, err
-	}
-	return id, nil
+	return op, false, nil
+}
+
+// unfinished reports whether an operation in this state still needs a job.
+func (s OperationState) unfinished() bool {
+	return s == OperationPending || s == OperationRetryable || s == OperationRunning
 }
 
 func (b *OperationBroker) enqueueJobTx(ctx context.Context, tx pgx.Tx, id int64, kind OperationKind) error {

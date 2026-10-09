@@ -30,31 +30,8 @@ func describe(t Target, s Stream, hasStream bool) status {
 	current := hasStream && t.Intent != nil && s.Generation == t.Intent.Generation && s.Revision == t.Intent.Revision
 	if i := t.Intent; i != nil {
 		st.Label, st.Tone = pages.Label(i.State), pages.Tone(i.State)
-		switch i.State {
-		case "pending":
-			st.Summary = "The automatic build is waiting for five quiet minutes after the latest push."
-			if !i.AvailableAt.IsZero() {
-				st.Summary = "The automatic build is waiting for five quiet minutes; it becomes eligible after " + i.AvailableAt.UTC().Format("2 Jan 2006, 15:04 UTC") + "."
-			}
-		case "queued":
-			st.Summary = "The build is queued and has not started yet."
-		case "running":
-			switch {
-			case current && !s.Finished:
-				st.Summary = "The build is running. New output appears here as it arrives."
-			case current:
-				st.Summary = "Build output is complete; the preview is being published."
-			default:
-				st.Summary = "The build is starting."
-			}
-		case "succeeded":
-			st.Summary = "The build succeeded."
-		case "failed":
-			st.Summary = "The build failed. The output below shows where it stopped."
-		case "cancelled":
-			st.Summary = "The build was cancelled."
-		case "superseded":
-			st.Summary = "A newer commit or request replaced this build."
+		if summary := intentSummary(i, current, s.Finished); summary != "" {
+			st.Summary = summary
 		}
 		if !current && hasStream {
 			st.Notices = append(st.Notices, buildpages.LogNotice{Tone: "tone-info", Text: "These logs are from an earlier attempt (commit " + pages.Short(s.HeadSHA) + "). The current request has not produced output yet."})
@@ -63,16 +40,9 @@ func describe(t Target, s Stream, hasStream bool) status {
 	if !t.Available {
 		st.Notices = append(st.Notices, buildpages.LogNotice{Tone: "tone-warn", Text: "GitHub access to this repository was removed. Stored logs stay readable until they expire."})
 	}
-	switch {
-	case !hasStream:
-		st.Empty = "No build output is stored for this pull request."
-	case !s.PrunedAt.IsZero():
-		st.Empty = "These logs expired."
+	st.Empty = emptyText(s, hasStream)
+	if hasStream && !s.PrunedAt.IsZero() {
 		st.Notices = append(st.Notices, buildpages.LogNotice{Tone: "tone-neutral", Text: fmt.Sprintf("Logs are kept for %d days after a build finishes; this attempt's logs were deleted.", int(Retention/(24*time.Hour)))})
-	case s.Lines == 0 && !s.Finished:
-		st.Empty = "Waiting for output…"
-	case s.Lines == 0:
-		st.Empty = "This attempt produced no output."
 	}
 	if hasStream && s.Truncated {
 		st.Notices = append(st.Notices, buildpages.LogNotice{Tone: "tone-warn", Text: fmt.Sprintf("Logs truncated: the size or line limit was reached, and %d later lines were not stored.", s.OmittedLines)})
@@ -84,4 +54,53 @@ func describe(t Target, s Stream, hasStream bool) status {
 		st.Notices = []buildpages.LogNotice{}
 	}
 	return st
+}
+
+// intentSummary says what the current request is doing; "" for a state it
+// does not know. current is whether the stored stream is the request's own.
+func intentSummary(i *Intent, current, finished bool) string {
+	switch i.State {
+	case "pending":
+		if i.AvailableAt.IsZero() {
+			return "The automatic build is waiting for five quiet minutes after the latest push."
+		}
+		return "The automatic build is waiting for five quiet minutes; it becomes eligible after " + i.AvailableAt.UTC().Format("2 Jan 2006, 15:04 UTC") + "."
+	case "queued":
+		return "The build is queued and has not started yet."
+	case "running":
+		switch {
+		case current && !finished:
+			return "The build is running. New output appears here as it arrives."
+		case current:
+			return "Build output is complete; the preview is being published."
+		default:
+			return "The build is starting."
+		}
+	case "succeeded":
+		return "The build succeeded."
+	case "failed":
+		return "The build failed. The output below shows where it stopped."
+	case "cancelled":
+		return "The build was cancelled."
+	case "superseded":
+		return "A newer commit or request replaced this build."
+	default:
+		return ""
+	}
+}
+
+// emptyText is what the log shows instead of lines, if it has none to show.
+func emptyText(s Stream, hasStream bool) string {
+	switch {
+	case !hasStream:
+		return "No build output is stored for this pull request."
+	case !s.PrunedAt.IsZero():
+		return "These logs expired."
+	case s.Lines == 0 && !s.Finished:
+		return "Waiting for output…"
+	case s.Lines == 0:
+		return "This attempt produced no output."
+	default:
+		return ""
+	}
 }

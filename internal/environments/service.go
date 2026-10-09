@@ -173,49 +173,11 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	if err := request.validate(); err != nil {
 		return err
 	}
-	if request.State != "open" {
+	if request.State != StateOpen {
 		return errors.New("build requires an open PR snapshot")
 	}
-	before, err := s.repo.Snapshot(ctx, request.PullRequestID)
-	if err != nil {
+	if proceed, err := s.admit(ctx, request); !proceed {
 		return err
-	}
-	if before.Generation != request.Generation || before.State != request.State || before.HeadSHA != request.HeadSHA || (request.State == "open" && before.Revision != request.Revision) {
-		return s.superseded(ctx, request)
-	}
-	if before.AppliedGeneration == request.Generation && before.AppliedRevision == request.Revision && before.Status == "running" {
-		return s.cleanup(ctx, request)
-	}
-	if before.PendingGeneration == request.Generation && before.PendingRevision == request.Revision && before.PendingArtifact.ContainerID != "" && before.PendingArtifact.ImageTag != "" {
-		return s.cleanup(ctx, request)
-	}
-	if s.paused {
-		metrics.BuildWaited(WaitPaused)
-		return errors.Join(&WaitingError{Reason: WaitPaused, Err: errors.New("builds are paused")}, s.repo.markWaiting(ctx, request, WaitPaused))
-	}
-	if s.verifier != nil {
-		// Fresh from GitHub, outside every lock: a new commit, a close or lost
-		// access recorded now supersedes this request before any work.
-		snapshot, err := s.verifier.VerifyUpstream(ctx, request.PullRequestID)
-		switch {
-		case errors.Is(err, ErrUpstreamClosed):
-			return s.superseded(ctx, request)
-		case errors.Is(err, ErrUpstreamInaccessible):
-			return &upstreamFailure{err: err}
-		case err != nil:
-			return err // unavailable, rate limited or still settling: retried
-		case !snapshot.Matches(request):
-			return s.superseded(ctx, request)
-		}
-	}
-	if s.headroom != nil && before.Revision == request.Revision {
-		if err := s.headroom.Admit(ctx, request); err != nil {
-			if reason := waitingReason(err); reason != "" {
-				metrics.BuildWaited(reason)
-				return errors.Join(&WaitingError{Reason: reason, Err: err}, s.repo.markWaiting(ctx, request, reason))
-			}
-			return err
-		}
 	}
 	attempt, allowed, err := s.repo.claimBuild(ctx, request, s.now())
 	if err != nil {
@@ -228,42 +190,89 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	buildCtx, cancel := context.WithTimeout(ctx, s.buildTimeout)
 	artifact, buildErr := s.runtime.Build(buildCtx, request, attempt)
 	cancel()
-	if buildErr != nil && ctx.Err() != nil {
-		metrics.BuildFinished("interrupted", "", s.now().Sub(started))
-		// The worker is shutting down: this is no failure of the request. It
-		// keeps its slot and runs again when a worker starts.
-		completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), queue.CompletionGrace)
-		defer completeCancel()
-		s.finishLogs(completeCtx, request, attempt)
-		return errors.Join(ErrInterrupted, s.cleanup(completeCtx, request))
-	}
-	if reason := waitingReason(buildErr); reason != "" {
-		// Not a failure: the admitted request keeps its slot and its place,
-		// and is retried once capacity or disk frees up.
-		metrics.BuildWaited(reason)
-		completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), queue.CompletionGrace)
-		defer completeCancel()
-		s.finishLogs(completeCtx, request, attempt)
-		return errors.Join(&WaitingError{Reason: reason, Err: buildErr}, s.repo.markWaiting(completeCtx, request, reason))
-	}
-	result := Result{Status: "running", Artifact: artifact}
-	if buildErr != nil {
-		code := "build_failed"
-		var coded failureCoder
-		if errors.As(buildErr, &coded) && safeErrorCode(coded.FailureCode()) != "" {
-			code = safeErrorCode(coded.FailureCode())
-		}
-		result = Result{Status: "failed", ErrorCode: code}
-	}
-	if buildErr == nil && (artifact.ContainerID == "" || artifact.ImageTag == "") {
-		buildErr = errors.New("runtime returned an incomplete artifact")
-		result = Result{Status: "failed", ErrorCode: "incomplete_artifact"}
-	}
 	// This is the pre-registration gate. Cancellation/timeouts still get a bounded
 	// chance to record a CURRENT failure and clean up, never a stale final state.
 	completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), queue.CompletionGrace)
 	defer completeCancel()
+	if buildErr != nil && ctx.Err() != nil {
+		metrics.BuildFinished("interrupted", "", s.now().Sub(started))
+		// The worker is shutting down: this is no failure of the request. It
+		// keeps its slot and runs again when a worker starts.
+		s.finishLogs(completeCtx, request, attempt)
+		return errors.Join(ErrInterrupted, s.cleanup(completeCtx, request))
+	}
 	s.finishLogs(completeCtx, request, attempt)
+	if reason := waitingReason(buildErr); reason != "" {
+		// Not a failure: the admitted request keeps its slot and its place,
+		// and is retried once capacity or disk frees up.
+		return s.wait(completeCtx, request, reason, buildErr)
+	}
+	return s.record(ctx, completeCtx, request, started, artifact, buildErr)
+}
+
+// admit runs the checks a build passes before it claims a slot. When the
+// request ends here it returns false with what Build returns: superseded or
+// already built (cleanup only), paused or short of capacity (waiting), or no
+// longer readable on GitHub.
+func (s *Service) admit(ctx context.Context, request Request) (bool, error) {
+	before, err := s.repo.Snapshot(ctx, request.PullRequestID)
+	if err != nil {
+		return false, err
+	}
+	if !before.matches(request) {
+		return false, s.superseded(ctx, request)
+	}
+	if before.built(request) {
+		return false, s.cleanup(ctx, request)
+	}
+	if s.paused {
+		return false, s.wait(ctx, request, WaitPaused, errors.New("builds are paused"))
+	}
+	if s.verifier != nil {
+		if current, err := s.verifyUpstream(ctx, request); !current {
+			return false, err
+		}
+	}
+	if s.headroom != nil && before.Revision == request.Revision {
+		if err := s.headroom.Admit(ctx, request); err != nil {
+			if reason := waitingReason(err); reason != "" {
+				return false, s.wait(ctx, request, reason, err)
+			}
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// verifyUpstream reads the PR fresh from GitHub, outside every lock: a new
+// commit, a close or lost access recorded now supersedes this request before
+// any work. It returns false with what Build returns when it does.
+func (s *Service) verifyUpstream(ctx context.Context, request Request) (bool, error) {
+	snapshot, err := s.verifier.VerifyUpstream(ctx, request.PullRequestID)
+	switch {
+	case errors.Is(err, ErrUpstreamClosed):
+		return false, s.superseded(ctx, request)
+	case errors.Is(err, ErrUpstreamInaccessible):
+		return false, &upstreamFailure{err: err}
+	case err != nil:
+		return false, err // unavailable, rate limited or still settling: retried
+	case !snapshot.Matches(request):
+		return false, s.superseded(ctx, request)
+	}
+	return true, nil
+}
+
+// wait records that the request waits for reason and returns the
+// WaitingError that retries it without spending an attempt.
+func (s *Service) wait(ctx context.Context, request Request, reason string, cause error) error {
+	metrics.BuildWaited(reason)
+	return errors.Join(&WaitingError{Reason: reason, Err: cause}, s.repo.markWaiting(ctx, request, reason))
+}
+
+// record applies an attempt's outcome, then schedules cleanup of whatever the
+// request no longer needs.
+func (s *Service) record(ctx, completeCtx context.Context, request Request, started time.Time, artifact Artifact, buildErr error) error {
+	result, buildErr := buildResult(artifact, buildErr)
 	applied, err := s.repo.Apply(completeCtx, request, result)
 	if err != nil {
 		return errors.Join(err, s.cleanup(completeCtx, request))
@@ -272,7 +281,7 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 		metrics.BuildFinished("superseded", "", s.now().Sub(started))
 		return s.superseded(completeCtx, request)
 	}
-	if result.Status == "failed" {
+	if result.Status == StatusFailed {
 		metrics.BuildFinished("failed", result.ErrorCode, s.now().Sub(started))
 	} else {
 		metrics.BuildFinished("succeeded", "", s.now().Sub(started))
@@ -290,30 +299,47 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	return nil
 }
 
+// buildResult is the environment result for a build's outcome. An artifact
+// without both a container and an image is a failure too.
+func buildResult(artifact Artifact, buildErr error) (Result, error) {
+	if buildErr != nil {
+		code := "build_failed"
+		var coded failureCoder
+		if errors.As(buildErr, &coded) && safeErrorCode(coded.FailureCode()) != "" {
+			code = safeErrorCode(coded.FailureCode())
+		}
+		return Result{Status: StatusFailed, ErrorCode: code}, buildErr
+	}
+	if artifact.ContainerID == "" || artifact.ImageTag == "" {
+		return Result{Status: StatusFailed, ErrorCode: "incomplete_artifact"}, errors.New("runtime returned an incomplete artifact")
+	}
+	return Result{Status: StatusRunning, Artifact: artifact}, nil
+}
+
 func (s *Service) Teardown(ctx context.Context, request Request) error {
 	if err := request.validate(); err != nil {
 		return err
 	}
-	if request.State == "open" {
+	if request.State == StateOpen {
 		return errors.New("teardown requires a closed PR snapshot")
 	}
 	before, err := s.repo.Snapshot(ctx, request.PullRequestID)
 	if err != nil {
 		return err
 	}
-	if before.Generation != request.Generation || before.State != request.State || before.HeadSHA != request.HeadSHA || (request.State == "open" && before.Revision != request.Revision) {
+	if !before.matches(request) {
 		return s.superseded(ctx, request)
 	}
-	if before.AppliedGeneration == request.Generation && before.Status == "torn_down" {
+	if before.AppliedGeneration == request.Generation && before.Status == StatusTornDown {
 		return s.cleanup(ctx, request)
 	}
-	if before.Status == "tearing_down" && before.TeardownGeneration == request.Generation {
+	if before.Status == StatusTearingDown && before.TeardownGeneration == request.Generation {
 		return s.cleanup(ctx, request) // A retry: this teardown already started.
 	}
-	if before.Status == "" || before.Status == "torn_down" {
+	if before.Status == "" || before.Status == StatusTornDown {
 		return s.cleanup(ctx, request)
 	}
-	result := Result{Status: "torn_down"}
+	result := Result{Status: StatusTornDown}
 	applied, err := s.repo.Apply(ctx, request, result)
 	if err != nil {
 		return err

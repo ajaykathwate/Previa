@@ -241,7 +241,9 @@ again only after a rebuild.
 | Path | Role |
 | --- | --- |
 | `internal/repoconfig` | The new keys: shape, catalog and command validation, clamping, hash |
-| `internal/runtime/backend.go`, `runtime.go` | Plan, credentials, specs, readiness order, setup, processes, outbound |
+| `internal/runtime/backend.go` | Plan, credentials, connection settings, service and command specs |
+| `internal/runtime/candidate.go`, `services.go` | Readiness order; services network, pinned images, protocol checks, setup, processes |
+| `internal/runtime/outbound.go` | Approved outbound connections for a candidate and their refresh |
 | `internal/runtime/inventory.go`, `cleanup.go`, `endpoint.go`, `capacity.go` | Candidate grouping, removal, publication check, capacity |
 | `internal/outbound` | Approvals: rules, store, Outbound tab, refresh job |
 | `internal/platform/egress/forward.go`, `gateway.go` | TCP forwarding, allow files, ports, counters, replacement on upgrade |

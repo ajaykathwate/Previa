@@ -18,6 +18,28 @@ const (
 	IntentSuperseded IntentState = "superseded"
 )
 
+// Build modes (repositories.build_mode). An intent's Source is the mode that
+// created it: an owner's request or an automatic observation.
+const (
+	modeManual    = "manual"
+	modeAutomatic = "automatic"
+)
+
+// transitionAllowed is the build intent's state machine:
+// pending -> queued -> running -> succeeded | failed.
+func transitionAllowed(from, to IntentState) bool {
+	switch to {
+	case IntentQueued:
+		return from == IntentPending
+	case IntentRunning:
+		return from == IntentQueued
+	case IntentSucceeded, IntentFailed:
+		return from == IntentRunning
+	default:
+		return false
+	}
+}
+
 type IntentAction string
 
 const (
@@ -52,6 +74,18 @@ type BuildIntent struct {
 	RequestedAt    time.Time
 	StartedAt      time.Time
 	CompletedAt    time.Time
+}
+
+// forHead reports whether the intent is for the locked PR's current
+// generation and commit.
+func (i *BuildIntent) forHead(scope intentScope) bool {
+	return i != nil && i.Generation == scope.pr.Generation && i.HeadSHA == scope.pr.HeadSha
+}
+
+// allowedIn reports whether the repository's build mode still allows the
+// intent: an automatic intent needs Automatic mode, unless it already runs.
+func (i *BuildIntent) allowedIn(mode string) bool {
+	return i.Source != modeAutomatic || mode == modeAutomatic || i.State == IntentRunning
 }
 
 type IntentCommand struct {

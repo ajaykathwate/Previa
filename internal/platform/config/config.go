@@ -190,11 +190,16 @@ func (c SharedConfig) validate() error {
 	if err != nil || u == nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Hostname() == "" || strings.Trim(u.Path, "/") == "" || u.Fragment != "" {
 		return errors.New("DATABASE_URL must be a PostgreSQL URL with a host and database name")
 	}
-	if u.Port() != "" {
-		port, err := strconv.Atoi(u.Port())
-		if err != nil || port < 1 || port > 65535 {
-			return errors.New("DATABASE_URL port must be between 1 and 65535")
-		}
+	return checkURLPort("DATABASE_URL", u)
+}
+
+// checkURLPort accepts a URL without a port or with one in 1-65535.
+func checkURLPort(name string, u *url.URL) error {
+	if u.Port() == "" {
+		return nil
+	}
+	if port, err := strconv.Atoi(u.Port()); err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("%s port must be between 1 and 65535", name)
 	}
 	return nil
 }
@@ -212,12 +217,9 @@ func (c ServerConfig) validate() error {
 	if _, err := ParseTrustedProxies(c.TrustedProxies); err != nil {
 		return err
 	}
-	base, err := url.Parse(c.AppBaseURL)
-	if err != nil || base == nil || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" || (base.Path != "" && base.Path != "/") || (base.Scheme != "http" && base.Scheme != "https") {
-		return errors.New("APP_BASE_URL must be an HTTP(S) origin without credentials, query, or path")
-	}
-	if base.Scheme == "http" && base.Hostname() != "localhost" && base.Hostname() != "127.0.0.1" && base.Hostname() != "::1" {
-		return errors.New("APP_BASE_URL must use HTTPS except on localhost")
+	base, err := parseAppBaseURL(c.AppBaseURL)
+	if err != nil {
+		return err
 	}
 	if c.Production() {
 		if base.Scheme != "https" {
@@ -227,19 +229,13 @@ func (c ServerConfig) validate() error {
 			return errors.New("GITHUB_WEBHOOK_SECRET is required when APP_ENV=production")
 		}
 	}
-	if base.Port() != "" {
-		port, err := strconv.Atoi(base.Port())
-		if err != nil || port < 1 || port > 65535 {
-			return errors.New("APP_BASE_URL port must be between 1 and 65535")
-		}
+	if err := checkURLPort("APP_BASE_URL", base); err != nil {
+		return err
 	}
-	for _, field := range []struct{ name, value string }{
-		{"GITHUB_OAUTH_CLIENT_ID", c.GitHubOAuthClientID},
-		{"GITHUB_OAUTH_CLIENT_SECRET", c.GitHubOAuthClientSecret},
-	} {
-		if strings.TrimSpace(field.value) == "" {
-			return fmt.Errorf("%s must not be empty", field.name)
-		}
+	if err := requireAll("%s must not be empty",
+		setting{"GITHUB_OAUTH_CLIENT_ID", c.GitHubOAuthClientID},
+		setting{"GITHUB_OAUTH_CLIENT_SECRET", c.GitHubOAuthClientSecret}); err != nil {
+		return err
 	}
 	if len(strings.TrimSpace(c.SessionSecret)) < 32 {
 		return errors.New("SESSION_SECRET must contain at least 32 characters")
@@ -255,28 +251,55 @@ func (c ServerConfig) validate() error {
 			return err
 		}
 	}
-	if c.GitHubAppID != 0 || c.GitHubAppSlug != "" || c.GitHubAppPrivateKeyPath != "" || c.GitHubAppClientID != "" || c.GitHubAppClientSecret != "" {
-		if c.GitHubAppID <= 0 {
-			return errors.New("GITHUB_APP_ID must be positive when installation linking is configured")
+	return c.checkGitHubApp()
+}
+
+// parseAppBaseURL accepts an HTTP(S) origin, plain HTTP only on localhost.
+func parseAppBaseURL(raw string) (*url.URL, error) {
+	base, err := url.Parse(raw)
+	if err != nil || base == nil || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" || (base.Path != "" && base.Path != "/") || (base.Scheme != "http" && base.Scheme != "https") {
+		return nil, errors.New("APP_BASE_URL must be an HTTP(S) origin without credentials, query, or path")
+	}
+	if base.Scheme == "http" && base.Hostname() != "localhost" && base.Hostname() != "127.0.0.1" && base.Hostname() != "::1" {
+		return nil, errors.New("APP_BASE_URL must use HTTPS except on localhost")
+	}
+	return base, nil
+}
+
+// checkGitHubApp validates installation linking, which is all or nothing:
+// any GitHub App setting requires all of them.
+func (c ServerConfig) checkGitHubApp() error {
+	if c.GitHubAppID == 0 && c.GitHubAppSlug == "" && c.GitHubAppPrivateKeyPath == "" && c.GitHubAppClientID == "" && c.GitHubAppClientSecret == "" {
+		return nil
+	}
+	if c.GitHubAppID <= 0 {
+		return errors.New("GITHUB_APP_ID must be positive when installation linking is configured")
+	}
+	if err := requireAll("%s is required when installation linking is configured",
+		setting{"GITHUB_APP_SLUG", c.GitHubAppSlug}, setting{"GITHUB_APP_PRIVATE_KEY_PATH", c.GitHubAppPrivateKeyPath},
+		setting{"GITHUB_APP_CLIENT_ID", c.GitHubAppClientID}, setting{"GITHUB_APP_CLIENT_SECRET", c.GitHubAppClientSecret}); err != nil {
+		return err
+	}
+	for _, char := range c.GitHubAppSlug {
+		valid := char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || char == '-'
+		if !valid {
+			return errors.New("GITHUB_APP_SLUG must contain lowercase letters, digits or hyphens")
 		}
-		for _, field := range []struct{ name, value string }{
-			{"GITHUB_APP_SLUG", c.GitHubAppSlug}, {"GITHUB_APP_PRIVATE_KEY_PATH", c.GitHubAppPrivateKeyPath},
-			{"GITHUB_APP_CLIENT_ID", c.GitHubAppClientID}, {"GITHUB_APP_CLIENT_SECRET", c.GitHubAppClientSecret},
-		} {
-			if strings.TrimSpace(field.value) == "" {
-				return fmt.Errorf("%s is required when installation linking is configured", field.name)
-			}
-		}
-		for _, char := range c.GitHubAppSlug {
-			valid := char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || char == '-'
-			if !valid {
-				return errors.New("GITHUB_APP_SLUG must contain lowercase letters, digits or hyphens")
-			}
-		}
-		if c.Production() {
-			if err := CheckPrivateFile("GITHUB_APP_PRIVATE_KEY_PATH", c.GitHubAppPrivateKeyPath); err != nil {
-				return err
-			}
+	}
+	if c.Production() {
+		return CheckPrivateFile("GITHUB_APP_PRIVATE_KEY_PATH", c.GitHubAppPrivateKeyPath)
+	}
+	return nil
+}
+
+// setting is a named configuration value, for messages that name it.
+type setting struct{ name, value string }
+
+// requireAll returns the first blank setting's error, formatted with its name.
+func requireAll(format string, settings ...setting) error {
+	for _, s := range settings {
+		if strings.TrimSpace(s.value) == "" {
+			return fmt.Errorf(format, s.name)
 		}
 	}
 	return nil

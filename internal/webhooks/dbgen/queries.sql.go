@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deliveryMatches = `-- name: DeliveryMatches :one
+SELECT (event_type = $1::text AND payload_hash = $2::text)::boolean AS matches
+FROM webhook_deliveries WHERE delivery_id = $3
+`
+
+type DeliveryMatchesParams struct {
+	EventType   string
+	PayloadHash string
+	DeliveryID  string
+}
+
+func (q *Queries) DeliveryMatches(ctx context.Context, arg DeliveryMatchesParams) (bool, error) {
+	row := q.db.QueryRow(ctx, deliveryMatches, arg.EventType, arg.PayloadHash, arg.DeliveryID)
+	var matches bool
+	err := row.Scan(&matches)
+	return matches, err
+}
+
+const ensureInstallation = `-- name: EnsureInstallation :exec
+INSERT INTO installations (github_installation_id, status) VALUES ($1, 'active') ON CONFLICT DO NOTHING
+`
+
+func (q *Queries) EnsureInstallation(ctx context.Context, githubInstallationID int64) error {
+	_, err := q.db.Exec(ctx, ensureInstallation, githubInstallationID)
+	return err
+}
+
 const findEventRepository = `-- name: FindEventRepository :one
 SELECT installation_id FROM repos WHERE id = $1
 `
@@ -20,6 +47,24 @@ func (q *Queries) FindEventRepository(ctx context.Context, id int64) (int64, err
 	var installation_id int64
 	err := row.Scan(&installation_id)
 	return installation_id, err
+}
+
+const finishInstallationEvent = `-- name: FinishInstallationEvent :exec
+UPDATE installations
+SET source_updated_at = GREATEST(source_updated_at, $1::timestamptz),
+    cleanup_pending = cleanup_pending OR $2::boolean
+WHERE github_installation_id = $3
+`
+
+type FinishInstallationEventParams struct {
+	Stamp                pgtype.Timestamptz
+	Revoke               bool
+	GithubInstallationID int64
+}
+
+func (q *Queries) FinishInstallationEvent(ctx context.Context, arg FinishInstallationEventParams) error {
+	_, err := q.db.Exec(ctx, finishInstallationEvent, arg.Stamp, arg.Revoke, arg.GithubInstallationID)
+	return err
 }
 
 const lockEventInstallation = `-- name: LockEventInstallation :one
@@ -47,6 +92,37 @@ func (q *Queries) LockEventRepository(ctx context.Context, arg LockEventReposito
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const lockInstallationSourceTime = `-- name: LockInstallationSourceTime :one
+SELECT source_updated_at FROM installations WHERE github_installation_id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockInstallationSourceTime(ctx context.Context, githubInstallationID int64) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, lockInstallationSourceTime, githubInstallationID)
+	var source_updated_at pgtype.Timestamptz
+	err := row.Scan(&source_updated_at)
+	return source_updated_at, err
+}
+
+const recordDelivery = `-- name: RecordDelivery :execrows
+INSERT INTO webhook_deliveries (delivery_id, event_type, payload_hash)
+VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING
+`
+
+type RecordDeliveryParams struct {
+	DeliveryID  string
+	EventType   string
+	PayloadHash string
+}
+
+func (q *Queries) RecordDelivery(ctx context.Context, arg RecordDeliveryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordDelivery, arg.DeliveryID, arg.EventType, arg.PayloadHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const recordPREvent = `-- name: RecordPREvent :one
@@ -95,4 +171,35 @@ func (q *Queries) RecordPREvent(ctx context.Context, arg RecordPREventParams) (R
 		&i.Generation,
 	)
 	return i, err
+}
+
+const recordRepositoryEvent = `-- name: RecordRepositoryEvent :execrows
+INSERT INTO installation_repository_events (installation_id, github_repo_id, source_updated_at, removed)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (installation_id, github_repo_id) DO UPDATE
+SET source_updated_at = EXCLUDED.source_updated_at, removed = EXCLUDED.removed
+WHERE installation_repository_events.source_updated_at < EXCLUDED.source_updated_at
+   OR (installation_repository_events.source_updated_at = EXCLUDED.source_updated_at AND EXCLUDED.removed)
+`
+
+type RecordRepositoryEventParams struct {
+	InstallationID  int64
+	GithubRepoID    int64
+	SourceUpdatedAt pgtype.Timestamptz
+	Removed         bool
+}
+
+// The installation timestamp is not a selection sequence, so each repository
+// keeps its own: a newer event wins, and a removal wins a same-time re-add.
+func (q *Queries) RecordRepositoryEvent(ctx context.Context, arg RecordRepositoryEventParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordRepositoryEvent,
+		arg.InstallationID,
+		arg.GithubRepoID,
+		arg.SourceUpdatedAt,
+		arg.Removed,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

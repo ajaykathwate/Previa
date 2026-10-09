@@ -56,7 +56,7 @@ func (r *Repository) reportTx(ctx context.Context, tx pgx.Tx, pullRequestID int6
 		return fmt.Errorf("record wanted report: %w", err)
 	}
 	request := NewRequest(target.ID, target.Generation, target.HeadSha, target.State)
-	if target.CurrentIntent && target.State == "open" {
+	if target.CurrentIntent && target.State == StateOpen {
 		request.Revision = target.Revision
 	}
 	if _, err := r.operations.EnqueueTx(ctx, tx, OperationSpec{

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/ajaykathwatee/previa/internal/webhooks/dbgen"
 	"github.com/google/go-github/v91/github"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -25,11 +27,17 @@ type revoker interface {
 	RevokeTx(ctx context.Context, tx pgx.Tx, githubInstallationID int64, allRepositories bool, githubRepoIDs []int64) (int, error)
 }
 
+// lifecycleApplier records an installation lifecycle change;
+// *installations.Repository implements it.
+type lifecycleApplier interface {
+	ApplyEventTx(ctx context.Context, tx pgx.Tx, change installations.LifecycleChange) error
+}
+
 type DeliveryService struct {
 	pool          *pgxpool.Pool
 	observer      pullrequests.Observer
 	revoker       revoker
-	installations *installations.Repository
+	installations lifecycleApplier
 	invalidate    func(int64)
 	refresher     pullrequests.MergeabilityRefresher
 }
@@ -46,44 +54,19 @@ func NewDeliveryService(pool *pgxpool.Pool, observer pullrequests.Observer, inva
 	}
 	return s
 }
+
+// Process records a verified delivery once and applies its event in the same
+// transaction. A redelivery is a no-op; a reused ID with another event is
+// ErrDeliveryConflict. Installation caches are invalidated after commit.
 func (s *DeliveryService) Process(ctx context.Context, id, kind, hash string, event any) error {
 	var installationID int64
 	err := database.InTransaction(ctx, s.pool, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `INSERT INTO webhook_deliveries(delivery_id,event_type,payload_hash) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, id, kind, hash)
-		if err != nil {
-			return fmt.Errorf("record delivery: %w", err)
-		}
-		if tag.RowsAffected() == 0 {
-			var match bool
-			if err := tx.QueryRow(ctx, `SELECT event_type=$2 AND payload_hash=$3 FROM webhook_deliveries WHERE delivery_id=$1`, id, kind, hash).Scan(&match); err != nil {
-				return err
-			}
-			if !match {
-				return ErrDeliveryConflict
-			}
-			return nil
+		if fresh, err := recordDelivery(ctx, dbgen.New(tx), id, kind, hash); err != nil || !fresh {
+			return err
 		}
 		switch e := event.(type) {
 		case *github.PullRequestEvent:
-			if e.GetAction() == "" {
-				return ErrInvalidEvent
-			}
-			switch e.GetAction() {
-			case "opened", "reopened", "synchronize", "closed":
-			default:
-				return nil
-			}
-			if e.GetInstallation().GetID() <= 0 || e.GetRepo().GetID() <= 0 {
-				return ErrInvalidEvent
-			}
-			o, err := pullrequests.FromGitHub(e.GetPullRequest(), e.GetRepo().GetID())
-			if err != nil {
-				return fmt.Errorf("%w: incomplete PR", ErrInvalidEvent)
-			}
-			if e.GetAction() == "closed" && o.State == "open" || e.GetAction() != "closed" && o.State != "open" {
-				return ErrInvalidEvent
-			}
-			return pullrequests.ProcessWebhookTx(ctx, tx, e.GetRepo().GetID(), e.GetInstallation().GetID(), o, s.observer, s.refresher)
+			return s.pullRequest(ctx, tx, e)
 		case *github.InstallationEvent:
 			if e.GetAction() == "" {
 				return ErrInvalidEvent
@@ -113,48 +96,69 @@ func (s *DeliveryService) Process(ctx context.Context, id, kind, hash string, ev
 	}
 	return err
 }
+
+// recordDelivery records the delivery ID and reports whether it is new.
+func recordDelivery(ctx context.Context, q *dbgen.Queries, id, kind, hash string) (bool, error) {
+	recorded, err := q.RecordDelivery(ctx, dbgen.RecordDeliveryParams{DeliveryID: id, EventType: kind, PayloadHash: hash})
+	if err != nil {
+		return false, fmt.Errorf("record delivery: %w", err)
+	}
+	if recorded > 0 {
+		return true, nil
+	}
+	match, err := q.DeliveryMatches(ctx, dbgen.DeliveryMatchesParams{DeliveryID: id, EventType: kind, PayloadHash: hash})
+	if err != nil {
+		return false, err
+	}
+	if !match {
+		return false, ErrDeliveryConflict
+	}
+	return false, nil
+}
+
+// pullRequest applies an opened, reopened, synchronized or closed PR.
+func (s *DeliveryService) pullRequest(ctx context.Context, tx pgx.Tx, e *github.PullRequestEvent) error {
+	if e.GetAction() == "" {
+		return ErrInvalidEvent
+	}
+	switch e.GetAction() {
+	case "opened", "reopened", "synchronize", "closed":
+	default:
+		return nil
+	}
+	if e.GetInstallation().GetID() <= 0 || e.GetRepo().GetID() <= 0 {
+		return ErrInvalidEvent
+	}
+	o, err := pullrequests.FromGitHub(e.GetPullRequest(), e.GetRepo().GetID())
+	if err != nil {
+		return fmt.Errorf("%w: incomplete PR", ErrInvalidEvent)
+	}
+	closing := e.GetAction() == "closed"
+	if closing == (o.State == environments.StateOpen) {
+		return ErrInvalidEvent // a close must report a closed PR, every other action an open one
+	}
+	return pullrequests.ProcessWebhookTx(ctx, tx, e.GetRepo().GetID(), e.GetInstallation().GetID(), o, s.observer, s.refresher)
+}
+
+// lifecycle applies an installation or repository-selection change unless
+// it is older than what is recorded, revokes what it removes, and records the
+// installation's source time and pending cleanup.
 func (s *DeliveryService) lifecycle(ctx context.Context, tx pgx.Tx, event any, stamp time.Time) error {
 	change, err := installations.ParseLifecycleEvent(event)
-	if err != nil {
+	if err != nil || stamp.IsZero() {
 		return ErrInvalidEvent
 	}
-	if stamp.IsZero() {
-		return ErrInvalidEvent
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO installations(github_installation_id,status) VALUES($1,'active') ON CONFLICT DO NOTHING`, change.ID); err != nil {
+	q := dbgen.New(tx)
+	if err := q.EnsureInstallation(ctx, change.ID); err != nil {
 		return err
 	}
-	var source pgtype.Timestamptz
-	if err := tx.QueryRow(ctx, `SELECT source_updated_at FROM installations WHERE github_installation_id=$1 FOR UPDATE`, change.ID).Scan(&source); err != nil {
+	source, err := q.LockInstallationSourceTime(ctx, change.ID)
+	if err != nil {
 		return err
 	}
 	revoke := change.Cleanup || len(change.Removed) > 0
 	if _, repositoryEvent := event.(*github.InstallationRepositoriesEvent); repositoryEvent {
-		// The installation timestamp is not a selection sequence. Track each repo:
-		// independent additions work, while removal wins ambiguous same-time re-adds.
-		filter := func(repos []installations.RepositoryInfo, removed bool) ([]installations.RepositoryInfo, error) {
-			accepted := make([]installations.RepositoryInfo, 0, len(repos))
-			for _, repo := range repos {
-				tag, err := tx.Exec(ctx, `INSERT INTO installation_repository_events(installation_id,github_repo_id,source_updated_at,removed)
-    VALUES($1,$2,$3,$4) ON CONFLICT(installation_id,github_repo_id) DO UPDATE
-    SET source_updated_at=EXCLUDED.source_updated_at,removed=EXCLUDED.removed
-    WHERE installation_repository_events.source_updated_at<EXCLUDED.source_updated_at
-    OR (installation_repository_events.source_updated_at=EXCLUDED.source_updated_at AND EXCLUDED.removed)`, change.ID, repo.ID, stamp, removed)
-				if err != nil {
-					return nil, err
-				}
-				if tag.RowsAffected() > 0 {
-					accepted = append(accepted, repo)
-				}
-			}
-			return accepted, nil
-		}
-		change.Added, err = filter(change.Added, false)
-		if err != nil {
-			return err
-		}
-		change.Removed, err = filter(change.Removed, true)
-		if err != nil {
+		if err := acceptRepositoryChanges(ctx, q, &change, stamp); err != nil {
 			return err
 		}
 		revoke = len(change.Removed) > 0
@@ -174,6 +178,35 @@ func (s *DeliveryService) lifecycle(ctx context.Context, tx pgx.Tx, event any, s
 			return err
 		}
 	}
-	_, err = tx.Exec(ctx, `UPDATE installations SET source_updated_at=GREATEST(source_updated_at,$2),cleanup_pending=cleanup_pending OR $3 WHERE github_installation_id=$1`, change.ID, stamp, revoke)
+	return q.FinishInstallationEvent(ctx, dbgen.FinishInstallationEventParams{GithubInstallationID: change.ID, Stamp: timestamp(stamp), Revoke: revoke})
+}
+
+// acceptRepositoryChanges keeps only the added and removed repositories whose
+// own event is newer than the last one recorded for them. The installation
+// timestamp is not a selection sequence: independent additions work, while a
+// removal wins an ambiguous same-time re-add.
+func acceptRepositoryChanges(ctx context.Context, q *dbgen.Queries, change *installations.LifecycleChange, stamp time.Time) error {
+	accept := func(repos []installations.RepositoryInfo, removed bool) ([]installations.RepositoryInfo, error) {
+		accepted := make([]installations.RepositoryInfo, 0, len(repos))
+		for _, repo := range repos {
+			recorded, err := q.RecordRepositoryEvent(ctx, dbgen.RecordRepositoryEventParams{
+				InstallationID: change.ID, GithubRepoID: repo.ID, SourceUpdatedAt: timestamp(stamp), Removed: removed,
+			})
+			if err != nil {
+				return nil, err
+			}
+			if recorded > 0 {
+				accepted = append(accepted, repo)
+			}
+		}
+		return accepted, nil
+	}
+	var err error
+	if change.Added, err = accept(change.Added, false); err != nil {
+		return err
+	}
+	change.Removed, err = accept(change.Removed, true)
 	return err
 }
+
+func timestamp(t time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: t, Valid: true} }

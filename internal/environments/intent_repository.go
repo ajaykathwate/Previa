@@ -43,6 +43,17 @@ func lockIntentScope(ctx context.Context, q *dbgen.Queries, userID, prID int64) 
 	return intentScope{pr: pr, mode: repo.BuildMode}, nil
 }
 
+// lockOwnerIntentScope locks the intent scope on behalf of the PR's owner,
+// whose access every system step (admission, results, routing, handoff) acts
+// under; step names it in errors.
+func lockOwnerIntentScope(ctx context.Context, q *dbgen.Queries, prID int64, step string) (intentScope, error) {
+	owner, err := q.FindPROwner(ctx, prID)
+	if err != nil {
+		return intentScope{}, fmt.Errorf("find %s owner: %w", step, err)
+	}
+	return lockIntentScope(ctx, q, owner.Int64, prID)
+}
+
 func intentAccessError(operation string, err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrIntentUnavailable
@@ -83,7 +94,7 @@ func (r *IntentRepository) requestIntentTx(ctx context.Context, tx pgx.Tx, comma
 	if err != nil {
 		return IntentOutcome{}, err
 	}
-	if scope.pr.State != "open" {
+	if scope.pr.State != StateOpen {
 		return IntentOutcome{}, ErrPRClosed
 	}
 	if err := BuildBlockReason(scope.pr.BuildStatus, scope.pr.NeedsRefresh); err != nil {
@@ -104,7 +115,7 @@ func (r *IntentRepository) requestIntentTx(ctx context.Context, tx pgx.Tx, comma
 	row, err := q.ReplaceBuildIntent(ctx, dbgen.ReplaceBuildIntentParams{
 		PrID: command.PullRequestID, BaseRevision: command.ExpectedRevision,
 		Generation: scope.pr.Generation, HeadSha: scope.pr.HeadSha,
-		Source: "manual", RequestAction: string(command.Action),
+		Source: modeManual, RequestAction: string(command.Action),
 		AvailableAt: pgtype.Timestamptz{Time: availableAt, Valid: !availableAt.IsZero()},
 		RequestedBy: pgtype.Int8{Int64: command.UserID, Valid: true}, IdempotencyKey: command.IdempotencyKey,
 	})
@@ -126,7 +137,7 @@ func checkIntentCommand(command IntentCommand, scope intentScope, current *Build
 			if current.Action != string(command.Action) || current.RequestedBy != command.UserID || current.BaseRevision != command.ExpectedRevision {
 				return false, ErrIntentKeyConflict
 			}
-			if current.Generation != scope.pr.Generation || current.HeadSHA != scope.pr.HeadSha {
+			if !current.forHead(scope) {
 				return false, ErrIntentConflict
 			}
 			return true, nil
@@ -136,7 +147,7 @@ func checkIntentCommand(command IntentCommand, scope intentScope, current *Build
 		return false, ErrIntentConflict
 	}
 	if command.Action != BuildLatest {
-		if current == nil || current.Generation != scope.pr.Generation || current.HeadSHA != scope.pr.HeadSha {
+		if !current.forHead(scope) {
 			return false, ErrIntentConflict
 		}
 		if (command.Action == RetryBuild && current.State != IntentFailed) || (command.Action == Rebuild && current.State != IntentSucceeded) {
@@ -144,14 +155,14 @@ func checkIntentCommand(command IntentCommand, scope intentScope, current *Build
 		}
 		return false, nil
 	}
-	if current == nil || current.Generation != scope.pr.Generation || current.HeadSHA != scope.pr.HeadSha {
+	if !current.forHead(scope) {
 		return false, nil
 	}
 	switch current.State {
 	case IntentPending, IntentQueued:
 		// A manual override creates a new immediate revision, fencing any delayed
 		// or queued automatic wake-up. Manual pending work simply coalesces.
-		return current.Source == "manual", nil
+		return current.Source == modeManual, nil
 	case IntentRunning, IntentSucceeded, IntentFailed:
 		return true, nil
 	default:

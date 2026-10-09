@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
 	"github.com/jackc/pgx/v5"
@@ -85,34 +86,18 @@ func (s *SyncService) Request(ctx context.Context, userID, repoID int64) error {
 		return err
 	})
 }
+
+// RunPage discovers one page of a repository's open PRs. It claims the page
+// under the usual locks, reads GitHub with no transaction open, then records
+// what it found unless the sync moved on or the installation or repository
+// changed meanwhile.
 func (s *SyncService) RunPage(ctx context.Context, args SyncArgs) error {
 	if args.RepoID <= 0 || args.Revision <= 0 || args.Page <= 0 {
 		return errors.New("invalid discovery job identity")
 	}
-	var before scope
-	current := false
-	err := database.InTransaction(ctx, s.pool, func(tx pgx.Tx) error {
-		var err error
-		before, err = lockScope(ctx, tx, args.RepoID, 0)
-		if err != nil {
-			return err
-		}
-		q := dbgen.New(tx)
-		row, err := q.LockSync(ctx, args.RepoID)
-		if err != nil {
-			return err
-		}
-		if row.Revision != args.Revision || row.NextPage != args.Page || row.State == "complete" {
-			return nil
-		}
-		current = true
-		return q.MarkSyncing(ctx, dbgen.MarkSyncingParams{RepoID: args.RepoID, Revision: args.Revision})
-	})
-	if err != nil {
+	before, current, err := s.claimPage(ctx, args)
+	if err != nil || !current {
 		return err
-	}
-	if !current {
-		return nil
 	}
 	if s.source == nil {
 		return errors.New("GitHub App discovery credentials are not configured")
@@ -126,8 +111,15 @@ func (s *SyncService) RunPage(ctx context.Context, args SyncArgs) error {
 		return errors.New("invalid discovery pagination")
 	}
 	return database.InTransaction(ctx, s.pool, func(tx pgx.Tx) error {
-		after, err := lockScope(ctx, tx, args.RepoID, 0)
-		if err != nil {
+		return s.recordPageTx(ctx, tx, args, before, observations, next)
+	})
+}
+
+// claimPage marks the sync as running this page, if the page is still the
+// sync's next one, and returns the scope its result must still match.
+func (s *SyncService) claimPage(ctx context.Context, args SyncArgs) (before scope, current bool, err error) {
+	err = database.InTransaction(ctx, s.pool, func(tx pgx.Tx) error {
+		if before, err = lockScope(ctx, tx, args.RepoID, 0); err != nil {
 			return err
 		}
 		q := dbgen.New(tx)
@@ -135,39 +127,61 @@ func (s *SyncService) RunPage(ctx context.Context, args SyncArgs) error {
 		if err != nil {
 			return err
 		}
-		if row.Revision != args.Revision || row.NextPage != args.Page || row.State == "complete" {
+		if current = pageCurrent(row, args); !current {
 			return nil
 		}
-		if after.install.ID != before.install.ID || after.install.Revision != before.install.Revision || after.repo.ObservationVersion != before.repo.ObservationVersion {
-			return ErrSnapshotChanged
+		return q.MarkSyncing(ctx, dbgen.MarkSyncingParams{RepoID: args.RepoID, Revision: args.Revision})
+	})
+	return before, current, err
+}
+
+// recordPageTx observes the page's open PRs, records the sync's progress and
+// queues the next page.
+func (s *SyncService) recordPageTx(ctx context.Context, tx pgx.Tx, args SyncArgs, before scope, observations []Observation, next int32) error {
+	after, err := lockScope(ctx, tx, args.RepoID, 0)
+	if err != nil {
+		return err
+	}
+	q := dbgen.New(tx)
+	row, err := q.LockSync(ctx, args.RepoID)
+	if err != nil {
+		return err
+	}
+	if !pageCurrent(row, args) {
+		return nil
+	}
+	if after.install.ID != before.install.ID || !after.unchanged(before) {
+		return ErrSnapshotChanged
+	}
+	stored := int32(0)
+	for _, o := range observations {
+		if o.State != environments.StateOpen {
+			continue
 		}
-		stored := int32(0)
-		for _, o := range observations {
-			if o.State != "open" {
-				continue
-			}
-			if _, err := ObserveTx(ctx, tx, args.RepoID, o, false, s.observer); err != nil {
-				return err
-			}
-			stored++
-			if err := s.RefreshMergeabilityTx(ctx, tx, args.RepoID, o.Number); err != nil {
-				return err
-			}
-		}
-		state := "syncing"
-		storedNext := next
-		if next == 0 {
-			state = "complete"
-			storedNext = args.Page
-		}
-		if err := q.FinishSyncPage(ctx, dbgen.FinishSyncPageParams{RepoID: args.RepoID, Revision: args.Revision, NextPage: storedNext, Fetched: stored, State: state}); err != nil {
+		if _, err := ObserveTx(ctx, tx, args.RepoID, o, false, s.observer); err != nil {
 			return err
 		}
-		if next > 0 {
-			_, err = s.jobs.InsertTx(ctx, tx, SyncArgs{args.RepoID, args.Revision, next}, nil)
+		stored++
+		if err := s.RefreshMergeabilityTx(ctx, tx, args.RepoID, o.Number); err != nil {
+			return err
 		}
+	}
+	state, storedNext := "syncing", next
+	if next == 0 {
+		state, storedNext = "complete", args.Page
+	}
+	if err := q.FinishSyncPage(ctx, dbgen.FinishSyncPageParams{RepoID: args.RepoID, Revision: args.Revision, NextPage: storedNext, Fetched: stored, State: state}); err != nil {
 		return err
-	})
+	}
+	if next > 0 {
+		_, err = s.jobs.InsertTx(ctx, tx, SyncArgs{args.RepoID, args.Revision, next}, nil)
+	}
+	return err
+}
+
+// pageCurrent reports whether the page is still the running sync's next one.
+func pageCurrent(row dbgen.PrSync, args SyncArgs) bool {
+	return row.Revision == args.Revision && row.NextPage == args.Page && row.State != "complete"
 }
 
 type SyncWorker struct {

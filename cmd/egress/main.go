@@ -51,7 +51,7 @@ func main() {
 	if len(args) > 0 && args[0] == "serve" {
 		args = args[1:]
 	}
-	serve(args)
+	os.Exit(serve(args))
 }
 
 func probe(args []string) int {
@@ -200,7 +200,9 @@ func parsePorts(value string) ([]int, error) {
 	return ports, nil
 }
 
-func serve(args []string) {
+// serve runs the proxy until it is told to stop and returns the exit code;
+// its deferred cleanup runs before the process exits.
+func serve(args []string) int {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
 	listen := flags.String("listen", ":"+egress.Port, "address to listen on")
 	state := flags.String("state", egress.StateDir, "state directory (forwarded ports, allow files and counters)")
@@ -232,6 +234,7 @@ func serve(args []string) {
 	logger.Info("egress proxy listening", "address", *listen)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("egress proxy stopped", "error", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

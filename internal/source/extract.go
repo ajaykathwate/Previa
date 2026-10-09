@@ -141,70 +141,87 @@ func (x *extractor) entry(tr io.Reader, hdr *tar.Header) error {
 	}
 	switch hdr.Typeflag {
 	case tar.TypeDir:
-		if x.files[name] {
-			return overlapping()
-		}
-		if err := x.markParents(name); err != nil {
-			return err
-		}
-		x.dirs[name] = true
-		if err := x.root.MkdirAll(name, 0o755); err != nil {
-			return writeFailure(err)
-		}
-		x.stats.Directories++
+		return x.directory(name)
 	case tar.TypeReg:
-		if x.files[name] || x.dirs[name] {
-			return overlapping()
-		}
-		if hdr.Size < 0 || hdr.Size > x.limits.MaxExtractedBytes-x.stats.Bytes {
-			return failure(CodeTooLarge, fmt.Sprintf("The extracted source would exceed %d bytes.", x.limits.MaxExtractedBytes), nil)
-		}
-		if err := x.markParents(name); err != nil {
-			return err
-		}
-		x.files[name] = true
-		if parent := path.Dir(name); parent != "." {
-			if err := x.root.MkdirAll(parent, 0o755); err != nil {
-				return writeFailure(err)
-			}
-		}
-		perm := os.FileMode(0o644)
-		if hdr.Mode&0o111 != 0 {
-			perm = 0o755 // Keep the executable bit only; never setuid, setgid or sticky.
-		}
-		f, err := x.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
-		if err != nil {
-			return writeFailure(err)
-		}
-		written, copyErr := io.Copy(f, io.LimitReader(tr, hdr.Size))
-		closeErr := f.Close()
-		if copyErr != nil {
-			return readFailure(context.Background(), copyErr)
-		}
-		if written != hdr.Size {
-			return retryable(CodeInvalidArchive, "The archive ended before a file was complete.", nil)
-		}
-		if closeErr != nil {
-			return writeFailure(closeErr)
-		}
-		x.stats.Files++
-		x.stats.Bytes += written
+		return x.file(tr, hdr, name)
 	case tar.TypeSymlink:
-		if err := x.validateLink(name, hdr.Linkname); err != nil {
-			return err
-		}
-		if x.files[name] || x.dirs[name] {
-			return overlapping()
-		}
-		if err := x.markParents(name); err != nil {
-			return err
-		}
-		x.files[name] = true
-		x.links = append(x.links, pendingLink{name: name, target: hdr.Linkname})
-		x.stats.Symlinks++
+		return x.symlink(name, hdr.Linkname)
 	default:
 		return failure(CodeUnsafeArchive, "The archive contains a hard link, device, FIFO or other unsupported entry.", nil)
 	}
+}
+
+func (x *extractor) directory(name string) error {
+	if x.files[name] {
+		return overlapping()
+	}
+	if err := x.markParents(name); err != nil {
+		return err
+	}
+	x.dirs[name] = true
+	if err := x.root.MkdirAll(name, 0o755); err != nil {
+		return writeFailure(err)
+	}
+	x.stats.Directories++
+	return nil
+}
+
+// file writes a regular file within the size budget, keeping only its
+// executable bit.
+func (x *extractor) file(tr io.Reader, hdr *tar.Header, name string) error {
+	if x.files[name] || x.dirs[name] {
+		return overlapping()
+	}
+	if hdr.Size < 0 || hdr.Size > x.limits.MaxExtractedBytes-x.stats.Bytes {
+		return failure(CodeTooLarge, fmt.Sprintf("The extracted source would exceed %d bytes.", x.limits.MaxExtractedBytes), nil)
+	}
+	if err := x.markParents(name); err != nil {
+		return err
+	}
+	x.files[name] = true
+	if parent := path.Dir(name); parent != "." {
+		if err := x.root.MkdirAll(parent, 0o755); err != nil {
+			return writeFailure(err)
+		}
+	}
+	perm := os.FileMode(0o644)
+	if hdr.Mode&0o111 != 0 {
+		perm = 0o755 // Keep the executable bit only; never setuid, setgid or sticky.
+	}
+	f, err := x.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return writeFailure(err)
+	}
+	written, copyErr := io.Copy(f, io.LimitReader(tr, hdr.Size))
+	closeErr := f.Close()
+	if copyErr != nil {
+		return readFailure(context.Background(), copyErr)
+	}
+	if written != hdr.Size {
+		return retryable(CodeInvalidArchive, "The archive ended before a file was complete.", nil)
+	}
+	if closeErr != nil {
+		return writeFailure(closeErr)
+	}
+	x.stats.Files++
+	x.stats.Bytes += written
+	return nil
+}
+
+// symlink records a validated link; links are created after every file.
+func (x *extractor) symlink(name, target string) error {
+	if err := x.validateLink(name, target); err != nil {
+		return err
+	}
+	if x.files[name] || x.dirs[name] {
+		return overlapping()
+	}
+	if err := x.markParents(name); err != nil {
+		return err
+	}
+	x.files[name] = true
+	x.links = append(x.links, pendingLink{name: name, target: target})
+	x.stats.Symlinks++
 	return nil
 }
 

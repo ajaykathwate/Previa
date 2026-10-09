@@ -176,7 +176,7 @@ and slug, used to recognise its own comments, come from the App itself
 - `internal/environments/reports.go`: `reportTx`, `WithReports`; hooks in the
   lifecycle transactions listed above. `pullrequests` records reports for refreshed
   observations through the broker (`RecordReportTx`).
-- Wiring (`internal/app/pipeline.go`): the App's ID and slug are read from GitHub
+- Wiring (`internal/app/execution.go`): the App's ID and slug are read from GitHub
   (`GET /app`) at start, then `reporting.NewGitHubAPI(githubapp client, app ID, slug)`
   and `reporting.NewReporter(pool, api, Settings{AppBaseURL, PreviewBaseDomain}, logger)`
   become the `report_status` executor of the operation worker. The server

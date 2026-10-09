@@ -28,8 +28,7 @@ func (r *IntentRepository) AdvanceIntent(ctx context.Context, command IntentTran
 		if err != nil {
 			return err
 		}
-		if current == nil || current.Revision != command.Revision || current.Generation != command.Generation ||
-			current.Generation != scope.pr.Generation || current.HeadSHA != scope.pr.HeadSha || scope.pr.State != "open" {
+		if !current.forHead(scope) || current.Revision != command.Revision || current.Generation != command.Generation || scope.pr.State != StateOpen {
 			return ErrIntentConflict
 		}
 		if command.Next == IntentRunning {
@@ -41,13 +40,10 @@ func (r *IntentRepository) AdvanceIntent(ctx context.Context, command IntentTran
 			result = *current
 			return nil // Same fenced transition is idempotent; it does not repeat effects.
 		}
-		allowed := (command.Next == IntentQueued && current.State == IntentPending) ||
-			(command.Next == IntentRunning && current.State == IntentQueued) ||
-			((command.Next == IntentSucceeded || command.Next == IntentFailed) && current.State == IntentRunning)
-		if !allowed {
+		if !transitionAllowed(current.State, command.Next) {
 			return ErrIntentAction
 		}
-		if current.Source == "automatic" && scope.mode != "automatic" && current.State != IntentRunning {
+		if !current.allowedIn(scope.mode) {
 			return ErrIntentConflict
 		}
 		row, err := q.AdvanceBuildIntent(ctx, dbgen.AdvanceBuildIntentParams{
@@ -85,15 +81,15 @@ func (r *IntentRepository) ObserveIntentTx(ctx context.Context, tx pgx.Tx, userI
 	if err != nil {
 		return ObservationOutcome{}, err
 	}
-	closed := scope.pr.State != "open"
-	stale := current != nil && (current.Generation != scope.pr.Generation || current.HeadSHA != scope.pr.HeadSha)
-	if closed || (stale && scope.mode == "manual") {
+	closed := scope.pr.State != StateOpen
+	stale := current != nil && !current.forHead(scope)
+	if closed || (stale && scope.mode == modeManual) {
 		if _, err := q.SupersedeBuildIntent(ctx, prID); err != nil {
 			return ObservationOutcome{}, fmt.Errorf("supersede observed intent: %w", err)
 		}
 		return ObservationOutcome{TeardownRequired: closed}, nil
 	}
-	if scope.mode == "manual" {
+	if scope.mode == modeManual {
 		return ObservationOutcome{Intent: current}, nil
 	}
 	if current != nil && !stale {
@@ -108,7 +104,7 @@ func (r *IntentRepository) ObserveIntentTx(ctx context.Context, tx pgx.Tx, userI
 	}
 	row, err := q.ReplaceBuildIntent(ctx, dbgen.ReplaceBuildIntentParams{
 		PrID: prID, BaseRevision: baseRevision, Generation: scope.pr.Generation, HeadSha: scope.pr.HeadSha,
-		Source: "automatic", RequestAction: "automatic", IdempotencyKey: fmt.Sprintf("auto-%d-%d", prID, scope.pr.Generation),
+		Source: modeAutomatic, RequestAction: modeAutomatic, IdempotencyKey: fmt.Sprintf("auto-%d-%d", prID, scope.pr.Generation),
 		AvailableAt: pgtype.Timestamptz{Time: deadline.UTC(), Valid: true},
 	})
 	if errors.Is(err, pgx.ErrNoRows) {

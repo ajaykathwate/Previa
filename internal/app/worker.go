@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/platform/config"
-	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 	"github.com/ajaykathwatee/previa/internal/platform/githubapp"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
@@ -16,7 +15,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/version"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/jackc/pgx/v5"
-	"github.com/moby/moby/client"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 )
 
@@ -34,35 +33,20 @@ func RunWorker(ctx context.Context, logger *slog.Logger) error {
 		return fmt.Errorf("configure worker: %w", err)
 	}
 	cfg.ApplicationName = "previa-worker"
-	pool, err := database.NewPool(ctx, cfg.SharedConfig)
+	pool, err := openDatabase(ctx, cfg.SharedConfig, "worker", cfg.AppEnv, logger)
 	if err != nil {
-		return fmt.Errorf("initialize worker database: %w", err)
-	}
-	defer pool.Close()
-	if err := database.CheckSchema(ctx, pool); err != nil {
 		return err
 	}
-	logger.Info("database health check passed", "version", version.Version, "schema", database.SchemaVersion, "environment", cfg.AppEnv)
+	defer pool.Close()
 	producer, err := queue.NewProducer(pool, logger)
 	if err != nil {
 		return err
 	}
-	in := pipelineInput{cfg: cfg, pool: pool, producer: producer, logger: logger}
-	if cfg.GitHubAppID > 0 {
-		app, err := githubapp.NewApp(cfg.GitHubAppID, cfg.GitHubAppPrivateKeyPath)
-		if err != nil {
-			return fmt.Errorf("initialize worker GitHub App: %w", err)
-		}
-		in.github = app
+	in, closeDocker, err := workerInput(ctx, cfg, pool, producer, logger)
+	if err != nil {
+		return err
 	}
-	if cfg.RoutingConfigured() && in.github != nil {
-		docker, err := dockerx.New(ctx)
-		if err != nil {
-			return fmt.Errorf("builds need Docker (unset PREVIEW_BASE_DOMAIN to run without builds): %w", err)
-		}
-		defer func(c *client.Client) { _ = c.Close() }(docker)
-		in.docker = docker
-	}
+	defer closeDocker()
 	p, err := buildPipeline(ctx, in)
 	if err != nil {
 		return fmt.Errorf("compose worker: %w", err)
@@ -87,10 +71,8 @@ func RunWorker(ctx context.Context, logger *slog.Logger) error {
 	for _, reason := range p.unavailable {
 		logger.Warn("capability unavailable", "reason", reason)
 	}
-	checks := append([]httpx.Check{
-		{Name: "database", Run: func(ctx context.Context) error { return database.HealthCheck(ctx, pool) }},
-		{Name: "schema", Run: func(ctx context.Context) error { return database.CheckSchema(ctx, pool) }},
-		{Name: "river", Run: func(context.Context) error {
+	checks := append(databaseChecks(pool),
+		httpx.Check{Name: "river", Run: func(context.Context) error {
 			select {
 			case <-riverClient.Stopped():
 				return errors.New("stopped")
@@ -98,21 +80,45 @@ func RunWorker(ctx context.Context, logger *slog.Logger) error {
 				return nil
 			}
 		}},
-		{Name: "heartbeat", Run: func(context.Context) error { return heartbeat.Fresh() }},
-	}, p.checks...)
-	stopInternal, err := httpx.ServeInternal(cfg.InternalAddr, httpx.Internal(checks, func() map[string]any {
+		httpx.Check{Name: "heartbeat", Run: func(context.Context) error { return heartbeat.Fresh() }})
+	stopInternal, err := httpx.ServeInternal(cfg.InternalAddr, httpx.Internal(append(checks, p.checks...), func() map[string]any {
 		return map[string]any{"capabilities": heartbeat.Capabilities(), "version": version.Version}
 	}), logger)
 	if err != nil {
 		return errors.Join(err, heartbeat.Stop(context.Background()), stopRiver(riverClient, logger))
 	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = stopInternal(ctx)
-	}()
+	defer stopWithin(stopInternal, 5*time.Second)
 	logger.Info("River worker started", "execution", p.capabilities.Execution, "paused", p.capabilities.Paused, "reporting", p.capabilities.Reporting,
 		"housekeeping", p.capabilities.Housekeeping, "discovery", p.capabilities.Discovery, "build_workers", cfg.MaxConcurrentBuilds)
+	return runUntilStopped(ctx, riverClient, heartbeat, logger)
+}
+
+// workerInput gathers the worker's external dependencies: the GitHub App,
+// and Docker when the worker can build (routing configured and the App
+// present). The returned close releases Docker.
+func workerInput(ctx context.Context, cfg config.WorkerConfig, pool *pgxpool.Pool, producer *river.Client[pgx.Tx], logger *slog.Logger) (pipelineInput, func(), error) {
+	in := pipelineInput{cfg: cfg, pool: pool, producer: producer, logger: logger}
+	if cfg.GitHubAppID > 0 {
+		app, err := githubapp.NewApp(cfg.GitHubAppID, cfg.GitHubAppPrivateKeyPath)
+		if err != nil {
+			return pipelineInput{}, nil, fmt.Errorf("initialize worker GitHub App: %w", err)
+		}
+		in.github = app
+	}
+	if !cfg.RoutingConfigured() || in.github == nil {
+		return in, func() {}, nil
+	}
+	docker, err := dockerx.New(ctx)
+	if err != nil {
+		return pipelineInput{}, nil, fmt.Errorf("builds need Docker (unset PREVIEW_BASE_DOMAIN to run without builds): %w", err)
+	}
+	in.docker = docker
+	return in, func() { _ = docker.Close() }, nil
+}
+
+// runUntilStopped runs until the process is told to stop or River stops on
+// its own, then withdraws the worker's capabilities and drains River.
+func runUntilStopped(ctx context.Context, riverClient *river.Client[pgx.Tx], heartbeat *workers.Heartbeat, logger *slog.Logger) error {
 	var stopped error
 	select {
 	case <-ctx.Done():

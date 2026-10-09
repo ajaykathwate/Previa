@@ -92,16 +92,7 @@ func (g *Gateway) Ensure(ctx context.Context) (string, error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		inspected, err := g.docker.ContainerInspect(ctx, ContainerName, client.ContainerInspectOptions{})
 		if err == nil {
-			c := inspected.Container
-			if c.Config != nil && c.Config.Labels[labelSpec] == spec {
-				if c.State == nil || !c.State.Running {
-					if _, err := g.docker.ContainerStart(ctx, c.ID, client.ContainerStartOptions{}); err != nil {
-						return "", fmt.Errorf("start egress proxy: %w", err)
-					}
-				}
-				return c.ID, nil
-			}
-			return g.replace(ctx, c, spec)
+			return g.reuse(ctx, inspected.Container, spec)
 		}
 		if !cerrdefs.IsNotFound(err) {
 			return "", fmt.Errorf("inspect egress proxy: %w", err)
@@ -113,6 +104,20 @@ func (g *Gateway) Ensure(ctx context.Context) (string, error) {
 		return id, err
 	}
 	return "", errors.New("egress proxy could not be created")
+}
+
+// reuse starts the existing proxy if it runs the current image, and replaces
+// it otherwise.
+func (g *Gateway) reuse(ctx context.Context, c container.InspectResponse, spec string) (string, error) {
+	if c.Config == nil || c.Config.Labels[labelSpec] != spec {
+		return g.replace(ctx, c, spec)
+	}
+	if c.State == nil || !c.State.Running {
+		if _, err := g.docker.ContainerStart(ctx, c.ID, client.ContainerStartOptions{}); err != nil {
+			return "", fmt.Errorf("start egress proxy: %w", err)
+		}
+	}
+	return c.ID, nil
 }
 
 // spec identifies what the container runs: the image's content.

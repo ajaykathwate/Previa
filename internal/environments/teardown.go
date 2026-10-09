@@ -76,7 +76,7 @@ func (r *Repository) RequestTeardown(ctx context.Context, pullRequestID int64, r
 		if err != nil {
 			return err
 		}
-		required := pr.State != "open" || pr.TeardownRequestedGeneration == pr.Generation
+		required := pr.State != StateOpen || pr.TeardownRequestedGeneration == pr.Generation
 		if required && pr.TeardownCompletedGeneration >= pr.Generation {
 			return nil // Requested and started already.
 		}
@@ -108,7 +108,7 @@ func teardownNeeded(ctx context.Context, q *dbgen.Queries, pullRequestID int64) 
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("read environment for teardown: %w", err)
 	}
-	if err == nil && env.Status != "tearing_down" && env.Status != "torn_down" {
+	if err == nil && env.Status != StatusTearingDown && env.Status != StatusTornDown {
 		return true, nil
 	}
 	intent, err := q.ReadBuildIntent(ctx, pullRequestID)
@@ -131,7 +131,7 @@ func (r *Repository) startTeardownTx(ctx context.Context, tx pgx.Tx, pullRequest
 	if err != nil {
 		return false, fmt.Errorf("lock PR to start teardown: %w", err)
 	}
-	if pr.State == "open" && pr.TeardownRequestedGeneration != pr.Generation {
+	if pr.State == StateOpen && pr.TeardownRequestedGeneration != pr.Generation {
 		return false, errors.New("teardown is not required at the PR's current generation")
 	}
 	if pr.TeardownCompletedGeneration >= pr.Generation {
@@ -143,15 +143,15 @@ func (r *Repository) startTeardownTx(ctx context.Context, tx pgx.Tx, pullRequest
 		return false, fmt.Errorf("read environment to start teardown: %w", err)
 	}
 	started := false
-	inTeardown := err == nil && env.Status == "tearing_down" && env.TeardownGeneration.Valid && env.TeardownGeneration.Int64 == pr.Generation
-	if err == nil && env.Status != "torn_down" && !inTeardown {
+	inTeardown := err == nil && env.Status == StatusTearingDown && env.TeardownGeneration.Valid && env.TeardownGeneration.Int64 == pr.Generation
+	if err == nil && env.Status != StatusTornDown && !inTeardown {
 		previous, err := q.ApplyResult(ctx, dbgen.ApplyResultParams{
-			PrID: pr.ID, ExpectedGeneration: pr.Generation, ExpectedRevision: 0, ResultStatus: "torn_down", HeadSha: pr.HeadSha,
+			PrID: pr.ID, ExpectedGeneration: pr.Generation, ExpectedRevision: 0, ResultStatus: StatusTornDown, HeadSha: pr.HeadSha,
 		})
 		if err != nil {
 			return false, fmt.Errorf("start environment teardown: %w", err)
 		}
-		if err := r.enqueueResultTx(ctx, tx, request, Result{Status: "torn_down"}, previous); err != nil {
+		if err := r.enqueueResultTx(ctx, tx, request, Result{Status: StatusTornDown}, previous); err != nil {
 			return false, err
 		}
 		started = true
@@ -294,7 +294,25 @@ func (s *TeardownSweeper) RunOnce(ctx context.Context) (TeardownSweep, error) {
 // settle requests and starts teardown for anything revoked now (however the
 // access was lost), then clears the cleanup marker when nothing remains.
 func (s *TeardownSweeper) settle(ctx context.Context, installationID int64) (started int, cleared bool, err error) {
-	var revision int64
+	started, revision, err := s.startRevoked(ctx, installationID)
+	if err != nil {
+		return 0, false, err
+	}
+	drained, err := s.drained(ctx, installationID)
+	if err != nil || !drained {
+		return started, false, err
+	}
+	affected, err := dbgen.New(s.repo.pool).ClearInstallationCleanup(ctx, dbgen.ClearInstallationCleanupParams{ID: installationID, Revision: revision})
+	if err != nil {
+		return started, false, fmt.Errorf("clear installation cleanup marker: %w", err)
+	}
+	return started, affected == 1, nil
+}
+
+// startRevoked requests and starts teardown of every PR the installation can
+// no longer reach, if its cleanup is pending. It returns how many teardowns it
+// started and the installation's revision, which clearing the marker checks.
+func (s *TeardownSweeper) startRevoked(ctx context.Context, installationID int64) (started int, revision int64, err error) {
 	err = database.InTransaction(ctx, s.repo.pool, func(tx pgx.Tx) error {
 		started = 0
 		q := dbgen.New(tx)
@@ -326,47 +344,42 @@ func (s *TeardownSweeper) settle(ctx context.Context, installationID int64) (sta
 		}
 		return nil
 	})
-	if err != nil {
-		return 0, false, err
-	}
+	return started, revision, err
+}
+
+// drained reports whether nothing of the installation's revoked PRs remains:
+// no teardown left to start, no live environment, no unfinished operation,
+// and, Docker being the last word, nothing still labelled for one of them.
+// Leftovers are scheduled for removal; inventory runs outside any transaction.
+func (s *TeardownSweeper) drained(ctx context.Context, installationID int64) (bool, error) {
 	q := dbgen.New(s.repo.pool)
 	work, err := q.CountInstallationTeardownWork(ctx, installationID)
 	if err != nil {
-		return started, false, fmt.Errorf("count remaining teardown work: %w", err)
+		return false, fmt.Errorf("count remaining teardown work: %w", err)
 	}
 	if work.Unstarted+work.Live+work.Operations > 0 {
-		return started, false, nil
+		return false, nil
 	}
-	// Docker is the last word: anything still labelled for a revoked PR is
-	// scheduled for removal, and the marker stays until it is gone. Inventory
-	// runs outside any transaction.
 	prs, err := q.ListRevokedEnvironmentPRs(ctx, dbgen.ListRevokedEnvironmentPRsParams{InstallationID: installationID, BatchSize: s.batchSize})
 	if err != nil {
-		return started, false, fmt.Errorf("list revoked environments: %w", err)
+		return false, fmt.Errorf("list revoked environments: %w", err)
 	}
 	if len(prs) == int(s.batchSize) {
-		return started, false, nil // More than one pass can check; finish next time.
+		return false, nil // More than one pass can check; finish next time.
 	}
-	remaining := false
+	drained := true
 	for _, id := range prs {
 		resources, err := s.inventory.Resources(ctx, id)
 		if err != nil {
-			return started, false, fmt.Errorf("inspect resources of PR %d: %w", id, err)
+			return false, fmt.Errorf("inspect resources of PR %d: %w", id, err)
 		}
 		if len(resources) == 0 {
 			continue
 		}
-		remaining = true
+		drained = false
 		if err := s.repo.ScheduleResourceCleanup(ctx, Request{PullRequestID: id}, resources); err != nil {
-			return started, false, fmt.Errorf("schedule cleanup of PR %d: %w", id, err)
+			return false, fmt.Errorf("schedule cleanup of PR %d: %w", id, err)
 		}
 	}
-	if remaining {
-		return started, false, nil
-	}
-	affected, err := q.ClearInstallationCleanup(ctx, dbgen.ClearInstallationCleanupParams{ID: installationID, Revision: revision})
-	if err != nil {
-		return started, false, fmt.Errorf("clear installation cleanup marker: %w", err)
-	}
-	return started, affected == 1, nil
+	return drained, nil
 }

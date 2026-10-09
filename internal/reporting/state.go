@@ -2,8 +2,9 @@ package reporting
 
 import (
 	"fmt"
-	"github.com/ajaykathwatee/previa/internal/environments"
 	"time"
+
+	"github.com/ajaykathwatee/previa/internal/environments"
 )
 
 // Phase is what a PR's preview is doing, as reported on GitHub.
@@ -114,16 +115,9 @@ type Settings struct {
 func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View {
 	v := View{Phase: PhaseNone, HeadSHA: s.HeadSHA}
 	env := s.Environment
-	live := env != nil && env.DeployedSHA != "" && (env.Status == "running" || env.Status == "failed" || env.Status == "publishing")
+	live := env.live()
 	if live {
-		v.Deployed, v.ExpiresAt = env.DeployedSHA, env.ExpiresAt
-		if settings.PreviewBaseDomain != "" && env.Hostname != "" {
-			v.PreviewURL = "https://" + env.Hostname + "." + settings.PreviewBaseDomain
-			if env.Backend.DocsPath != "" {
-				v.DocsURL = v.PreviewURL + env.Backend.DocsPath
-			}
-		}
-		v.Backend = env.Backend.Summary()
+		v.describePreview(env, settings)
 	}
 	if env != nil && settings.AppBaseURL != "" {
 		v.LogsURL = fmt.Sprintf("%s/repositories/%d/pull-requests/%d/logs", settings.AppBaseURL, s.RepoID, s.Number)
@@ -132,11 +126,11 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 	if current != nil && (current.Generation != s.Generation || current.HeadSHA != s.HeadSHA) {
 		current = nil // a request for an older commit: nothing requested for the latest one
 	}
-	active := current != nil && current.State != "cancelled" && current.State != "superseded"
+	active := current != nil && current.State != string(environments.IntentCancelled) && current.State != string(environments.IntentSuperseded)
 	v.Comment = hasComment || active || env != nil
 
 	switch {
-	case s.State != "open" || s.TeardownRequested:
+	case s.State != environments.StateOpen || s.TeardownRequested:
 		v.Phase = removalPhase(s, env)
 		v.Deployed, v.PreviewURL, v.ExpiresAt, v.DocsURL, v.Backend = "", "", time.Time{}, "", ""
 		if v.Phase == PhaseRemoving && live {
@@ -151,30 +145,18 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 	}
 	v.Revision = current.Revision
 	switch current.State {
-	case "pending", "queued", "running":
-		if current.State == "running" && current.Waiting == "" {
-			v.Phase = PhaseBuilding
-			break
-		}
-		if reason := blockedReason(s); reason != "" && current.State != "running" {
-			v.Phase, v.Blocked, v.Conflicts = PhaseBlocked, reason, !s.NeedsRefresh && s.BuildStatus == "conflicts"
-		} else if current.Waiting != "" {
-			v.Phase, v.Waiting = PhaseCapacity, current.Waiting
-		} else if current.State == "pending" && current.AvailableAt.After(now) {
-			v.Phase, v.EligibleAt = PhaseWaiting, current.AvailableAt
-		} else {
-			v.Phase = PhaseQueued
-		}
-	case "succeeded":
+	case string(environments.IntentPending), string(environments.IntentQueued), string(environments.IntentRunning):
+		v.unfinishedPhase(s, current, now)
+	case string(environments.IntentSucceeded):
 		switch {
-		case env != nil && env.Status == "running" && env.AppliedGeneration == current.Generation && env.AppliedRevision == current.Revision:
+		case env.applied(current, environments.StatusRunning):
 			v.Phase = PhaseReady
-		case env != nil && env.Status == "failed" && env.AppliedGeneration == current.Generation && env.AppliedRevision == current.Revision:
+		case env.applied(current, environments.StatusFailed):
 			v.Phase, v.Failure = PhaseFailed, environments.FailureMessage(env.LastErrorCode)
 		default:
 			v.Phase = PhaseBuilding // built; publication not confirmed yet
 		}
-	case "failed":
+	case string(environments.IntentFailed):
 		v.Phase = PhaseFailed
 		code := ""
 		if env != nil && env.AppliedGeneration == current.Generation && env.AppliedRevision == current.Revision {
@@ -186,8 +168,52 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 	return withNotices(v, s)
 }
 
+// live reports whether the environment has a preview deployed, healthy or not.
+func (e *Environment) live() bool {
+	return e != nil && e.DeployedSHA != "" &&
+		(e.Status == environments.StatusRunning || e.Status == environments.StatusFailed || e.Status == "publishing")
+}
+
+// applied reports whether the environment applied the intent's request with
+// the given status.
+func (e *Environment) applied(i *Intent, status string) bool {
+	return e != nil && e.Status == status && e.AppliedGeneration == i.Generation && e.AppliedRevision == i.Revision
+}
+
+// describePreview adds the deployed preview: its commit, expiry and what runs
+// next to its app, and its address and docs when a preview domain is known.
+func (v *View) describePreview(env *Environment, settings Settings) {
+	v.Deployed, v.ExpiresAt = env.DeployedSHA, env.ExpiresAt
+	if settings.PreviewBaseDomain != "" && env.Hostname != "" {
+		v.PreviewURL = "https://" + env.Hostname + "." + settings.PreviewBaseDomain
+		if env.Backend.DocsPath != "" {
+			v.DocsURL = v.PreviewURL + env.Backend.DocsPath
+		}
+	}
+	v.Backend = env.Backend.Summary()
+}
+
+// unfinishedPhase is the phase of a request that has not finished: building,
+// blocked by mergeability (until it runs), waiting for capacity or for its
+// Automatic deadline, or queued.
+func (v *View) unfinishedPhase(s Snapshot, current *Intent, now time.Time) {
+	running := current.State == string(environments.IntentRunning)
+	switch reason := blockedReason(s); {
+	case running && current.Waiting == "":
+		v.Phase = PhaseBuilding
+	case !running && reason != "":
+		v.Phase, v.Blocked, v.Conflicts = PhaseBlocked, reason, !s.NeedsRefresh && s.BuildStatus == "conflicts"
+	case current.Waiting != "":
+		v.Phase, v.Waiting = PhaseCapacity, current.Waiting
+	case current.State == string(environments.IntentPending) && current.AvailableAt.After(now):
+		v.Phase, v.EligibleAt = PhaseWaiting, current.AvailableAt
+	default:
+		v.Phase = PhaseQueued
+	}
+}
+
 func removalPhase(s Snapshot, env *Environment) Phase {
-	if env != nil && env.Status == "tearing_down" {
+	if env != nil && env.Status == environments.StatusTearingDown {
 		return PhaseRemoving
 	}
 	if s.TeardownRequested && s.TeardownReason == "expired" {

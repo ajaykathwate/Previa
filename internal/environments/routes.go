@@ -86,8 +86,7 @@ func compareVersion(generation, revision, otherGeneration, otherRevision int64) 
 // version never moves backwards, so a late activation can never replace a
 // newer route or resurrect a removed one. No external call happens here.
 func (r *Repository) AcceptRoute(ctx context.Context, op Operation, target RouteTarget) (RouteDecision, error) {
-	if op.Kind != ActivateRoute || target.Artifact != op.Payload.Artifact || target.Artifact.ContainerID == "" ||
-		target.Artifact.ImageTag == "" || target.Backend == "" || target.Port <= 0 || target.Port > 65535 || target.NetworkID == "" {
+	if op.Kind != ActivateRoute || !target.complete() || target.Artifact != op.Payload.Artifact {
 		return RouteDecision{}, errors.New("invalid route activation")
 	}
 	request := op.Payload.Request
@@ -95,27 +94,21 @@ func (r *Repository) AcceptRoute(ctx context.Context, op Operation, target Route
 	err := database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		decision = RouteDecision{}
 		q := dbgen.New(tx)
-		owner, err := q.FindPROwner(ctx, op.PullRequestID)
-		if err != nil {
-			return fmt.Errorf("find route owner: %w", err)
-		}
-		scope, err := lockIntentScope(ctx, q, owner.Int64, op.PullRequestID)
+		scope, err := lockOwnerIntentScope(ctx, q, op.PullRequestID, "route")
 		if errors.Is(err, ErrIntentUnavailable) {
 			return nil // Access was revoked; revocation tears the preview down.
 		}
 		if err != nil {
 			return err
 		}
-		if scope.pr.Generation != request.Generation || scope.pr.HeadSha != request.HeadSHA || scope.pr.State != "open" ||
-			BuildBlockReason(scope.pr.BuildStatus, scope.pr.NeedsRefresh) != nil {
+		if !scope.publishes(request) {
 			return nil
 		}
 		intent, err := readLockedIntent(ctx, q, op.PullRequestID)
 		if err != nil {
 			return err
 		}
-		if intent == nil || intent.Generation != request.Generation || intent.Revision != request.Revision ||
-			intent.HeadSHA != request.HeadSHA || (intent.State != IntentRunning && intent.State != IntentSucceeded) {
+		if !intent.publishes(request) {
 			return nil
 		}
 		env, err := q.LockRouteEnvironment(ctx, op.PullRequestID)
@@ -125,9 +118,7 @@ func (r *Repository) AcceptRoute(ctx context.Context, op Operation, target Route
 		if err != nil {
 			return fmt.Errorf("lock environment for route activation: %w", err)
 		}
-		if env.PendingGeneration.Int64 != request.Generation || !env.PendingGeneration.Valid ||
-			env.PendingRevision.Int64 != request.Revision || !env.PendingRevision.Valid ||
-			env.PendingContainerID.String != target.Artifact.ContainerID || env.PendingImageTag.String != target.Artifact.ImageTag {
+		if !pendingCandidate(env, request, target.Artifact) {
 			return nil
 		}
 		decision.EnvironmentID = env.ID
@@ -148,21 +139,9 @@ func (r *Repository) AcceptRoute(ctx context.Context, op Operation, target Route
 				return nil
 			}
 		}
-		version, err := q.NextRouteTableVersion(ctx)
+		version, err := saveActiveRoute(ctx, q, op, env.ID, target)
 		if err != nil {
-			return fmt.Errorf("advance route table version: %w", err)
-		}
-		affected, err := q.SaveActiveRoute(ctx, dbgen.SaveActiveRouteParams{
-			EnvironmentID: env.ID, PullRequestID: op.PullRequestID, Generation: request.Generation, Revision: request.Revision,
-			ContainerID: text(target.Artifact.ContainerID), ImageTag: text(target.Artifact.ImageTag), Backend: text(target.Backend),
-			Port: pgtype.Int4{Int32: int32(target.Port), Valid: true}, NetworkID: text(target.NetworkID),
-			TableVersion: version, OperationID: pgtype.Int8{Int64: op.ID, Valid: op.ID > 0},
-		})
-		if err != nil {
-			return fmt.Errorf("save accepted route: %w", err)
-		}
-		if affected != 1 {
-			return errors.New("accepted route did not move forward")
+			return err
 		}
 		decision.Accepted, decision.TableVersion = true, version
 		return nil
@@ -171,6 +150,57 @@ func (r *Repository) AcceptRoute(ctx context.Context, op Operation, target Route
 		return RouteDecision{}, err
 	}
 	return decision, nil
+}
+
+// complete reports whether the target names a candidate and where it listens.
+func (t RouteTarget) complete() bool {
+	return t.Artifact.ContainerID != "" && t.Artifact.ImageTag != "" && t.Backend != "" &&
+		t.Port > 0 && t.Port <= 65535 && t.NetworkID != ""
+}
+
+// publishes reports whether the locked PR still wants the request published:
+// open, at its generation and commit, and not blocked from building.
+func (s intentScope) publishes(request Request) bool {
+	return s.pr.Generation == request.Generation && s.pr.HeadSha == request.HeadSHA && s.pr.State == StateOpen &&
+		BuildBlockReason(s.pr.BuildStatus, s.pr.NeedsRefresh) == nil
+}
+
+// publishes reports whether the intent is the request's and its build is
+// running or succeeded.
+func (i *BuildIntent) publishes(request Request) bool {
+	return i != nil && i.Generation == request.Generation && i.Revision == request.Revision &&
+		i.HeadSHA == request.HeadSHA && (i.State == IntentRunning || i.State == IntentSucceeded)
+}
+
+// pendingCandidate reports whether the environment's pending candidate is the
+// request's artifact.
+func pendingCandidate(env dbgen.LockRouteEnvironmentRow, request Request, artifact Artifact) bool {
+	return env.PendingGeneration.Valid && env.PendingGeneration.Int64 == request.Generation &&
+		env.PendingRevision.Valid && env.PendingRevision.Int64 == request.Revision &&
+		env.PendingContainerID.String == artifact.ContainerID && env.PendingImageTag.String == artifact.ImageTag
+}
+
+// saveActiveRoute moves the PR's route forward to the target under a new
+// route table version, which it returns.
+func saveActiveRoute(ctx context.Context, q *dbgen.Queries, op Operation, environmentID int64, target RouteTarget) (int64, error) {
+	request := op.Payload.Request
+	version, err := q.NextRouteTableVersion(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("advance route table version: %w", err)
+	}
+	affected, err := q.SaveActiveRoute(ctx, dbgen.SaveActiveRouteParams{
+		EnvironmentID: environmentID, PullRequestID: op.PullRequestID, Generation: request.Generation, Revision: request.Revision,
+		ContainerID: text(target.Artifact.ContainerID), ImageTag: text(target.Artifact.ImageTag), Backend: text(target.Backend),
+		Port: pgtype.Int4{Int32: int32(target.Port), Valid: true}, NetworkID: text(target.NetworkID),
+		TableVersion: version, OperationID: pgtype.Int8{Int64: op.ID, Valid: op.ID > 0},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("save accepted route: %w", err)
+	}
+	if affected != 1 {
+		return 0, errors.New("accepted route did not move forward")
+	}
+	return version, nil
 }
 
 // AcceptRouteRemoval is the removal fence. It records a removal tombstone at

@@ -51,42 +51,9 @@ func validateShape(data []byte) (shape, error) {
 			continue
 		}
 		seen[field] = true
-		valid := false
-		switch field {
-		case "dockerfile", "health_check_path", "resource_tier", "docs_path":
-			_, valid = entry.Value.(*ast.StringNode)
-		case "port":
-			_, valid = entry.Value.(*ast.IntegerNode)
-		case "env":
-			sequence, isSequence := entry.Value.(*ast.SequenceNode)
-			valid = isSequence
-			if isSequence {
-				for i, value := range sequence.Values {
-					if _, ok := value.(*ast.StringNode); !ok {
-						issues = append(issues, shapeIssue(fmt.Sprintf("env[%d]", i), "invalid_type", "Environment entries must be NAME=value strings.", value))
-					}
-				}
-			}
-		case "setup":
-			valid = true
-			issues = append(issues, commandShape("setup", entry.Value)...)
-		case "services":
-			services, isMapping := entry.Value.(*ast.MappingNode)
-			valid = isMapping
-			if isMapping {
-				var serviceIssues []Issue
-				found.services, serviceIssues = servicesShape(services)
-				issues = append(issues, serviceIssues...)
-			}
-		case "processes":
-			sequence, isSequence := entry.Value.(*ast.SequenceNode)
-			valid = isSequence
-			if isSequence {
-				for i, value := range sequence.Values {
-					issues = append(issues, processShape(fmt.Sprintf("processes[%d]", i), value)...)
-				}
-			}
-		default:
+		valid, fieldIssues, known := fieldShape(field, entry.Value, &found)
+		issues = append(issues, fieldIssues...)
+		if !known {
 			issues = append(issues, shapeIssue("$", "unknown_field", "Unknown key; supported keys are dockerfile, port, env, health_check_path, resource_tier, services, setup, processes and docs_path.", entry.Key))
 			continue
 		}
@@ -98,6 +65,48 @@ func validateShape(data []byte) (shape, error) {
 		return shape{}, &ValidationError{Issues: issues}
 	}
 	return found, nil
+}
+
+// fieldShape checks one top-level key's value. valid is whether the value
+// has the field's type; issues are problems inside it; known is false for a
+// key the contract does not have. Requested services are collected in found.
+func fieldShape(field string, value ast.Node, found *shape) (valid bool, issues []Issue, known bool) {
+	switch field {
+	case "dockerfile", "health_check_path", "resource_tier", "docs_path":
+		_, valid = value.(*ast.StringNode)
+	case "port":
+		_, valid = value.(*ast.IntegerNode)
+	case "env":
+		sequence, isSequence := value.(*ast.SequenceNode)
+		valid = isSequence
+		if isSequence {
+			for i, item := range sequence.Values {
+				if _, ok := item.(*ast.StringNode); !ok {
+					issues = append(issues, shapeIssue(fmt.Sprintf("env[%d]", i), "invalid_type", "Environment entries must be NAME=value strings.", item))
+				}
+			}
+		}
+	case "setup":
+		valid = true
+		issues = commandShape("setup", value)
+	case "services":
+		services, isMapping := value.(*ast.MappingNode)
+		valid = isMapping
+		if isMapping {
+			found.services, issues = servicesShape(services)
+		}
+	case "processes":
+		sequence, isSequence := value.(*ast.SequenceNode)
+		valid = isSequence
+		if isSequence {
+			for i, item := range sequence.Values {
+				issues = append(issues, processShape(fmt.Sprintf("processes[%d]", i), item)...)
+			}
+		}
+	default:
+		return false, nil, false
+	}
+	return valid, issues, true
 }
 
 // servicesShape reads `kind: version` entries. The kind itself is checked

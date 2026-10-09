@@ -103,10 +103,46 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid form.", http.StatusBadRequest)
 		return
 	}
-	names, values := r.PostForm["name"], r.PostForm["value"]
-	view := pages.Page{}
-	var entries []Entry
-	var rowOf []int // the editor line of each entry, or -1 for pasted text
+	form := readSecretsForm(r.PostForm)
+	defer form.wipe()
+	if form.view.Error != "" {
+		h.render(w, r, user, repoID, http.StatusUnprocessableEntity, form.view)
+		return
+	}
+	created, err := h.service.PutMany(r.Context(), user, repoID, form.entries)
+	if err != nil {
+		status, unexpected := form.explainSaveError(err)
+		if unexpected {
+			h.logger.ErrorContext(r.Context(), "save repository secrets failed", "repo_id", repoID)
+		}
+		h.render(w, r, user, repoID, status, form.view)
+		return
+	}
+	h.logger.InfoContext(r.Context(), "repository secrets saved", "repo_id", repoID, "count", len(form.entries), "created", created)
+	query := url.Values{}
+	if len(form.entries) == 1 {
+		query.Set("saved", form.entries[0].Name)
+	} else {
+		query.Set("saved_count", strconv.Itoa(len(form.entries)))
+		query.Set("created", strconv.Itoa(created))
+	}
+	http.Redirect(w, r, secretsURL(repoID, query), http.StatusSeeOther)
+}
+
+// secretsForm is a submitted secrets form: the page to show again (names and
+// reasons, never values) and the entries to save.
+type secretsForm struct {
+	view    pages.Page
+	entries []Entry
+	rowOf   []int // the editor line of each entry, or -1 for pasted text
+}
+
+// readSecretsForm reads every filled editor line and every NAME=value of the
+// pasted .env text. A line missing its name or value, or unreadable pasted
+// text, sets the page's error: nothing is saved then.
+func readSecretsForm(form url.Values) *secretsForm {
+	f := &secretsForm{}
+	names, values := form["name"], form["value"]
 	for i, raw := range names {
 		name := strings.TrimSpace(raw)
 		value := ""
@@ -124,72 +160,64 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		case value == "":
 			row.Error = "Enter a value for " + name + "."
 		default:
-			entries = append(entries, Entry{Name: name, Value: []byte(value)})
-			rowOf = append(rowOf, len(view.Rows))
+			f.entries = append(f.entries, Entry{Name: name, Value: []byte(value)})
+			f.rowOf = append(f.rowOf, len(f.view.Rows))
 		}
-		view.Rows = append(view.Rows, row)
+		if row.Error != "" {
+			f.view.Error = "Some lines need a name or a value. Nothing was saved; enter the values again."
+		}
+		f.view.Rows = append(f.view.Rows, row)
 	}
-	pasted, err := ParseDotenv(r.PostForm.Get("dotenv"))
+	pasted, err := ParseDotenv(form.Get("dotenv"))
 	if invalid := (*InvalidError)(nil); errors.As(err, &invalid) {
-		view.DotenvError = invalid.Message
+		f.view.DotenvError = invalid.Message
+		if f.view.Error == "" {
+			f.view.Error = "The pasted text could not be read. Nothing was saved; paste it again after fixing it."
+		}
 	}
 	for _, e := range pasted {
-		entries = append(entries, e)
-		rowOf = append(rowOf, -1)
+		f.entries = append(f.entries, e)
+		f.rowOf = append(f.rowOf, -1)
 	}
-	defer func() {
-		for _, e := range entries {
-			clear(e.Value)
-		}
-	}()
-	for _, row := range view.Rows {
-		if row.Error != "" {
-			view.Error = "Some lines need a name or a value. Nothing was saved; enter the values again."
-		}
+	return f
+}
+
+// wipe clears the submitted values from memory.
+func (f *secretsForm) wipe() {
+	for _, e := range f.entries {
+		clear(e.Value)
 	}
-	if view.DotenvError != "" && view.Error == "" {
-		view.Error = "The pasted text could not be read. Nothing was saved; paste it again after fixing it."
-	}
-	if view.Error != "" {
-		h.render(w, r, user, repoID, http.StatusUnprocessableEntity, view)
-		return
-	}
-	created, err := h.service.PutMany(r.Context(), user, repoID, entries)
-	if err == nil {
-		h.logger.InfoContext(r.Context(), "repository secrets saved", "repo_id", repoID, "count", len(entries), "created", created)
-		query := url.Values{}
-		if len(entries) == 1 {
-			query.Set("saved", entries[0].Name)
-		} else {
-			query.Set("saved_count", strconv.Itoa(len(entries)))
-			query.Set("created", strconv.Itoa(created))
-		}
-		http.Redirect(w, r, secretsURL(repoID, query), http.StatusSeeOther)
-		return
-	}
-	status := http.StatusUnprocessableEntity
+}
+
+// explainSaveError puts why saving failed on the page, at the offending line
+// when it is one, and returns the response status and whether the failure
+// was unexpected (and so worth logging).
+func (f *secretsForm) explainSaveError(err error) (status int, unexpected bool) {
 	var invalid *InvalidError
 	switch {
 	case errors.As(err, &invalid):
-		view.Error = invalid.Message + " Nothing was saved; enter the values again."
+		f.view.Error = invalid.Message + " Nothing was saved; enter the values again."
 		if invalid.Entry > 0 {
-			if line := rowOf[invalid.Entry-1]; line >= 0 {
-				view.Rows[line].Error = invalid.Message
+			if line := f.rowOf[invalid.Entry-1]; line >= 0 {
+				f.view.Rows[line].Error = invalid.Message
 			} else {
-				view.DotenvError = "In the pasted text: " + invalid.Message
+				f.view.DotenvError = "In the pasted text: " + invalid.Message
 			}
 		}
+		return http.StatusUnprocessableEntity, false
 	case errors.Is(err, ErrLimit):
-		view.Error = fmt.Sprintf("A repository holds at most %d secrets. Delete some, or save fewer new names. Nothing was saved.", MaxSecretsPerRepository)
+		f.view.Error = fmt.Sprintf("A repository holds at most %d secrets. Delete some, or save fewer new names. Nothing was saved.", MaxSecretsPerRepository)
+		return http.StatusUnprocessableEntity, false
 	case errors.Is(err, ErrNotConfigured):
-		status, view.Error = http.StatusServiceUnavailable, "Secrets are not configured on this server."
+		f.view.Error = "Secrets are not configured on this server."
+		return http.StatusServiceUnavailable, false
 	case errors.Is(err, ErrUnavailable):
-		status, view.Error = http.StatusConflict, "GitHub access to this repository was removed. You can delete secrets, but not add or replace them."
+		f.view.Error = "GitHub access to this repository was removed. You can delete secrets, but not add or replace them."
+		return http.StatusConflict, false
 	default:
-		h.logger.ErrorContext(r.Context(), "save repository secrets failed", "repo_id", repoID)
-		status, view.Error = http.StatusServiceUnavailable, "The secrets could not be saved. Please retry."
+		f.view.Error = "The secrets could not be saved. Please retry."
+		return http.StatusServiceUnavailable, true
 	}
-	h.render(w, r, user, repoID, status, view)
 }
 
 // delete removes one secret (a row's Delete) or every selected one.

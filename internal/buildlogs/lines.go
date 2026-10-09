@@ -55,59 +55,79 @@ func (s *controlStripper) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// step advances the stripper by one byte, one state at a time.
 func (s *controlStripper) step(c byte) {
 	switch s.state {
 	case stripText:
 		s.text(c)
 	case stripEscape:
-		switch {
-		case c == '[':
-			s.state = stripCSI
-		case c == ']' || c == 'P' || c == 'X' || c == '^' || c == '_':
-			s.state, s.run = stripString, 0
-		case c >= intermediateLow && c <= intermediateHigh:
-			s.state = stripIntermediate
-		case c < firstPrintableByte:
-			s.state = stripText
-			s.text(c)
-		default:
-			s.state = stripText // A two-byte sequence such as ESC 7.
-		}
+		s.escape(c)
 	case stripIntermediate:
-		switch {
-		case c >= intermediateLow && c <= intermediateHigh:
-		case c < firstPrintableByte:
-			s.state = stripText
-			s.text(c)
-		default:
-			s.state = stripText
-		}
+		s.intermediate(c)
 	case stripCSI:
-		switch {
-		case c >= csiFinalLowBound && c <= csiFinalHighBound:
-			s.state = stripText
-		case c < firstPrintableByte:
-			// A control byte aborts the sequence; a line break must survive.
-			s.state = stripText
-			s.text(c)
-		}
+		s.csi(c)
 	case stripString:
-		s.run++
-		switch {
-		case c == stringTerminator:
-			s.state = stripText
-		case c == escapeByte:
-			s.state = stripStringEscape
-		case c == '\n' || s.run > maxEscapeString:
-			s.state = stripText
-			s.text(c)
-		}
+		s.escapeString(c)
 	case stripStringEscape:
 		if c == '\\' {
 			s.state = stripText
 		} else {
 			s.state = stripString
 		}
+	}
+}
+
+// escape reads the byte after ESC, which says what kind of sequence follows.
+func (s *controlStripper) escape(c byte) {
+	switch {
+	case c == '[':
+		s.state = stripCSI
+	case c == ']' || c == 'P' || c == 'X' || c == '^' || c == '_':
+		s.state, s.run = stripString, 0
+	case c >= intermediateLow && c <= intermediateHigh:
+		s.state = stripIntermediate
+	case c < firstPrintableByte:
+		s.state = stripText
+		s.text(c)
+	default:
+		s.state = stripText // A two-byte sequence such as ESC 7.
+	}
+}
+
+func (s *controlStripper) intermediate(c byte) {
+	switch {
+	case c >= intermediateLow && c <= intermediateHigh:
+	case c < firstPrintableByte:
+		s.state = stripText
+		s.text(c)
+	default:
+		s.state = stripText
+	}
+}
+
+func (s *controlStripper) csi(c byte) {
+	switch {
+	case c >= csiFinalLowBound && c <= csiFinalHighBound:
+		s.state = stripText
+	case c < firstPrintableByte:
+		// A control byte aborts the sequence; a line break must survive.
+		s.state = stripText
+		s.text(c)
+	}
+}
+
+// escapeString skips an OSC, DCS or similar string up to its terminator,
+// giving up at a line break or after maxEscapeString bytes.
+func (s *controlStripper) escapeString(c byte) {
+	s.run++
+	switch {
+	case c == stringTerminator:
+		s.state = stripText
+	case c == escapeByte:
+		s.state = stripStringEscape
+	case c == '\n' || s.run > maxEscapeString:
+		s.state = stripText
+		s.text(c)
 	}
 }
 

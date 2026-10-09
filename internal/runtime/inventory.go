@@ -9,6 +9,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
 
@@ -23,90 +24,128 @@ import (
 // housekeeping.
 func (r *Runtime) Resources(ctx context.Context, pullRequestID int64) ([]environments.Resource, error) {
 	filter := client.Filters{}.Add("label", dockerx.LabelManaged+"=true", dockerx.LabelInstance+"="+r.instance, dockerx.LabelPR+"="+strconv.FormatInt(pullRequestID, 10))
+	inv := &prInventory{pullRequestID: pullRequestID, used: map[string]bool{}}
+	if err := r.inventoryContainers(ctx, filter, inv); err != nil {
+		return nil, err
+	}
+	if err := r.inventoryNetworks(ctx, filter, inv); err != nil {
+		return nil, err
+	}
+	if err := r.inventoryImages(ctx, filter, inv); err != nil {
+		return nil, err
+	}
+	return inv.found, nil
+}
+
+// prInventory collects one PR's resources while Resources lists Docker.
+type prInventory struct {
+	pullRequestID int64
+	found         []environments.Resource
+	used          map[string]bool // image tags a candidate container uses
+	candidates    bool            // whether any candidate container exists
+}
+
+func (inv *prInventory) add(labels map[string]string, artifact environments.Artifact, created time.Time) {
+	inv.found = append(inv.found, resource(inv.pullRequestID, labels, artifact, created))
+}
+
+// inventoryContainers lists candidates (each app with its companions) and
+// builder containers.
+func (r *Runtime) inventoryContainers(ctx context.Context, filter client.Filters, inv *prInventory) error {
 	containers, err := r.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: filter})
 	if err != nil {
-		return nil, fmt.Errorf("list preview containers: %w", err)
+		return fmt.Errorf("list preview containers: %w", err)
 	}
-	var found []environments.Resource
-	used := map[string]bool{}
-	candidates := false
-	apps := map[string]int{}         // candidate key -> index of its resource in found
-	companions := map[string][]int{} // candidate key -> indexes into containers.Items
-	for i, c := range containers.Items {
-		created := time.Unix(c.Created, 0)
-		switch kind := c.Labels[dockerx.LabelKind]; kind {
+	apps := map[string]int{}                       // candidate key -> index of its resource in found
+	companions := map[string][]container.Summary{} // candidate key -> its companion containers
+	for _, c := range containers.Items {
+		switch c.Labels[dockerx.LabelKind] {
 		case dockerx.KindPreview:
-			candidates = true
-			used[c.Labels[dockerx.LabelImage]] = true
-			found = append(found, resource(pullRequestID, c.Labels, environments.Artifact{ContainerID: c.ID, ImageTag: c.Labels[dockerx.LabelImage]}, created))
+			inv.candidates = true
+			inv.used[c.Labels[dockerx.LabelImage]] = true
+			inv.add(c.Labels, environments.Artifact{ContainerID: c.ID, ImageTag: c.Labels[dockerx.LabelImage]}, time.Unix(c.Created, 0))
 			if key := c.Labels[dockerx.LabelCandidate]; key != "" {
-				apps[key] = len(found) - 1
+				apps[key] = len(inv.found) - 1
 			}
 		case dockerx.KindService, dockerx.KindSetup, dockerx.KindProcess:
-			candidates = true
+			inv.candidates = true
 			if image := c.Labels[dockerx.LabelImage]; image != "" {
-				used[image] = true
+				inv.used[image] = true
 			}
 			key := c.Labels[dockerx.LabelCandidate]
 			if key == "" {
 				key = c.ID // a companion without a key stands alone
 			}
-			companions[key] = append(companions[key], i)
+			companions[key] = append(companions[key], c)
 		case dockerx.KindBuilder:
-			found = append(found, resource(pullRequestID, c.Labels, environments.Artifact{ContainerID: c.ID}, time.Unix(c.Created, 0)))
+			inv.add(c.Labels, environments.Artifact{ContainerID: c.ID}, time.Unix(c.Created, 0))
 		}
 	}
-	for key, items := range companions {
-		newest := time.Time{}
-		for _, i := range items {
-			if created := time.Unix(containers.Items[i].Created, 0); created.After(newest) {
-				newest = created
-			}
-		}
-		if at, ok := apps[key]; ok {
-			// The candidate is as young as its youngest container.
-			if newest.After(found[at].CreatedAt) {
-				found[at].CreatedAt = newest
-			}
-			continue
-		}
-		// The app was never created (or is gone): the leftover companions are
-		// one resource, named by one of them; removing it removes them all.
-		first := containers.Items[items[0]]
-		left := resource(pullRequestID, first.Labels, environments.Artifact{ContainerID: first.ID}, newest)
-		found = append(found, left)
+	for key, group := range companions {
+		inv.addCompanions(apps, key, group)
 	}
+	return nil
+}
+
+// addCompanions accounts for one candidate's companions. With its app, the
+// candidate is as young as its youngest container. Without one (the app was
+// never created, or is gone) the leftovers are one resource, named by one of
+// them; removing it removes them all.
+func (inv *prInventory) addCompanions(apps map[string]int, key string, group []container.Summary) {
+	newest := time.Time{}
+	for _, c := range group {
+		if created := time.Unix(c.Created, 0); created.After(newest) {
+			newest = created
+		}
+	}
+	if at, ok := apps[key]; ok {
+		if newest.After(inv.found[at].CreatedAt) {
+			inv.found[at].CreatedAt = newest
+		}
+		return
+	}
+	inv.add(group[0].Labels, environments.Artifact{ContainerID: group[0].ID}, newest)
+}
+
+// inventoryNetworks lists build networks, and the PR's preview and services
+// networks once no candidate uses them.
+func (r *Runtime) inventoryNetworks(ctx context.Context, filter client.Filters, inv *prInventory) error {
 	networks, err := r.docker.NetworkList(ctx, client.NetworkListOptions{Filters: filter})
 	if err != nil {
-		return nil, fmt.Errorf("list preview networks: %w", err)
+		return fmt.Errorf("list preview networks: %w", err)
 	}
 	for _, n := range networks.Items {
 		switch n.Labels[dockerx.LabelKind] {
 		case dockerx.KindBuildNetwork:
-			network := resource(pullRequestID, n.Labels, environments.Artifact{}, n.Created)
+			network := resource(inv.pullRequestID, n.Labels, environments.Artifact{}, n.Created)
 			network.Network = n.ID
-			found = append(found, network)
+			inv.found = append(inv.found, network)
 		case dockerx.KindPreviewNetwork, dockerx.KindServiceNetwork:
-			if !candidates {
-				found = append(found, environments.Resource{PullRequestID: pullRequestID, Network: n.ID, CreatedAt: n.Created})
+			if !inv.candidates {
+				inv.found = append(inv.found, environments.Resource{PullRequestID: inv.pullRequestID, Network: n.ID, CreatedAt: n.Created})
 			}
 		}
 	}
+	return nil
+}
+
+// inventoryImages lists the PR's built images no candidate uses.
+func (r *Runtime) inventoryImages(ctx context.Context, filter client.Filters, inv *prInventory) error {
 	images, err := r.docker.ImageList(ctx, client.ImageListOptions{Filters: filter})
 	if err != nil {
-		return nil, fmt.Errorf("list preview images: %w", err)
+		return fmt.Errorf("list preview images: %w", err)
 	}
 	for _, i := range images.Items {
 		if i.Labels[dockerx.LabelKind] != dockerx.KindImage {
 			continue
 		}
 		for _, tag := range i.RepoTags {
-			if !used[tag] {
-				found = append(found, resource(pullRequestID, i.Labels, environments.Artifact{ImageTag: tag}, time.Unix(i.Created, 0)))
+			if !inv.used[tag] {
+				inv.add(i.Labels, environments.Artifact{ImageTag: tag}, time.Unix(i.Created, 0))
 			}
 		}
 	}
-	return found, nil
+	return nil
 }
 
 func resource(pullRequestID int64, labels map[string]string, artifact environments.Artifact, created time.Time) environments.Resource {

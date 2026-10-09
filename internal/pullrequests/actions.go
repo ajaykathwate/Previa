@@ -130,21 +130,10 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 		PublishedAt: timestamp(row.PublishedAt), RequestCurrent: row.RequestCurrent,
 		RequestSource: row.RequestSource, RequestedBy: row.RequestedByLogin,
 		RequestedAt: timestamp(row.RequestedAt), StartedAt: timestamp(row.StartedAt), CompletedAt: timestamp(row.CompletedAt)}
-	live := row.DeployedSha != "" && (row.EnvironmentStatus == "running" || row.EnvironmentStatus == "failed" || row.EnvironmentStatus == "publishing")
-	if live {
-		pr.OlderPreview = row.DeployedSha != row.HeadSha
-		if h.actions != nil && h.actions.PreviewBaseDomain != "" && row.Hostname != "" {
-			pr.PreviewURL = "https://" + row.Hostname + "." + h.actions.PreviewBaseDomain
-		}
-		if row.ExpiresAt.Valid {
-			pr.ExpiresAt = row.ExpiresAt.Time.UTC().Format(time.RFC3339)
-		}
-		backend := environments.ParseBackend(row.BackendServices, row.BackendProcesses, row.BackendSetup, row.BackendDocsPath, row.BackendOutbound, row.BackendOutboundWithheld)
-		pr.Backend, pr.Outbound, pr.OutboundWithheld = backend.Summary(), backend.Outbound, backend.OutboundWithheld
-		if pr.PreviewURL != "" && backend.DocsPath != "" {
-			pr.DocsURL = pr.PreviewURL + backend.DocsPath
-		}
-	} else if row.EnvironmentStatus != "tearing_down" && row.EnvironmentStatus != "torn_down" && row.EnvironmentStatus != "publishing" {
+	switch {
+	case previewDeployed(row.DeployedSha, row.EnvironmentStatus):
+		h.describePreview(&pr, row)
+	case row.EnvironmentStatus != environments.StatusTearingDown && row.EnvironmentStatus != environments.StatusTornDown && row.EnvironmentStatus != "publishing":
 		// A build in progress or a failed first build has nothing deployed;
 		// the request column carries its state.
 		pr.Environment = "Not deployed"
@@ -152,24 +141,7 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 	if row.RequestCurrent && row.WaitingReason != "" {
 		pr.Waiting, pr.WaitingNote = environments.WaitingTitle(row.WaitingReason), environments.WaitingMessage(row.WaitingReason)
 	}
-	switch {
-	case row.RequestCurrent && row.BuildState == "failed":
-		code := ""
-		if row.FailureCurrent {
-			code = row.FailureCode
-		}
-		pr.Failure = environments.FailureMessage(code)
-		if h.logs != nil && row.EnvironmentID > 0 {
-			lines, err := h.logs.Tail(ctx, row.EnvironmentID, row.Generation, row.RequestRevision.Int64, failureLogLines)
-			if err != nil {
-				// The page stays useful without the excerpt; the log page has it all.
-				h.logger.WarnContext(ctx, "read failed build output", "error", err)
-			}
-			pr.FailureLog = lines
-		}
-	case row.EnvironmentStatus == "failed" && row.FailureCode == "preview_missing":
-		pr.Failure = environments.FailureMessage(row.FailureCode)
-	}
+	h.describeFailure(ctx, &pr, row)
 	pr.RemovedNote = removedNote(row)
 	if pr.State == "checking" && row.MergeabilityUnresolvedAt.Valid {
 		pr.State, pr.MergeUnknown = "unknown", true
@@ -189,6 +161,59 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 	pr.Actions = actions
 	pr.Headline = headline(pr, row)
 	return pr, nil
+}
+
+// previewDeployed reports whether a PR has a preview deployed, healthy or
+// not, from its deployed commit and environment status.
+func previewDeployed(deployedSHA, environmentStatus string) bool {
+	return deployedSHA != "" && (environmentStatus == environments.StatusRunning ||
+		environmentStatus == environments.StatusFailed || environmentStatus == "publishing")
+}
+
+// previewURL is a preview's address, or "" without a preview domain.
+func (h *Handler) previewURL(hostname string) string {
+	if h.actions == nil || h.actions.PreviewBaseDomain == "" || hostname == "" {
+		return ""
+	}
+	return "https://" + hostname + "." + h.actions.PreviewBaseDomain
+}
+
+// describePreview adds the deployed preview: whether it serves an older
+// commit, its address and expiry, and what runs next to its app.
+func (h *Handler) describePreview(pr *pages.PR, row dbgen.OwnedPRRow) {
+	pr.OlderPreview = row.DeployedSha != row.HeadSha
+	pr.PreviewURL = h.previewURL(row.Hostname)
+	if row.ExpiresAt.Valid {
+		pr.ExpiresAt = row.ExpiresAt.Time.UTC().Format(time.RFC3339)
+	}
+	backend := environments.ParseBackend(row.BackendServices, row.BackendProcesses, row.BackendSetup, row.BackendDocsPath, row.BackendOutbound, row.BackendOutboundWithheld)
+	pr.Backend, pr.Outbound, pr.OutboundWithheld = backend.Summary(), backend.Outbound, backend.OutboundWithheld
+	if pr.PreviewURL != "" && backend.DocsPath != "" {
+		pr.DocsURL = pr.PreviewURL + backend.DocsPath
+	}
+}
+
+// describeFailure explains why the current request failed, with the end of
+// its output, or that the deployed preview stopped.
+func (h *Handler) describeFailure(ctx context.Context, pr *pages.PR, row dbgen.OwnedPRRow) {
+	switch {
+	case row.RequestCurrent && row.BuildState == string(environments.IntentFailed):
+		code := ""
+		if row.FailureCurrent {
+			code = row.FailureCode
+		}
+		pr.Failure = environments.FailureMessage(code)
+		if h.logs != nil && row.EnvironmentID > 0 {
+			lines, err := h.logs.Tail(ctx, row.EnvironmentID, row.Generation, row.RequestRevision.Int64, failureLogLines)
+			if err != nil {
+				// The page stays useful without the excerpt; the log page has it all.
+				h.logger.WarnContext(ctx, "read failed build output", "error", err)
+			}
+			pr.FailureLog = lines
+		}
+	case row.EnvironmentStatus == environments.StatusFailed && row.FailureCode == "preview_missing":
+		pr.Failure = environments.FailureMessage(row.FailureCode)
+	}
 }
 
 // headline sums the PR's preview up in one line, most pressing first.
@@ -278,9 +303,9 @@ func removedNote(row dbgen.OwnedPRRow) string {
 func (h *Handler) actionsFor(ctx context.Context, row dbgen.OwnedPRRow, noWorker bool) (pages.Actions, error) {
 	a := pages.Actions{ExpectedRevision: row.RequestRevision.Int64, RequestKey: requestKey()}
 	unfinished := row.RequestCurrent && (row.BuildState == "pending" || row.BuildState == "queued" || row.BuildState == "running")
-	deployed := row.DeployedSha != "" && (row.EnvironmentStatus == "running" || row.EnvironmentStatus == "failed" || row.EnvironmentStatus == "publishing")
-	if row.State == "open" && row.Available.Bool && !row.TeardownRequested && h.actions != nil {
+	if row.State == environments.StateOpen && row.Available.Bool && !row.TeardownRequested && h.actions != nil {
 		// Teardown needs no worker to be recorded; the removal runs when one does.
+		deployed := previewDeployed(row.DeployedSha, row.EnvironmentStatus)
 		a.Teardown = deployed || unfinished
 		a.CancelOnly = !deployed
 	}

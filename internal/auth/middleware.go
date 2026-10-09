@@ -43,16 +43,18 @@ func (h *Handler) LoadUser(next http.Handler) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		if id := h.sessions.GetInt64(r.Context(), "user_id"); id != 0 {
 			u, err := h.users.GetUser(r.Context(), id)
-			if errors.Is(err, pgx.ErrNoRows) {
+			switch {
+			case errors.Is(err, pgx.ErrNoRows):
+				// The account is gone: end the session and continue signed out.
 				if err := h.sessions.Destroy(r.Context()); err != nil {
 					h.fail(w, r, http.StatusServiceUnavailable, "Your session could not be cleared. Please try again.")
 					return
 				}
-			} else if err != nil {
+			case err != nil:
 				h.logger.ErrorContext(r.Context(), "load session user", "error", err)
 				h.fail(w, r, http.StatusServiceUnavailable, "Your account is unavailable. Please try again.")
 				return
-			} else {
+			default:
 				r = r.WithContext(context.WithValue(r.Context(), userKey, u))
 			}
 		}

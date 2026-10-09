@@ -21,17 +21,24 @@ func main() {
 	if len(os.Args) > 1 {
 		os.Exit(command(os.Args[1]))
 	}
+	os.Exit(run())
+}
+
+// run runs the worker until it is told to stop and returns the exit code; its
+// deferred cleanup runs before the process exits.
+func run() int {
 	logger, err := logging.New(os.Stdout, os.Getenv("LOG_LEVEL"))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := app.RunWorker(ctx, logger); err != nil {
 		logger.Error("worker stopped", "error", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func command(name string) int {

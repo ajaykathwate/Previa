@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/a-h/templ"
+	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
+	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
 )
@@ -23,27 +25,9 @@ func (h *Handler) ValidateSelection(ctx context.Context, userID, repoID int64, p
 }
 
 func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Values) (pages.Page, error) {
-	f := Filter{Page: 1, State: params.Get("pr_state"), Search: strings.TrimSpace(params.Get("pr_q"))}
-	if f.State == "" {
-		f.State = "open"
-	}
-	if value := params.Get("pr_page"); value != "" {
-		var err error
-		f.Page, err = strconv.ParseInt(value, 10, 32)
-		if err != nil || f.Page < 1 {
-			return pages.Page{}, installations.ErrWorkspaceInput
-		}
-	}
-	if len([]rune(f.Search)) > 100 || f.State != "open" && f.State != "closed" && f.State != "merged" && f.State != "all" {
-		return pages.Page{}, installations.ErrWorkspaceInput
-	}
-	var number int64
-	if value := params.Get("pr"); value != "" {
-		var err error
-		number, err = strconv.ParseInt(value, 10, 32)
-		if err != nil || number < 1 {
-			return pages.Page{}, installations.ErrWorkspaceInput
-		}
+	f, number, err := workspaceQuery(params)
+	if err != nil {
+		return pages.Page{}, err
 	}
 	data, err := h.repo.Page(ctx, userID, repoID, f)
 	if err != nil {
@@ -66,20 +50,7 @@ func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Val
 		page.SyncStaleAt = data.Sync.RequestedAt.Time.Add(SyncStaleAfter).UTC().Format(time.RFC3339)
 	}
 	for _, row := range data.Rows {
-		pr := pages.PR{Number: row.Number, Title: row.Title, Author: row.Author,
-			Branch: row.HeadBranch, SHA: row.HeadSha, State: DisplayStatus(row.State, row.BuildStatus), Build: row.BuildState,
-			Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh, RequestCurrent: row.RequestCurrent,
-			DeployedSHA: row.DeployedSha, Environment: row.EnvironmentStatus}
-		live := row.DeployedSha != "" && (row.EnvironmentStatus == "running" || row.EnvironmentStatus == "failed" || row.EnvironmentStatus == "publishing")
-		if live && h.actions != nil && h.actions.PreviewBaseDomain != "" && row.Hostname != "" {
-			pr.PreviewURL = "https://" + row.Hostname + "." + h.actions.PreviewBaseDomain
-			pr.OlderPreview = row.DeployedSha != row.HeadSha
-		}
-		if pr.State == "checking" && row.MergeabilityUnresolvedAt.Valid {
-			pr.State, pr.MergeUnknown = "unknown", true
-		}
-		pr.NoWorker = page.WorkerMissing
-		page.Rows = append(page.Rows, pr)
+		page.Rows = append(page.Rows, h.listPR(row, page.WorkerMissing))
 	}
 	if number > 0 {
 		row, err := h.repo.Detail(ctx, userID, repoID, int32(number))
@@ -93,6 +64,49 @@ func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Val
 		page.SelectedPR = &pr
 	}
 	return page, nil
+}
+
+// workspaceQuery reads the PR list's filter and the selected PR's number
+// from a workspace URL; anything malformed is ErrWorkspaceInput.
+func workspaceQuery(params url.Values) (f Filter, number int64, err error) {
+	f = Filter{Page: 1, State: params.Get("pr_state"), Search: strings.TrimSpace(params.Get("pr_q"))}
+	if f.State == "" {
+		f.State = environments.StateOpen
+	}
+	if value := params.Get("pr_page"); value != "" {
+		if f.Page, err = strconv.ParseInt(value, 10, 32); err != nil || f.Page < 1 {
+			return Filter{}, 0, installations.ErrWorkspaceInput
+		}
+	}
+	switch f.State {
+	case environments.StateOpen, environments.StateClosed, environments.StateMerged, "all":
+	default:
+		return Filter{}, 0, installations.ErrWorkspaceInput
+	}
+	if len([]rune(f.Search)) > 100 {
+		return Filter{}, 0, installations.ErrWorkspaceInput
+	}
+	if value := params.Get("pr"); value != "" {
+		if number, err = strconv.ParseInt(value, 10, 32); err != nil || number < 1 {
+			return Filter{}, 0, installations.ErrWorkspaceInput
+		}
+	}
+	return f, number, nil
+}
+
+// listPR maps a PR to its row in the list.
+func (h *Handler) listPR(row dbgen.ListPRsRow, noWorker bool) pages.PR {
+	pr := pages.PR{Number: row.Number, Title: row.Title, Author: row.Author,
+		Branch: row.HeadBranch, SHA: row.HeadSha, State: DisplayStatus(row.State, row.BuildStatus), Build: row.BuildState,
+		Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh, RequestCurrent: row.RequestCurrent,
+		DeployedSHA: row.DeployedSha, Environment: row.EnvironmentStatus, NoWorker: noWorker}
+	if url := h.previewURL(row.Hostname); url != "" && previewDeployed(row.DeployedSha, row.EnvironmentStatus) {
+		pr.PreviewURL, pr.OlderPreview = url, row.DeployedSha != row.HeadSha
+	}
+	if pr.State == "checking" && row.MergeabilityUnresolvedAt.Valid {
+		pr.State, pr.MergeUnknown = "unknown", true
+	}
+	return pr
 }
 
 func panelError(err error) error {
