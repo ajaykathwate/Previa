@@ -6,7 +6,8 @@
 #   sudo deploy/production/setup.sh
 #
 # It is idempotent and never overwrites an existing /etc/previa/previa.env.
-# It installs Docker Engine, age and rclone; opens only SSH, HTTP and HTTPS;
+# It installs Docker Engine, age and rclone; allows the user namespaces that
+# rootless image builds need (Ubuntu 24.04); opens only SSH, HTTP and HTTPS;
 # creates the directories and file modes Previa expects; generates the
 # secrets it can (session, database, webhook, repository-secrets key); and
 # installs the nightly backup timer. Values that come from outside (GitHub
@@ -40,6 +41,15 @@ if ! command -v docker >/dev/null; then
 	apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
 fi
 systemctl enable --now docker >/dev/null
+
+# Ubuntu 24.04 restricts unprivileged user namespaces, which every rootless
+# BuildKit builder needs; without this, every preview build fails. Kernels
+# without the switch (Debian 12) need nothing. The file reapplies it at boot.
+if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+	echo "== user namespaces for rootless builds"
+	printf '%s\n' 'kernel.apparmor_restrict_unprivileged_userns=0' >/etc/sysctl.d/90-previa-rootless.conf
+	sysctl -q -p /etc/sysctl.d/90-previa-rootless.conf
+fi
 
 echo "== firewall: SSH, HTTP and HTTPS only"
 ufw default deny incoming >/dev/null
