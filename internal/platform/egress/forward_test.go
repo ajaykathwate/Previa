@@ -27,7 +27,9 @@ type forwardFixture struct {
 	stateDir string
 }
 
-func newForwardFixture(t *testing.T, resolver resolver) *forwardFixture {
+// newForwardFixture starts a forwarder. configure adjusts its limits before it
+// accepts anything: its connections read them, so they cannot change later.
+func newForwardFixture(t *testing.T, resolver resolver, configure ...func(*forwardLimits)) *forwardFixture {
 	t.Helper()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -37,6 +39,9 @@ func newForwardFixture(t *testing.T, resolver resolver) *forwardFixture {
 	x := &forwardFixture{t: t, dialer: &routingDialer{routes: map[string]string{}}, stateDir: t.TempDir()}
 	x.port = listener.Addr().(*net.TCPAddr).Port
 	x.f = newForwarder(x.stateDir, resolver, x.dialer, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, c := range configure {
+		c(&x.f.limits)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go x.f.accept(ctx, listener)
@@ -170,11 +175,13 @@ func TestForwarderDialsTheAddressItVetted(t *testing.T) {
 }
 
 func TestForwarderBoundsConnections(t *testing.T) {
-	x := newForwardFixture(t, fakeResolver{"db.example.com": {"93.184.216.34"}})
+	x := newForwardFixture(t, fakeResolver{"db.example.com": {"93.184.216.34"}}, func(l *forwardLimits) {
+		l.perNetwork = 1
+		l.recheck = 50 * time.Millisecond
+		l.maxBytes = 8 // the held connection's two bytes stay below it
+	})
 	x.dialer.routes["93.184.216.34:"+strconv.Itoa(x.port)] = echoServer(t)
 	x.allow(Destination{Host: "db.example.com", Port: x.port})
-	x.f.limits.perNetwork = 1
-	x.f.limits.recheck = 50 * time.Millisecond
 
 	held, err := net.Dial("tcp4", "127.0.0.1:"+strconv.Itoa(x.port))
 	if err != nil {
@@ -204,7 +211,6 @@ func TestForwarderBoundsConnections(t *testing.T) {
 
 	// A connection is cut at its byte cap.
 	x.allow(Destination{Host: "db.example.com", Port: x.port})
-	x.f.limits.maxBytes = 8
 	if _, err := x.exchange("more than eight bytes"); err == nil {
 		t.Fatal("the byte cap was not enforced")
 	}
