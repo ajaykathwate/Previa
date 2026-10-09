@@ -335,9 +335,13 @@ func TestBrowserRegression(t *testing.T) {
 	server.Start()
 	t.Cleanup(server.Close)
 	t.Cleanup(hub.Close) // Runs first, ending open event streams so Close returns.
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "node", "--test", "ui.test.cjs")
+	args := []string{"--test"}
+	if pattern := os.Getenv("UI_TEST_PATTERN"); pattern != "" {
+		args = append(args, "--test-name-pattern="+pattern) // rerun matching scenarios only
+	}
+	command := exec.CommandContext(ctx, "node", append(args, "ui.test.cjs")...)
 	command.Env = append(os.Environ(), "BROWSER_BASE_URL="+origin)
 	output, err := command.CombinedOutput()
 	if err != nil {

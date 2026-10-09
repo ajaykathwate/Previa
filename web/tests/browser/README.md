@@ -45,6 +45,16 @@ actions for an unavailable repository, and Builds/Environments showing addresses
 waits and failures. The real handlers' authorization, CSRF, idempotency and
 revision checks are covered by `internal/pullrequests` tests against PostgreSQL.
 
+Resilience scenarios intercept requests in the browser to show what a person sees
+when things go wrong: slow searches (progress, the newest result wins), a double
+click under a slow response (one request), refused, failed and offline actions
+(an explanation, nothing changed, the control usable again), a request that never
+answers (the 10-second timeout and a retry), a forged CSRF token, and a "slow 3G"
+network through Chrome DevTools emulation with a 512 KiB page-weight budget. An
+accessibility audit checks 13 pages for a language, title, single `h1`, `main`
+landmark, named controls, labelled fields, image `alt` text and unique IDs. The
+cases and their place in the full regression are in [test-docs/](../../../test-docs/README.md).
+
 To capture ignored screenshots:
 
 ```sh
@@ -54,7 +64,8 @@ UI_BROWSER_SCREENSHOTS=1 make test-browser
 Files appear in `web/tests/browser/artifacts/`. These are inspection artifacts,
 not committed snapshot baselines. `UI_BROWSER_EXECUTABLE=/absolute/path/to/chromium`
 optionally selects an existing compatible browser; the default uses Playwright's
-installed Chromium. Neither variable is application configuration.
+installed Chromium. `UI_TEST_PATTERN='<regex>'` runs only the scenarios whose
+titles match. None of these variables is application configuration.
 
 If Chromium reports missing Linux system libraries, install its OS dependencies
 (this may request administrator privileges):

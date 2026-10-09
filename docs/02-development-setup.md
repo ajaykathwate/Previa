@@ -513,7 +513,16 @@ session/CSRF middleware and fake GitHub/queue providers; no database or `.env`
 needed. To use an existing Chromium, set
 `UI_BROWSER_EXECUTABLE=/absolute/path/to/chrome` (for example a snap install at
 `/snap/bin/chromium`). `UI_BROWSER_SCREENSHOTS=1` writes ignored screenshots to
-`web/tests/browser/artifacts/`. Details: [web/tests/browser/README.md](../web/tests/browser/README.md).
+`web/tests/browser/artifacts/`. `UI_TEST_PATTERN='<regex>'` reruns only the
+scenarios whose titles match (for example `UI_TEST_PATTERN='slow|offline'`); the
+whole suite takes about two minutes. Details: [web/tests/browser/README.md](../web/tests/browser/README.md).
+
+### Full regression
+
+[test-docs/](../test-docs/README.md) lists every regression test case by module,
+with the command that runs each level (static checks, `go test -race` against
+PostgreSQL, the browser suite, the real Docker suites, end-to-end, release images
+and the production smoke test) and the results of the latest cycle.
 
 ## 6. Run the application
 

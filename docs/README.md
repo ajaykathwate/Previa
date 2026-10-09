@@ -39,6 +39,7 @@ Related files outside this folder:
 - [technical-docs/](../technical-docs/README.md): go-to references: the tech stack with every URL and dashboard, the end-user guide with a manual test checklist, and Mermaid class and database diagrams.
 - [DESIGN.md](../DESIGN.md): per-feature design and the package-by-feature layout (Section 20).
 - [AGENTS.md](../AGENTS.md) and [HANDOFF.md](../HANDOFF.md): working rules and current state for contributors and coding agents.
+- [test-docs/](../test-docs/README.md): the regression test specification, 242 cases by module with the evidence for each and the latest cycle's results.
 - [web/tests/browser/README.md](../web/tests/browser/README.md) and [web/components/README.md](../web/components/README.md): browser tests and component provenance.
 
 When behaviour, configuration or decisions change, update the matching document in

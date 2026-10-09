@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -531,5 +532,71 @@ func TestLegacyPRNeedsSourceBaselineBeforeReopen(t *testing.T) {
 	}
 	if f.count(t, "SELECT count(*) FROM build_intents") != 0 {
 		t.Fatal("baseline refresh authorized a build")
+	}
+}
+
+// TestHostileSearchAndTitlesAreInertData stores GitHub data an attacker
+// controls (titles, authors, branches) and searches with SQL and LIKE
+// syntax: every value is matched literally, as data, and nothing leaks
+// across owners.
+func TestHostileSearchAndTitlesAreInertData(t *testing.T) {
+	f := setup(t)
+	hostile := []struct {
+		number                int
+		title, author, branch string
+	}{
+		{1, `<script>alert(document.cookie)</script>`, "mallory", `feature"><img src=x onerror=alert(1)>`},
+		{2, `'; DROP TABLE pull_requests; --`, "mallory", "sql"},
+		{3, `100% done`, "alice", "percent"},
+		{4, `snake_case rename`, "bob", "underscore"},
+		{5, `Unicode ✓ ünïcödé 🚀`, "carol", "unicode"},
+	}
+	for _, p := range hostile {
+		if _, err := f.pool.Exec(t.Context(), `INSERT INTO pull_requests(repo_id,number,head_sha,state,generation,title,author,head_branch)VALUES($1,$2,$3,'open',1,$4,$5,$6)`,
+			f.repoID, p.number, fmt.Sprintf("%040d", p.number), p.title, p.author, p.branch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repo := pr.NewRepository(f.pool)
+	numbers := func(userID int64, search string) []int32 {
+		t.Helper()
+		page, err := repo.Page(t.Context(), userID, f.repoID, pr.Filter{Page: 1, State: "open", Search: search})
+		if err != nil {
+			t.Fatalf("search %q: %v", search, err)
+		}
+		var found []int32
+		for _, row := range page.Rows {
+			found = append(found, row.Number)
+		}
+		return found
+	}
+	for search, want := range map[string][]int32{
+		"' OR 1=1 --":                 {},
+		"'; DROP TABLE pull_requests": {2},
+		"%":                           {3},
+		"_":                           {2, 4}, // "pull_requests" in #2's title has one too
+		"<script>":                    {1},
+		"onerror=":                    {1},
+		"ÜNÏCÖDÉ":                     {5},
+		"MALLORY":                     {1, 2},
+		"":                            {1, 2, 3, 4, 5},
+	} {
+		got := numbers(f.userID, search)
+		slices.Sort(got)
+		if fmt.Sprint(got) != fmt.Sprint(want) && (len(got) != 0 || len(want) != 0) {
+			t.Errorf("search %q found %v, want %v", search, got, want)
+		}
+	}
+	var stored int
+	if err := f.pool.QueryRow(t.Context(), `SELECT count(*) FROM pull_requests`).Scan(&stored); err != nil || stored != len(hostile) {
+		t.Fatalf("pull_requests after hostile searches: %d rows, %v", stored, err)
+	}
+	// Another user sees nothing of this repository, whatever the search.
+	var stranger int64
+	if err := f.pool.QueryRow(t.Context(), `INSERT INTO users(github_id,username)VALUES(43,'stranger')RETURNING id`).Scan(&stranger); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Page(t.Context(), stranger, f.repoID, pr.Filter{Page: 1, State: "all", Search: "' OR 1=1 --"}); !errors.Is(err, pr.ErrUnavailable) {
+		t.Errorf("a stranger's search: %v, want ErrUnavailable", err)
 	}
 }

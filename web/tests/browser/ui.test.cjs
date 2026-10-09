@@ -1020,3 +1020,167 @@ test('build logs paginate and stay readable without JavaScript',async()=>{
   await plain.getByRole('link',{name:'Refresh',exact:true}).waitFor();
  } finally {await noJS.close();}
 });
+
+// Resilience: what a person sees when the network or the server misbehaves.
+// Requests are slowed, refused, dropped or left unanswered in the browser, so
+// these scenarios exercise the real page code against each failure.
+
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const isSearch = (query) => url => url.pathname === '/repositories/1' && url.searchParams.get('pr_q') === query;
+
+test('slow searches show progress, apply only the newest results and stay responsive', async () => {
+  await login();
+  await page.goto(`${origin}/repositories/1`);
+  let searches = 0;
+  await page.route(url => url.pathname === '/repositories/1' && url.searchParams.has('pr_q'), async route => {
+    searches++;
+    await wait(900);
+    await route.continue().catch(() => {}); // the page may have cancelled it meanwhile
+  });
+  const search = page.locator('#pull-request-search');
+  await search.fill('preview 1');
+  await page.waitForFunction(() => document.getElementById('pull-request-results').getAttribute('aria-busy') === 'true');
+  assert.match(await page.locator('#pull-request-filters [data-repository-feedback]').innerText(), /Updating/);
+  // The field stays editable while that search is in flight; the newer one replaces it.
+  await search.fill('preview 12');
+  await page.waitForFunction(() => document.querySelectorAll('.pr-table tbody tr').length === 1 &&
+    !document.getElementById('pull-request-results').hasAttribute('aria-busy'));
+  assert.match(await page.locator('.pr-table').innerText(), /#12/);
+  assert.equal(new URL(page.url()).searchParams.get('pr_q'), 'preview 12');
+  assert(searches >= 2, 'both searches were sent');
+  await wait(1200); // a late answer to the older search must never replace the newer results
+  assert.equal(await page.locator('.pr-table tbody tr').count(), 1);
+  assert.equal(await page.locator('#pull-request-filters [data-repository-feedback]').innerText(), '');
+});
+
+test('a slow build request disables its control so a double click sends one request', async () => {
+  await login();
+  await page.goto(`${origin}/repositories/1/pull-requests/7`);
+  let builds = 0;
+  await page.route('**/repositories/1/pull-requests/7/build', async route => {
+    builds++;
+    await wait(800);
+    await route.continue().catch(() => {});
+  });
+  const build = page.getByRole('button', {name: 'Build latest commit', exact: true});
+  await build.dblclick();
+  assert(await page.locator('form[action$="/pull-requests/7/build"] button[type="submit"]').isDisabled(), 'the button is disabled while the request runs');
+  await page.waitForFunction(() => /Queued/.test(document.querySelector('.pr-detail-grid')?.innerText || ''));
+  assert.equal(builds, 1, 'one build request reached the server');
+});
+
+test('refused, failed and offline requests explain themselves and leave the page usable', async () => {
+  await login();
+  await page.goto(`${origin}/repositories/1/pull-requests/8`);
+  const route = '**/repositories/1/pull-requests/8/build';
+  const build = page.getByRole('button', {name: 'Build latest commit', exact: true});
+  const feedback = page.locator('[data-detail-feedback]');
+  const failedWith = async pattern => {
+    await page.waitForFunction(text => new RegExp(text).test(document.querySelector('[data-detail-feedback]')?.textContent || ''), pattern.source);
+    assert.equal(await feedback.getAttribute('data-error'), 'true');
+    assert.equal(await page.locator('#repository-detail').getAttribute('aria-busy'), null, 'the panel is not left busy');
+    assert(await build.isEnabled(), 'the control can be used again');
+    assert.match(await page.locator('.pr-detail-grid').innerText(), /No build requested yet/, 'nothing changed');
+  };
+  // A refusal the server explains in a sentence is shown as it is.
+  await page.route(route, r => r.fulfill({status: 409, contentType: 'text/plain; charset=utf-8', body: 'The pull request or its build changed meanwhile. Reload and try again.'}));
+  await build.click();
+  await failedWith(/changed meanwhile/);
+  // An unexplained server error gets a plain message, never the error page.
+  await page.unroute(route);
+  await page.route(route, r => r.fulfill({status: 500, contentType: 'text/html', body: '<h1>internal stack trace</h1>'}));
+  await build.click();
+  await failedWith(/Could not update this view/);
+  assert.doesNotMatch(await page.locator('body').innerText(), /stack trace/);
+  // Offline: the request never reaches the server.
+  await page.unroute(route);
+  await page.route(route, r => r.abort('internetdisconnected'));
+  await build.click();
+  await failedWith(/Check your connection/);
+  // Back online, the same control works and the message clears.
+  await page.unroute(route);
+  await build.click();
+  await page.waitForFunction(() => /Queued/.test(document.querySelector('.pr-detail-grid')?.innerText || ''));
+  assert.equal(await feedback.innerText(), '');
+});
+
+test('a request that never answers times out with a message and can be retried', async () => {
+  await login();
+  await page.goto(`${origin}/repositories/1`);
+  await page.route(isSearch('preview 9'), () => {}); // never answered
+  await page.locator('#pull-request-search').fill('preview 9');
+  await page.waitForFunction(() => /Could not update this view/.test(document.querySelector('#pull-request-filters [data-repository-feedback]')?.textContent || ''), null, {timeout: 15000});
+  assert.equal(await page.locator('.pr-table tbody tr').count(), 10, 'the earlier results stay');
+  assert.equal(await page.locator('#pull-request-results').getAttribute('aria-busy'), null);
+  await page.unroute(isSearch('preview 9'));
+  await page.locator('#pull-request-search').fill('preview 19');
+  await page.waitForFunction(() => document.querySelectorAll('.pr-table tbody tr').length === 1);
+  assert.match(await page.locator('.pr-table').innerText(), /#19/);
+});
+
+test('a forged CSRF token is refused and changes nothing', async () => {
+  await login();
+  await page.goto(`${origin}/repositories/1/pull-requests/11`);
+  await page.locator('form[action$="/pull-requests/11/build"] input[name="csrf_token"]').evaluate(input => { input.value = 'forged'; });
+  const response = page.waitForResponse(r => r.url().endsWith('/pull-requests/11/build'));
+  await page.getByRole('button', {name: 'Build latest commit', exact: true}).click();
+  assert.equal((await response).status(), 403);
+  await page.waitForFunction(() => document.querySelector('[data-detail-feedback]')?.dataset.error === 'true');
+  assert.match(await page.locator('[data-detail-feedback]').innerText(), /could not be verified/);
+  await page.reload();
+  assert.match(await page.locator('.pr-detail-grid').innerText(), /No build requested yet/);
+});
+
+test('the workspace loads within its page weight and stays usable on a slow network', async () => {
+  await login();
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Network.enable');
+  await cdp.send('Network.setCacheDisabled', {cacheDisabled: true});
+  // About "slow 3G": 400 ms round trips and 400 kbit/s down.
+  await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 400, downloadThroughput: 50 * 1024, uploadThroughput: 25 * 1024});
+  const started = Date.now();
+  await page.goto(`${origin}/repositories/1`, {waitUntil: 'load', timeout: 30000});
+  const loadMs = Date.now() - started;
+  const bytes = await page.evaluate(() => [...performance.getEntriesByType('navigation'), ...performance.getEntriesByType('resource')]
+    .reduce((sum, entry) => sum + (entry.transferSize || 0), 0));
+  assert(bytes > 0 && bytes < 512 * 1024, `page weight ${bytes} bytes`);
+  assert(loadMs < 15000, `slow-network load took ${loadMs} ms`);
+  await page.locator('#pull-request-search').fill('preview 25');
+  await page.waitForFunction(() => document.querySelectorAll('.pr-table tbody tr').length === 1, null, {timeout: 15000});
+  await page.locator('.pr-table tbody a').first().click();
+  await page.waitForURL(url => url.pathname === '/repositories/1/pull-requests/25', {timeout: 15000});
+  assert(await page.getByRole('button', {name: 'Build latest commit', exact: true}).isEnabled());
+  console.log(`# slow network: ${Math.round(bytes / 1024)} KiB in ${loadMs} ms`);
+});
+
+test('every page passes basic accessibility checks', async () => {
+  const audit = () => {
+    const problems = [];
+    const name = el => (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') && document.getElementById(el.getAttribute('aria-labelledby'))?.textContent ||
+      el.getAttribute('title') || el.textContent || el.querySelector('img[alt]')?.getAttribute('alt') || el.getAttribute('value') || '').trim();
+    const visible = el => !el.closest('[hidden], template') && el.getClientRects().length > 0;
+    if (!document.documentElement.lang) problems.push('html has no lang');
+    if (document.querySelectorAll('h1').length !== 1) problems.push(`${document.querySelectorAll('h1').length} h1 elements`);
+    if (!document.querySelector('main')) problems.push('no main landmark');
+    if (!document.title.trim()) problems.push('no title');
+    for (const el of document.querySelectorAll('a[href], button, [role="button"], [role="switch"], [role="link"], summary')) {
+      if (visible(el) && !name(el)) problems.push(`unnamed ${el.tagName.toLowerCase()} ${el.outerHTML.slice(0, 80)}`);
+    }
+    for (const el of document.querySelectorAll('input:not([type="hidden"]), select, textarea')) {
+      const labelled = el.labels?.length || el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title');
+      if (visible(el) && !labelled) problems.push(`unlabelled ${el.tagName.toLowerCase()} ${el.name || el.id}`);
+    }
+    for (const img of document.querySelectorAll('img')) if (!img.hasAttribute('alt')) problems.push(`img without alt ${img.src}`);
+    const ids = [...document.querySelectorAll('[id]')].map(el => el.id);
+    for (const id of new Set(ids.filter((id, i) => ids.indexOf(id) !== i))) problems.push(`duplicate id ${id}`);
+    return problems;
+  };
+  await page.goto(origin);
+  assert.deepEqual(await page.evaluate(audit), [], 'home');
+  await login();
+  for (const path of ['/dashboard', '/repositories', '/repositories/1', '/repositories/1/pull-requests/3', '/repositories/1/pull-requests/9',
+    '/repositories/1/secrets', '/repositories/1/outbound', '/repositories/1/pull-requests/3/logs', '/builds?fixture=rows', '/environments?fixture=rows', '/faq', '/developer-tools']) {
+    await page.goto(`${origin}${path}`);
+    assert.deepEqual(await page.evaluate(audit), [], path);
+  }
+});
