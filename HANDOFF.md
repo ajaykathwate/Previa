@@ -64,7 +64,6 @@ Last updated: 2026-10-09
 - Outbound (internal/outbound, web/pages/outbound): <=10 host:port, one per port,
   PREVIEW_OUTBOUND_PORTS (none = off); worker writes allow files on previa-egress
   (outbound_refresh every minute); /etc/hosts maps names to the proxy; forks get none.
-- Metrics previa_egress_connections_total{outcome}, previa_egress_bytes_total.
 - Committed d612277 (feature), 6174a28 (CI disk fix), 3e055a1 (DESIGN diagram).
 
 ## Code quality pass (2026-10-08; behavior unchanged)
@@ -74,20 +73,23 @@ Last updated: 2026-10-09
   candidate/services/outbound.go; app execution.go, process.go). Shared rules:
   cleanupFence, lockOwnerIntentScope, transitionAllowed, judgeObservation.
 - webhooks delivery SQL in sqlc; cmd mains return exit codes so defers run.
-- Committed 6b227e5 (refactor) and 2e9cf53 (lint rules).
 
-## Regression cycle (2026-10-09, uncommitted; test-docs/)
+## Regression cycle (2026-10-09, committed e9aac61; test-docs/)
 - test-docs/: 242 cases in 16 module files (ID, type, priority, level, steps,
   expected, evidence); README holds strategy, commands and cycle results.
   Tick a case only when its evidence passed in a recorded run.
-- New tests: app/server_test.go (assembled router: headers, hosts, CSRF, limits,
-  webhooks, concurrency), 7 browser scenarios (resilience, slow 3G, a11y),
-  hostile search (pullrequests) and escaping (web/pages/pullrequests).
 - Fixed: D-01 htmx auth refusals now plain text (shown as the reason); D-02 GitHub
   link only for https://; D-03 Go 1.26.9 + x/net v0.60.0 (13 new advisories);
   D-04 smoke.sh reads the Go version from the Dockerfile's GO_IMAGE pin.
 - Open (owner decision): install-tailwind.sh curl has no retry/time limit; a GitHub
   download stall hung a release-images run for 27 minutes.
+
+## Deployment and next features (2026-10-09)
+- docs/25 is the one deployment guide (cd-in-action §9-11 point to it): OVHcloud
+  VPS-2 + Cloudflare DNS + R2 backups (~€7/mo). The owner chose OVH over Hetzner
+  (strict account terminations). It has starter/VPS-4 budgets and an "Account
+  safety" section (Manual builds for public repos). setup.sh sets the userns sysctl.
+- NEXT-FEATURES.md (root): 10 candidate features, none built.
 
 ## Pending (docs/26)
 - A real host (setup.sh, stack, backups to object storage, restore, upgrade);

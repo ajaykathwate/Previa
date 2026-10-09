@@ -39,6 +39,7 @@ Related files outside this folder:
 - [DESIGN.md](../DESIGN.md): per-feature design and the package-by-feature layout (Section 20).
 - [AGENTS.md](../AGENTS.md) and [HANDOFF.md](../HANDOFF.md): working rules and current state for contributors and coding agents.
 - [test-docs/](../test-docs/README.md): the regression test specification, 242 cases by module with the evidence for each and the latest cycle's results.
+- [NEXT-FEATURES.md](../NEXT-FEATURES.md): candidate features beyond the roadmap (none built), such as branch previews and a main-versus-PR compare view.
 - [web/tests/browser/README.md](../web/tests/browser/README.md) and [web/components/README.md](../web/components/README.md): browser tests and component provenance.
 
 When behaviour, configuration or decisions change, update the matching document in
