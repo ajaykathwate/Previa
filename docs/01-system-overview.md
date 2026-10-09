@@ -30,7 +30,7 @@ per-feature design lives in [DESIGN.md](../DESIGN.md).
 | Worker capabilities, Build/Retry/Rebuild/Tear down controls, Builds/Environments/Overview with real state | Working; the whole pipeline proven on real Docker, BuildKit and Traefik with a fake GitHub, including a GitHub reporting outage (`make test-e2e`) |
 | Observability: correlated redacted logs, bounded metrics, readiness on internal listeners, Grafana dashboard, 24 alert rules | Working; rules unit-tested (`make observability-check`) ([23](23-observability-and-hardening.md)) |
 | Hardening: nonce CSP and security headers, host and trusted-proxy validation, body and rate limits, production mode, execution kill switch | Working; browser suite runs under the CSP; incident runbook ([24](24-incident-runbook.md)) |
-| Release images, production Compose, host setup, encrypted backups and restore, upgrades and rollback, CI and releases | Working on local staging (`make prod-smoke`: 43 checks); a real host, DNS and hosted GitHub are pending ([25](25-production-deployment.md), [26](26-release-report.md)) |
+| Release images, production Compose, host setup, encrypted backups and restore, upgrades and rollback, CI and releases | Working on local staging (`make prod-smoke`: 40 checks, 43 with an older-schema restore); a real host, DNS and hosted GitHub are pending ([25](25-production-deployment.md), [26](26-release-report.md)) |
 
 This is an operational MVP, packaged and rehearsed for production on local staging
 infrastructure. What each capability needs and what is proven by which test are
@@ -74,59 +74,17 @@ flowchart LR
   container. Traefik ([12](12-routing-and-https.md)) serves the healthy preview at
   its stable HTTPS address.
 
-## Code layout
+## Where the details live
 
-`cmd → internal/app → feature packages → internal/platform`. Features own their
-handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
+This overview keeps the map and the reasoning; the references hold the inventories.
 
-| Path | What it holds |
+| To find | Read |
 | --- | --- |
-| `cmd/server`, `cmd/worker`, `cmd/migrate`, `cmd/river-migrate`, `cmd/secrets-reencrypt`, `cmd/route-sync`, `cmd/housekeeping`, `cmd/egress` | Thin entry points. `server` and `worker` also answer `healthcheck` and `check-config`; `migrate` applies the embedded migrations in release images; `river-migrate`, `secrets-reencrypt`, `route-sync` and `housekeeping` (dry run) are maintenance commands; `egress` runs as `previa-egress`, the proxy and prober container. |
-| `internal/app` | Composition root: builds dependencies, starts and stops processes; `pipeline.go` composes the worker's pipeline from validated dependencies and records why anything is unavailable. |
-| `internal/auth` | GitHub OAuth login, user upsert, SCS sessions, CSRF, logout. |
-| `internal/installations` | Verified App linking, installation lifecycle, repository directory, build-mode policy. |
-| `internal/webhooks` | Signed ingress, delivery deduplication, lifecycle dispatch. |
-| `internal/pullrequests` | PR observations, discovery/sync, mergeability, repository/PR pages, Build/Retry/Rebuild and teardown actions, Builds/Environments, event stream endpoint. |
-| `internal/environments` | Build intent, scheduling, admission and environment provisioning, generation-fenced results, publication outbox, the route fence, teardown requests and the teardown sweep, reconciler. |
-| `internal/repoconfig` | `.previewrc.yaml` strict validation, defaults, resource tiers, effective hash. |
-| `internal/source` | Exact-commit archive download through the base repository, identity check, hardened extraction, workspaces, config from the tree. |
-| `internal/secrets` | Encrypted repository secrets, Secrets tab, worker `ContainerEnv` contract, streaming redaction, re-encryption. |
-| `internal/buildlogs` | Current-attempt log streams: fenced bounded writer, owner page, live SSE, retention job. |
-| `internal/builds` | Isolated BuildKit image builder, size-capped export, labelled cleanup. |
-| `internal/runtime` | Hardened preview candidates: recheck, secrets, readiness, capacity, inventory, the pre-publication check and the owner-verified cleanup executor. |
-| `internal/routing` | Stable hostnames, the route controller (Traefik file provider), forward-only route table file, router control through Docker, the unavailable page. |
-| `internal/dashboard` | Home, overview, session and developer-tools pages; queue ping. |
-| `internal/platform/*` | Shared infrastructure: `config`, `database`, `queue` (River), `githubapp` (App auth), `httpx` (router), `realtime` (LISTEN/NOTIFY hub, SSE, stream limiter), `workers` (capability heartbeat), `logging` (correlation, redaction), `metrics` (Prometheus), `version`, `dockerx` (Docker client, shared labels), `egress` (the egress proxy, readiness probe and its container). |
-| `internal/reporting` | PR feedback: state derivation, comment and check run rendering, the GitHub adapter and the leased reporter ([14](14-pr-feedback.md)). |
-| `internal/housekeeping` | Startup and periodic River jobs: recovery, resource inventory with grace periods, PR reconciliation, expiry, pruning, dry runs ([15](15-housekeeping-and-capacity.md)). |
-| `web/` | `pages/<feature>`, `layouts`, `components`, `styles` (Tailwind), `static` (HTMX, compiled CSS, `ui.js`), browser tests. |
-| `db/migrations` | Goose migrations 0001–0020 (embedded by `db/migrations.go`); sqlc generates typed queries into each feature's `dbgen/`. |
-| `deploy/egress` | Dockerfile for the egress proxy and prober image (`make egress-image`). |
-| `deploy/traefik` | The development router's Compose file (`make router-up`): file provider, loopback API, staging ACME, secret-file DNS credential. |
-| `deploy/production`, `Dockerfile` | Release images; production Compose; host setup, backup, restore and smoke-test scripts ([25](25-production-deployment.md)). |
-| `deploy/observability` | Prometheus configuration, alert rules and their tests, the Grafana dashboard ([23](23-observability-and-hardening.md)). |
-| `.github/workflows`, `.goreleaser.yaml` | CI (checks, browser, images, real Docker suites) and tag-driven releases. |
-| `tools/go.mod` | Pinned dev tools: templ, sqlc, Goose, Air, golangci-lint. |
-
-## Data model
-
-| Table | Purpose |
-| --- | --- |
-| `users`, `sessions` | GitHub identities and server-side sessions. |
-| `installations`, `repos` | Linked App installations (owner, status, revision, `cleanup_pending` after a revocation) and repositories (access, `build_mode`, observation version). |
-| `installation_repository_events`, `webhook_deliveries` | Lifecycle ordering tombstones and delivery receipts (hash, not payload). |
-| `pull_requests` | Observed PR state: head SHA, lifecycle, `generation`, source timestamp, mergeability, fork data, and teardown requests (requested/started generation, reason). |
-| `pr_syncs` | Discovery run state per repository. |
-| `build_intents` | One current authorized build request per PR, with `revision`. |
-| `environments`, `environment_operations` | One lifetime preview per PR (hostname, active and pending artifacts, teardown generation) and the durable publication outbox. |
-| `environment_routes`, `route_table` | The route controller's accepted and served version per environment (removals kept as tombstones) and the counter that orders versions. |
-| `platform_instance`, `pr_reconciliations` | This database's identity for the Docker objects it creates; when housekeeping last confirmed each live PR with GitHub. |
-| `pull_request_reports` | PR feedback per PR: wanted and reported report versions, content digests, the current check run (commit, revision, ID), the reporter lease and the last error category. The living comment's ID stays on `pull_requests`. |
-| `env_secrets` | Repository secrets: nonce ‖ AES-256-GCM ciphertext bound to repository, name and key version. |
-| `build_log_streams` | One row per environment for the current build attempt: `epoch`, generation/revision, state, line and byte counts, truncation and loss counters. |
-| `build_logs` | That attempt's lines (`epoch`, `sequence`, `kind`); replaced on admission, pruned after 14 days. |
-| `worker_capabilities` | One row per running worker: what it can do (execution, routing, reporting, housekeeping, discovery), whether builds are paused, and when it was last seen. |
-| `river_*` | River's own job tables, migrated separately. |
+| Every package and folder, and what it holds | [DESIGN.md Section 20](../DESIGN.md#20-recommended-folder-structure-package-by-feature) (the tree) and [Inside Previa §1.5](../technical-docs/inside-previa.md#15-where-the-code-lives) |
+| Every table, column, constraint and trigger | [database-schema.md](../technical-docs/database-schema.md) and its [diagram](../technical-docs/database-schema-diagram.md) |
+| Every technology and version, process, container, URL and admin command | [tech-stack.md](../technical-docs/tech-stack.md) |
+| Every package's types and how they connect | [class-diagram.md](../technical-docs/class-diagram.md) |
+| Every term (generation, revision, intent, operation, candidate, …) | [Inside Previa, Appendix D](../technical-docs/inside-previa.md#appendix-d-glossary). Two more used in these docs: a **topic / cursor** is a realtime channel name such as `repository:42` and a resumable position in it ([20](20-realtime-updates.md)); an **upstream snapshot** is a PR as GitHub reported it moments ago, recorded under the usual fences ([05](05-webhooks-and-pr-discovery.md)). |
 
 ## Key decisions and trade-offs
 
@@ -173,7 +131,7 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
   so old operations cannot collide with new ones ([16](16-build-policy-and-intents.md)).
 - **No transactions across systems.** Desired state commits in PostgreSQL with a
   durable operation row; external calls run outside transactions and a reconciler
-  repairs partial failures ([18](18-durable-publication-design.md)).
+  repairs partial failures ([19](19-generation-ordering.md#the-decision)).
 - **Long locks versus slow IO.** GitHub/Docker calls never run while a row lock or
   transaction is open; revisions are captured before IO and rechecked after.
 - **Asynchronous mergeability.** Unknown results trigger a bounded, fenced recheck
@@ -206,27 +164,7 @@ handlers, services, SQL and jobs in flat packages; presentation lives in `web/`.
   cursor is read before page state, so a commit in between is replayed
   ([20](20-realtime-updates.md)).
 
-## Glossary
-
-| Term | Meaning |
-| --- | --- |
-| Observation | A PR state learned from a webhook, sync or targeted API read. |
-| Generation | Monotonic counter on a PR, advanced by each fresh relevant observation. |
-| Intent | The single current authorized build request for a PR (`build_intents`). |
-| Revision | Monotonic counter on an intent; distinguishes deliberate requests for the same SHA. |
-| Wake-up | A delayed River job that rechecks durable intent when its deadline arrives. |
-| Environment | The one lifetime preview record per PR, holding active and pending artifacts. |
-| Operation | A durable outbox row for an external side effect (route, report, cleanup). |
-| Topic / cursor | A realtime channel name such as `repository:42` and a resumable event position. |
-| Upstream snapshot | A PR as GitHub reported it moments ago, recorded under the usual fences. |
-| Workspace | A worker-owned directory holding one extracted commit and its marker file. |
-| Trusted source | A head repository that is provably the base repository; only these receive secrets. |
-| Attempt / log epoch | One admitted execution of a request; its epoch changes on every admission, even a retry. |
-| Egress proxy | The only route out of build networks: ports 80/443 to public addresses. |
-| Cache scope | Base repository plus source repository; builds share a BuildKit cache only within one. |
-| Candidate | A healthy preview container that is not yet routed; publication decides whether it becomes active. |
-
 ## Read next
 
-[02-development-setup.md](02-development-setup.md) to run it locally, then
-[03-user-guide.md](03-user-guide.md) to walk through the screens.
+[02-development-setup.md](02-development-setup.md) to run it locally, then the
+[user guide](../technical-docs/user-guide.md) to walk through the screens.

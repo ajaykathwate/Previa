@@ -2,8 +2,8 @@
 
 How Previa learns about pull requests: signed webhooks for changes as they happen,
 bounded API discovery for PRs that already exist, and targeted mergeability checks.
-All three only *observe* state; none of them authorizes a build. The screens are in
-[03-user-guide.md](03-user-guide.md).
+All three only *observe* state; none of them authorizes a build. The screens are in the
+[user guide](../technical-docs/user-guide.md).
 
 ## Decisions and alternatives
 

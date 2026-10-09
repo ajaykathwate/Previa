@@ -7,7 +7,7 @@ truth at the moment they are written, so a late or repeated report can never put
 older state back. This document covers the decisions, what GitHub shows in each
 state, how a report gets from a database change to GitHub, how comments and check
 runs keep a stable identity, ordering and its limits, failures, permissions and what
-was verified. It builds on the durable outbox ([18](18-durable-publication-design.md))
+was verified. It builds on the durable outbox
 and generation fences ([19](19-generation-ordering.md)). The worker registers the
 reporter as the report executor whenever it can build ([22](22-mvp-operations.md)),
 and both processes record report work whenever the GitHub App is configured.

@@ -2273,162 +2273,34 @@ when this single server fails.
 
 ## CI and releases
 
-### Exactly which events trigger what?
+CI validates and never deploys; a tag publishes a release; an operator deploys it
+by hand. Nothing in GitHub Actions reaches the VPS.
 
-| Event | Workflow / result | Deploys to the VPS? |
+| Event | Result | Deploys to the VPS? |
 | --- | --- | --- |
-| Push/merge a commit into `main` | `CI` runs validation, test jobs and temporary runner image builds/scans. | **No.** |
-| Open/update a pull request | `CI` runs; fork PRs do not run its privileged real-Docker suite. | **No.** |
-| Run `CI` manually in Actions | `workflow_dispatch` runs the same validation workflow. | **No.** |
-| Push a tag matching `v*.*.*`, such as `v0.1.0` | `Release` builds release archives/SBOMs and then pushes all three versioned multiarch images to GHCR. | **No.** |
-| Publish the draft GitHub Release | Makes the release page/assets visible according to GitHub release behavior. | **No.** |
-| Re-run a failed Release workflow job | Retries the selected publication steps. | **No.** |
-| Operator changes the VPS checkout/env and runs pull/build plus `dc up` | Uses the selected release on the VPS. | **Yes, manually.** |
-| Push to a repository being previewed by a running Previa instance | Previa webhook policy: Manual waits for an owner request; Automatic waits five quiet minutes. | May update a **PR preview**, not Previa's own server deployment. |
+| Push to `main`, open or update a pull request, or **Actions → CI → Run workflow** | `CI` generates, builds, lints, scans and tests; fork pull requests skip the privileged real-Docker suite. | No |
+| Push a tag matching `v*.*.*` (for example `v0.1.0` or `v0.1.0-rc.1`) | `Release` drafts a GitHub Release (command archives, checksums, SBOMs) and pushes the three multi-arch images to GHCR. | No |
+| The operator selects a release on the host and follows [Upgrades and rollback](#upgrades-and-rollback) (or Fresh host setup) | The host runs that release. | **Yes, manually** |
 
-`CI`'s push filter is specifically `branches: [main]`, not every branch/tag.
-The tag-driven `Release` workflow does **not** depend on a successful `CI`
-workflow, and creating a tag is not a substitute for running CI on its exact
-commit. There is no workflow that SSHes into the VPS, changes its env file,
-executes its Compose commands, or automatically restores a failed rollout.
+- `Release` does not wait for `CI`: tag only a commit whose own CI run passed.
+- Images are pushed while the release is still a draft; a maintainer reviews and
+  publishes the draft, and nothing changes on the host until it is deployed.
+- Production secrets (OAuth and App keys, database password, DNS token, keyring,
+  backup identity) never enter the workflows; they use the built-in `GITHUB_TOKEN`
+  and a disposable PostgreSQL.
+- Before the first release: enable Actions, protect `main` with the CI checks,
+  create the `release` environment with reviewers, and decide whether the GHCR
+  packages are public (a private one needs a read credential on the host).
 
-DigitalOcean's role here is hosting the Droplet and Spaces bucket. There is no
-App Platform repository integration or provider deploy button managing this
-Compose application. A reboot restarts/reconciles the installed stack; it does
-not fetch the latest GitHub commit. The operator chooses and applies releases.
-
-### Set up GitHub before the first release
-
-1. Ensure Actions is enabled and `.github/workflows/ci.yml` and `release.yml` are
-   present on the repository's default branch. Open a PR or push `main`, then
-   inspect all results in **Actions**.
-2. Configure main-branch protections/rulesets with the required CI checks your
-   repository exposes. Review skipped fork-only checks rather than treating a
-   skipped real-Docker job as a successful integration proof.
-3. Create the GitHub environment named **`release`**, configure allowed release
-   tags and required reviewers where your GitHub plan/repository visibility
-   supports them. The workflow's `environment: release` alone does not configure
-   an approval gate. See [GitHub environment protection](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments).
-4. Confirm the workflow can use its declared job permissions. It uses the
-   automatically supplied **`GITHUB_TOKEN`** for Releases/packages/attestations;
-   there is no repository-specific PAT or live production credential required
-   by the checked-in workflows.
-5. Decide whether GHCR packages are public or private. Public source does not mean
-   every package is automatically public. Check package access after publication;
-   configure the VPS's read credential if private.
-6. Validate the exact release candidate and document migration/rollback behavior,
-   configuration changes and the pending live checks. Run the smoke test against
-   that candidate's images and confirm all current schema checks pass.
-
-Keep **production** OAuth/App secrets, database password, DNS token, repository
-keyring and backup identity out of these workflows. The workflows use disposable
-PostgreSQL settings and do not deploy the production env file. A future deployment
-workflow would need its own explicit host access credentials and authorization;
-that is not part of the current CI.
-
-### What CI actually checks
-
-The `checks` job first generates template Go packages so a fresh checkout can
-resolve local imports, verifies modules are tidy, generates assets/templates/sqlc code,
-builds, runs `go vet`/golangci-lint and govulncheck, migrates disposable PostgreSQL,
-runs race-enabled Go tests, and checks Prometheus alert rules and dashboard queries.
-A separate browser job installs isolated Playwright tooling and runs UI regressions.
-The image job builds server/worker/egress images on the runner and scans the
-server and worker with the digest-pinned official Trivy container for fixable
-HIGH/CRITICAL vulnerabilities. It shares a temporary vulnerability-DB cache
-between scans and avoids downloading a separate scanner binary. These CI
-image builds are not pushed to the production registry by `ci.yml`.
-
-The `real-docker` job runs builder, runtime, routing, housekeeping, complete
-pipeline and production-stack smoke suites. It runs on pushes/manual runs and
-same-repository PRs, not on fork PRs, and needs the checks job. Those tests use
-runner Docker resources and disposable data, not the production VPS.
-
-### Publish a versioned release
-
-From your workstation, on a tested commit that has been pushed to GitHub:
-
-```sh
-git switch main
-git pull --ff-only origin main
-git status
-git rev-parse HEAD
-# Confirm this exact commit passed CI before tagging it.
-PREVIA_RELEASE=v0.1.0
-git tag -a "$PREVIA_RELEASE" -m "Previa $PREVIA_RELEASE"
-git push origin "$PREVIA_RELEASE"
-```
-
-Use a new version that does not already exist. In **Actions → Release**, approve
-the environment jobs if protection requires it, then verify completion:
-
-- GoReleaser creates a **draft** release with Linux amd64/arm64 command archives,
-  docs/deploy files, SHA-256 checksums and SBOMs. The commands include server,
-  worker, migrate, route-sync, housekeeping, secrets-reencrypt and egress.
-- After the binary job, the image matrix pushes
-  `ghcr.io/<actual-owner>/previa-server:<tag>`, `previa-worker:<tag>` and
-  `previa-egress:<tag>` for `linux/amd64` and `linux/arm64`, with provenance/SBOM
-  attestations. The owner is derived from the GitHub repository owner, not from
-  the differently spelled historical Go module import path.
-- Images are pushed even while the GitHub Release is still a draft. A maintainer
-  inspects assets, checksums, notes and image tags and deliberately publishes
-  the draft. Nothing then changes on the VPS until manual deployment.
-
-A first version such as `v0.1.0-rc.1` is still a matching tag pattern; use it if
-publishing a staging candidate. Verify candidate handling and release notes rather
-than presenting an RC as production acceptance.
-
-### Deploy manually, with or without the release workflow
-
-**From a published release:** SSH to the VPS, use Fresh host setup for a new host
-or U1–U5 for an existing host, select the same tag/checkout, edit the protected env,
-pull the images, validate, migrate, start paused, perform live checks and resume.
-Only the host needs production secrets. **Publishing first and deploying later
-is the current intended workflow.**
-
-**Without publishing images:** check out the reviewed/tested source on the VPS,
-choose an explicit version identifier in its env, and build:
-
-```sh
-dc --profile images build server worker egress
-```
-
-Then use the same config/migration/start/verification gates. For an existing host,
-still take a backup and retain the prior local images/checkout before replacement.
-A tag name is not enough to verify a locally built image: record its source commit
-and actual digest. Do not build from uncommitted production edits.
-
-**Manually run CI:** use GitHub **Actions → CI → Run workflow** and select the
-appropriate branch. This does not deploy. Release has no `workflow_dispatch`
-trigger in its checked-in YAML; its normal entry point is a pushed matching tag.
-A failed existing run can be retried in Actions after diagnosing it.
-
-### If automatic deployment is wanted later
-
-It needs a new, explicitly designed deployment workflow or supervised deployment
-agent. No such code is added here. Its necessary behavior would be to select a
-verified release, serialize deployments to this one host, enforce any desired
-approval/environment gate, authenticate to the host/registry, take and verify a
-fresh backup, apply version/config, validate/migrate, recreate services, verify
-internal and external health, resume deliberately and report the result. It also
-needs an explicit distinction between compatible image rollback and destructive
-schema recovery; automatically restoring old data on any failed health check is
-not the current behavior.
-
-Put any future SSH/deployment token into that deployment environment's protected
-secrets, with host identity verification and scoped access. That future token is
-different from the built-in `GITHUB_TOKEN` and from Previa's GitHub App key.
-Until such a workflow is implemented/tested, every production rollout is manual.
-
-For a future SSH deployment to this Droplet, the environment would normally hold
-the production host/user, a dedicated deployment SSH private key and verified
-SSH host-key/known-hosts data; a private GHCR pull credential is separate.
-DigitalOcean API access is only needed if the workflow actually provisions or
-changes provider resources. Do not give the application a provider token simply
-to run Docker, and do not assume hosted GitHub runners can reach an SSH rule
-restricted to your workstation IP. The runner's authorized network path and the
-deployment account's Docker/root privileges need explicit implementation.
-These are design requirements, not secrets consumed by the current workflows.
+Block by block: [CI in action](../technical-docs/ci-in-action.md) (each job, how to
+use the pipeline and
+[what a passing run establishes](../technical-docs/ci-in-action.md#10-what-a-passing-run-establishes))
+and [CD in action](../technical-docs/cd-in-action.md) (the Release workflow,
+GoReleaser and the Dockerfile,
+[how to publish a release](../technical-docs/cd-in-action.md#8-how-to-publish-a-release),
+[how it reaches DigitalOcean](../technical-docs/cd-in-action.md#9-how-the-release-reaches-digitalocean),
+[which credentials go where](../technical-docs/cd-in-action.md#11-which-credentials-go-where)
+and [what a future automatic deployment would need](../technical-docs/cd-in-action.md#12-automation-boundaries-and-troubleshooting)).
 
 ## Local staging smoke test
 

@@ -259,7 +259,7 @@ readable without JavaScript, with Copy and Download). When no worker that can bu
 is running, the build action is shown disabled with the reason and the fix (for
 example a worker without a preview domain), and the endpoints refuse with 503
 instead of recording work.
-See [03-user-guide.md](docs/03-user-guide.md) for the current browser workflow.
+See the [user guide](technical-docs/user-guide.md) for the current browser workflow.
 
 - **Builds** describes current/latest execution work and its commit/logs, not a
   permanent historical build archive (see 4.5).

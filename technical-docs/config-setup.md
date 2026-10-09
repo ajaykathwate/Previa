@@ -403,7 +403,8 @@ marked *command line* are typed before a `make` command instead.
 - **Type:** Required (the worker does not start without it). No default.
 - **What it is:** how many builds may run at the same time, across all workers.
 - **Where it's used:** the **Builds** page: requests beyond this number wait as
-  **Queued**.
+  **Queued**. It is also each worker process's number of build workers and the
+  concurrency of the developer-tools ping queue.
 - **How to get it:** `1` or `2` on a laptop. On a server, roughly the free memory
   divided by [BUILD_MEMORY](#build_memory) (4 GiB by default).
 - **Example:** `MAX_CONCURRENT_BUILDS=2`
@@ -414,7 +415,7 @@ marked *command line* are typed before a `make` command instead.
 - **What it is:** the longest one build may take: download, image build and the
   preview becoming healthy.
 - **Where it's used:** a build that runs longer fails with "The build took longer
-  than allowed".
+  than allowed". The job gets one more minute after that to publish or clean up.
 - **How to get it:** keep `12m`; raise it (for example `30m`) for very large images.
 - **Example:** `BUILD_TIMEOUT=12m`
 

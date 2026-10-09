@@ -1,11 +1,10 @@
-# 19 · Generation ordering and fencing (implementation)
+# 19 · Generation ordering and fencing
 
 How the code guarantees that a newer commit, a close or a deliberate rebuild always
-beats older work, even when jobs retry, overlap or finish late. This is the
-implementation of the decision in [18](18-durable-publication-design.md); the
-request revision it carries alongside generation comes from
-[16](16-build-policy-and-intents.md), and admission/handoff from
-[17](17-build-scheduling.md).
+beats older work, even when jobs retry, overlap or finish late: the decision behind
+durable publication, then its implementation. The request revision it carries
+alongside generation comes from [16](16-build-policy-and-intents.md), and
+admission/handoff from [17](17-build-scheduling.md).
 
 **Status:** generation and revision fencing, guarded results and the database/River
 publication outbox are implemented in `internal/environments` and tested with real
@@ -17,6 +16,51 @@ replace the serving preview and an Automatic burst that builds only the newest
 commit. Migration 9 keeps one
 environment row per PR for its whole life; admission clears the previous build's
 logs only after its checks pass.
+
+## The decision
+
+Publishing a preview touches systems that cannot share a transaction: PostgreSQL,
+River, Docker, the router and GitHub. Previa uses a transactional outbox with
+sagas, not a distributed transaction, and holds itself to these rules:
+
+- **PostgreSQL is the only source of truth** for desired PR state and environment
+  state. Traefik's route file and the GitHub comment are views that converge to it.
+- **Atomic recording:** a state change and the durable work it requires (a River
+  job, or an `environment_operations` row plus its River wake-up) commit together
+  in one short transaction, or neither does.
+- **Short transactions:** no Docker, router or GitHub call runs while a
+  transaction or PR row lock is held; outcomes are recorded afterwards in another
+  short, fenced transaction.
+- **Stale-result fencing:** `(generation, revision)` is the fencing token. No result
+  of an older pair may replace state accepted for a newer one, report a final
+  success or become the route target.
+- **At-least-once safety:** jobs may run twice. Every operation is idempotent, so a
+  repeat converges instead of duplicating routes, comments, containers or cleanup.
+  Temporary provider errors and timeouts retry; invalid configuration and other
+  deterministic failures are terminal for that request and reported once.
+- **Crash recovery:** after a crash at any boundary, durable rows tell the next
+  worker what remains; nothing is inferred from process memory. Exhausted retries
+  leave the operation visible for recovery, never silently dropped.
+- **Blue/green preservation and durable cleanup:** a healthy preview keeps serving
+  until its replacement is accepted and routed; old artifacts are removed only
+  then, and cleanup stays pending until it succeeds.
+- **Reconciliation:** housekeeping compares PostgreSQL with Docker and the router
+  and repairs drift after missed jobs, ambiguous timeouts or exhausted retries
+  ([15](15-housekeeping-and-capacity.md)).
+
+An ordinary router configuration push cannot be fenced, so one route controller owns
+every route change: it accepts a version in PostgreSQL only when that version is
+newer and still wanted, and writes Traefik's file only forward
+([12](12-routing-and-https.md)). Traefik's Docker-label provider was rejected
+because labels exist before a candidate is accepted and need the Docker socket.
+
+Not promised: exactly-once external execution, an atomic commit across PostgreSQL
+and the outside systems, or per-request routing freshness (for about a second after
+a switch, requests can still reach the previous target). While an outside system is
+down, its view can lag PostgreSQL until retries converge. The same design told as
+one flow, with diagrams, is in
+[Inside Previa](../technical-docs/inside-previa.md#32-generation-and-revision-fencing-tokens),
+chapters 3, 25, 26 and 33.
 
 ## Recording an event and capturing its generation
 

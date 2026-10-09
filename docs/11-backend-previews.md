@@ -11,7 +11,7 @@ rebuild, copies of production databases and non-HTTP ingress stay out of scope.
 
 Everything here builds on the preview runtime ([10](10-preview-runtime.md)): the
 same hardening, the same blue/green publication and fences
-([12](12-routing-and-https.md), [18](18-durable-publication-design.md)), the same
+([12](12-routing-and-https.md), [19](19-generation-ordering.md#the-decision)), the same
 teardown and cleanup contract ([13](13-teardown-and-cleanup.md)) and the same
 housekeeping ([15](15-housekeeping-and-capacity.md)). There is no second
 orchestrator.

@@ -109,7 +109,7 @@ PreviaBuildsWaitingForCapacity.
 
 **Alerts:** PreviaOperationsFailed, PreviaCleanupBacklog.
 
-Operations are routes, reports and cleanups ([18](18-durable-publication-design.md)).
+Operations are routes, reports and cleanups ([19](19-generation-ordering.md#the-decision)).
 
 1. Grafana "Operations by kind and state".
 2. `activate_route`/`remove_route` failing: is the router healthy (`dc ps router`)?

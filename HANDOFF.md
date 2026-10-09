@@ -3,9 +3,11 @@ Last updated: 2026-10-09
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
-- docs/README.md indexes 27 docs (02 setup, 11 backend previews, 22 operations,
-  23 observability, 24 incidents, 25 deployment, 26 release report, 27 roadmap).
-  A new doc takes its reading-order slot; later numbers, links, labels and H1s shift.
+- docs/README.md indexes 25 docs (02 setup, 11 backend previews, 19 publication
+  decision + fencing, 22 operations, 23 observability, 24 incidents, 25 deployment,
+  26 release report, 27 roadmap). 03 and 18 are retired (user guide in
+  technical-docs, decision merged into 19); numbers are not reused or shifted.
+  Do not edit technical-docs/inside-previa.md (owner's rule, 2026-10-09).
 - docs/27-roadmap.md: Prompts 1-13 done. Prompt 14 (detect missed uninstall/suspend/
   repository-removal webhooks by reconciliation) is planned, not started (an attempt
   was reverted at the owner's request). docs/26-release-report.md answers the release

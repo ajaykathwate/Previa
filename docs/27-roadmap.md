@@ -159,8 +159,7 @@ presentation in web/, and construction in internal/app. Use small consumer-owned
 interfaces; do not create global handler/store layers or speculative frameworks.
 
 Preserve [16-build-policy-and-intents.md](16-build-policy-and-intents.md),
-[17-build-scheduling.md](17-build-scheduling.md),
-[18-durable-publication-design.md](18-durable-publication-design.md) and
+[17-build-scheduling.md](17-build-scheduling.md) and
 [19-generation-ordering.md](19-generation-ordering.md). Every executable
 request and external artifact/operation carries PR identity, exact SHA and the
 ordered (generation, revision) fence. Same-SHA Retry/Rebuild changes revision.
@@ -395,6 +394,9 @@ infrastructure, and neither may weaken a release check that has already passed.
 
 ## Prompt 6 — Stable HTTPS routing and fenced blue/green publication
 
+*Since 2026-10-09 the decision this prompt names is in
+[19](19-generation-ordering.md#the-decision); docs/18 was merged into it.*
+
 > Implement DESIGN Sections 11 and 13 and the route boundary in
 > docs/18-durable-publication-design.md. Read existing operation leases, candidate/
 > active artifacts and finalization SQL before adding internal/routing adapters.
@@ -525,6 +527,9 @@ infrastructure, and neither may weaken a release check that has already passed.
 > startup/periodic maintenance services, ready for Prompt 10's production wiring.
 
 ## Prompt 10 — Connect real workers and complete MVP dashboard actions
+
+*Since 2026-10-09 the user guide this prompt names is
+[technical-docs/user-guide.md](../technical-docs/user-guide.md); docs/03 was retired.*
 
 > Connect Prompts 1–9 in internal/app and the existing feature handlers. Read
 > DESIGN Sections 7, 13 and 17 and docs/03-user-guide.md. This task makes a complete

@@ -2,7 +2,8 @@
 
 How the dashboard is built: server-rendered pages, progressive enhancement, the
 visual system and the browser behaviours layered on top. Screen behaviour from a
-user's point of view is in [03-user-guide.md](03-user-guide.md).
+user's point of view is in the
+[user guide](../technical-docs/user-guide.md).
 
 ## Principles
 

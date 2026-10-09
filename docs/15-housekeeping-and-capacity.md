@@ -8,7 +8,7 @@ covers the owner decisions, the jobs, what each crash point leaves behind and wh
 resumes it, expiry and its feedback, orphan detection, PR reconciliation with
 GitHub, pruning, capacity controls, dry runs, configuration and what was verified.
 It extends the environments contracts ([17](17-build-scheduling.md),
-[18](18-durable-publication-design.md), [13](13-teardown-and-cleanup.md)); the
+[19](19-generation-ordering.md#the-decision), [13](13-teardown-and-cleanup.md)); the
 code is `internal/housekeeping` plus capacity in `internal/environments`,
 `internal/runtime` and `internal/builds`. The worker registers it whenever it can
 build ([22](22-mvp-operations.md)); `make housekeeping-dry-run` runs it as a

@@ -108,47 +108,11 @@ packages as part of the tools module and tries to fetch their imports remotely.
 The existing `go tool -modfile=tools/go.mod <tool>` commands still select the
 pinned tool dependencies correctly.
 
-| Variable | Process | How to set it | Purpose |
-| --- | --- | --- | --- |
-| `DATABASE_URL` | server, worker, migrations | Keep the example for the Compose database. | Application data, sessions and River jobs. |
-| `HTTP_ADDR` | server | `127.0.0.1:8080` | Listen address. |
-| `APP_ENV` | server, worker | Optional; `development` (default) or `production`. | Production requires an HTTPS `APP_BASE_URL` and `GITHUB_WEBHOOK_SECRET`, refuses a GitHub App key readable by group or others, and turns the queue-ping tools off ([23](23-observability-and-hardening.md)). |
-| `LOG_LEVEL` | server, worker, egress | Optional; `debug`, `info` (default), `warn`, `error`. | JSON logs with correlation fields; secrets redacted. |
-| `INTERNAL_ADDR` | server | Optional; default `127.0.0.1:9090`. | `/livez`, `/readyz`, `/metrics`; never publish it. |
-| `TRUSTED_PROXIES` | server | Optional; addresses or CIDR ranges; empty trusts nobody. | Reverse proxies allowed to set `X-Forwarded-For`/`-Host`. |
-| `BACKUP_STATUS_FILE` | server | Optional; set in production Compose. | Its modification time becomes the last-backup metric ([25](25-production-deployment.md#backups-and-restore)). |
-| `APP_BASE_URL` | server | `http://localhost:8080` | OAuth redirects, CSRF origin checks, cookie security. |
-| `GITHUB_OAUTH_CLIENT_ID` / `_SECRET` | server | **Required** (the server does not start without them). From a GitHub **OAuth App** ([04](04-github-sign-in-and-app.md)). | Dashboard sign-in. |
-| `SESSION_SECRET` | server | `openssl rand -hex 32` | Signs OAuth state; at least 32 characters. |
-| `MAX_CONCURRENT_BUILDS` | worker | `2` | Builds running at once across all workers (and build workers per process); also the ping queue's concurrency ([15](15-housekeeping-and-capacity.md)). |
-| `BUILD_TIMEOUT` | worker | `12m` (max `24h`) | Build execution budget plus a one-minute grace. |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | server, worker | **Required for repositories** (linking, sync, builds). From a GitHub **App** ([04](04-github-sign-in-and-app.md)). | App JWTs; the worker needs only these two for discovery. |
-| `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | server | **Required for repositories.** Same GitHub App. | Installation page and verified linking. |
-| `GITHUB_WEBHOOK_SECRET` | server | **Required for live updates and Automatic builds** (and in production). `openssl rand -hex 32`, same value in the App settings. | Verifies webhook signatures ([05](05-webhooks-and-pr-discovery.md)). |
-| `SECRETS_ENCRYPTION_KEYS` | server, worker | **Required for repository secrets.** `1:` + output of `openssl rand -base64 32`; comma-separate versions. | Encrypts repository secrets ([07](07-repository-secrets.md)). |
-| `SECRETS_ACTIVE_KEY_VERSION` | server, worker | **Required for repository secrets.** The version new values use, e.g. `1`. | Selects the key for new values. |
-| `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS` | worker | Optional; defaults `2`, `4GiB`, `2048`. | Per-build limits for the isolated builder ([09](09-image-builds.md)). |
-| `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK` | worker | Optional; defaults `20GiB`, `4GiB`, `15GiB`. | Disk and image bounds; sizes take `KiB`, `MiB`, `GiB` or `TiB`. |
-| `BUILDKIT_IMAGE`, `EGRESS_IMAGE` | worker | Optional; defaults to the pinned rootless BuildKit image and `previa-egress:dev`. | Builder image; egress proxy and prober image for builds and previews. |
-| `PREVIEW_ALLOW_ROOT`, `PREVIEW_WRITABLE_ROOTFS` | worker | Optional; default `false`. | Server-wide opt-outs from running previews as UID 65532 with a read-only root ([10](10-preview-runtime.md)). |
-| `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT` | worker | Optional; defaults `256MiB`, `512`, `120s`. | Preview `/tmp` size, process limit and readiness deadline. |
-| `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY` | worker | Optional; empty budgets use 60% of Docker memory and 75% of its CPUs; `10`. | What all previews may use together, and per repository. |
-| `PREVIEW_OCI_RUNTIME` | worker | Optional, e.g. `runsc` where gVisor is installed. | Docker runtime for previews. |
-| `PREVIEW_SERVICE_CATALOG` | worker | Optional; empty uses Previa's pinned PostgreSQL 17/16 and Redis 8/7 images, `none` offers none. Entries are `kind:version=image@sha256:digest`. | Managed services previews may request ([11](11-backend-previews.md)). |
-| `PREVIEW_SETUP_TIMEOUT` | worker | Optional, default `5m` (10s–30m). | Limit of a preview's setup command. |
-| `PREVIEW_OUTBOUND_PORTS` | server, worker | Optional, default `5432,3306,6379,6380,27017,5671,5672,9092,1433`; `none` turns the feature off. Never 80, 443 or 3128. | Ports owners may approve for outbound connections (Outbound tab). |
-| `WORKER_INTERNAL_ADDR` | worker | Optional; default `127.0.0.1:9091`. | `/livez`, `/readyz` (with capabilities), `/metrics`. |
-| `BUILDS_PAUSED` | worker | Optional; default `false`. | The execution kill switch: builds wait; teardown, cleanup, routing, reports and housekeeping continue ([24](24-incident-runbook.md#execution-kill-switch)). |
-| `SOURCE_WORKSPACE_ROOT` | worker | Optional; default `previa-sources` in the system temporary directory. An absolute path on a Linux filesystem. | Where each build's extracted source lives while it builds. |
-| `ENV_TTL_HOURS` | worker | Optional; default `48`, `0` never expires. | Preview lifetime after its latest publication ([15](15-housekeeping-and-capacity.md)). |
-| `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE` | worker | Optional; defaults `false`, `15m`. | Log housekeeping deletions without making them; the minimum age of an orphan. |
-| `BUILD_CACHE_BUDGET` | worker | Optional; default `40GiB`. | All build caches together; the oldest unused ones are pruned first. |
-| `PREVIEW_BASE_DOMAIN` | server, worker | **Required for builds and previews.** `preview.localtest.me` on one machine, or a domain you control (not the dashboard's host or a parent of it). | Preview hostnames below it ([12](12-routing-and-https.md)); turns routing on in the worker. |
-| `APP_BASE_URL` | worker (when routing) | The dashboard origin, as on the server. | Unknown preview hosts are redirected to its `/previews/unavailable`. |
-| `ROUTER_DYNAMIC_DIR` | worker (when routing), router | **Required for builds and previews.** A full path on a Linux filesystem, without `~` (`.env` does not expand it) or a trailing slash; `make router-up` creates it. | Where the route controller writes Traefik's route table. |
-| `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS` | worker | Optional; defaults `previa-router`, `websecure`, `127.0.0.1:8080` (must be loopback). | The router container, its HTTPS entry point and its in-container API. |
-| `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE` | router (`make router-up`) | **Required for builds and previews** (`make router-up` refuses without them, even on one machine; the file may hold any text there). Your ACME contact, lego provider (e.g. `cloudflare`), its credential variable (e.g. `CF_DNS_API_TOKEN`) and a `chmod 600` file holding the token. | Wildcard certificate over DNS-01; read by `deploy/traefik/compose.yml`, not by Go. |
-| `ACME_CA_SERVER`, `ACME_DNS_RESOLVERS` | router | `ACME_CA_SERVER` is **required on one machine**: `https://127.0.0.1:1/directory` requests no certificate. With a real domain, Let's Encrypt **staging** (the default), then production. Resolvers are optional. | Switch to production only after staging issued a certificate. |
+Every setting, which process reads it, its default and how to get its value is in
+[technical-docs/config-setup.md](../technical-docs/config-setup.md), grouped as in
+`.env.example`: shared, dashboard (server), GitHub App, repository secrets, builds,
+previews, preview domain and router, housekeeping, tests and tooling, and
+production only. The rules that most often stop a first run:
 
 - Sign-in needs real OAuth values; placeholders start the server but cannot log in.
 - The five server App settings are all-or-nothing. Omit them all to run with
@@ -560,7 +524,7 @@ the server when Go, templ, CSS, JS or SQL files change (polling works on
 WSL-mounted folders). It does not restart the worker; restart that yourself after
 worker changes. Refresh the browser after a rebuild.
 
-Screen-by-screen behavior is in [03-user-guide.md](03-user-guide.md). Signed
+Screen-by-screen behavior is in the [user guide](../technical-docs/user-guide.md). Signed
 webhook check, once the secret is configured and the server is running:
 
 ```sh

@@ -5,8 +5,8 @@ withdraws its preview's route and removes every Docker object it created for tha
 PR, durably and without GitHub. This document covers the triggers, the states, the
 order of removal, what is kept, how revocation works, why an old teardown can never
 remove a newer preview, and how each step resumes after a crash. It extends the
-existing teardown job, outbox and cleanup contracts ([18](18-durable-publication-design.md),
-[19](19-generation-ordering.md)); there is no second teardown queue. The worker
+existing teardown job, outbox and cleanup contracts
+([19](19-generation-ordering.md)); there is no second teardown queue. The worker
 registers the teardown, route, cleanup and sweep workers whenever it can build
 ([22](22-mvp-operations.md)); a teardown recorded while none runs waits durably.
 

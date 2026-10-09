@@ -2,7 +2,7 @@
 
 **Module:** RTE · **Code:** `internal/routing`, `internal/environments` (route fence) ·
 **Feature docs:** [12 · Routing and HTTPS](../docs/12-routing-and-https.md),
-[18 · Durable publication](../docs/18-durable-publication-design.md)
+[19 · Generation ordering and fencing](../docs/19-generation-ordering.md)
 
 Turning a healthy candidate into the preview URL: the route fence that only moves
 forward, the router's file and certificates, and what visitors see for previews

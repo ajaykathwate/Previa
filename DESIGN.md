@@ -459,9 +459,8 @@ High. Concurrency and zero-gap swapping.
 - **Manual freshness:** a new commit fences an older in-flight result but does not authorize its successor in Manual mode. An already deployed healthy preview stays available and the UI distinguishes its deployed SHA from the latest PR SHA.
 - **Mode changes:** switching to Manual cancels unstarted Automatic intent; enabling Automatic applies to future relevant events, not a bulk build of existing PRs. Already-running authorized work may finish if its generation/request remains current. Explicit Retry after failure or Rebuild after success advances request revision without fabricating a PR event. The schema/domain foundation is implemented; see [16-build-policy-and-intents.md](docs/16-build-policy-and-intents.md). Scheduling propagates revision through jobs, results and publication; [17-build-scheduling.md](docs/17-build-scheduling.md) records exact SQL and integration limits.
 
-Implementation status and the durable publication boundary are kept separate: see
-[the current generation-ordering implementation](docs/19-generation-ordering.md) and
-[the durable publication design](docs/18-durable-publication-design.md). External
+The durable publication decision and its implementation are in
+[19-generation-ordering.md](docs/19-generation-ordering.md). External
 routing and reporting calls run outside transactions with generation fencing and
 recovery across crashes. The swap itself is implemented by the route controller
 ([12-routing-and-https.md](docs/12-routing-and-https.md)): the new candidate is verified
@@ -621,8 +620,8 @@ Initial discovery and detail screens are implemented by a feature-owned
 source/access snapshot fences and owned Templ pages. The build action checks
 ownership, the PR's state and mergeability, a live worker that can build (otherwise
 503 with nothing recorded) and a fresh GitHub read, then records one idempotent,
-revision-checked request with its wake-up. There is no bulk build. See
-[03-user-guide.md](docs/03-user-guide.md).
+revision-checked request with its wake-up. There is no bulk build. See the
+[user guide](technical-docs/user-guide.md).
 
 ### Design decisions and edge cases
 - **Server-rendered UI** keeps everything in one binary and one deploy.

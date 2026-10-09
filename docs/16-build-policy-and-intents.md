@@ -3,7 +3,7 @@
 Who decides that a pull request gets built, and how that decision is stored so it
 survives crashes, retries and races. Scheduling the decision is
 [17-build-scheduling.md](17-build-scheduling.md); executing it safely is
-[18](18-durable-publication-design.md) and [19](19-generation-ordering.md).
+[19](19-generation-ordering.md).
 
 ## The decision
 

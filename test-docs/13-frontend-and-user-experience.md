@@ -2,7 +2,7 @@
 
 **Module:** UI · **Code:** `web/` (templates, `static/js/ui.js`, CSS), handlers'
 view models · **Feature docs:** [21 · UI architecture](../docs/21-ui-architecture.md),
-[03 · User guide](../docs/03-user-guide.md)
+[User guide](../technical-docs/user-guide.md)
 
 What a person sees and can do: navigation, modals, keyboard and screen-reader
 use, small screens, no JavaScript, and above all what happens when the network or
