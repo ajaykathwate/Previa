@@ -194,7 +194,7 @@ another provider.
 ### What the host must provide
 
 Previa cannot run on a platform-as-a-service (Render, Railway, Heroku, Fly.io apps,
-Cloud Run, DigitalOcean App Platform): the worker needs a Docker daemon it
+Cloud Run): the worker needs a Docker daemon it
 controls, private Docker networks, rootless BuildKit builders and Traefik on ports
 80 and 443. Any provider that rents a plain Linux VM works:
 
@@ -219,10 +219,9 @@ excluding VAT. Providers change prices and plans, so check before you buy.
 | OVHcloud | VPS-3 | 6 / 12 GB / 100 GB | €10.40 | The first upgrade when builds queue or previews wait. |
 | OVHcloud | VPS-4 | 8 / 24 GB / 200 GB | €19.96 | For real traffic. |
 | OVHcloud | VPS-1 | 2 / 4 GB / 40 GB | €3.81 | Only to try Previa out: see [Minimum host](#minimum-host). |
-| [Hetzner Cloud](https://www.hetzner.com/cloud) | CX33 | 4 x86 / 8 GB / 80 GB | €8.99 | Hourly billing and a polished console, but strict signup checks, and it locks a server's IP when an abuse report is not answered in time; its terms allow ending the contract without notice for abuse. |
 | Contabo | Cloud VPS 10 | 4 / 8 GB / 75 GB | about €4.50 | Cheapest, but slower and weaker on uptime and support in independent tests. |
 | [Vultr](https://www.vultr.com/pricing/) | Regular, 8 GB | 4 / 8 GB / 160 GB | $40 | More regions; polished, but about five times the price. |
-| [DigitalOcean](https://www.digitalocean.com/pricing/droplets) | Basic Droplet, 8 GiB | 4 / 8 GiB / 160 GiB | $48 | Best documentation; see [On another provider](#on-another-provider). |
+| Akamai (Linode) | Shared, 8 GB | 4 / 8 GB / 160 GB | $48 | Mainstream, but about six times the price. |
 | Oracle Cloud | Always Free, Ampere A1 | 2 Arm OCPU / 12 GB (free-tier accounts, since June 2026) | $0 | **Not recommended.** Oracle may reclaim an Always Free instance whose CPU, network and memory use stay under 20% for 7 days, which describes a Previa nobody uses yet. |
 
 **This guide's setup:** OVHcloud VPS-2, Cloudflare's free DNS, and Cloudflare R2
@@ -237,14 +236,14 @@ Everything from [Step 3](#step-3--install-the-checkout-and-prepare-the-host) on 
 provider-neutral: `setup.sh`, Compose, certificates, backups through rclone,
 upgrades and restores. Only the provider's console steps differ:
 
-| In this guide (OVHcloud) | On another provider (for example Hetzner or DigitalOcean) |
+| In this guide (OVHcloud) | On another provider |
 | --- | --- |
-| Order a VPS-2 (Step 1); log in as `ubuntu` | Create a VM that meets the requirements above (a Hetzner CX33, a DigitalOcean Droplet) with your SSH key; their Ubuntu images log in as `root`. |
-| UFW, optionally the Edge Network Firewall | The provider's firewall (Hetzner Firewalls, DigitalOcean Cloud Firewalls; both stateful) with inbound SSH/80/443. |
-| Update DNS when replacing the VPS | Optionally, an address that survives replacing the VM (Hetzner Primary IPs, DigitalOcean Reserved IPs). |
-| R2 bucket and token (B2, B3) | Unchanged: R2 works with any host. Or the provider's S3-compatible storage. |
-| Host checks and an external uptime check | The provider's monitoring (Hetzner graphs CPU, disk and network; DigitalOcean's agent adds memory graphs, alerts and uptime checks). |
-| Included daily backup and snapshot (B7) | The provider's backups and snapshots (Hetzner: 20% of the server price). |
+| Order a VPS-2 (Step 1); log in as `ubuntu` | Create a VM that meets the requirements above, with your SSH key. Many providers' Ubuntu images log in as `root`; create the `ops` user from there the same way. |
+| UFW, optionally the Edge Network Firewall | UFW as here, plus the provider's firewall if it has one (usually stateful) with inbound SSH/80/443 only. |
+| Update DNS when replacing the VPS | The same, or a provider address that survives replacing the VM (often called a reserved, floating or primary IP). |
+| R2 bucket and token (B2, B3) | Unchanged: R2 works with any host. Or the provider's S3-compatible storage through rclone. |
+| Host checks and an external uptime check | The same checks, plus the provider's monitoring if it offers any. |
+| Included daily backup and snapshot (B7) | The provider's backups and snapshots, if offered and at its price. |
 | Upgrade the model | The provider's resize; plan an outage the same way. |
 
 ### Starter settings for a small host
@@ -275,8 +274,9 @@ ENV_TTL_HOURS=24
 - **Control plane:** PostgreSQL, the server, the worker and the router have 4 GiB
   of limits between them but use about 1 GiB while idle. Leave out the
   `observability` profile (Prometheus and Grafana, up to 1.5 GiB) on this host:
-  define `dc` without `--profile observability`, and rely on the backup-failure
-  webhook and an external uptime check until you add it.
+  use the [Step 7](#step-7--define-the-production-commands-and-obtain-images) `dc`
+  without it, and rely on the backup-failure webhook and an external uptime check
+  until you add it.
 - **Swap:** add a 4 GiB swap file as a cushion against short memory peaks:
 
   ```sh
@@ -401,12 +401,15 @@ not create them. Use `docker ps` and their labels to inspect them.
 
 | Object | Created by / lifetime | What it does |
 | --- | --- | --- |
-| `previa-egress` container and network | Worker startup; shared and persistent | Runs the Previa proxy and readiness prober. Attached to build/preview networks; permits proxy traffic to public addresses and blocks private/control-plane/metadata addresses. Requires its image to be downloaded beforehand. |
+| `previa-egress` container and network | Worker startup; shared and persistent | Runs the Previa proxy and readiness prober. Attached to build/preview networks; permits proxy traffic to public addresses, forwards owner-approved outbound connections, and blocks private/control-plane/metadata addresses. Requires its image to be downloaded beforehand; the worker replaces it when that image changes (see U4). |
 | Rootless BuildKit builder | A build attempt; removed afterwards | Fetches public base images/dependencies through the proxy, executes Dockerfile steps, builds the preview image. Its cache may persist in a labelled Docker volume. |
 | Build network | A build attempt; removed afterwards | Internal bridge network containing the builder and attached egress proxy. |
 | Preview image | A successful Dockerfile build | Kept in the VPS's Docker image store, not uploaded to GHCR by the PR build pipeline. |
 | App preview container | A successful build; lives until replacement, teardown or expiry | Runs the app with bounded CPU/memory/PIDs, its configured internal port and appropriate repository secrets. No Docker socket or published host ports. |
 | PR preview network | That PR's preview lifecycle | Internal bridge shared by that PR's candidates, Traefik and the egress proxy. Other PRs and the control plane are not attached. |
+| Backend preview services | Each candidate of a PR whose `.previewrc.yaml` declares `services`; removed with it | A fresh PostgreSQL and/or Redis per candidate, data on tmpfs (lost on rebuild), generated credentials. Never restarted: a crashed service fails that candidate. |
+| Setup and process containers | Each candidate that declares `setup` or `processes` | The app's image running the setup command once before the app starts, and up to three extra processes (such as a queue worker) beside it. |
+| PR services network | That PR's backend previews | Internal bridge joined only by the PR's candidates and their services: no egress proxy, no router. |
 
 The preview config `.previewrc.yaml` points at a Dockerfile and the app's internal
 port. It is not a file for deploying Previa's own control plane. A preview must
@@ -917,6 +920,9 @@ Other implemented optional controls retain their defaults unless you need them:
 | `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS` | `256MiB`, `512`; temporary writable space and process cap per preview. |
 | `PREVIEW_STARTUP_TIMEOUT` | `120s`; deadline for initial readiness. |
 | `PREVIEW_OCI_RUNTIME` | Empty: Docker's default runtime. `runsc` requires separately installing/configuring gVisor on the host. |
+| `PREVIEW_SERVICE_CATALOG` | Empty: Previa's pinned PostgreSQL 17/16 and Redis 8/7 images are offered to backend previews; `none` offers none. Entries are `kind:version=image@sha256:digest` ([11](11-backend-previews.md)). |
+| `PREVIEW_SETUP_TIMEOUT` | `5m` (10s–30m); limit of a backend preview's setup command. |
+| `PREVIEW_OUTBOUND_PORTS` | `5432,3306,6379,6380,27017,5671,5672,9092,1433`; the ports owners may approve on the **Outbound** tab; `none` turns approved outbound connections off. The server and the worker both read it, which the shared env file guarantees. |
 | `HOUSEKEEPING_DRY_RUN` | `false`; `true` observes deletion decisions without executing housekeeping deletions. |
 | `HOUSEKEEPING_GRACE` | `15m` before unreferenced resources count as orphans. |
 | `PREVIA_ENV_FILE` | Optional alternate host env-file path for container `env_file` and scripts. If changed, also pass that path to Compose `--env-file` and the backup systemd service. |
@@ -948,21 +954,31 @@ new SSH session; they are shell helpers, not installed commands:
 
 ```sh
 cd /opt/previa
+# VPS-2 (starter settings): without Prometheus and Grafana.
 dc() {
   docker compose -p previa \
     -f /opt/previa/deploy/production/compose.yml \
-    --env-file /etc/previa/previa.env --profile observability "$@"
+    --env-file /etc/previa/previa.env "$@"
 }
+# VPS-3 or VPS-4: define dc like this instead, to run Prometheus and Grafana.
+# dc() {
+#   docker compose -p previa \
+#     -f /opt/previa/deploy/production/compose.yml \
+#     --env-file /etc/previa/previa.env --profile observability "$@"
+# }
 probe() {
-  docker run --rm --network previa_control curlimages/curl:8.15.0 \
+  docker run --rm --network previa_control \
+    curlimages/curl:8.15.0@sha256:4026b29997dc7c823b51c164b71e2b51e0fd95cce4601f78202c513d97da2922 \
     -fsS --max-time 15 "$@"
 }
 ```
 
-The `observability` profile is deliberately present on every normal `dc` command
-in this guide. The `images` profile is used only while pulling/building images;
-**do not enable it on `up`**, because the worker creates the real `previa-egress`
-container itself.
+Pick one `dc` and use it for every command on this host, so Compose always sees
+the same services; the monitoring steps below that use Prometheus or Grafana
+need the `observability` profile. `probe` uses the curl image pinned by digest,
+as the smoke test does. The `images` profile is used only while pulling/building
+images; **do not enable it on `up`**, because the worker creates the real
+`previa-egress` container itself.
 
 For **published GHCR images**, uncomment/set the three `PREVIA_*_IMAGE` names in
 `previa.env`, set the matching `PREVIA_VERSION`, then:
@@ -1040,7 +1056,7 @@ Expected behavior:
 4. Server starts only after migrations succeed. Worker starts after migrations
    and router health, ensures the egress proxy exists, synchronizes the accepted
    route table, starts River and records its capabilities.
-5. Prometheus and Grafana start because this guide enabled `observability`.
+5. Prometheus and Grafana start too if your `dc` enables the `observability` profile.
 6. Traefik issues the wildcard preview certificate through DNS-01 and the
    dashboard certificate through TLS-ALPN-01. Check both certificates; a green
    container health check alone is not proof of ACME success.
@@ -1131,9 +1147,15 @@ Then, from an external browser and GitHub:
 8. If you want Automatic, enable it for this repository: eligible head changes
    build after **five quiet minutes**, not immediately after every push. Test a
    burst of changes and ensure only the latest eligible commit is published.
-9. Tear down from the PR page, then test close/merge cleanup. The URL should
+9. If your apps need a database, cache, migrations or a worker, open a PR whose
+   `.previewrc.yaml` declares `services`, `setup` and `processes`
+   ([11](11-backend-previews.md)). Confirm the build log shows each service
+   ready, the setup output and the processes starting, and that the PR page's
+   **Runs with** matches. To let previews reach an external system, approve its
+   `host:port` on the repository's **Outbound** tab and rebuild.
+10. Tear down from the PR page, then test close/merge cleanup. The URL should
    become unavailable and the owned containers/networks should be cleaned up.
-10. Take an encrypted backup, confirm off-host storage, rehearse a restore on a
+11. Take an encrypted backup, confirm off-host storage, rehearse a restore on a
     different disposable host, and verify actual alert delivery.
 
 The host/runtime recovery and live hosted GitHub/DNS checks remain deployment
@@ -1151,8 +1173,9 @@ stopped. **A health check turning unhealthy does not itself restart a running
 process in this plain Compose setup.** Investigate its readiness and logs.
 See [Docker restart policy behavior](https://docs.docker.com/engine/containers/start-containers-automatically/).
 
-Preview containers have a different policy: **on failure, at most three
-restarts**. They are not promised to restart automatically on a Docker-daemon
+Preview app containers and their declared processes have a different policy:
+**on failure, at most three restarts**. Backend preview services and setup
+containers are never restarted; a crashed service fails its candidate. They are not promised to restart automatically on a Docker-daemon
 restart. After a host reboot, inspect them and the dashboard; missing/dead
 previews are reconciled and may need an owner rebuild. Do not apply
 `restart: unless-stopped` to all previews as an undocumented lifecycle change.
@@ -1167,7 +1190,7 @@ a worker/server restart if Traefik and the preview containers remain running.
 
 ### Open Grafana and check metric collection
 
-On your **workstation**:
+This needs the `observability` profile (see Step 7). On your **workstation**:
 
 ```sh
 ssh -N -L 3000:127.0.0.1:3000 ops@YOUR_SERVER_IP
@@ -1207,6 +1230,7 @@ listeners and Traefik's control API are not public dashboards to expose.
 | Worker availability | `previa_workers_live`, `previa_worker_capability`, worker `/readyz`, Overview | Whether a worker is alive and capable of discovery, building, routing, reporting and cleanup. |
 | Durable publication and teardown | `previa_operations`, `previa_environments`, operation logs | Route changes, GitHub reports and cleanup waiting/retrying independently of a build. |
 | Capacity and housekeeping | Build waiting reasons, housekeeping action counts, `previa_build_disk_free_bytes` | Admission limits, cleanup behavior, free disk **at the last build check**, not a continuous host disk monitor. |
+| Outbound connections from previews | `previa_egress_connections_total{outcome}`, `previa_egress_bytes_total` | Approved outbound connections opened, refused or failed, and the bytes they carried. |
 | GitHub and webhooks | Request/rate-limit metrics, webhook delivery outcomes, GitHub delivery screen | API failures, token/permission problems, exhausted API budget and signature failures. |
 | Backup health | `previa_backup_last_success_timestamp_seconds`, systemd status and R2 objects | Whether the entire encrypted backup and retention pass succeeded. |
 | TLS | `traefik_tls_certs_not_after`, router ACME logs, external HTTPS check | Upcoming expiry, failed renewal and public certificate acceptance. |
@@ -1362,10 +1386,15 @@ These run inside the worker through River, not in separate cron containers:
 | Preview expiry | Every ten minutes; `ENV_TTL_HOURS=48` by default after latest publication, `0` disables TTL expiry. |
 | Cache/workspace pruning | Hourly, with emergency pruning at most every five minutes when builds wait for disk. |
 | Build log retention | Hourly; retains completed-attempt logs for 14 days. |
+| Approved outbound connections | Every minute and after every change on the **Outbound** tab; rewrites the egress proxy's approvals, so a removal takes effect within a minute. |
 | Database/config/ACME backup | Host systemd timer; independent of River, described below. |
 | TLS renewal | Traefik ACME; independent of River. |
 
 ### Make alerts reach a person
+
+This needs Prometheus, so the `observability` profile. Without it (the VPS-2's
+starter setup), rely on `BACKUP_FAILURE_WEBHOOK` and the external uptime checks
+until you add the profile.
 
 The repository loads **24 alert rules**, including server/worker availability,
 queue delays, build failures, capacity, webhook errors, certificate expiry and
@@ -2132,53 +2161,37 @@ procedure. The supplied service is PostgreSQL 17. A future database-major change
 needs its own tested dump/restore or `pg_upgrade` plan and compatible clients,
 not simply a replacement image tag on the old data directory.
 
-### Step U4 — Account for the separately managed egress proxy
+### Step U4 — Check the egress proxy after the upgrade
 
-**Important lifecycle detail:** the worker's `Gateway.Ensure` reuses an existing
-`previa-egress` container by name. Updating `EGRESS_IMAGE` or pulling its new tag
-is not a check/replacement of that running container's image. Compare:
+The worker keeps one shared `previa-egress` container. When it starts with an
+`EGRESS_IMAGE` whose content differs from the image the running proxy was created
+from, it **replaces the proxy itself**: it removes the old container, creates one
+from the new image and reconnects it to the same build and preview networks. Every
+release builds a new egress image (the version is compiled in), so expect this on
+each upgrade. Check it after U3:
 
 ```sh
-docker inspect --format '{{.Config.Image}} {{.Image}}' previa-egress
+docker inspect --format '{{.Config.Image}} {{.Created}}' previa-egress
 ```
 
-If the existing proxy remains compatible and the release does not require its
-replacement, record the intentional version difference. If the egress binary
-changed and must be upgraded, use a separate, rehearsed maintenance procedure:
+**Expected:** the new release's egress image, created at the upgrade.
 
-1. Keep new builds paused and wait until no builder is running. Stop the worker
-   so it cannot race proxy creation while you inspect/remove the old proxy.
-2. Save the proxy's network names and **IPv4 addresses** privately:
+The new proxy can get different addresses on the preview networks. Previews that
+were running before the upgrade keep the old proxy address in their environment
+and `/etc/hosts`, so their **outbound** requests (calls to external APIs and
+approved outbound connections) fail until they are rebuilt. Inbound traffic is
+unaffected: visitors reach previews through Traefik, not the proxy. During the
+maintenance window, rebuild the live previews whose apps call external services
+(PR page → **Rebuild preview**), or accept that their outbound calls fail until
+their next build. Readiness probes and new builds use the new proxy at once.
 
-   ```sh
-   docker inspect --format '{{json .NetworkSettings.Networks}}' previa-egress \
-     > /root/previa-egress-networks-before.json
-   ```
-
-3. Confirm the selected new egress image is present locally. Remove only the old
-   `previa-egress` container, then start the worker paused so its startup creates
-   the proxy from the selected image. Do not remove the preview networks/images.
-4. Reattach it to each surviving preview network using the recorded IP where
-   required. Preview containers already contain their proxy's IP in environment
-   variables; assigning a different address does not rewrite those variables.
-   The relevant manual Docker operation is:
-
-   ```sh
-   docker network connect --ip SAVED_IPV4_ADDRESS SAVED_PREVIEW_NETWORK previa-egress
-   ```
-
-   Substitute the recorded address/name and verify that address is available.
-   If the new proxy was attached at a different address, stop work and deliberately
-   reconcile that attachment; do not blindly issue duplicate connections.
-   Alternatively, tear down/rebuild affected previews during the maintenance
-   window so their new runtime environment uses the new endpoint.
-5. Verify the proxy image, preview readiness, outbound access and isolation, then
-   resume builds. Include the same proxy/network plan if later rolling back it.
-
-This is not an automatic zero-downtime proxy rollout. The shared container and
-hardcoded host topology also mean that blindly scaling workers onto another VPS
-is not supported by this deployment; the roadmap's multi-host runtime work needs
-its own architecture and tests.
+If the worker cannot start the proxy, it exits with `prepare worker: start the
+egress proxy …` and Docker keeps restarting it, so nothing runs (builds, routing,
+reports and cleanup) until you fix the cause, usually a missing egress image:
+pull it with `dc --profile images pull`, then `dc up -d --wait worker`. The shared container and
+fixed host topology also mean that scaling workers onto another VPS is not
+supported by this deployment; multi-host runtime work needs its own architecture
+and tests.
 
 ### Step U5 — Resume only after live checks pass
 
@@ -2466,9 +2479,12 @@ The tracked `smoke.sh` asserts Goose schema **20** after initial migration,
 upgrade and an optional older-backup restore, matching
 `internal/platform/database/schema.go` and the current migration set. When adding
 a migration, update those three expectations alongside the application's schema
-requirement. The earlier 43/43 result in the release report is historical; run the
-current harness against the exact candidate images before treating its gate as
-passed.
+requirement.
+
+**Expected:** `smoke test passed: 40 checks` (43 with `SMOKE_OLD_DUMP`, 33 without
+`age`). Run it against the exact candidate images before treating its gate as
+passed; an earlier result recorded in the release report does not cover a newer
+candidate.
 
 ## Security notes
 
@@ -2519,8 +2535,9 @@ passed.
 | [Setup script](../deploy/production/setup.sh) | Packages, directory ownership, generated secrets, Docker group and backup timer. |
 | [Dockerfile](../Dockerfile), [GoReleaser](../.goreleaser.yaml) | Embedded presentation, image targets, static commands and release archives. |
 | [Server](../internal/app/server.go), [worker](../internal/app/worker.go), [pipeline](../internal/app/pipeline.go) | Webhooks/queue production, actual execution dependencies, capabilities, startup and shutdown. |
-| [Runtime hardening](../internal/runtime/hardening.go), [builder](../internal/builds/sandbox.go), [egress lifecycle](../internal/platform/egress/gateway.go) | Dynamic Docker objects, restart policies, resource boundaries and proxy reuse. |
+| [Runtime hardening](../internal/runtime/hardening.go), [builder](../internal/builds/sandbox.go), [egress lifecycle](../internal/platform/egress/gateway.go) | Dynamic Docker objects, restart policies, resource boundaries, and proxy reuse and replacement. |
 | [Routing](../internal/routing/controller.go), [housekeeping schedules](../internal/housekeeping/settings.go) | Accepted routes, reconciliation/expiry/pruning and recovery. |
+| [Backend preview services](../internal/runtime/services.go), [outbound approvals](../internal/outbound/) | Per-candidate PostgreSQL/Redis, setup and processes; approved outbound connections and their refresh. |
 | [Metrics](../internal/platform/metrics/metrics.go), [state collection](../internal/app/observe.go), [River observations](../internal/platform/queue/observe.go) | Traffic/build/job counters, queue state, capability and backup gauges. |
 | [Prometheus](../deploy/observability/prometheus.yml), [alerts](../deploy/observability/alerts.yml), [Grafana](../deploy/observability/grafana/dashboards/previa.json) | Actual scrape targets, missing alert-delivery configuration and provisioned panels. |
 | [Backup](../deploy/production/backup.sh), [restore](../deploy/production/restore.sh) | Local PostgreSQL target, encrypted artifacts, retention, destructive restore and paused startup. |

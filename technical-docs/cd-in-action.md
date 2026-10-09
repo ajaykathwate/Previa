@@ -708,7 +708,7 @@ release by hand, following the production guide; this is the shape of it:
 | Record and pause | Record the running tag, schema and image digests; set `BUILDS_PAUSED=true` and let builds drain. | [U1, U2](../docs/25-production-deployment.md#step-u1--prepare-and-record-the-previous-release) |
 | Back up | Run the backup service and confirm all three encrypted archives arrived. | [U2](../docs/25-production-deployment.md#step-u2--pause-new-builds-drain-and-make-a-fresh-backup) |
 | Select and validate | Check out the same tag, set `PREVIA_VERSION` and the GHCR image names, pull (log in first if the packages are private), run `check-config`. | [U3](../docs/25-production-deployment.md#step-u3--select-validate-and-start-the-candidate) |
-| Migrate and start | Run the forward migrations, then `up -d --wait`; replace the egress proxy and keep Traefik's preview networks only when the release needs it. | [U3, U4](../docs/25-production-deployment.md#step-u4--account-for-the-separately-managed-egress-proxy) |
+| Migrate and start | Run the forward migrations, then `up -d --wait`. The worker replaces the egress proxy itself; rebuild live previews that call external services. Keep Traefik's preview networks if the router is recreated. | [U3, U4](../docs/25-production-deployment.md#step-u4--check-the-egress-proxy-after-the-upgrade) |
 | Verify and resume | Check HTTPS, sign-in, webhooks, a disposable preview and PR feedback, then unpause and take a fresh backup. | [U5](../docs/25-production-deployment.md#step-u5--resume-only-after-live-checks-pass) |
 
 The source checkout matters even when pulling images: it selects the matching
@@ -802,7 +802,7 @@ That would be a separate operational/privilege design.
 | New release published but old server still runs | No deploy step has run, or running containers were not reconciled |
 | Migration/startup fails on host | First migration/config/health error; pause and choose a tested recovery path |
 | Router healthy but preview fails | Dynamic network attachments and accepted route/backend state |
-| Egress still reports old image | Name-based reuse; apply the separate proxy upgrade procedure |
+| Egress still reports old image | The worker has not restarted since the upgrade, or the new egress image is missing on the host; check the worker log, pull it and recreate the worker ([U4](../docs/25-production-deployment.md#step-u4--check-the-egress-proxy-after-the-upgrade)) |
 | Backup fails | Root's rclone config, bucket scope/endpoint, age recipient, dump/archive and retention logs |
 
 ### 12.4 Files to open when behavior changes

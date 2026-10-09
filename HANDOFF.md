@@ -86,9 +86,9 @@ Last updated: 2026-10-09
 
 ## Deployment and next features (2026-10-09)
 - docs/25 is the one deployment guide (cd-in-action §9-11 point to it): OVHcloud
-  VPS-2 + Cloudflare DNS + R2 backups (~€7/mo). The owner chose OVH over Hetzner
-  (strict account terminations). It has starter/VPS-4 budgets and an "Account
-  safety" section (Manual builds for public repos). setup.sh sets the userns sysctl.
+  VPS-2 + Cloudflare DNS + R2 backups (~€7/mo), the owner's choice for cost and
+  account handling. Do not reintroduce the earlier providers (owner's request).
+  Starter/VPS-4 budgets; "Account safety" (Manual builds for public repos).
 - NEXT-FEATURES.md (root): 10 candidate features, none built.
 
 ## Pending (docs/26)
