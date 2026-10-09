@@ -3,7 +3,7 @@
 Previa's continuous integration runs on **GitHub Actions**, using temporary
 GitHub-hosted Ubuntu runners. It checks the source, UI, database behavior,
 container images and preview pipeline. It does not deploy Previa or use the
-production DigitalOcean Droplet, database or Spaces bucket.
+production OVHcloud VPS, database or R2 backup bucket.
 
 This guide explains the checked-in [ci.yml](../.github/workflows/ci.yml) block by
 block, including the Makefile targets and test harnesses it calls. It describes
@@ -31,13 +31,13 @@ Source behavior was reviewed on **2026-10-06**.
 | --- | --- | --- |
 | Your workstation | Git edits, commits, pushes and optional local checks | Your development environment |
 | GitHub-hosted runner | One CI job's commands, temporary test databases and Docker containers | Temporary build/test environment |
-| DigitalOcean Droplet | Deployed server, worker, production PostgreSQL, Traefik and live previews | Persistent production host |
+| OVHcloud VPS | Deployed server, worker, production PostgreSQL, Traefik and live previews | Persistent production host |
 | GHCR | Published release images from the separate Release workflow | Registry storage, not an app server |
 
 Every CI job has `runs-on: ubuntu-24.04`. These are GitHub-hosted machines;
-there is no `self-hosted` runner or DigitalOcean API/SSH deployment step in this
+there is no `self-hosted` runner or OVHcloud API/SSH deployment step in this
 workflow. GitHub provisions runners for the jobs. You do not create those
-machines in your DigitalOcean account. [GitHub-hosted runners](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners).
+machines in your OVHcloud account. [GitHub-hosted runners](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners).
 
 The `checks` and `real-docker` jobs each get their **own** PostgreSQL service.
 Their Docker daemons, workspaces and databases are separate. Passing `checks`
@@ -58,7 +58,7 @@ flowchart TD
 ```
 
 These temporary runner machines do not change the live preview architecture:
-Previa's worker creates live PR containers on the persistent DigitalOcean host.
+Previa's worker creates live PR containers on the persistent OVHcloud VPS.
 A connected repository's webhook/build request is a different pipeline from
 the GitHub Actions workflow that tests Previa itself.
 
@@ -232,7 +232,7 @@ services:
 5. Run migrations and tests against this disposable database.
 
 The connection settings above match this block. This is not the production
-volume `previa_postgres` and is not DigitalOcean Managed PostgreSQL.
+volume `previa_postgres` and is not a managed PostgreSQL service.
 GitHub manages the service container lifecycle for the job.
 [Service containers](https://docs.github.com/en/actions/tutorials/use-containerized-services/use-docker-service-containers).
 
@@ -377,7 +377,7 @@ migration adapter via `make river-migrate-up`.
 
 Goose owns Previa's application schema; River owns its queue schema/history.
 Both are prepared before integration tests. A failure here points to migration,
-connection, PostgreSQL readiness or schema setup, not a migration on your Droplet.
+connection, PostgreSQL readiness or schema setup, not a migration on your production server.
 
 ### 4.11 Run Go tests, including database tests
 
@@ -465,7 +465,7 @@ normally skips.
 [browser_test.go](../web/tests/browser/browser_test.go) serves the UI through
 an in-process test HTTP server with fixtures. It exercises real UI, session,
 CSRF and Content Security Policy behavior without a live PostgreSQL database or
-external GitHub calls. It does not open your DigitalOcean dashboard or sign in
+external GitHub calls. It does not open your OVHcloud Control Panel or sign in
 to your real GitHub account.
 
 ## 6. The images job
@@ -504,7 +504,7 @@ done
 
 This command does not request the release workflow's AMD64/ARM64 matrix.
 It builds locally for CI validation. The images are not uploaded to GHCR or
-copied to the Droplet. The later Docker integration job builds its own images.
+copied to the production server. The later Docker integration job builds its own images.
 
 ### 6.3 Scan the worker image
 
@@ -694,7 +694,7 @@ App is disabled, and ACME is deliberately unreachable. It checks startup,
 migrations, readiness, security headers, metrics, hardening, graceful stops,
 tag-based replacement/rollback and an encrypted backup/restore drill.
 
-Its backup destination is a temporary local directory, not DigitalOcean Spaces.
+Its backup destination is a temporary local directory, not Cloudflare R2.
 The default cleanup removes the test stack/volumes and temporary files.
 `SMOKE_KEEP=1` can retain them for a local investigation; that variable is not
 set in CI.
@@ -743,8 +743,8 @@ does not upgrade Actions or change configuration.
 6. Configure branch protection/rulesets with the checks you require for merging.
    Workflow YAML alone does not make green CI mandatory for a merge.
 
-No DigitalOcean API token, production SSH key, production GitHub App PEM,
-Cloudflare token or Spaces key is required by this CI workflow. Its temporary
+No OVHcloud API credential, production SSH key, production GitHub App PEM,
+Cloudflare DNS token or R2 token is required by this CI workflow. Its temporary
 database values are already declared in YAML.
 
 ### 9.2 Manual run and logs
@@ -823,9 +823,9 @@ A passing run means the checks configured for that event completed successfully
 against their runner environments and fixtures. It does not establish:
 
 - A release was published, or that Release is automatically gated on this CI.
-- The DigitalOcean server was updated, backed up or rolled back.
+- The OVHcloud VPS was updated, backed up or rolled back.
 - Real GitHub OAuth/App registrations, DNS and production certificates work.
-- A Spaces backup can be decrypted/restored on a replacement Droplet.
+- An R2 backup can be decrypted/restored on a replacement server.
 - Skipped fork-only or opt-in suites passed.
 - Every image/severity was scanned, or every UI/production path has a test.
 

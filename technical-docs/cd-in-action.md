@@ -2,7 +2,8 @@
 
 Previa currently has **automated release publishing and manual production
 deployment**. GitHub Actions builds versioned binaries and Docker images.
-An operator then installs the selected version on the DigitalOcean Droplet.
+An operator then installs the selected version on the production host, one
+OVHcloud VPS.
 There is no checked-in workflow that SSHes into that host, deploys on every
 commit, or automatically rolls back a failed deployment.
 
@@ -14,8 +15,8 @@ or live server has been verified.
 
 Read [CI in action](ci-in-action.md) for the checks before publishing.
 Use [25 · Production deployment](../docs/25-production-deployment.md) for the full
-DigitalOcean account, Droplet, DNS, secrets, monitoring, Spaces and recovery
-runbook. The commands below explain that existing process; they do not provision
+host, DNS, secrets, monitoring, backup and recovery runbook, including the choice
+of provider and low-cost settings. The commands below explain that existing process; they do not provision
 anything by being documented.
 
 ## Contents
@@ -28,7 +29,7 @@ anything by being documented.
 - [The images job](#6-the-images-job)
 - [Dockerfile and build context](#7-the-dockerfile-and-dockerignore)
 - [Publish a release, step by step](#8-how-to-publish-a-release)
-- [Deploy to DigitalOcean manually](#9-how-the-release-reaches-digitalocean)
+- [How a release reaches the host](#9-how-a-release-reaches-the-host)
 - [Backups and rollback](#10-backups-failures-and-rollback)
 - [Secrets and configuration locations](#11-which-credentials-go-where)
 - [Automatic deployment and troubleshooting](#12-automation-boundaries-and-troubleshooting)
@@ -39,8 +40,8 @@ anything by being documented.
 | --- | --- | --- |
 | Continuous integration | Validate a proposed change | `ci.yml` runs generation, build, lint, vulnerability and test jobs |
 | Release delivery | Produce and publish a named installable version | `release.yml` publishes binaries and container images from a version tag |
-| Production deployment | Change the version running for users | Operator performs the Droplet runbook and verification |
-| PR preview deployment | Build/run an app from a connected repository | The deployed Previa worker manages Docker previews on that Droplet |
+| Production deployment | Change the version running for users | Operator performs the production runbook and verification on the server |
+| PR preview deployment | Build/run an app from a connected repository | The deployed Previa worker manages Docker previews on that server |
 
 CD can mean continuous delivery or continuous deployment. This project's current
 automation covers artifact delivery. It does not implement automatic production
@@ -59,7 +60,7 @@ flowchart TD
     Draft --> Publish["Maintainer publishes release page"]
     Registry --> Deploy["Operator backs up and deploys"]
     Publish --> Deploy
-    Deploy --> Host["DigitalOcean Droplet"]
+    Deploy --> Host["OVHcloud VPS"]
 ```
 
 The review-to-tag arrow is an **operator responsibility**, not an implemented
@@ -73,20 +74,20 @@ workflow has no `needs` relationship to CI, and does not rerun the full CI suite
 | Release build jobs | GitHub-hosted `ubuntu-24.04` runners | Compile/package/publish, then finish |
 | Release archives and checksums | GitHub Releases | Downloadable executables and selected deployment documentation/files |
 | Platform Docker images | GitHub Container Registry, `ghcr.io` | Stores images for the host to pull |
-| Production platform | One DigitalOcean Droplet, Ubuntu + Docker Compose | Runs server, worker, Traefik, PostgreSQL and optional monitoring |
-| Production database | Docker `postgres` service, volume `previa_postgres` on the Droplet | Application state, sessions, repository secrets and River jobs |
-| Live app previews/builders | Docker containers created by the worker on the same Droplet | PR runtime and temporary app builds |
-| Encrypted backup archives | Private DigitalOcean Spaces bucket | Off-host DB/config/certificate recovery |
+| Production platform | One OVHcloud VPS (VPS-2), Ubuntu + Docker Compose | Runs server, worker, Traefik, PostgreSQL and optional monitoring |
+| Production database | Docker `postgres` service, volume `previa_postgres` on the host | Application state, sessions, repository secrets and River jobs |
+| Live app previews/builders | Docker containers created by the worker on the same host | PR runtime and temporary app builds |
+| Encrypted backup archives | A private Cloudflare R2 bucket | Off-host DB/config/certificate recovery |
 | Public DNS | Cloudflare authoritative zones | Points dashboard/wildcard names to the chosen host address |
 
 GitHub's runner VMs are temporary build machines. You do not configure them
-through DigitalOcean. [Runner infrastructure](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners).
-The workflow has no DigitalOcean Container Registry, App Platform integration or
-`doctl` provisioning command. GHCR is image storage; it does not run the app.
+through OVHcloud. [Runner infrastructure](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners).
+The workflow has no provider container registry, hosting-platform integration or
+OVHcloud API provisioning call. GHCR is image storage; it does not run the app.
 
 The host pulls **Previa platform images** from GHCR. The worker builds **users'
 PR images** locally on the host. Those PR images are not published by this
-release workflow, and each PR does not create another Droplet.
+release workflow, and each PR does not create another server.
 
 ## 3. The Release workflow-level blocks
 
@@ -163,7 +164,7 @@ in this release job; GitHub's platform limits still apply.
 
 `contents: write` authorizes the job token to create/update the GitHub Release
 and its assets. It does not give the job access to the production database or
-DigitalOcean host.
+the production server.
 
 `environment: release` associates the job with the GitHub environment named
 `release`. Configure **Settings → Environments → release** with allowed tag rules
@@ -223,12 +224,12 @@ associated with the published artifact.
 | Step `GITHUB_TOKEN` | Supplies the automatically generated job token for GitHub publication |
 
 The command reads the root `.goreleaser.yaml`. Its `--clean` applies to generated
-release output on the runner; it does not clean the Droplet, database or Spaces.
+release output on the runner; it does not clean the server, database or R2 bucket.
 The Action version `@v6`, GoReleaser v2, Go 1.26.9 and Previa's `v0.2.0` tag
 identify four different things.
 
 This workflow requires no manually created production GitHub App token or
-DigitalOcean secret for publication. The token's permissions come from the job.
+OVHcloud or Cloudflare secret for publication. The token's permissions come from the job.
 [GoReleaser Action](https://github.com/goreleaser/goreleaser-action),
 [GitHub token](https://docs.github.com/en/actions/concepts/security/github_token).
 
@@ -419,8 +420,8 @@ the earlier workspace or wait for CI. Each image job checks out source again.
 | `id-token: write` | Obtain the OIDC identity used for build attestations |
 | `attestations: write` | Publish GitHub artifact attestations |
 
-These permissions concern GitHub publication. The OIDC permission is not a
-DigitalOcean token or an SSH key. The same `release` environment applies here,
+These permissions concern GitHub publication. The OIDC permission is not an
+OVHcloud credential or an SSH key. The same `release` environment applies here,
 with whatever protection rules you configured; approval of the binaries phase
 does not encode a bypass of all later environment checks.
 
@@ -469,7 +470,7 @@ The runner's Docker client logs into GitHub Container Registry using the run's
 actor and the job token. The image namespace is the repository owner, not
 necessarily that actor's username.
 
-This does not log Docker into GHCR on your Droplet. Private package pulls require
+This does not log Docker into GHCR on your server. Private package pulls require
 separate host authentication.
 
 ### 6.5 Build, push and attach image metadata
@@ -536,7 +537,7 @@ This records build origin/identity separately from BuildKit's provenance/SBOM
 options. The binaries job has no equivalent GitHub attestation step for archives.
 Consumers must verify/evaluate provenance for it to inform trust. It does not
 prove vulnerability-free code, live health or database compatibility. The current
-Droplet commands do not enforce automatic attestation verification.
+production commands do not enforce automatic attestation verification.
 [Artifact attestations](https://docs.github.com/en/actions/concepts/security/artifact-attestations).
 
 ## 7. The Dockerfile and .dockerignore
@@ -574,7 +575,7 @@ ARG VERSION=dev
 7. Read `VERSION`, overridden by CI/release.
 
 These caches belong to the builder. They do not transfer its Docker data to the
-DigitalOcean host.
+production server.
 
 ### 7.3 Compilation heredoc
 
@@ -653,7 +654,7 @@ An image is not a backup of the production database.
 6. After publication, review GHCR visibility/repository access. Public source
    alone does not establish that packages are public.
 
-No production SSH key, OAuth secret, App PEM, Spaces key or DigitalOcean token
+No production SSH key, OAuth secret, App PEM, R2 token or OVHcloud credential
 is consumed by these publication jobs. `GITHUB_TOKEN` is supplied automatically.
 
 ### 8.2 Select and tag the exact candidate
@@ -681,7 +682,7 @@ git push origin "$PREVIA_RELEASE"
 ```
 
 Creating the tag labels the local commit. Pushing starts Release on GitHub,
-without changing the DigitalOcean server.
+without changing the production server.
 
 ### 8.3 Inspect publication and publish the draft
 
@@ -696,311 +697,55 @@ Do not move/reuse a published tag to quietly replace a version. Inspect partial
 publication before retrying; select a new version if source/release contents
 must change. Nothing here makes partial publication atomic.
 
-## 9. How the release reaches DigitalOcean
+## 9. How a release reaches the host
 
-### 9.1 First deployment versus later upgrades
+Nothing in this workflow deploys. An operator moves the host to a published
+release by hand, following the production guide; this is the shape of it:
 
-For a new host, follow the production guide's Steps 0–10. They create/prepare
-the Droplet, firewall/admin access, checkout, GitHub integrations, credentials,
-DNS, backup client and staging-to-production certificates. An image pull alone
-does not create those prerequisites.
-
-This guide's upgrade example assumes:
-
-- The existing deployment lives at `/opt/previa`.
-- The protected production env is `/etc/previa/previa.env`.
-- PostgreSQL/router and backup configuration already work.
-- The selected release passed staging, and recovery keys/artifacts are available.
-- Commands run in an administrative root shell during the planned maintenance.
-
-Example version/domain values must be replaced. Run one step at a time and stop
-on failed verification.
-
-### 9.2 Connect and define the production helpers
-
-On your workstation:
-
-```sh
-ssh ops@YOUR_SERVER_IP
-```
-
-Use the dedicated SSH key/agent configured by the host guide. On the Droplet:
-
-```sh
-sudo -i
-cd /opt/previa
-dc() {
-  docker compose -p previa \
-    -f /opt/previa/deploy/production/compose.yml \
-    --env-file /etc/previa/previa.env --profile observability "$@"
-}
-probe() {
-  docker run --rm --network previa_control curlimages/curl:8.15.0 \
-    -fsS --max-time 15 "$@"
-}
-```
-
-`dc` explicitly chooses the production project, Compose file, env file and
-monitoring profile. `probe` reaches the private health listeners through the
-control network. These functions exist only in this shell; redefine them after
-reconnecting.
-
-### 9.3 Record the old version and pause builds
-
-Before selecting the new checkout/images:
-
-```sh
-git rev-parse HEAD
-git describe --tags --exact-match
-dc images
-probe http://server:9090/readyz
-probe http://worker:9091/readyz
-dc run --rm --no-deps migrate status
-docker inspect --format '{{.Config.Image}} {{.Image}}' previa-egress
-```
-
-Record the commit/tag, schema, actual image IDs/digests and host overrides.
-Retain old artifacts and a protected configuration copy.
-
-Edit the env file:
-
-```sh
-nano /etc/previa/previa.env
-```
-
-Set its single `BUILDS_PAUSED` entry to `true`, then load that setting:
-
-```sh
-dc up -d --force-recreate --no-deps worker
-probe http://worker:9091/readyz
-```
-
-Verify the paused capability and that existing builds drained/cancelled.
-Pausing new builds does not stop cleanup, routing, reporting or every DB write.
-Plan a quiet maintenance window where the release's migrations require it.
-
-### 9.4 Make and verify a fresh Spaces backup
-
-```sh
-systemctl start previa-backup.service
-systemctl status previa-backup.service --no-pager
-journalctl -u previa-backup.service -n 30 --no-pager
-```
-
-The host's backup script dumps PostgreSQL, archives configuration/ACME state,
-encrypts them with age, and uploads through root's rclone configuration to Spaces.
-Confirm all three encrypted artifacts and the success timestamp, not merely that
-the service was started. Keep the backup timestamp and offline age identity
-available before changing versions.
-
-This backup uses the Droplet's existing configuration. The Release workflow does
-not run it and does not know the Spaces secret.
-
-### 9.5 Select matching checkout, version and image names
-
-```sh
-git fetch --tags origin
-PREVIA_NEXT_RELEASE=v0.2.0
-git checkout --detach "$PREVIA_NEXT_RELEASE"
-nano /etc/previa/previa.env
-```
-
-For a GHCR deployment, the relevant entries have this shape:
-
-```dotenv
-PREVIA_VERSION=v0.2.0
-PREVIA_SERVER_IMAGE=ghcr.io/ajaykathwate/previa-server
-PREVIA_WORKER_IMAGE=ghcr.io/ajaykathwate/previa-worker
-PREVIA_EGRESS_IMAGE=ghcr.io/ajaykathwate/previa-egress
-BUILDS_PAUSED=true
-```
-
-Use the actual tested tag/owner. Image-name values omit the tag because Compose
-adds `PREVIA_VERSION`. Keep the password, encryption keyring, session secret,
-valid certificates and other production settings. Apply required release config
-changes deliberately.
+| Step | What happens | Production guide |
+| --- | --- | --- |
+| First deployment | Rent and prepare the host, register GitHub, install credentials, DNS, backups and staged certificates. An image pull alone creates none of this. | [Steps 0–10](../docs/25-production-deployment.md#fresh-host-setup) |
+| Record and pause | Record the running tag, schema and image digests; set `BUILDS_PAUSED=true` and let builds drain. | [U1, U2](../docs/25-production-deployment.md#step-u1--prepare-and-record-the-previous-release) |
+| Back up | Run the backup service and confirm all three encrypted archives arrived. | [U2](../docs/25-production-deployment.md#step-u2--pause-new-builds-drain-and-make-a-fresh-backup) |
+| Select and validate | Check out the same tag, set `PREVIA_VERSION` and the GHCR image names, pull (log in first if the packages are private), run `check-config`. | [U3](../docs/25-production-deployment.md#step-u3--select-validate-and-start-the-candidate) |
+| Migrate and start | Run the forward migrations, then `up -d --wait`; replace the egress proxy and keep Traefik's preview networks only when the release needs it. | [U3, U4](../docs/25-production-deployment.md#step-u4--account-for-the-separately-managed-egress-proxy) |
+| Verify and resume | Check HTTPS, sign-in, webhooks, a disposable preview and PR feedback, then unpause and take a fresh backup. | [U5](../docs/25-production-deployment.md#step-u5--resume-only-after-live-checks-pass) |
 
 The source checkout matters even when pulling images: it selects the matching
-Compose, scripts and monitoring configuration. Changing only a release page
-or env version does not recreate the running containers.
-
-### 9.6 Pull and validate
-
-For private GHCR packages, authenticate root's Docker client on the host:
-
-```sh
-docker login ghcr.io -u YOUR_GITHUB_USERNAME
-```
-
-Enter an authorized package-read credential at the prompt. Public package pulls
-normally need no login. This host credential is different from the runner's
-temporary publication token.
-
-Then:
-
-```sh
-dc config --quiet
-dc --profile images pull
-dc run --rm --no-deps server check-config
-dc run --rm --no-deps worker check-config
-```
-
-`config --quiet` validates Compose without printing interpolated secrets.
-The `images` profile includes the egress image for pulling, but must not be
-enabled on normal startup. The two app commands should print
-`configuration is valid`; this does not prove actual GitHub/DNS/DB access.
-
-For a source-built deployment, omit the three image-name overrides and replace
-the pull step with `dc --profile images build server worker egress` from the
-selected clean checkout. The root Dockerfile performs compilation; Go/Node do
-not need to be installed directly on the production host for this path.
-
-### 9.7 Migration gate and service replacement
-
-With PostgreSQL healthy and the release's maintenance conditions met:
-
-```sh
-dc run --rm --no-deps migrate
-dc up -d --wait --wait-timeout 180
-probe http://server:9090/readyz
-probe http://worker:9091/readyz
-dc run --rm --no-deps migrate status
-```
-
-The migrate image command runs forward Goose/River migrations. Compose's normal
-dependency also requires migration completion before server/worker start.
-`up` reconciles definitions/images; `restart` alone does not load changed env
-values or select the new image definition.
-
-Stop if migration/startup fails. Earlier migrations may have committed even if
-a later one fails. A version switch is not proof those changes were undone.
-
-Two existing runtime details require special handling:
-
-1. **Egress:** the worker reuses `previa-egress` by name. Pulling a new egress
-   image does not automatically replace that container. Follow production U4
-   when replacement is required, preserving/reconciling its network addresses.
-2. **Traefik:** recreating `previa-router` loses dynamically added preview-network
-   attachments. Preserve and reconnect them through the production guide's
-   router procedure. An internally healthy router can still lack access to
-   live preview backends.
-
-Review whether the candidate will recreate the router/egress before applying it.
-Do not promise uninterrupted traffic from this single-host replacement.
-
-### 9.8 Live verification, resume and deployment record
-
-Before resuming, check real HTTPS, sign-in, GitHub webhooks/access, monitoring,
-existing preview URLs, a disposable preview build and PR feedback. Internal
-readiness alone does not exercise all of those external paths.
-
-Set `BUILDS_PAUSED=false` in the env file only after checks pass:
-
-```sh
-dc up -d --force-recreate --no-deps worker
-probe http://worker:9091/readyz
-systemctl start previa-backup.service
-```
-
-Verify the new backup and expected worker capability. Record source commit,
-release, actual image versions, schema, checks and recovery checkpoint.
-Keep previous images/backups through the rollback window.
-
-The Droplet runs Docker services after the SSH session ends. CI runners do not
-keep production running; Docker restart policies and host operations do.
-An automatic server restart does not fetch/deploy the newest GitHub commit.
+Compose file, scripts and monitoring configuration. The host keeps running after
+SSH ends; an automatic restart never fetches a newer commit.
 
 ## 10. Backups, failures and rollback
 
-### 10.1 Three different recovery mechanisms
+A failed **release** changes nothing on the host, because no deploy step ran;
+inspect the run and its partial artifacts. A failed **deployment** stays paused
+while the operator picks the recovery that fits what failed:
 
-| Mechanism | Location / purpose | Relationship to Release |
+| Failure | Recovery | Production guide |
 | --- | --- | --- |
-| Nightly/manual encrypted logical backup | Spaces: PostgreSQL dump, config and ACME archives | Existing host timer/script, independent of release publication |
-| Optional Droplet backup/snapshot | DigitalOcean disk image | Extra host recovery, not an app version switch |
-| Previous platform images/checkout | GHCR/local images and Git source | Select old executable/configuration definitions |
+| Configuration or a new executable, with a compatible schema | Return to the recorded checkout, `PREVIA_VERSION` and images; no data changes. | [Application/image rollback](../docs/25-production-deployment.md#applicationimage-rollback-preserving-the-database) |
+| Schema or data | Restore the pre-upgrade encrypted dump with the older release; writes after it are lost. | [Schema/data rollback](../docs/25-production-deployment.md#schemadata-rollback-using-the-pre-upgrade-backup) |
+| The host itself | Prepare a replacement host, recover configuration, certificates and the database from the off-host backups and offline keys, then move DNS. | [Backups and restore](../docs/25-production-deployment.md#backups-and-restore) |
 
-The default logical schedule is `previa-backup.timer` at 02:30 UTC with up to
-15 minutes randomized delay; inspect the actual installed timer.
-Spaces stores archives, not a second running database. PostgreSQL stays on the
-Droplet. A release archive or Docker image does not contain live production rows.
-
-### 10.2 Failed release versus failed deployment
-
-If GitHub publication fails, inspect that run and partial artifacts. The current
-production server stays at its existing version because no deploy step ran.
-
-If a manual rollout fails, keep builds paused and choose a recovery action based
-on whether configuration, executable compatibility, schema/data or the host failed.
-No controller automatically picks/restores a backup for you.
-
-### 10.3 Compatible application/image rollback
-
-If the previous executable is verified compatible with the current database:
-
-1. Keep builds paused and preserve failure logs/state.
-2. Select the previously recorded checkout and `PREVIA_VERSION`.
-3. Pull/use the recorded previous images and validate config.
-4. Reconcile services, readiness and public paths.
-5. Handle egress/router attachment changes separately where required.
-6. Resume only after verification.
-
-The existing DB and encryption key versions needed for newer writes remain.
-`previa-migrate` supports forward migration/status, not production `down`.
-Accepting a newer schema number does not prove an older binary understands all
-changed tables/data.
-
-### 10.4 Schema/data recovery
-
-When old binaries cannot safely use the new schema, select the old recovery
-release and follow production **B5/B6** with the pre-upgrade encrypted dump.
-The restore script drops/recreates the selected local database, restores rows,
-runs the selected checkout's migrations and starts server/worker with builds paused.
-
-Writes after the selected dump are lost. Config/ACME restoration is separate.
-The runbook also moves the generated preview route file out of Traefik's watched
-directory before restore: the current writer refuses to replace a newer on-disk
-route version with an older restored DB version.
-
-For host loss, prepare a replacement Droplet, recover config/certificates/DB
-from Spaces and offline keys, isolate the old host, verify the replacement and
-cut over DNS or its Reserved IP. Rebuild missing previews; their ephemeral
-filesystems and containers are not in the database backup.
-
-Use the [full backup/restore steps](../docs/25-production-deployment.md#backups-and-restore)
-and [rollback procedures](../docs/25-production-deployment.md#upgrades-and-rollback)
-for these destructive recovery operations.
+`previa-migrate` only migrates forward, and a release archive or image never
+contains production rows: the nightly encrypted logical backup (02:30 UTC) is the
+data recovery path, and provider snapshots are an optional extra.
 
 ## 11. Which credentials go where?
 
-| Credential/configuration | Exact place | Used by |
+The release pipeline needs only what GitHub supplies:
+
+| Credential | Where | Used by |
 | --- | --- | --- |
-| Publication `GITHUB_TOKEN` | Automatically supplied to workflow jobs | GitHub Release, GHCR login and attestations |
-| `release` environment rules | GitHub repository Settings → Environments | Approval/tag protection |
-| Production env | `/etc/previa/previa.env` on the Droplet, protected mode 600 | Compose/application settings and backup settings |
-| GitHub OAuth/App IDs and secrets | Production env | Dashboard sign-in and App authorization |
-| GitHub App signing PEM | `/etc/previa/github-app.pem`, UID 65532/mode 600 | Server/worker bind mounts |
-| Cloudflare DNS token | `/etc/previa/dns-credential`, root/mode 600 | Traefik DNS-01 |
-| PostgreSQL password and URL | Production env; initialized DB role must agree | Local PostgreSQL/server/worker/migrations |
-| Repository-secret encryption keyring | Production env plus protected offline recovery copy | Encrypt/decrypt repository secrets |
-| Spaces key/secret | Root's protected rclone config, normally `/root/.config/rclone/rclone.conf` | Backup uploads, retention and restores |
-| Public age recipient | `BACKUP_AGE_RECIPIENT` in production env | Backup encryption |
-| Private age identity | Offline recovery storage | Backup decryption during recovery |
-| Administrative SSH private key | Workstation/agent | Manual host administration |
-| Private GHCR pull credential | Root's protected Docker login config on host, if needed | Host image pulls |
-| DigitalOcean API token | Not required by this manual deployment/publication | Only future provider automation if implemented |
+| `GITHUB_TOKEN` | Supplied to each workflow job | The GitHub Release, GHCR login and attestations |
+| `release` environment rules | Repository **Settings → Environments** | Approval and tag protection |
+| GHCR pull credential (private packages only) | Root's Docker login on the host | Image pulls during a deployment; not the runner's token |
 
-The backup env includes the Spaces rclone destination, such as
-`BACKUP_REMOTE=previa-backups:YOUR_BUCKET/production`, not its access secret or
-the live DB location. A Droplet has no application-env panel that replaces the
-host file. Production binaries do not automatically discover a repository `.env`;
-Compose supplies the selected env explicitly.
-
-Application configuration is not added to GitHub Actions secrets just because
-Actions publishes images. The current workflows do not deploy that configuration.
-Use [configuration setup](config-setup.md) and the
-[production credential inventory](../docs/25-production-deployment.md#credential-checklist-what-is-generated-supplied-and-kept-offline)
-for generation, permissions and rotation.
+Production settings and secrets never enter GitHub Actions: they live only on the
+host, in `/etc/previa/previa.env` and the credential files beside it. Where each
+one comes from and its file mode are in the
+[production credential checklist](../docs/25-production-deployment.md#credential-checklist-what-is-generated-supplied-and-kept-offline);
+[configuration setup](config-setup.md) explains every setting.
 
 ## 12. Automation boundaries and troubleshooting
 
@@ -1013,7 +758,7 @@ for generation, permissions and rotation.
 | Publish draft page | Makes the release page/assets available according to GitHub release behavior |
 | Operator pulls + migrates + `dc up` | Changes production deliberately |
 | Connected repository's preview request | Previa worker builds/runs Docker app previews according to policy |
-| Host backup timer | Writes encrypted recovery archives to Spaces |
+| Host backup timer | Writes encrypted recovery archives to Cloudflare R2 |
 
 There is no automatic production deployment on `main` or tags and no automatic
 production rollback. Repository preview automation still follows Manual versus
@@ -1028,7 +773,7 @@ would need to:
 1. Select a verified exact release and serialize deployments to this host.
 2. Apply the intended approval gate and verify host identity.
 3. Authenticate with a dedicated deployment account, SSH key and registry access.
-4. Take/verify a fresh Spaces backup and preserve previous artifacts.
+4. Take/verify a fresh R2 backup and preserve previous artifacts.
 5. Apply version/config, validate, migrate, replace and verify.
 6. Preserve/reconcile egress and router network lifecycle.
 7. Resume only after internal and external checks and report the result.
@@ -1037,10 +782,10 @@ would need to:
 Those future deployment credentials would belong in a protected deployment
 environment/secret store. They are not the current publication token.
 An SSH firewall limited to your workstation will not automatically admit hosted
-runner traffic; authorized connectivity must be designed. A DigitalOcean API
-token is only needed if automation actually manages provider resources.
+runner traffic; authorized connectivity must be designed. OVHcloud API
+credentials are only needed if automation actually manages provider resources.
 
-Do not install a self-hosted runner on the production Droplet merely to follow
+Do not install a self-hosted runner on the production server merely to follow
 these workflows: the checked-in runners already use GitHub-hosted machines.
 That would be a separate operational/privilege design.
 
@@ -1072,7 +817,7 @@ That would be a separate operational/privilege design.
 | [setup.sh](../deploy/production/setup.sh) | Existing host preparation and backup unit installation |
 | [backup.sh](../deploy/production/backup.sh) / [restore.sh](../deploy/production/restore.sh) | Encrypted logical backup and destructive DB recovery |
 | [smoke.sh](../deploy/production/smoke.sh) | Disposable stack rehearsal and coverage described by the CI guide |
-| [production deployment](../docs/25-production-deployment.md) | Full DigitalOcean operational procedure |
+| [production deployment](../docs/25-production-deployment.md) | The full deployment and operations procedure, for any provider |
 
 The code/configuration and those runbooks take precedence when versions change.
 Adding these guides does not change either workflow, runtime topology or

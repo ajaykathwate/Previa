@@ -203,7 +203,7 @@ inside the containers.
 | Local development | Working on the dashboard, sign-in, linking, discovery, policies, secrets, logs | `docker compose -f deploy/docker-compose.yml up -d`, `make migrate-up`, `make run-server` + `make run-worker` (or `make dev`) ([02](../docs/02-development-setup.md)) |
 | Local previews without a domain | Building and opening previews on your machine | Add `PREVIEW_BASE_DOMAIN=preview.localtest.me` and a `ROUTER_DYNAMIC_DIR`, start the router with `make router-up` (see [user-guide.md](user-guide.md#0-before-you-start)); browsers warn about Traefik's default certificate |
 | Local staging of the production stack | Checking release images, Compose, backups, upgrades | `make release-images PREVIA_VERSION=x` then `make prod-smoke PREVIA_VERSION=x` |
-| Production (one VPS) | Real use | `deploy/production/setup.sh`, then the production Compose file ([25](../docs/25-production-deployment.md)) |
+| Production (one VPS) | Real use | One OVHcloud VPS-2 (about €7 a month) with Cloudflare DNS and R2 backups: `deploy/production/setup.sh`, then the production Compose file ([25](../docs/25-production-deployment.md)) |
 
 ## Testing
 

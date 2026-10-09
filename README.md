@@ -573,7 +573,7 @@ each one turns on, and what happens without it, is in
 
 ### 4.9 Infrastructure and deployment
 
-- One VPS (Hetzner or similar) running Docker; control plane (Go server, worker, Postgres, Traefik) via Docker Compose
+- One VPS (OVHcloud VPS-2 or similar) running Docker; control plane (Go server, worker, Postgres, Traefik) via Docker Compose
 - DNS: a wildcard A record (`*.preview.yourdomain.com`) pointing at the VPS
 - Provisioning: Terraform for the VPS and DNS, or a documented setup script for the MVP
 - CI/CD: GitHub Actions for tests and image builds; `goreleaser` for versioned releases

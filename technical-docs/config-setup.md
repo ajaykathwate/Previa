@@ -727,7 +727,7 @@ marked *command line* are typed before a `make` command instead.
 - **How to get it:**
   1. Use the company that hosts your domain's DNS, by its name in
      [lego's DNS provider list](https://go-acme.github.io/lego/dns/), for example
-     `cloudflare` or `digitalocean`.
+     `cloudflare`, which this guide uses.
   2. Choose a provider whose lego entry needs a single API token.
   3. On one machine with `preview.localtest.me`, keep `cloudflare` (nothing is
      contacted).
@@ -740,7 +740,7 @@ marked *command line* are typed before a `make` command instead.
 - **Where it's used:** the router's certificate requests.
 - **How to get it:** open your provider's page in
   [lego's list](https://go-acme.github.io/lego/dns/) and copy the token variable's
-  name: `CF_DNS_API_TOKEN` for Cloudflare, `DO_AUTH_TOKEN` for DigitalOcean.
+  name: `CF_DNS_API_TOKEN` for Cloudflare; other providers name theirs in the lego list.
 - **Example:** `ACME_DNS_CREDENTIAL_VARIABLE=CF_DNS_API_TOKEN`
 
 ### `ACME_DNS_CREDENTIAL_FILE`
