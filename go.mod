@@ -1,6 +1,6 @@
 module github.com/ajaykathwatee/previa
 
-go 1.26.8
+go 1.26.9
 
 require (
 	github.com/Oudwins/tailwind-merge-go v0.2.0
@@ -26,7 +26,7 @@ require (
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.47.0
 	github.com/riverqueue/river/rivertype v0.47.0
 	github.com/tonistiigi/fsutil v0.0.0-20260819142231-83cac42c1c52
-	golang.org/x/net v0.58.0
+	golang.org/x/net v0.60.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/time v0.16.0
 )

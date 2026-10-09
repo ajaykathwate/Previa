@@ -100,5 +100,11 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, status int, message string) {
+	if r.Header.Get("HX-Request") == "true" {
+		// An in-page request shows the refusal's sentence next to its control;
+		// an error page would only be replaced by a generic message.
+		http.Error(w, message, status)
+		return
+	}
 	templ.Handler(authpages.Error(message), templ.WithStatus(status)).ServeHTTP(w, r)
 }

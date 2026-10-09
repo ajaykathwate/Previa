@@ -56,6 +56,16 @@ func TestPingRequiresLoginAndCSRF(t *testing.T) {
 	if w := b.request(http.MethodPost, "/queue/ping", "pr_key=demo:pr:1"); w.Code != http.StatusForbidden || pings.calls != 0 {
 		t.Fatal("ping without CSRF was accepted")
 	}
+	// An in-page (htmx) request gets the refusal as a sentence to show next to
+	// its control; a page request gets the error page.
+	partial := b.request(http.MethodPost, "/queue/ping", "pr_key=demo:pr:1", map[string]string{"X-CSRF-Token": "forged", "HX-Request": "true"})
+	if partial.Code != http.StatusForbidden || !strings.HasPrefix(partial.Header().Get("Content-Type"), "text/plain") ||
+		strings.TrimSpace(partial.Body.String()) != "This action could not be verified. Refresh the page and try again." || pings.calls != 0 {
+		t.Fatalf("forged token in an in-page request: %d %q %q", partial.Code, partial.Header().Get("Content-Type"), partial.Body)
+	}
+	if page := b.request(http.MethodPost, "/queue/ping", "pr_key=demo:pr:1", map[string]string{"X-CSRF-Token": "forged"}); page.Code != http.StatusForbidden || !strings.HasPrefix(page.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("forged token in a page request: %d %q", page.Code, page.Header().Get("Content-Type"))
+	}
 	csrf := token()
 	if w := b.request(http.MethodPost, "/queue/ping", "pr_key=bad+key", map[string]string{"X-CSRF-Token": csrf}); w.Code != http.StatusBadRequest || pings.calls != 0 {
 		t.Fatal("invalid PR key was accepted")

@@ -15,6 +15,9 @@ set -Eeuo pipefail
 
 VERSION=${PREVIA_VERSION:?set PREVIA_VERSION to the built images tag}
 HERE=$(dirname "$(readlink -f "$0")")
+# The toolchain the release images are built with, from the Dockerfile's pin.
+GO_VERSION=$(sed -n 's/^ARG GO_IMAGE=golang:\([0-9.]*\)-.*/go\1/p' "$HERE/../../Dockerfile")
+[[ -n $GO_VERSION ]] || { echo "no Go version in the Dockerfile's GO_IMAGE" >&2; exit 1; }
 PROJECT=previa-smoke
 CURL_IMAGE=curlimages/curl:8.15.0@sha256:4026b29997dc7c823b51c164b71e2b51e0fd95cce4601f78202c513d97da2922
 HOST=previa.localtest.me
@@ -118,7 +121,7 @@ check "server ready, schema current, version $VERSION" grep -q "\"status\":\"rea
 ready=$(inside http://worker:9091/readyz)
 check "worker ready and reports its capabilities" grep -q '"capabilities":{"execution":false' <<<"$ready"
 metrics=$(inside http://server:9090/metrics)
-check "build info and state gauges exported" bash -c "grep -q 'previa_build_info{go_version=\"go1.26.8\",version=\"$VERSION\"} 1' <<<\"\$0\" && grep -q '^previa_workers_live 1' <<<\"\$0\"" "$metrics"
+check "build info and state gauges exported" bash -c "grep -q 'previa_build_info{go_version=\"$GO_VERSION\",version=\"$VERSION\"} 1' <<<\"\$0\" && grep -q '^previa_workers_live 1' <<<\"\$0\"" "$metrics"
 check "Prometheus scrapes server, worker and router" bash -c '
 	for _ in $(seq 20); do
 		up=$(docker run --rm --network '"${PROJECT}_control"' '"$CURL_IMAGE"' -fsS "http://prometheus:9090/api/v1/query?query=sum(up)")

@@ -142,8 +142,11 @@ the operator after an hour. Migration 0018 adds the reason and the capability.
 ## Dependencies
 
 `make vuln` runs govulncheck. It found nine reachable vulnerabilities in Go 1.26.5's
-standard library and `containerd/v2` 2.3.4; the minimum Go version is now 1.26.8 and
-containerd 2.3.6, and the scan reports none reachable. One advisory remains in a
+standard library and `containerd/v2` 2.3.4; the minimum Go version became 1.26.8 and
+containerd 2.3.6, and the scan reported none reachable. On 2026-10-09 thirteen new
+advisories (GO-2026-6599 to GO-2026-6617, in `net/http`, `crypto/tls`,
+`html/template`, `os`, `net/textproto` and `golang.org/x/net`) raised the minimum to
+Go 1.26.9 and `golang.org/x/net` v0.60.0; the scan again reports none reachable. One advisory remains in a
 required module but is not reachable: `golang.org/x/crypto/openpgp` (deprecated,
 no fix; Previa never imports it). CI runs the scan, and Trivy scans the release
 images for fixable HIGH and CRITICAL vulnerabilities ([25](25-production-deployment.md#ci-and-releases)).

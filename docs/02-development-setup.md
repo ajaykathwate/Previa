@@ -9,7 +9,7 @@ Current schema: **Goose 20**, **River 007**. After pulling changes, run
 
 ## 1. Prerequisites
 
-- Go **1.26.8 or newer** (required by `go.mod` and `tools/go.mod`; 1.26.8 fixes standard-library vulnerabilities `make vuln` reports in earlier releases).
+- Go **1.26.9 or newer** (required by `go.mod` and `tools/go.mod`; 1.26.9 fixes standard-library vulnerabilities `make vuln` reports in earlier releases). With the default `GOTOOLCHAIN=auto`, an older local Go downloads 1.26.9 by itself.
 - Git, GNU Make, curl, a SHA-256 tool (`sha256sum` or `shasum`) and OpenSSL.
 - Docker Engine with the Compose plugin, or Docker Desktop running Linux containers.
 - Internet access for the first dependency, tool and image downloads.

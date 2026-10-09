@@ -183,7 +183,7 @@ env:
 | `DATABASE_URL` | Database connection used by migration and application tooling |
 | `TEST_DATABASE_URL` | Enables tests that need PostgreSQL and River integration |
 
-`actions/setup-go` selects Go from `go.mod`, currently requiring Go **1.26.8**.
+`actions/setup-go` selects Go from `go.mod`, currently requiring Go **1.26.9**.
 The URL uses deliberately disposable test credentials. `localhost:5432` works
 because the jobs with PostgreSQL publish the service port onto their runner.
 

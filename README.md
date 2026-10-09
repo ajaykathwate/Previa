@@ -412,7 +412,7 @@ forward ([docs/12-routing-and-https.md](docs/12-routing-and-https.md)).
 
 | Layer | Choice |
 |---|---|
-| Backend | Go 1.26 (1.26.8 or newer), `net/http` + `chi` |
+| Backend | Go 1.26 (1.26.9 or newer), `net/http` + `chi` |
 | Database | PostgreSQL |
 | Job queue | River (Postgres-backed) |
 | Routing / TLS | Traefik v3 + Let's Encrypt wildcard cert (DNS-01) |

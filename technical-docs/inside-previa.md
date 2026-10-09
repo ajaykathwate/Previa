@@ -214,7 +214,7 @@ Every library and tool, and the step of the flow where it acts.
 
 | Technology | Version | Used at | What it does there |
 | --- | --- | --- | --- |
-| Go | 1.26.8 | Everything | One language for server, worker, proxy and tools; cross-compiled into distroless images |
+| Go | 1.26.9 | Everything | One language for server, worker, proxy and tools; cross-compiled into distroless images |
 | [chi](https://github.com/go-chi/chi) | v5.3.2 | Server HTTP routing | Routes, middleware groups (session, CSRF, ingress limits) |
 | [templ](https://templ.guide) | v0.3.1020 | Every dashboard page | Type-checked Go HTML templates, compiled to Go code |
 | [HTMX](https://htmx.org) | vendored, local | Dashboard interactions | Partial page swaps on live updates and filters, CSRF header on requests |

@@ -111,6 +111,15 @@ func (a Actions) TeardownLabel() string {
 // Live reports whether the PR has a preview that is published now.
 func (pr PR) Live() bool { return pr.DeployedSHA != "" && pr.PreviewURL != "" }
 
+// GitHubURL is the PR's page on GitHub; empty unless the address is HTTPS, so
+// the link can never run script whatever the stored address holds.
+func (pr PR) GitHubURL() string {
+	if !strings.HasPrefix(pr.URL, "https://") {
+		return ""
+	}
+	return pr.URL
+}
+
 // CommitURL links a commit of this PR's repository on GitHub, derived from the
 // PR's own GitHub address; empty when that address is unknown.
 func (pr PR) CommitURL(sha string) string {

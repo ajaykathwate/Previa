@@ -63,7 +63,7 @@ flowchart LR
 
 | Layer | Technology (version) | Used for | Where in the code | Read more |
 | --- | --- | --- | --- | --- |
-| Language and runtime | Go 1.26 (1.26.8 or newer) | Both processes, the migrator, maintenance commands, the egress proxy | `cmd/*`, `internal/*` | [01](../docs/01-system-overview.md) |
+| Language and runtime | Go 1.26 (1.26.9 or newer) | Both processes, the migrator, maintenance commands, the egress proxy | `cmd/*`, `internal/*` | [01](../docs/01-system-overview.md) |
 | HTTP routing | chi v5.3.2 | Routes and middleware | `internal/platform/httpx`, each feature's `routes.go`/`handler.go` | [21](../docs/21-ui-architecture.md) |
 | Server-rendered UI | templ v0.3.1020 | Every page and HTMX fragment | `web/pages/*`, `web/layouts`, `web/components` | [21](../docs/21-ui-architecture.md) |
 | Interactivity | HTMX 2.0.11 (vendored) + one `ui.js` | Partial page updates, live search, modals; works without JavaScript | `web/static/htmx.min.js`, `web/static/js/ui.js` | [21](../docs/21-ui-architecture.md) |
@@ -92,7 +92,7 @@ flowchart LR
 | Metrics | prometheus/client_golang v1.24.1 | Bounded metrics on internal listeners | `internal/platform/metrics`, `internal/app/observe.go` | [23](../docs/23-observability-and-hardening.md) |
 | Monitoring | Prometheus v3.5.0, Grafana 12.1.1 (pinned) | Scraping, 24 alert rules, a provisioned dashboard | `deploy/observability` | [23](../docs/23-observability-and-hardening.md), [24](../docs/24-incident-runbook.md) |
 | Ingress hardening | golang.org/x/time/rate v0.16.0 and own middleware | Rate limits, host checks, CSP nonce, body limits | `internal/platform/httpx/ingress.go` | [23](../docs/23-observability-and-hardening.md) |
-| Packaging | Docker multi-stage build: `golang:1.26.8-bookworm` to distroless static (UID 65532) | Release images `previa-server`, `previa-worker`, `previa-egress` | `Dockerfile`, `.dockerignore` | [25](../docs/25-production-deployment.md) |
+| Packaging | Docker multi-stage build: `golang:1.26.9-bookworm` to distroless static (UID 65532) | Release images `previa-server`, `previa-worker`, `previa-egress` | `Dockerfile`, `.dockerignore` | [25](../docs/25-production-deployment.md) |
 | Orchestration | Docker Compose | Local PostgreSQL; the whole production stack | `deploy/docker-compose.yml`, `deploy/production/compose.yml` | [25](../docs/25-production-deployment.md) |
 | Backups | `pg_dump`, age (encryption), rclone (object storage), systemd timer | Nightly encrypted backups and restore | `deploy/production/{backup,restore,setup}.sh` | [25](../docs/25-production-deployment.md#backups-and-restore) |
 | CI/CD | GitHub Actions, GoReleaser v2, Trivy, actionlint | Checks, tests, image scans, tag-driven releases | `.github/workflows`, `.goreleaser.yaml` | [25](../docs/25-production-deployment.md#ci-and-releases) |

@@ -14,7 +14,7 @@ repository that were not available.
 | Component | Version |
 | --- | --- |
 | Host | WSL 2 (Linux 6.18) on Windows, Docker Desktop: Engine 29.8.1, Compose 5.5.1 |
-| Go | 1.26.8 (`go.mod` minimum; release images build with `golang:1.26.8-bookworm`, pinned by digest) |
+| Go | 1.26.9 (`go.mod` minimum; release images build with `golang:1.26.9-bookworm`, pinned by digest; raised from 1.26.8 on 2026-10-09 for new standard-library advisories) |
 | PostgreSQL | 17.11 (`postgres:17.11-alpine`, pinned) |
 | Router | Traefik v3.7.13 (pinned); Pebble for certificate issuance tests |
 | Builds | rootless BuildKit v0.33.1 (pinned) |

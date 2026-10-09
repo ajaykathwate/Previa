@@ -329,8 +329,8 @@ templ PRDetail(p Page, pr PR, csrf string) {
 			if pr.Fork {
 				<span class="badge tone-warn" title="Pull requests from forks never receive repository secrets.">Fork · no secrets</span>
 			}
-			if pr.URL!="" {
-				<a class="text-link github-link" href={ templ.SafeURL(pr.URL) } target="_blank" rel="noopener noreferrer">
+			if pr.GitHubURL() != "" {
+				<a class="text-link github-link" href={ templ.SafeURL(pr.GitHubURL()) } target="_blank" rel="noopener noreferrer">
 					@components.GitHubMark()
 					View on GitHub
 					@components.ArrowUpRight()
