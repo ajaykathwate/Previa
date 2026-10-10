@@ -197,6 +197,8 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0016 | This database's instance identity (`platform_instance`), waiting notes on build requests (`waiting_revision`, `waiting_reason`) and `pr_reconciliations`. |
 | 0017 | `worker_capabilities`: what each running worker can do, refreshed every 30 seconds, read by the server. |
 | 0018 | The execution kill switch: build requests may wait with reason `paused`, and workers report `paused` ([23](23-observability-and-hardening.md#execution-kill-switch)). |
+| 0019 | `pull_requests.mergeability_unresolved_at`: when the mergeability check gave up after eight attempts, so the dashboard shows **Unknown** instead of **Checking** forever; any new observation clears it. |
+| 0020 | Backend previews ([11](11-backend-previews.md)): `preview_components` (what a deployed candidate ran next to its app: services, setup, processes, docs path, outbound count), `repository_destinations` (owner-approved outbound `host:port`) and `worker_capabilities.services` (the managed services a worker offers). |
 
 Optional check that live updates are wired:
 

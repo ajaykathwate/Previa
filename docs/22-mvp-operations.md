@@ -70,9 +70,12 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 ## Running the whole pipeline (local or staging)
 
 1. `make migrate-up` (Goose 20) and `make egress-image`.
-2. A domain whose wildcard record points at the Docker host, a DNS token in a
-   `chmod 600` file, and the routing and `ACME_*` settings in `.env`; then
-   `make router-up` (Let's Encrypt **staging** first, [12](12-routing-and-https.md)).
+2. The routing and `ACME_*` settings in `.env`, then `make router-up`. On one
+   machine use `PREVIEW_BASE_DOMAIN=preview.localtest.me` with a placeholder DNS
+   token and `ACME_CA_SERVER=https://127.0.0.1:1/directory`, as in the
+   [user guide](../technical-docs/user-guide.md#0-before-you-start). With a real
+   domain, its wildcard record points at the Docker host and the token is real
+   (Let's Encrypt **staging** first, [12](12-routing-and-https.md)).
 3. In `.env`, for the worker: the two App settings, `PREVIEW_BASE_DOMAIN`,
    `APP_BASE_URL`, `ROUTER_DYNAMIC_DIR`, the secrets keyring if repositories use
    secrets; optionally `ENV_TTL_HOURS` and the housekeeping settings.
@@ -86,9 +89,10 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 6. **Tear down preview** (confirmed in a dialog) or closing the PR removes route and
    containers; the comment says so.
 
-Without a domain and DNS token the router cannot obtain a certificate, so builds
-stay unavailable; `make test-e2e` proves the whole pipeline on this machine without
-them (a router with Traefik's default certificate). For a production host use the
+Builds do not need a real domain: with `preview.localtest.me` the router serves
+Traefik's self-signed certificate (browsers warn; accept it for testing) and every
+step above works on one machine. A real domain and DNS token are needed only for
+trusted certificates. `make test-e2e` proves the same pipeline automatically. For a production host use the
 release images and Compose file instead ([25](25-production-deployment.md)).
 
 ## What is proven, and by which test
