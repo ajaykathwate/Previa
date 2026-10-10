@@ -52,7 +52,7 @@ inside() { docker run --rm --network "${PROJECT}_control" "$CURL_IMAGE" -fsS --m
 outside() { curl -ksS --max-time 10 --resolve "$HOST:18443:127.0.0.1" --resolve "pr-1-x-y.preview.localtest.me:18443:127.0.0.1" "$@"; }
 psql() { "${compose[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U previa -d previa -tAc "$1"; }
 # Checks that run in a child bash use these helpers too.
-export HOST PROJECT CURL_IMAGE
+export HOST PROJECT CURL_IMAGE VERSION GO_VERSION
 export -f inside outside
 
 echo "== configuration in $work"
@@ -126,8 +126,16 @@ ready=$(inside http://server:9090/readyz)
 check "server ready, schema current, version $VERSION" grep -q "\"status\":\"ready\".*\"version\":\"$VERSION\"" <<<"$(tr -d '\n' <<<"$ready")"
 ready=$(inside http://worker:9091/readyz)
 check "worker ready and reports its capabilities" grep -q '"capabilities":{"execution":false' <<<"$ready"
-metrics=$(inside http://server:9090/metrics)
-check "build info and state gauges exported" bash -c "grep -q 'previa_build_info{go_version=\"$GO_VERSION\",version=\"$VERSION\"} 1' <<<\"\$0\" && grep -q '^previa_workers_live 1' <<<\"\$0\"" "$metrics"
+# State gauges come from a snapshot refreshed at most every 10 seconds, so
+# one taken just before the worker registered still says none is live.
+check "build info and state gauges exported" bash -c '
+	for _ in $(seq 15); do
+		metrics=$(inside http://server:9090/metrics) &&
+			grep -q "previa_build_info{go_version=\"$GO_VERSION\",version=\"$VERSION\"} 1" <<<"$metrics" &&
+			grep -q "^previa_workers_live 1" <<<"$metrics" && exit 0
+		sleep 1
+	done
+	exit 1'
 check "Prometheus scrapes server, worker and router" bash -c '
 	for _ in $(seq 20); do
 		up=$(docker run --rm --network '"${PROJECT}_control"' '"$CURL_IMAGE"' -fsS "http://prometheus:9090/api/v1/query?query=sum(up)")
@@ -137,7 +145,13 @@ check "Prometheus scrapes server, worker and router" bash -c '
 	exit 1'
 check "all 24 alert rules loaded" bash -c "inside http://prometheus:9090/api/v1/rules | grep -o '\"type\":\"alerting\"' | wc -l | grep -qx 24"
 grafana_password=$(grep '^GRAFANA_ADMIN_PASSWORD=' "$work/previa.env" | cut -d= -f2-)
-check "Grafana provisioned the Previa dashboard" bash -c "curl -fsS --max-time 10 -u admin:$grafana_password 'http://127.0.0.1:13000/api/search?query=Previa' | grep -q '\"uid\":\"previa\"'"
+# Grafana provisions its dashboards in the background as it starts.
+check "Grafana provisioned the Previa dashboard" bash -c '
+	for _ in $(seq 10); do
+		curl -fsS --max-time 10 -u "admin:$1" "http://127.0.0.1:13000/api/search?query=Previa" | grep -q "\"uid\":\"previa\"" && exit 0
+		sleep 2
+	done
+	exit 1' _ "$grafana_password"
 
 echo "== container hardening"
 for service in server worker; do
