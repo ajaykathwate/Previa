@@ -109,8 +109,14 @@ check "HSTS on the HTTPS dashboard" grep -qi '^strict-transport-security: max-ag
 check "framing refused" grep -qi '^x-frame-options: DENY' <<<"$headers"
 check "a spoofed X-Forwarded-Host is replaced by the router" \
 	bash -c "outside -H 'X-Forwarded-Host: evil.example' -o /dev/null -w '%{http_code}' https://$HOST:18443/ | grep -qx 200"
-check "an unknown preview host goes to the unavailable page" \
-	bash -c "outside -o /dev/null -w '%{redirect_url}' https://pr-1-x-y.preview.localtest.me:18443/ | grep -q '/previews/unavailable'"
+# Traefik loads the route file route-sync just wrote a moment later (file
+# watch plus its reload throttle), so allow it a few seconds.
+check "an unknown preview host goes to the unavailable page" bash -c '
+	for _ in $(seq 20); do
+		outside -o /dev/null -w "%{redirect_url}" https://pr-1-x-y.preview.localtest.me:18443/ | grep -q /previews/unavailable && exit 0
+		sleep 0.5
+	done
+	exit 1'
 check "sign-in is rate limited per client" bash -c '
 	for _ in $(seq 25); do outside -o /dev/null -w "%{http_code}\n" "https://'"$HOST"':18443/auth/github/login"; done | grep -qx 429'
 check "internal listeners are not published" bash -c '! curl -s --max-time 3 http://127.0.0.1:9090/livez && ! curl -s --max-time 3 http://127.0.0.1:9091/livez'
