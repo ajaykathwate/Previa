@@ -89,6 +89,26 @@ func (x *forwardFixture) waitCount(outcome string, want int64) {
 	}
 }
 
+// waitIdle waits until no connection holds a slot. A connection's outcome is
+// counted just before its slot is released, so a count alone does not mean
+// the slot is free again.
+func (x *forwardFixture) waitIdle() {
+	x.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		x.f.mu.Lock()
+		held := x.f.total
+		x.f.mu.Unlock()
+		if held == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			x.t.Fatalf("%d connections still hold a slot", held)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestForwarderRelaysOnlyApprovedPublicDestinations(t *testing.T) {
 	x := newForwardFixture(t, fakeResolver{
 		"db.example.com":       {"93.184.216.34"},
@@ -208,6 +228,7 @@ func TestForwarderBoundsConnections(t *testing.T) {
 		t.Fatalf("the connection outlived its approval: %v", err)
 	}
 	x.waitCount(OutcomeRevoked, 1)
+	x.waitIdle() // the per-network limit is one: the next connection needs this slot
 
 	// A connection is cut at its byte cap.
 	x.allow(Destination{Host: "db.example.com", Port: x.port})
