@@ -95,8 +95,12 @@ CI's separate Docker integration runner runs `make assets generate` before its
 opt-in suites. When running those suites manually on a fresh checkout, run the
 same command first; generated files are not passed between GitHub Actions jobs.
 
-To verify a CI fix, commit and push the workflow and application changes, then
-open the new Actions run and compare its commit SHA with `git rev-parse HEAD`.
+CI runs for pull requests into `master` (the default and release branch), for
+merges into it, and when dispatched manually (**Actions → CI → Run workflow**,
+choosing your branch); a push to `main` alone runs nothing. To verify a CI fix,
+push it, open or update a pull request into `master` (or dispatch CI on your
+branch), then open the new Actions run and compare its commit SHA with
+`git rev-parse HEAD`.
 **Re-run jobs** keeps the original run's commit and cannot test local changes or
 a later fix. See [CI in action](../technical-docs/ci-in-action.md#92-manual-run-and-logs)
 for the steps that identify the corrected scanner and rootless-builder setup.

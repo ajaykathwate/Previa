@@ -1,4 +1,7 @@
 # Continuous integration (docs/25-production-deployment.md#ci-and-releases).
+# master is the release branch and changes reach it through pull requests:
+# CI runs for pull requests into master, for the push a merge makes, and on
+# demand. Pushes to any other branch, main included, run nothing.
 # Pull requests, including from forks, run with a read-only token and no
 # secrets. The privileged real-Docker suites run only for code already in
 # this repository (pushes and same-repository pull requests).
@@ -6,8 +9,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
+    branches: [master]
   workflow_dispatch:
 
 permissions:

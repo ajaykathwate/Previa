@@ -2429,18 +2429,21 @@ by hand. Nothing in GitHub Actions reaches the VPS.
 
 | Event | Result | Deploys to the VPS? |
 | --- | --- | --- |
-| Push to `main`, open or update a pull request, or **Actions → CI → Run workflow** | `CI` generates, builds, lints, scans and tests; fork pull requests skip the privileged real-Docker suite. | No |
-| Push a tag matching `v*.*.*` (for example `v0.1.0` or `v0.1.0-rc.1`) | `Release` drafts a GitHub Release (command archives, checksums, SBOMs) and pushes the three multi-arch images to GHCR. | No |
+| Open or update a pull request into `master`, merge it (a push to `master`), or **Actions → CI → Run workflow** | `CI` generates, builds, lints, scans and tests; fork pull requests skip the privileged real-Docker suite. | No |
+| Push to `main` or any other branch | Nothing runs: `master` is the release branch, and work reaches it through pull requests. | No |
+| Push a tag matching `v*.*.*` (for example `v0.1.0` or `v0.1.0-rc.1`) on a commit in `master` | `Release` drafts a GitHub Release (command archives, checksums, SBOMs) and pushes the three multi-arch images to GHCR. A tag on any other commit stops before anything is built. | No |
 | The operator selects a release on the host and follows [Upgrades and rollback](#upgrades-and-rollback) (or Fresh host setup) | The host runs that release. | **Yes, manually** |
 
-- `Release` does not wait for `CI`: tag only a commit whose own CI run passed.
+- `Release` does not wait for `CI`: tag only a commit on `master` whose CI run passed.
 - Images are pushed while the release is still a draft; a maintainer reviews and
   publishes the draft, and nothing changes on the host until it is deployed.
 - Production secrets (OAuth and App keys, database password, DNS token, keyring,
   backup identity) never enter the workflows; they use the built-in `GITHUB_TOKEN`
   and a disposable PostgreSQL.
-- Before the first release: enable Actions, protect `main` with the CI checks,
-  create the `release` environment with reviewers, and decide whether the GHCR
+- Before the first release: enable Actions, make `master` the default branch and
+  protect it (pull requests only, CI checks required, no force pushes; on a
+  private repository GitHub enforces this only on a paid plan), create the
+  `release` environment with reviewers, and decide whether the GHCR
   packages are public (a private one needs a read credential on the host).
 
 Block by block: [CI in action](../technical-docs/ci-in-action.md) (each job, how to

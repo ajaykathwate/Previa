@@ -1,5 +1,5 @@
 # Project handoff
-Last updated: 2026-10-09
+Last updated: 2026-10-10
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
@@ -48,10 +48,12 @@ Last updated: 2026-10-09
   .env import; sync stalls after 5m; mergeability "Unknown" after 8 tries (0019);
   .env.example lines all labelled (config/example_test.go).
 
-## CI (guides technical-docs/ci-in-action.md, cd-in-action.md)
-- Trivy via digest-pinned image; runner allows unprivileged userns for rootless
-  BuildKit; "Free runner disk" step; build tests use small disk thresholds.
-  Not pushed yet: confirm a run tests the pushed SHA.
+## Branches and CI (technical-docs/ci-in-action.md, cd-in-action.md)
+- master: default and release branch, changed only through PRs (by convention: the
+  private repo's Free plan has no branch protection); work happens on main. CI runs
+  for PRs into master, pushes to master and manual runs; Release refuses tags off master.
+- CI green on c94d35f (2026-10-10). Smoke checks that read state settling after
+  startup must retry; userns for rootless BuildKit; "Free runner disk" step.
 
 ## Prompt 13: backend previews (docs/11)
 - .previewrc.yaml: services {postgres|redis: version} from PREVIEW_SERVICE_CATALOG
@@ -64,7 +66,6 @@ Last updated: 2026-10-09
 - Outbound (internal/outbound, web/pages/outbound): <=10 host:port, one per port,
   PREVIEW_OUTBOUND_PORTS (none = off); worker writes allow files on previa-egress
   (outbound_refresh every minute); /etc/hosts maps names to the proxy; forks get none.
-- Committed d612277 (feature), 6174a28 (CI disk fix), 3e055a1 (DESIGN diagram).
 
 ## Code quality pass (2026-10-08; behavior unchanged)
 - .golangci.yml adds gocognit (30, tests exempt), nestif, gocritic and revive style
@@ -72,7 +73,6 @@ Last updated: 2026-10-09
 - Long functions became named steps (environments operation_finalize.go; runtime
   candidate/services/outbound.go; app execution.go, process.go). Shared rules:
   cleanupFence, lockOwnerIntentScope, transitionAllowed, judgeObservation.
-- webhooks delivery SQL in sqlc; cmd mains return exit codes so defers run.
 
 ## Regression cycle (2026-10-09, committed e9aac61; test-docs/)
 - test-docs/: 242 cases in 16 module files (ID, type, priority, level, steps,
@@ -95,5 +95,5 @@ Last updated: 2026-10-09
 - A real host (setup.sh, stack, backups to object storage, restore, upgrade);
   domains + DNS token (Let's Encrypt staging then production); hosted GitHub
   (OAuth/App, webhooks, real repo, make test-source / test-reporting with
-  TEST_GITHUB_* of an authorized disposable PR, not in .env); workflows on GitHub
-  and a protected release environment; Alertmanager; optional gVisor.
+  TEST_GITHUB_* of an authorized disposable PR, not in .env); the protected release
+  environment; Alertmanager; optional gVisor.
