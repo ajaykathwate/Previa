@@ -38,7 +38,7 @@ Always open the dashboard as `localhost`, not `127.0.0.1`, because sign-in cooki
 ## Step 3: Database and migrations
 ```sh
 docker compose -f deploy/docker-compose.yml up -d --wait postgres
-make migrate-up        # your dev DB was last at 19; this brings it to Goose 20
+make migrate-up        # brings the dev DB to the current schema, Goose 21
 ```
 
 ## Step 4: Build, then start the router

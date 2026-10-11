@@ -184,7 +184,7 @@ and `builds.ConfigFrom(…, instance, …)` with `instance` from `database.Insta
 has one worker per process. Jobs run every minute (recovery), 5 minutes (resources),
 15 minutes (PR reconciliation), 10 minutes (expiry) and hourly (pruning), with
 timeouts of 2, 5, 5, 2 and 15 minutes. The dashboard shows
-the waiting reason and the expiry on PR pages, Builds and Environments.
+the waiting reason and the expiry on PR pages, Builds and Previews.
 
 ## What was verified
 

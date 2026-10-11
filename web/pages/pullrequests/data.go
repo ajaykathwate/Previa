@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a-h/templ"
+
 	"github.com/ajaykathwatee/previa/web/components"
 	"github.com/ajaykathwatee/previa/web/components/button"
 	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
@@ -348,6 +350,56 @@ type ActivityRow struct {
 	RequestCurrent                               bool   // the request is for the latest commit
 	RequestSource                                string // "manual" or "automatic"
 	StartedAt, CompletedAt, PublishedAt          string // RFC 3339
+	Revision                                     int64  // the build request's revision, for dismissing its failure
+	// Attention is how a failed request is shown: "attention" (recent,
+	// highlighted), "older" or "dismissed" (quiet, with AttentionNote saying
+	// why), or "" for anything else.
+	Attention, AttentionNote string
+}
+
+// PreviewStatus is a Previews row's status, in what reviewers care about: a
+// preview that keeps serving while a newer build runs or after it failed is
+// still live.
+func (r ActivityRow) PreviewStatus() (label, tone string) {
+	switch r.State {
+	case "running":
+		return "Live", "tone-ok"
+	case "queued", "building", "publishing":
+		return "Live · updating", "tone-info"
+	case "failed":
+		return "Live · update failed", "tone-warn"
+	case "tearing_down":
+		return "Removing", "tone-warn"
+	}
+	return Label(r.State), Tone(r.State)
+}
+
+// IconTone is the row icon's tone, matching its status badge.
+func (r ActivityRow) IconTone(previews bool) string {
+	if previews {
+		_, tone := r.PreviewStatus()
+		return tone
+	}
+	return r.StatusTone()
+}
+
+// StatusTone is the status badge's tone: a failure that no longer needs
+// attention is shown, but not in red.
+func (r ActivityRow) StatusTone() string {
+	if r.Attention == "older" || r.Attention == "dismissed" {
+		return "tone-neutral"
+	}
+	return Tone(r.State)
+}
+
+// CanDismiss reports whether the owner can dismiss this failure; Dismissed
+// whether they can undo a dismissal.
+func (r ActivityRow) CanDismiss() bool { return r.Attention == "attention" || r.Attention == "older" }
+func (r ActivityRow) Dismissed() bool  { return r.Attention == "dismissed" }
+
+// FailureURL is the pull request's failure action: "dismiss" or "restore".
+func (r ActivityRow) FailureURL(action string) templ.SafeURL {
+	return templ.SafeURL(string(PRURL(r.RepoID, r.Number)) + "/failure/" + action)
 }
 
 // TeardownDialog is the row's confirmation dialog ID.
@@ -355,22 +407,71 @@ func (r ActivityRow) TeardownDialog() string {
 	return "teardown-" + strconv.FormatInt(r.RepoID, 10) + "-" + strconv.Itoa(int(r.Number))
 }
 
+// Activity is the Builds page (every pull request's current or latest build
+// request) or, with Previews, the Previews page (environments that serve a
+// commit).
 type Activity struct {
 	Rows                         []ActivityRow
 	Total, Number, Pages, RepoID int64
-	Environments                 bool
+	Previews                     bool
+	// Failures narrows Builds: "attention", "older", "dismissed" or "" (all).
+	Failures string
+	// DismissedRepo and DismissedNumber name a failure just dismissed, so the
+	// page can offer Undo even when the list no longer shows it.
+	DismissedRepo   int64
+	DismissedNumber int32
+	// AttentionDays is how long a failure needs attention.
+	AttentionDays int
+}
+
+// FailureEmpty is what an empty failure view says.
+func FailureEmpty(failures string) (heading, text string) {
+	switch failures {
+	case "attention":
+		return "No failures need attention.", "Recent failed builds that you have not dismissed appear here."
+	case "older":
+		return "No older failures.", "Failures that have waited a long time without a new build appear here, without being highlighted."
+	}
+	return "Nothing dismissed.", "Failures you dismiss appear here, where you can undo it."
+}
+
+// FailureFilter is one of the Builds page's failure filters.
+type FailureFilter struct {
+	Value, Label string
+}
+
+// FailureFilters are the Builds page's views of failures, all first.
+func FailureFilters() []FailureFilter {
+	return []FailureFilter{{"", "All"}, {"attention", "Needs attention"}, {"older", "Older failures"}, {"dismissed", "Dismissed"}}
 }
 
 func (a Activity) PageURL(n int64) string {
 	path := "/builds"
-	if a.Environments {
-		path = "/environments"
+	if a.Previews {
+		path = "/previews"
 	}
 	v := url.Values{"page": {strconv.FormatInt(n, 10)}}
 	if a.RepoID > 0 {
 		v.Set("repo_id", strconv.FormatInt(a.RepoID, 10))
 	}
+	if a.Failures != "" {
+		v.Set("failures", a.Failures)
+	}
 	return path + "?" + v.Encode()
+}
+
+// FilterURL is Builds with another failure filter, from its first page.
+func (a Activity) FilterURL(failures string) templ.SafeURL {
+	a.Failures = failures
+	return templ.SafeURL(a.PageURL(1))
+}
+
+// DismissedPR is the pull request whose failure was just dismissed, for Undo.
+func (a Activity) DismissedPR() (ActivityRow, bool) {
+	if a.DismissedRepo <= 0 || a.DismissedNumber <= 0 {
+		return ActivityRow{}, false
+	}
+	return ActivityRow{RepoID: a.DismissedRepo, Number: a.DismissedNumber}, true
 }
 
 func (p Page) DirectoryFilters() map[string]string {

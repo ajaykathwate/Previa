@@ -502,7 +502,7 @@ Medium.
 - **Never remove the replacement:** a late teardown after a reopen cannot remove the newer route (tombstone ordering) or its artifacts (reference checks).
 - **Missed webhook:** if the `closed` event is lost, the reconciler (feature 15) catches it by comparing with GitHub's actual PR state.
 - **Logs retention:** build logs may be kept for a short period after teardown for debugging, then deleted.
-- **Current implementation:** see [13-teardown-and-cleanup.md](docs/13-teardown-and-cleanup.md); verified with real Docker and Traefik by `make test-routing`. The worker registers the teardown, route, cleanup and sweep workers; the owner's **Tear down preview** (a CSRF-protected form in a confirmation dialog, on the PR page and per row on Environments) records a teardown with reason `requested` that supersedes unfinished work and runs when a worker does. `make test-e2e` proves it end to end.
+- **Current implementation:** see [13-teardown-and-cleanup.md](docs/13-teardown-and-cleanup.md); verified with real Docker and Traefik by `make test-routing`. The worker registers the teardown, route, cleanup and sweep workers; the owner's **Tear down preview** (a CSRF-protected form in a confirmation dialog, on the PR page and per row on Previews) records a teardown with reason `requested` that supersedes unfinished work and runs when a worker does. `make test-e2e` proves it end to end.
 
 ---
 
@@ -581,7 +581,7 @@ Medium.
 1. During builds and container startup, each output line is appended to the log table with a sequence number per environment.
 2. The logs page loads existing lines, then opens an SSE stream that pushes new lines as they arrive. Use `internal/platform/realtime`: the hub wakes the stream on a log notification and `realtime.SSE` frames lines whose ids are log sequence numbers.
 3. A reconnecting client resumes from the last sequence number it received, so nothing is duplicated or lost.
-4. The workspace has separate Overview, Repositories, Builds and Environments pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 records), search and Available/Unavailable/All access tabs (Available by default). Environments shows each preview's status, URL, deployed commit SHA (marked when earlier than the latest), expiry and a **Tear down** action confirmed in a modal; it shows the expiry rather than the age, because expiry is what an owner acts on. Builds shows queued and running work with latest and requested SHAs, wait and failure reasons and log links. Overview places the owner's open pull requests along the delivery pipeline (waiting, building, live, failed) with their shares and preview coverage, lists the newest build requests and previews (rows expand to their details) and shows which pipeline stages a running worker provides. Developer tools has its own local diagnostic page. An FAQ page, and the home page's How it works and FAQ sections, explain Previa as a conversation with it: static copy kept true to the current release, with examples labelled as examples.
+4. The workspace has separate Overview, Repositories, Builds and Previews pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 records), search and Available/Unavailable/All access tabs (Available by default). Environments shows each preview's status, URL, deployed commit SHA (marked when earlier than the latest), expiry and a **Tear down** action confirmed in a modal; it shows the expiry rather than the age, because expiry is what an owner acts on. Builds shows queued and running work with latest and requested SHAs, wait and failure reasons and log links. Overview places the owner's open pull requests along the delivery pipeline (waiting, building, live, failed) with their shares and preview coverage, lists the newest build requests and previews (rows expand to their details) and shows which pipeline stages a running worker provides. Developer tools has its own local diagnostic page. An FAQ page, and the home page's How it works and FAQ sections, explain Previa as a conversation with it: static copy kept true to the current release, with examples labelled as examples.
 5. Dashboard actions check both authentication and ownership: a user can only see and act on environments in installations they own.
 6. Log retention has a size and age cap; old logs are pruned.
 
@@ -614,8 +614,9 @@ detail shows the latest observed, requested and deployed commits separately, wit
 the owner's Build latest commit, Build now (an Automatic request still waiting),
 Retry build (after a failure) or Rebuild preview (after a success), and Tear down
 preview. Builds is
-a cross-repository view of current/latest work; Environments is a deployment view,
-not another name for Builds. Do not add historical build storage implicitly.
+a cross-repository view of current/latest work; Previews (formerly Environments) is
+the view of what is live, not another name for Builds: it lists only environments
+that serve a commit. Do not add historical build storage implicitly.
 Initial discovery and detail screens are implemented by a feature-owned
 `internal/pullrequests` package: explicit refresh, bounded River pagination,
 source/access snapshot fences and owned Templ pages. The build action checks
@@ -628,6 +629,7 @@ revision-checked request with its wake-up. There is no bulk build. See the
 - **Server-rendered UI** keeps everything in one binary and one deploy.
 - **Authorization at the query level:** every query is scoped by the user's installations, not just by an ID from the URL.
 - **Log volume:** large or runaway output is truncated with a marker to protect the database.
+- **Failures that need attention (an addition after Prompt 13):** the dashboard highlights a failed build request only for 7 days after it finished (`pullrequests.FailureAttentionWindow`); older ones stay listed on Builds without highlighting and are counted apart. An owner can dismiss one failed attempt (`build_failure_dismissals`, keyed by user and pull request, holding the request revision), which stops it counting until the pull request fails again; Undo deletes it. Builds filters failures the same way the Overview counts them. See [21-ui-architecture.md](docs/21-ui-architecture.md#overview).
 - **Current implementation:** `internal/buildlogs` keeps one attempt per environment in `build_log_streams`; build admission bumps its `epoch` and clears old lines in one transaction, and the runtime receives an `environments.Attempt`. Writers strip control sequences, redact, split and cap lines (5 MiB / 20,000 lines / 8 KiB), batch in the background and append only while their epoch is current; storage loss is counted and marked, never silent. `/repositories/{id}/pull-requests/{n}/logs` shows the newest lines with paging, Copy and a whole-attempt Download (`…/logs/download`), the PR page quotes a failed attempt's last lines (`Store.Tail`, fenced by generation and revision), and its SSE stream uses `<epoch>.<next>` ids with `reset` for a replacement attempt, per-user and global stream caps and per-frame write timeouts. A River job deletes logs 14 days after an attempt finishes. See [08-build-logs.md](docs/08-build-logs.md).
 
 ---
@@ -978,7 +980,7 @@ preview/
 │   │   ├── repositories/           # paginated, filtered repository page
 │   │   ├── pullrequests/           # repository/PR detail and shared current activity
 │   │   ├── builds/                 # Builds page, current-attempt build log page
-│   │   ├── environments/           # Environments page (shares the activity view)
+│   │   ├── previews/               # Previews page (shares the activity view)
 │   │   ├── starterkits/            # Starter kits: choices beside a two-tab editor
 │   │   └── routing/                # "preview not found or expired" (public)
 │   ├── components/                 # local, reusable UI; no backend imports

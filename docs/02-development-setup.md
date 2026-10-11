@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 20**, **River 007**. After pulling changes, run
+Current schema: **Goose 21**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker.
 
 ## 1. Prerequisites
@@ -199,6 +199,7 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0018 | The execution kill switch: build requests may wait with reason `paused`, and workers report `paused` ([23](23-observability-and-hardening.md#execution-kill-switch)). |
 | 0019 | `pull_requests.mergeability_unresolved_at`: when the mergeability check gave up after eight attempts, so the dashboard shows **Unknown** instead of **Checking** forever; any new observation clears it. |
 | 0020 | Backend previews ([11](11-backend-previews.md)): `preview_components` (what a deployed candidate ran next to its app: services, setup, processes, docs path, outbound count), `repository_destinations` (owner-approved outbound `host:port`) and `worker_capabilities.services` (the managed services a worker offers). |
+| 0021 | `build_failure_dismissals`: a failed build request an owner dismissed (user, pull request, request revision), so it stops needing attention on the Overview until the pull request fails again. |
 
 Optional check that live updates are wired:
 

@@ -308,7 +308,7 @@ func TestDiscoveryPaginationCoalescingAndOwnership(t *testing.T) {
 	if _, err := repo.Detail(ctx, f.userID+1, f.repoID, 1); !errors.Is(err, pr.ErrUnavailable) {
 		t.Fatal("foreign detail exposed")
 	}
-	if _, err := repo.Activity(ctx, f.userID+1, f.repoID, 1, false); !errors.Is(err, pr.ErrUnavailable) {
+	if _, err := repo.Activity(ctx, f.userID+1, pr.ActivityQuery{RepoID: f.repoID, Page: 1}); !errors.Is(err, pr.ErrUnavailable) {
 		t.Fatal("foreign activity exposed")
 	}
 }

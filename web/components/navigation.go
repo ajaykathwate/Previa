@@ -8,7 +8,7 @@ const (
 	NavOverview     NavItem = "overview"
 	NavRepositories NavItem = "repositories"
 	NavStarterKits  NavItem = "starter-kits"
-	NavEnvironments NavItem = "environments"
+	NavPreviews     NavItem = "previews"
 	NavBuilds       NavItem = "builds"
 	NavTools        NavItem = "tools"
 	NavFAQ          NavItem = "faq"

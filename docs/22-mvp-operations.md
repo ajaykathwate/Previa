@@ -114,7 +114,7 @@ release images and Compose file instead ([25](25-production-deployment.md)).
 | Restart recovery | `TestRealRoutingRecoversAfterControllerAndRouterRestarts`, `TestRecoveryResumesLostJobsLeasesAndExhaustedRetries`, `TestAWorkerShutdownMidBuildIsNoFailure` |
 | Permanent failures end at once | `TestPermanentFailuresEndAfterOneAttempt` |
 | No worker that can build | `TestBuildIsUnavailableWithoutAWorkerThatCanBuild`, `TestPipelineRegistersOnlyWhatItsDependenciesAllow`, `TestCapabilitiesComeFromLiveWorkersOnly` |
-| Cross-owner rejection | `TestActionsRefuseAnotherOwnersPullRequest` (build, Retry, Rebuild and teardown of another owner's real PR: 404, nothing recorded, absent from Builds and Environments), `TestWorkspaceHTTPAuthorizationCSRFActions`, `TestTeardownIsConfirmedOwnerOnlyAndIdempotent` |
+| Cross-owner rejection | `TestActionsRefuseAnotherOwnersPullRequest` (build, Retry, Rebuild and teardown of another owner's real PR: 404, nothing recorded, absent from Builds and Previews), `TestWorkspaceHTTPAuthorizationCSRFActions`, `TestTeardownIsConfirmedOwnerOnlyAndIdempotent` |
 | Teardown confirmed in a modal, owner-only, CSRF-protected | `TestTeardownIsConfirmedOwnerOnlyAndIdempotent`, browser tests (with and without JavaScript) |
 | Dashboard pages show real state | `TestEnvironmentsAndBuildsShowRealDeliveryState`, browser tests |
 | A GitHub outage never blocks publication; reports catch up | `TestRealEndToEnd` (comment and check-run API failing during a build) |

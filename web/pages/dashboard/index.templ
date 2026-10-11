@@ -48,7 +48,7 @@ templ Index(username string, csrfToken string, summary Summary) {
 					@sources(summary)
 				</div>
 			</div>
-			@activity(summary)
+			@activity(summary, csrfToken)
 		</div>
 	}
 }
@@ -94,7 +94,7 @@ templ kpis(summary Summary) {
 			</a>
 		</li>
 		<li>
-			<a class="ov-kpi" href="/environments">
+			<a class="ov-kpi" href="/previews">
 				<span class="ov-kpi-head">
 					<span class="ov-kpi-label">Live previews</span>
 					<span class="ov-kpi-icon is-ok" aria-hidden="true">
@@ -113,7 +113,7 @@ templ kpis(summary Summary) {
 			</a>
 		</li>
 		<li>
-			<a class={ "ov-kpi", templ.KV("is-attention", summary.Failed > 0) } href="/builds">
+			<a class={ "ov-kpi", templ.KV("is-attention", summary.Failed > 0) } href={ templ.SafeURL(summary.FailuresURL()) }>
 				<span class="ov-kpi-head">
 					<span class="ov-kpi-label">Needs attention</span>
 					<span class={ "ov-kpi-icon", templ.KV("is-danger", summary.Failed > 0), templ.KV("is-ok", summary.Failed == 0) } aria-hidden="true">
@@ -127,7 +127,9 @@ templ kpis(summary Summary) {
 				<strong class="ov-kpi-value">{ count(summary.Failed) }</strong>
 				<span class="ov-kpi-note">
 					if summary.Failed > 0 {
-						{ plural(summary.Failed, "failed build request", "failed build requests") } · see why
+						{ plural(summary.Failed, "failed build", "failed builds") } in the last { strconv.Itoa(summary.AttentionDays) } days · see why
+					} else if summary.FailedOlder > 0 {
+						No new failures · { count(summary.FailedOlder) } older
 					} else {
 						No failed build requests
 					}
@@ -264,9 +266,9 @@ templ flow(summary Summary) {
 			@flowNode("/repositories?access=available", "Open pull requests", "Tracked from GitHub", summary.OpenPRs, summary.OpenPRs, "tone-neutral", false, false, components.PullRequestIcon())
 			@flowNode("/builds", "Waiting or queued", "Quiet period, queue or capacity", summary.Waiting, summary.OpenPRs, "tone-info", true, summary.Waiting > 0, components.ClockIcon())
 			@flowNode("/builds", "Building", "Image and preview starting", summary.Building, summary.OpenPRs, "tone-info", true, summary.Building > 0, components.BuildIcon())
-			@flowNode("/environments", "Live previews", "Serving at their address", summary.Live, summary.OpenPRs, "tone-ok", true, false, components.EnvironmentIcon())
+			@flowNode("/previews", "Live previews", "Serving at their address", summary.Live, summary.OpenPRs, "tone-ok", true, false, components.EnvironmentIcon())
 		</ol>
-		<a class={ "ov-flow-failed", templ.KV("tone-danger", summary.Failed > 0), templ.KV("tone-ok", summary.Failed == 0 && summary.OpenPRs > 0), templ.KV("tone-neutral", summary.Failed == 0 && summary.OpenPRs == 0) } href="/builds">
+		<a class={ "ov-flow-failed", templ.KV("tone-danger", summary.Failed > 0), templ.KV("tone-ok", summary.Failed == 0 && summary.FailedOlder == 0 && summary.OpenPRs > 0), templ.KV("tone-neutral", summary.Failed == 0 && (summary.FailedOlder > 0 || summary.OpenPRs == 0)) } href={ templ.SafeURL(summary.FailuresURL()) }>
 			<span class="ov-flow-failed-icon" aria-hidden="true">
 				if summary.Failed > 0 {
 					@components.AlertIcon()
@@ -275,7 +277,9 @@ templ flow(summary Summary) {
 				}
 			</span>
 			if summary.Failed > 0 {
-				<span><strong>{ count(summary.Failed) } { plural(summary.Failed, "failed request", "failed requests") }</strong> · the latest attempt failed; Builds shows why.</span>
+				<span><strong>{ count(summary.Failed) } { plural(summary.Failed, "failed request", "failed requests") }</strong> · failed in the last { strconv.Itoa(summary.AttentionDays) } days; Builds shows why.</span>
+			} else if summary.FailedOlder > 0 {
+				<span><strong>No new failures</strong> · { count(summary.FailedOlder) } { plural(summary.FailedOlder, "older failure", "older failures") }, over { strconv.Itoa(summary.AttentionDays) } days old, not counted.</span>
 			} else {
 				<span><strong>No failed requests</strong> · nothing to review right now.</span>
 			}
@@ -321,7 +325,7 @@ templ flowNode(href, label, hint string, n, whole int64, tone string, share, act
 
 // activity lists the newest build requests and live previews. With
 // JavaScript they become two tabs; without it both lists show.
-templ activity(summary Summary) {
+templ activity(summary Summary, csrf string) {
 	<section class="panel ov-activity" aria-labelledby="activity-title" data-overview-activity>
 		<header class="panel-header ov-activity-head">
 			<div><span class="eyebrow">Latest activity</span><h2 id="activity-title">Builds and previews</h2></div>
@@ -348,7 +352,7 @@ templ activity(summary Summary) {
 					</div>
 					<ul class="ov-rows">
 						for _, row := range summary.Builds {
-							@buildRow(row)
+							@buildRow(row, csrf)
 						}
 					</ul>
 				</div>
@@ -382,7 +386,7 @@ templ activity(summary Summary) {
 			}
 			<p class="ov-panel-foot">
 				<span>Showing { strconv.Itoa(len(summary.Previews)) } of { count(summary.Live) } live { plural(summary.Live, "preview", "previews") }, newest first.</span>
-				<a class="text-link" href="/environments">
+				<a class="text-link" href="/previews">
 					All environments
 					@components.Arrow()
 				</a>
@@ -395,7 +399,7 @@ templ stateBadge(row prpages.ActivityRow) {
 	if row.Waiting != "" {
 		<span class="badge tone-info"><span class="badge-dot" aria-hidden="true"></span>{ row.Waiting }</span>
 	} else {
-		<span class={ "badge", prpages.Tone(row.State) }><span class="badge-dot" aria-hidden="true"></span>{ prpages.Label(row.State) }</span>
+		<span class={ "badge", row.StatusTone() }><span class="badge-dot" aria-hidden="true"></span>{ prpages.Label(row.State) }</span>
 	}
 }
 
@@ -403,7 +407,7 @@ templ sha(value string) {
 	<code class="sha">{ prpages.Short(value) }</code>
 }
 
-templ buildRow(row prpages.ActivityRow) {
+templ buildRow(row prpages.ActivityRow, csrf string) {
 	<li class="ov-row">
 		<details class="ov-row-details">
 			<summary class="ov-row-summary">
@@ -422,7 +426,10 @@ templ buildRow(row prpages.ActivityRow) {
 				</span>
 				<span class="ov-col ov-col-when">
 					if row.Failure != "" {
-						<span class="ov-col-reason">{ row.Diagnosis().Title }</span>
+						<span class={ "ov-col-reason", templ.KV("is-quiet", row.StatusTone() != "tone-danger") }>{ row.Diagnosis().Title }</span>
+					}
+					if row.AttentionNote != "" {
+						<small>{ row.AttentionNote }</small>
 					}
 					if row.CompletedAt != "" {
 						<small>
@@ -492,7 +499,7 @@ templ buildRow(row prpages.ActivityRow) {
 					}
 					if row.Failure != "" {
 						{{ d := row.Diagnosis() }}
-						<div class="is-danger"><dt>Why it failed</dt><dd><strong>{ d.Title }.</strong> { row.Failure }</dd></div>
+						<div class={ "is-reason", templ.KV("is-danger", row.StatusTone() == "tone-danger") }><dt>Why it failed</dt><dd><strong>{ d.Title }.</strong> { row.Failure }</dd></div>
 						if len(d.Steps) > 0 {
 							<div><dt>What to do</dt><dd>{ d.Steps[0] } The pull request page has every step.</dd></div>
 						}
@@ -511,9 +518,31 @@ templ buildRow(row prpages.ActivityRow) {
 						@components.Arrow()
 					</a>
 				</p>
+				if row.CanDismiss() || row.Dismissed() {
+					<form method="post" action={ row.FailureURL(failureAction(row)) } class="ov-row-dismiss">
+						<input type="hidden" name="csrf_token" value={ csrf }/>
+						<input type="hidden" name="return" value="overview"/>
+						if row.CanDismiss() {
+							<input type="hidden" name="revision" value={ strconv.FormatInt(row.Revision, 10) }/>
+							<button type="submit" class="link-button">Dismiss this failure</button>
+							<span>Stops counting it on the Overview; it comes back if this pull request fails again.</span>
+						} else {
+							<button type="submit" class="link-button">Undo dismiss</button>
+							<span>You dismissed this failure; it no longer counts on the Overview.</span>
+						}
+					</form>
+				}
 			</div>
 		</details>
 	</li>
+}
+
+// failureAction is the row's failure form action: dismiss or undo.
+func failureAction(row prpages.ActivityRow) string {
+	if row.CanDismiss() {
+		return "dismiss"
+	}
+	return "restore"
 }
 
 templ previewRow(row prpages.ActivityRow) {

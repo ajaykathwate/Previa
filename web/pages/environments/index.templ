@@ -1,8 +1,0 @@
-package environments
-
-import pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
-
-// Index renders real ownership-scoped activity supplied by the workspace handler.
-templ Index(username, csrf string, page pages.Activity) {
- @pages.ActivityIndex(username,csrf,page)
-}

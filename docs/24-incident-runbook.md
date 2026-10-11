@@ -64,7 +64,7 @@ dc up -d worker      # the worker drains for 30 s, then cancels running builds
 
 Cancelled builds are not failures; they wait (reason `paused`) with every new
 request. To stop a specific preview as well, tear it down from its pull request
-page or the Environments page. To resume, remove the line (or set it to `false`)
+page or the Previews page. To resume, remove the line (or set it to `false`)
 and `dc up -d worker`.
 
 ## Database unavailable
@@ -162,7 +162,7 @@ Remove the dry-run line once explained.
 2. Builds already wait instead of failing and housekeeping prunes at once when they
    do (untagged images, old workspaces, caches over `BUILD_CACHE_BUDGET`). Lower
    `BUILD_CACHE_BUDGET` or `ENV_TTL_HOURS` for more room.
-3. Tear down previews nobody uses (Environments page), or pause builds.
+3. Tear down previews nobody uses (Previews page), or pause builds.
 4. Never `docker system prune -a` on a Previa host: it removes the egress image and
    serving previews. If space must be freed by hand, remove only images not used by
    a running container and labelled `io.previa.managed=true`.

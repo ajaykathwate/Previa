@@ -310,12 +310,15 @@ func TestTeardownIsConfirmedOwnerOnlyAndIdempotent(t *testing.T) {
 	if _, body := h.form(t); strings.Contains(body, `data-open-dialog="teardown-preview"`) {
 		t.Fatal("teardown still offered for a preview being removed")
 	}
-	// From the Environments page the owner returns there.
-	h.exec(t, "UPDATE pull_requests SET teardown_requested_generation=-1 WHERE id=$1", h.prID)
-	h.exec(t, "UPDATE environments SET status='running' WHERE pull_request_id=$1", h.prID)
-	w := h.request(t, "POST", detailPath+"/teardown", "csrf_token="+url.QueryEscape(token)+"&return=environments&page=2")
-	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/environments?page=2" {
-		t.Fatalf("return to Environments: %d %s", w.Code, w.Header().Get("Location"))
+	// From the Previews page the owner returns there; a form from before the
+	// page was renamed ("environments") does too.
+	for _, from := range []string{"previews", "environments"} {
+		h.exec(t, "UPDATE pull_requests SET teardown_requested_generation=-1 WHERE id=$1", h.prID)
+		h.exec(t, "UPDATE environments SET status='running' WHERE pull_request_id=$1", h.prID)
+		w := h.request(t, "POST", detailPath+"/teardown", "csrf_token="+url.QueryEscape(token)+"&return="+from+"&page=2")
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/previews?page=2" {
+			t.Fatalf("return to Previews from %q: %d %s", from, w.Code, w.Header().Get("Location"))
+		}
 	}
 	if w := h.request(t, "POST", detailPath+"/teardown", "csrf_token="+url.QueryEscape(token)+"&return=https://evil.example"); w.Code != http.StatusSeeOther || strings.Contains(w.Header().Get("Location"), "evil") {
 		t.Fatalf("open redirect: %s", w.Header().Get("Location"))
@@ -369,22 +372,22 @@ func TestActionsRefuseAnotherOwnersPullRequest(t *testing.T) {
 		t.Fatal("another owner's preview changed")
 	}
 	// Neither list shows it.
-	for _, page := range []string{"/builds", "/environments"} {
+	for _, page := range []string{"/builds", "/previews"} {
 		if w := h.request(t, "GET", page, ""); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "stranger/repo") {
 			t.Fatalf("%s shows another owner's PR (%d)", page, w.Code)
 		}
 	}
 }
 
-func TestEnvironmentsAndBuildsShowRealDeliveryState(t *testing.T) {
+func TestPreviewsAndBuildsShowRealDeliveryState(t *testing.T) {
 	h := newActionsHarness(t)
 	h.exec(t, `INSERT INTO environments(pull_request_id, subdomain, status, container_id, image_tag, head_sha, applied_generation, applied_revision, expires_at)
 		SELECT id, 'pr-7-2s-abcdefgh', 'running', 'container-1', 'image-1', 'sha-old', generation, 0, now() + interval '2 days' FROM pull_requests WHERE id=$1`, h.prID)
-	w := h.request(t, "GET", "/environments", "")
+	w := h.request(t, "GET", "/previews", "")
 	body := w.Body.String()
-	for _, want := range []string{"https://pr-7-2s-abcdefgh.preview.example.com", "Earlier than the latest commit", "Tear down", `name="return" value="environments"`} {
+	for _, want := range []string{"https://pr-7-2s-abcdefgh.preview.example.com", "Earlier than the latest commit", "Tear down", `name="return" value="previews"`, ">Live<", "Open preview"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("Environments lacks %q", want)
+			t.Fatalf("Previews lacks %q", want)
 		}
 	}
 	h.exec(t, `INSERT INTO build_intents(pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, started_at, waiting_revision, waiting_reason)
@@ -443,5 +446,36 @@ func TestRepositoryPageSaysWhenSyncsWaitStallOrNeverResolve(t *testing.T) {
 	h.caps.discovery = false
 	if values, body := h.form(t); values != nil || !strings.Contains(body, "Waiting for a worker to check mergeability") || !strings.Contains(body, "No worker is running to ask GitHub") {
 		t.Fatal("the PR page must explain the missing worker")
+	}
+}
+
+// Previews lists only previews that serve a commit. A first build that failed
+// before going live reserves an address but is not a preview: it is on Builds.
+// Once a version is live, a failed update keeps it listed, as live.
+func TestPreviewsListOnlyWhatServes(t *testing.T) {
+	h := newActionsHarness(t)
+	h.exec(t, `INSERT INTO build_intents(pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, started_at, completed_at)
+		SELECT id, 1, 0, generation, head_sha, 'manual', 'build', $2, 'key-failed-00000001', 'failed', now(), now(), now() FROM pull_requests WHERE id=$1`, h.prID, h.userID)
+	h.exec(t, `INSERT INTO environments(pull_request_id, subdomain, status, applied_generation, applied_revision, last_error_code, expires_at)
+		SELECT id, 'pr-7-2s-abcdefgh', 'failed', generation, 1, 'source_failed', now() + interval '2 days' FROM pull_requests WHERE id=$1`, h.prID)
+	listed := func(path string) bool {
+		t.Helper()
+		return strings.Contains(h.request(t, "GET", path, "").Body.String(), "/repositories/1/pull-requests/7")
+	}
+	if listed("/previews") || !listed("/builds") {
+		t.Fatal("a build that never went live is on Builds, not Previews")
+	}
+	if body := h.request(t, "GET", "/previews", "").Body.String(); !strings.Contains(body, "No live previews.") {
+		t.Fatal("an empty Previews says nothing is live and where failed builds are")
+	}
+	h.exec(t, "UPDATE environments SET head_sha='sha-old', container_id='container-1', image_tag='image-1', last_error_code='unhealthy' WHERE pull_request_id=$1", h.prID)
+	body := h.request(t, "GET", "/previews", "").Body.String()
+	for _, want := range []string{"Live · update failed", "Newer build failed:", "https://pr-7-2s-abcdefgh.preview.example.com"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("a live preview whose update failed lacks %q", want)
+		}
+	}
+	if w := h.request(t, "GET", "/environments?page=2", ""); w.Code != http.StatusMovedPermanently || w.Header().Get("Location") != "/previews?page=2" {
+		t.Fatalf("old links to Environments move to Previews: %d %q", w.Code, w.Header().Get("Location"))
 	}
 }

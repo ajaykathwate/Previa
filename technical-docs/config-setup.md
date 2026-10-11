@@ -651,7 +651,7 @@ marked *command line* are typed before a `make` command instead.
 - **What it is:** the domain every preview address lives under:
   `https://pr-<number>-<repo>-<token>.<PREVIEW_BASE_DOMAIN>`.
 - **Where it's used:** the **Build** buttons, preview addresses on the pull request
-  page, **Environments**, Overview and the PR comment, and the router's
+  page, **Previews**, Overview and the PR comment, and the router's
   certificate. It must not be the dashboard's host or a parent of it.
 - **How to get it (one machine):** use `preview.localtest.me`. Every
   `*.localtest.me` name already points at your own computer, so no DNS is needed.
@@ -797,7 +797,7 @@ marked *command line* are typed before a `make` command instead.
 
 - **Type:** Optional. Default `48`. `0` means previews never expire; at most `8760`.
 - **What it is:** how many hours a preview lives after its latest publication.
-- **Where it's used:** **Expires** on the pull request page and **Environments**,
+- **Where it's used:** **Expires** on the pull request page and **Previews**,
   and the "Preview expired" PR comment. The next build brings it back at the same
   address.
 - **How to get it:** keep `48`, or choose another number of hours.

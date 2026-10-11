@@ -93,7 +93,7 @@ func (pr PR) Diagnosis() Diagnosis {
 	return Diagnose(pr.FailureCode, pr.FailureLog)
 }
 
-// Diagnosis explains a Builds or Environments row's failure, from its
+// Diagnosis explains a Builds or Previews row's failure, from its
 // category alone (rows carry no output).
 func (r ActivityRow) Diagnosis() Diagnosis {
 	if r.Failure == "" {

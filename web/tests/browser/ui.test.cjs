@@ -59,7 +59,7 @@ async function assertNoOverflow() {
 }
 
 test('public home and protected dashboard access', async () => {
-  for (const route of ['/dashboard','/repositories','/builds','/environments','/developer-tools']) {
+  for (const route of ['/dashboard','/repositories','/builds','/previews','/environments','/developer-tools']) {
     assert.equal((await context.request.get(`${origin}${route}`, {maxRedirects:0})).status(),303);
   }
   await page.goto(origin);
@@ -621,11 +621,64 @@ test('a running build follows its log to the current step, with a clock and the 
   }
 });
 
-test('Environments and Builds show addresses, waits and failures, and teardown confirms per row', async () => {
+test('failures need attention for a week, then stay on Builds quietly, and can be dismissed or undone', async () => {
   await login();
+  // Overview: the recent failure is red and can be dismissed; older ones are counted apart, not in red.
+  await page.goto(`${origin}/__fixture/overview?state=busy`);
+  await page.waitForURL(`${origin}/dashboard`);
+  const kpi = page.locator('.ov-kpi', {hasText: 'Needs attention'});
+  assert.match(await kpi.innerText(), /1\s+failed build in the last 7 days/);
+  assert.equal(await kpi.getAttribute('href'), '/builds?failures=attention');
+  const older = page.locator('#ov-panel-builds .ov-row', {hasText: 'Fixture pull request 5'});
+  assert.match(await older.locator('.ov-col-status .badge').getAttribute('class'), /tone-neutral/);
+  assert.match(await older.locator('.ov-col-when').innerText(), /Over 7 days old/);
+  assert.match(await older.locator('.ov-col-reason').getAttribute('class'), /is-quiet/);
+  const recent = page.locator('#ov-panel-builds .ov-row', {hasText: 'Fixture pull request 4'});
+  await recent.locator('summary').click();
+  const dismiss = recent.locator('form.ov-row-dismiss');
+  assert.equal(await dismiss.getAttribute('action'), '/repositories/1/pull-requests/4/failure/dismiss');
+  assert.equal(await dismiss.locator('input[name="revision"]').inputValue(), '3');
+  assert.equal(await dismiss.locator('input[name="return"]').inputValue(), 'overview');
+  assert(await dismiss.getByRole('button', {name: 'Dismiss this failure'}).isVisible());
+  // Builds: filters, a quiet older row, Dismiss per row, and Undo after a dismissal.
+  await page.goto(`${origin}/builds?fixture=rows&failures=older`);
+  assert.equal(await page.locator('.activity-filters a[aria-current="page"]').innerText(), 'Older failures');
+  assert.equal(await page.locator('.activity-filters a', {hasText: 'Needs attention'}).getAttribute('href'), '/builds?failures=attention&page=1');
+  const oldRow = page.locator('.activity-table tr', {hasText: '#5'});
+  assert.match(await oldRow.locator('.badge').getAttribute('class'), /tone-neutral/);
+  assert.match(await oldRow.innerText(), /Over 7 days old/);
+  const rowDismiss = page.getByRole('button', {name: 'Dismiss the failure of fixture-owner/repository-1 #5'});
+  assert.equal(await rowDismiss.locator('xpath=ancestor::form').getAttribute('action'), '/repositories/1/pull-requests/5/failure/dismiss');
+  assert.equal(await rowDismiss.locator('xpath=ancestor::form').locator('input[name="failures"]').inputValue(), 'older');
+  await page.goto(`${origin}/builds?fixture=rows&dismissed=1-4`);
+  assert.match(await page.locator('.activity-notice').innerText(), /Failure dismissed/);
+  assert.equal(await page.locator('.activity-notice form').getAttribute('action'), '/repositories/1/pull-requests/4/failure/restore');
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+  // An empty filter says so and leads back to every build.
+  await page.goto(`${origin}/builds?failures=dismissed`);
+  assert.match(await page.locator('.activity-empty h2').innerText(), /Nothing dismissed/);
+});
+
+test('Previews show what is live with its link, Builds show attempts, and teardown confirms per row', async () => {
+  await login();
+  // The page's former address still works.
   await page.goto(`${origin}/environments?fixture=rows`);
-  const preview = page.getByRole('link', {name: 'Open preview'});
+  await page.waitForURL(url => url.pathname === '/previews' && url.searchParams.get('fixture') === 'rows');
+  assert.equal(await page.locator('h1').innerText(), 'Previews');
+  assert.equal(await page.locator('.app-sidebar a[href="/previews"]').getAttribute('aria-current'), 'page');
+  assert.match(await page.locator('.page-header-text p').innerText(), /What is live now/);
+  const preview = page.getByRole('link', {name: 'Open the preview of fixture-owner/repository-1 #3 in a new tab'});
   assert.equal(await preview.getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
+  assert.equal(await preview.getAttribute('target'), '_blank');
+  // Status is what reviewers care about: live, even while a newer build failed.
+  assert.deepEqual(await page.locator('.activity-table .pr-cell-state .badge').allInnerTexts(), ['Live', 'Live · update failed']);
+  assert.match(await page.locator('.activity-table').innerText(), /Newer build failed: Your app didn't become ready/);
+  // A row is not one big link: clicking it stays here; the title opens the pull request.
+  await page.locator('.activity-table tr', {hasText: '#3'}).locator('.pr-cell-sha').click();
+  assert.equal(new URL(page.url()).pathname, '/previews');
   assert.match(await page.locator('.activity-table').innerText(), /Earlier than the latest commit/);
   assert.match(await page.locator('.activity-table').innerText(), /Your app didn't become ready/);
   assert.equal(await page.locator('.activity-table [title="The app did not become ready."]').count(), 1, 'the recorded sentence stays one hover away');
@@ -637,8 +690,9 @@ test('Environments and Builds show addresses, waits and failures, and teardown c
   await page.getByRole('button', {name: 'Tear down the preview of fixture-owner/repository-1 #3'}).click();
   await page.waitForFunction(() => document.querySelector('#teardown-1-3').matches(':modal'));
   await page.locator('#teardown-1-3').getByRole('button', {name: 'Tear down preview', exact: true}).click();
-  await page.waitForURL(url => url.pathname === '/environments' && url.searchParams.get('page') === '1');
+  await page.waitForURL(url => url.pathname === '/previews' && url.searchParams.get('page') === '1');
   await page.goto(`${origin}/builds?fixture=rows`);
+  assert.match(await page.locator('.page-header-text p').innerText(), /latest attempt to build/);
   assert.match(await page.locator('.activity-table').innerText(), /Waiting for capacity/);
   // Row controls stay clickable above the row's whole-row link.
   await page.getByRole('link', {name: 'Build logs for fixture-owner/repository-1 #4'}).click();
@@ -941,9 +995,9 @@ test('command palette filters destinations, navigates and restores focus',async(
  await page.keyboard.press('Control+k');await page.waitForFunction(()=>document.querySelector('#command-palette').open);
  await page.locator('#command-input').fill('environ');
  assert.equal(await page.locator('[data-command-item]:not([hidden])').count(),1);
- assert.match(await page.locator('[data-command-item][aria-selected=true]').innerText(),/Environments/);
- await page.keyboard.press('Enter');await page.waitForURL(`${origin}/environments`);
- assert.equal(await page.locator('h1').innerText(),'Environments');
+ assert.match(await page.locator('[data-command-item][aria-selected=true]').innerText(),/Previews/);
+ await page.keyboard.press('Enter');await page.waitForURL(`${origin}/previews`);
+ assert.equal(await page.locator('h1').innerText(),'Previews');
  await page.keyboard.press('Control+k');await page.waitForFunction(()=>document.querySelector('#command-palette').open);
  await page.locator('#command-input').fill('zzz-no-match');
  assert.equal(await page.locator('[data-command-empty]').isVisible(),true);
@@ -1280,7 +1334,7 @@ test('every page passes basic accessibility checks', async () => {
   assert.deepEqual(await page.evaluate(audit), [], 'home');
   await login();
   for (const path of ['/dashboard', '/repositories', '/repositories/1', '/repositories/1/pull-requests/3', '/repositories/1/pull-requests/9',
-    '/repositories/1/secrets', '/repositories/1/outbound', '/repositories/1/pull-requests/3/logs', '/builds?fixture=rows', '/environments?fixture=rows', '/faq', '/developer-tools']) {
+    '/repositories/1/secrets', '/repositories/1/outbound', '/repositories/1/pull-requests/3/logs', '/builds?fixture=rows', '/previews?fixture=rows', '/faq', '/developer-tools']) {
     await page.goto(`${origin}${path}`);
     assert.deepEqual(await page.evaluate(audit), [], path);
   }

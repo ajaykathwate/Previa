@@ -218,7 +218,7 @@ The dashboard supports login, installation linking and the accepted manual build
 workflow. Owners need repository mode controls and a way to select a PR and request
 its latest commit. GitHub comments/checks remain the review-facing feedback channel.
 
-Current pages are Overview, Repositories, Builds, Environments and Developer Tools.
+Current pages are Overview, Repositories, Builds, Previews and Developer Tools.
 The workspace uses a "signal" theme (graphite neutrals, a lime accent, light and
 dark modes that follow the OS with a manual toggle, system sans plus monospace for
 commits and branches). A grouped sidebar collapses to an icon rail on medium screens
@@ -254,7 +254,7 @@ and navigation works without JavaScript.
 
 PR discovery, latest/requested/deployed commit views and the owner's Build,
 Build now, Retry, Rebuild and Tear down controls are implemented. Builds and
-Environments show actual saved state (queued and running work, failure reasons,
+Previews show actual saved state (queued and running work, failure reasons,
 preview URL, health and expiry) and link to each PR's **Build logs** page, which
 shows the current attempt's output live over Server-Sent Events (bounded, redacted,
 readable without JavaScript, with Copy and Download). When no worker that can build
@@ -265,8 +265,10 @@ See the [user guide](technical-docs/user-guide.md) for the current browser workf
 
 - **Builds** describes current/latest execution work and its commit/logs, not a
   permanent historical build archive (see 4.5).
-- **Environments** describes the preview deployment: URL, deployed SHA, health,
-  expiry and teardown. A preview can serve an older commit while a newer build runs.
+- **Previews** (formerly Environments) describes what is live: each preview's URL,
+  the commit it serves, health, expiry and teardown. A preview can serve an older
+  commit while a newer build runs. A build that never went live is not a preview:
+  it is on Builds only.
 - All lists/actions are scoped to the logged-in installation owner. Mutations
   require CSRF protection; destructive confirmation uses a modal.
 

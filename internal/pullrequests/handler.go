@@ -16,7 +16,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
 	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
-	environmentpages "github.com/ajaykathwatee/previa/web/pages/environments"
+	previewpages "github.com/ajaykathwatee/previa/web/pages/previews"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -49,10 +49,11 @@ type Handler struct {
 	live    LiveEvents
 	actions *Actions
 	logs    LogTail
+	now     func() time.Time // when failures stop needing attention is measured from
 }
 
 func NewHandler(repo *Repository, sync Refresher, policy Policy, users UserSession, logger *slog.Logger, enabled bool) *Handler {
-	return &Handler{repo: repo, sync: sync, policy: policy, users: users, logger: logger, enabled: enabled}
+	return &Handler{repo: repo, sync: sync, policy: policy, users: users, logger: logger, enabled: enabled, now: time.Now}
 }
 
 // WithLiveUpdates enables the repository event stream. Without it, pages stay
@@ -75,8 +76,11 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 		r.Post("/repositories/{repoID}/policy", h.setPolicy)
 		r.Post("/repositories/{repoID}/pull-requests/{number}/build", h.build)
 		r.Post("/repositories/{repoID}/pull-requests/{number}/teardown", h.teardown)
+		r.Post("/repositories/{repoID}/pull-requests/{number}/failure/dismiss", h.dismissFailure)
+		r.Post("/repositories/{repoID}/pull-requests/{number}/failure/restore", h.restoreFailure)
 		r.Get("/builds", h.activity)
-		r.Get("/environments", h.activity)
+		r.Get("/previews", h.activity)
+		r.Get("/environments", movedToPreviews)
 	})
 }
 func (h *Handler) identity(r *http.Request) (int64, int64, error) {
@@ -279,59 +283,97 @@ func (h *Handler) activity(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	isEnv := r.URL.Path == "/environments"
-	data, err := h.repo.Activity(r.Context(), user, repoID, f.Page, isEnv)
+	previews := r.URL.Path == "/previews"
+	failures := r.URL.Query().Get("failures")
+	if previews && failures != "" || !validFailures(failures) {
+		http.Error(w, "Invalid filter.", http.StatusBadRequest)
+		return
+	}
+	since := AttentionSince(h.now())
+	data, err := h.repo.Activity(r.Context(), user, ActivityQuery{RepoID: repoID, Page: f.Page, Previews: previews, Failures: failures, Since: since})
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	page := pages.Activity{Number: data.Page, Pages: data.Pages, Total: data.Total, RepoID: repoID, Environments: isEnv}
+	page := pages.Activity{Number: data.Page, Pages: data.Pages, Total: data.Total, RepoID: repoID, Previews: previews, Failures: failures,
+		AttentionDays: int(FailureAttentionWindow / (24 * time.Hour))}
+	page.DismissedRepo, page.DismissedNumber = dismissedNotice(r.URL.Query().Get("dismissed"))
 	for _, row := range data.Rows {
-		page.Rows = append(page.Rows, h.activityRow(row, isEnv))
+		page.Rows = append(page.Rows, h.activityRow(row, previews, since))
 	}
 	if page.Number != f.Page {
 		http.Redirect(w, r, page.PageURL(page.Number), http.StatusSeeOther)
 		return
 	}
 	username, _ := h.users.Username(r.Context())
-	if isEnv {
-		templ.Handler(environmentpages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
+	if previews {
+		templ.Handler(previewpages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
 	} else {
 		templ.Handler(buildpages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
 	}
 }
 
+// movedToPreviews keeps old links to /environments working: the page is now
+// called Previews.
+func movedToPreviews(w http.ResponseWriter, r *http.Request) {
+	target := "/previews"
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
+}
+
+// dismissedNotice reads the Builds page's "dismissed=<repo>-<number>", which
+// offers Undo after a dismissal; anything malformed is ignored.
+func dismissedNotice(v string) (int64, int32) {
+	repo, number, ok := strings.Cut(v, "-")
+	if !ok {
+		return 0, 0
+	}
+	r, err1 := strconv.ParseInt(repo, 10, 64)
+	n, err2 := strconv.ParseInt(number, 10, 32)
+	if err1 != nil || err2 != nil || r <= 0 || n <= 0 {
+		return 0, 0
+	}
+	return r, int32(n)
+}
+
 // Highlights are the Overview's latest build requests and published previews,
-// up to limit of each, mapped like the Builds and Environments rows.
+// up to limit of each, mapped like the Builds and Previews rows.
 func (h *Handler) Highlights(ctx context.Context, userID int64, limit int) (builds, previews []pages.ActivityRow, err error) {
-	recent, err := h.repo.Activity(ctx, userID, 0, 1, false)
+	since := AttentionSince(h.now())
+	recent, err := h.repo.Activity(ctx, userID, ActivityQuery{Page: 1, Since: since})
 	if err != nil {
 		return nil, nil, err
 	}
 	for _, row := range recent.Rows[:min(limit, len(recent.Rows))] {
-		builds = append(builds, h.activityRow(row, false))
+		builds = append(builds, h.activityRow(row, false, since))
 	}
-	live, err := h.repo.Activity(ctx, userID, 0, 1, true)
+	live, err := h.repo.Activity(ctx, userID, ActivityQuery{Page: 1, Previews: true, Since: since})
 	if err != nil {
 		return nil, nil, err
 	}
 	for _, row := range live.Rows {
-		if out := h.activityRow(row, true); out.Deployed != "" && out.State != "tearing_down" && len(previews) < limit {
+		if out := h.activityRow(row, true, since); out.Deployed != "" && out.State != "tearing_down" && len(previews) < limit {
 			previews = append(previews, out)
 		}
 	}
 	return builds, previews, nil
 }
 
-// activityRow maps one Builds or Environments row to display data.
-func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool) pages.ActivityRow {
+// activityRow maps one Builds or Previews row to display data. A failed
+// request is highlighted only while it needs attention (see failureAttention).
+func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool, since time.Time) pages.ActivityRow {
 	available := row.Accessible && row.InstallationStatus == "active"
 	out := pages.ActivityRow{RepoID: row.RepoID, Number: row.Number, Name: row.FullName, Title: row.Title, Latest: row.HeadSha,
 		Requested: row.RequestedSha, Deployed: row.DeployedSha, State: row.BuildState, Deadline: timestamp(row.AvailableAt), Available: available,
-		RequestCurrent: row.RequestCurrent, RequestSource: row.RequestSource,
+		RequestCurrent: row.RequestCurrent, RequestSource: row.RequestSource, Revision: row.RequestRevision,
 		StartedAt: timestamp(row.StartedAt), CompletedAt: timestamp(row.CompletedAt), PublishedAt: timestamp(row.PublishedAt)}
 	if deployments {
 		out.State = row.EnvironmentStatus
+	} else {
+		out.Attention = failureAttention(row, since)
+		out.AttentionNote = attentionNote(out.Attention)
 	}
 	live := previewDeployed(row.DeployedSha, row.EnvironmentStatus)
 	if live {
@@ -354,7 +396,7 @@ func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool) pages.Act
 	case deployments && row.EnvironmentStatus == "failed":
 		out.Failure, out.FailureCode = environments.FailureMessage(row.FailureCode), row.FailureCode
 	}
-	// Environments offers teardown for published previews; an unfinished
+	// Previews offers teardown for published previews; an unfinished
 	// build is cancelled from its pull request page.
 	out.Teardown = deployments && live && h.actions != nil && available && row.PrState == "open"
 	if deployments && !live {

@@ -49,7 +49,7 @@ idempotency, deadlines, build slots, capacity waits and recovery after crashes.
 
 - [x] **TC-BLD-REQ-006 · Requests for another owner's pull request are refused**  
   Type: Security · Priority: P1 · Level: Integration (PostgreSQL)  
-  Steps: As a second user, open, build, retry, rebuild and tear down the first owner's PR, and list Builds and Environments.  
+  Steps: As a second user, open, build, retry, rebuild and tear down the first owner's PR, and list Builds and Previews.  
   Expected: 404 for each; no request or teardown is recorded; the other owner's preview is untouched and never listed.  
   Evidence: `internal/pullrequests` › `TestActionsRefuseAnotherOwnersPullRequest`; `internal/environments` › `TestIntentDefaultsOwnershipAndConstraints`
 

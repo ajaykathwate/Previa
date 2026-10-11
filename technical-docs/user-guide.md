@@ -151,7 +151,8 @@ What you see on **Overview**, top to bottom:
   example "set `PREVIEW_BASE_DOMAIN` on the worker").
 - **Your next steps**, with progress, until every step is done.
 - Four tiles: **Linked repositories**, **Open pull requests**, **Live previews** and
-  **Needs attention** (failed requests); each opens where the number comes from.
+  **Needs attention** (builds that failed in the last 7 days and that you have not
+  dismissed); each opens where the number comes from.
 - **Delivery pipeline**: **Open pull requests** → **Waiting or queued** →
   **Building** → **Live previews**, each with its share of open pull requests, plus
   **Failed requests**.
@@ -336,7 +337,7 @@ again**.
 ## 10. Open and share a preview
 
 - Click **Open preview** in the status panel (or **Open** on the pull request list,
-  **Open preview** on **Environments** and **Previews** on Overview). **Copy** puts
+  **Open preview** on **Previews** and on Overview). **Copy** puts
   the address on the clipboard to share with reviewers.
 - The address never changes for that pull request.
 - **This preview serves an earlier commit than the latest one** means a newer
@@ -365,7 +366,7 @@ A **Previa preview** check run is added for each build request on its exact comm
 ## 12. Read build logs
 
 1. Click **Build logs** on the pull request page (or **Logs** on **Builds** /
-   **Environments**).
+   **Previews**).
 2. The status line says **No build requested**, **Waiting**, **Queued**, **Running**
    or how the attempt ended.
 3. New lines appear live while it runs; the view follows the end while you are at
@@ -392,7 +393,7 @@ From the pull request page:
 While a build runs and nothing is deployed yet, the same control reads **Cancel
 build** (dialog **Cancel this build?**): it stops the build and publishes nothing.
 
-From **Environments**: each published preview has **Tear down** with the same
+From **Previews**: each published preview has **Tear down** with the same
 dialog.
 
 Automatically: closing or merging the pull request removes its preview; reopening
@@ -455,24 +456,40 @@ docs_path: /docs
    **Approve**. **Remove** confirms in a dialog. Pull requests from forks never get
    these connections.
 
-## 16. Builds, Environments and Overview
+## 16. Builds, Previews and Overview
+
+**Builds** answers "what happened when Previa tried to build?"; **Previews** answers
+"what is live right now, and at which link?". Each page says so at the top and links
+to the other.
 
 - **Builds**: the current or latest request of each pull request across your
   repositories, most recent first: the pull request's title, the requested commit
   (and the latest one when it differs), status, why it waits or failed, when it
   became eligible, started or finished and how long it took, and **Logs**. It is not
   a history: a new request replaces the row.
-- **Environments**: each preview, most recently published first: title, status
-  (**Building**, **Publishing**, **Running**, **Failed**, **Removing**), the deployed
-  commit (marked when earlier than the latest), **Open preview** with a copy button,
-  when it was published and expires, **Logs**, and **Tear down** for published
-  previews.
+- **Failures that need attention**: a failed build is highlighted in red, and
+  counted on Overview, for 7 days after it failed. After that it stays on Builds in
+  grey ("Over 7 days old") and Overview counts it separately as an older failure.
+  Choose **Dismiss** (on Builds, or under a failed row on Overview) when a failure no
+  longer matters to you: it stops counting until that pull request fails again.
+  **Undo** brings it back. Filter Builds with **All**, **Needs attention**, **Older
+  failures** and **Dismissed**. Closing the pull request, pushing a new commit or a
+  successful rebuild also clears a failure, as before.
+- **Previews** (formerly **Environments**; old links still work): every preview
+  that is live, most recently published first: title, status (**Live**, **Live ·
+  updating** while a newer build runs, **Live · update failed** when a newer build
+  failed and the last good version keeps serving, **Removing**), the commit it serves
+  (marked when earlier than the latest), **Open preview** (opens your app in a new
+  tab) with a copy button, when it was published and expires, **Logs**, and **Tear
+  down**. Clicking a row does not leave the page; the pull request's title opens the
+  pull request. A build that failed before ever going live is not a preview: it is
+  on **Builds**, with why.
 - **Overview**: see [Sign in](#1-sign-in).
 
 ## 17. Everyday navigation
 
 - Sidebar: **Overview**, **Repositories**, **Starter kits**, **Builds**,
-  **Environments**, **Developer tools** (development only) and **FAQ**. On phones, the menu button opens it.
+  **Previews**, **Developer tools** (development only) and **FAQ**. On phones, the menu button opens it.
 - **FAQ** answers common questions as a conversation with Previa; the home page has
   the same answers plus **How it works**, a step-by-step conversation you advance with
   **Ask as Kai** or by choosing one of its seven steps.
@@ -641,9 +658,9 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | F1 | **Tear down preview**, then **Cancel** / Escape | Nothing changes |
 | F2 | **Tear down preview** and confirm | **Removing**, then removed; the address shows "Preview not found or expired"; the comment says removed |
 | F3 | Build again | The preview returns at the same address |
-| F4 | **Environments**, **Tear down** on a row, confirm | Same as F2, back on Environments |
+| F4 | **Previews**, **Tear down** on a row, confirm | Same as F2, back on Previews |
 | F4b | Start a build of a PR with no preview, then **Cancel build** and confirm | The build stops; nothing is published |
-| F4c | **Copy** next to a preview address (PR page, Environments, Overview) | The address is on the clipboard; the button says **Copied** briefly |
+| F4c | **Copy** next to a preview address (PR page, Previews, Overview) | The address is on the clipboard; the button says **Copied** briefly |
 | F5 | Close the PR on GitHub | The preview is removed automatically |
 | F6 | Reopen it (Manual) | Nothing builds until you click |
 | F7 | Set `ENV_TTL_HOURS=1` on the worker, build, wait over an hour | The preview expires; the comment says "Preview expired" |
@@ -708,7 +725,7 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 
 | # | Steps | Expected |
 | --- | --- | --- |
-| J1 | **Ctrl K**, type "env", Enter | Opens Environments; Escape closes the palette |
+| J1 | **Ctrl K**, type "prev" (or "env"), Enter | Opens Previews; Escape closes the palette |
 | J2 | Toggle the theme, reload | The theme stays |
 | J3 | Narrow the window to phone width | Menu button; PR rows become cards; nothing scrolls sideways |
 | J4 | Use Tab and Enter only to open a dialog and cancel it | Focus stays in the dialog; returns to the button afterwards |
@@ -718,6 +735,8 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | J8 | **FAQ** (home page and sidebar): filter **Security**, search "frameworks", open a question | Only matching questions remain; the answer appears after a short pause; `/faq#faq-secrets` opens that answer directly |
 | J9 | **Starter kits**: choose Django, turn on PostgreSQL and a worker, set the port to 70000, then 8001; switch to the **.previewrc.yaml** tab | The files update in place; 70000 shows "1 to fix" and the files keep the stack's default port, 8000; reloading the address shows the same kit |
 | J10 | In **.previewrc.yaml**, change `port: 8001` to `port: eighty`, then turn on Redis; copy, download, then **Reset** | The tab shows a dot; the bar names the problem on line 4; the edit stays after turning on Redis; copy and download give the edited text; Reset brings back the generated file with Redis |
+| J11 | With a build that failed over 7 days ago, open **Overview**, then **Builds** → **Older failures**; **Dismiss** it, then **Undo** | Overview shows "No new failures · 1 older" in grey, not red; the row is grey with "Over 7 days old"; after Dismiss it is gone from the older count and listed under **Dismissed** with **Undo**; Undo counts it again |
+| J12 | With a build that failed before going live and a live preview, open **Previews**; click a row outside its title; open `/environments` | Only the live preview is listed, with **Open preview**; the failed build is on **Builds**; the click stays on Previews; `/environments` opens Previews |
 
 ### K. Operator behaviour you can observe
 

@@ -1,0 +1,9 @@
+package previews
+
+import pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
+
+// Index renders the Previews page: the owner's live previews, supplied by the
+// workspace handler.
+templ Index(username, csrf string, page pages.Activity) {
+	@pages.ActivityIndex(username, csrf, page)
+}

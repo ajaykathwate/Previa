@@ -131,18 +131,32 @@ func TestBrowserRegression(t *testing.T) {
 			sessions.Put(r.Context(), "fixture-overview", r.URL.Query().Get("state"))
 			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		})
-		for _, path := range []string{"/builds", "/environments"} {
+		r.With(auth.RequireUser).Get("/environments", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/previews?"+r.URL.RawQuery, http.StatusMovedPermanently)
+		})
+		for _, path := range []string{"/builds", "/previews"} {
 			r.With(auth.RequireUser).Get(path, func(w http.ResponseWriter, r *http.Request) {
-				activity := prpages.Activity{Environments: r.URL.Path == "/environments", Number: 1, Pages: 1}
+				activity := prpages.Activity{Previews: r.URL.Path == "/previews", Number: 1, Pages: 1, Failures: r.URL.Query().Get("failures"), AttentionDays: 7}
+				if d := r.URL.Query().Get("dismissed"); d == "1-4" {
+					activity.DismissedRepo, activity.DismissedNumber = 1, 4
+				}
 				if r.URL.Query().Get("fixture") == "rows" {
-					activity.Total = 2
+					activity.Total = 3
 					activity.Rows = []prpages.ActivityRow{
 						{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Latest: "latest-commit", Requested: "latest-commit", Deployed: "older-commit", State: "running", Available: true,
 							PreviewURL: "https://pr-3-1-fixture.preview.example.com", ExpiresAt: "2026-10-07T10:00:00Z", OlderPreview: true, Teardown: true, Waiting: "Waiting for capacity"},
-						{RepoID: 1, Number: 4, Name: "fixture-owner/repository-1", Latest: "latest-commit", Requested: "latest-commit", State: "failed", Available: true, Failure: "The app did not become ready.", FailureCode: "unhealthy"},
+						{RepoID: 1, Number: 4, Name: "fixture-owner/repository-1", Latest: "latest-commit", Requested: "latest-commit", State: "failed", Available: true, Failure: "The app did not become ready.", FailureCode: "unhealthy",
+							Revision: 2, Attention: "attention"},
+						{RepoID: 1, Number: 5, Name: "fixture-owner/repository-1", Latest: "old-commit", Requested: "old-commit", State: "failed", Available: true, Failure: "The image build failed.", FailureCode: "build_failed",
+							Revision: 1, Attention: "older", AttentionNote: "Over 7 days old"},
 					}
-					if activity.Environments {
+					if activity.Previews {
+						// #3 is live on an earlier commit; #4's newer build failed while
+						// its earlier version keeps serving.
 						activity.Rows[0].Waiting = ""
+						activity.Rows[1].Deployed, activity.Rows[1].Attention, activity.Rows[1].PreviewURL = "old-commit", "", "https://pr-4-1-fixture.preview.example.com"
+						activity.Rows = activity.Rows[:2]
+						activity.Total = 2
 					}
 				}
 				templ.Handler(prpages.ActivityIndex("design-review", handler.CSRFToken(r.Context()), activity)).ServeHTTP(w, r)
@@ -234,8 +248,8 @@ func TestBrowserRegression(t *testing.T) {
 				} else {
 					sessions.Put(r.Context(), key, "removing")
 				}
-				if r.Form.Get("return") == "environments" {
-					http.Redirect(w, r, "/environments?page=1", http.StatusSeeOther)
+				if r.Form.Get("return") == "previews" {
+					http.Redirect(w, r, "/previews?page=1", http.StatusSeeOther)
 					return
 				}
 				query, _ := url.ParseQuery(r.Form.Get("workspace_query"))
@@ -610,14 +624,17 @@ func fixturePR(r *http.Request, sessions *scs.SessionManager, number int32, avai
 func fixtureOverview(now time.Time) dashboardpages.Summary {
 	at := func(d time.Duration) string { return now.Add(d).UTC().Format(time.RFC3339) }
 	return dashboardpages.Summary{
-		Installations: 2, Repositories: 6, Available: 5, OpenPRs: 12, Waiting: 2, Building: 1, Failed: 1, Live: 4,
+		Installations: 2, Repositories: 6, Available: 5, OpenPRs: 12, Waiting: 2, Building: 1, Failed: 1, FailedOlder: 2, Live: 4, AttentionDays: 7,
 		Workers: dashboardpages.Workers{Discovery: true, Execution: true, Reporting: true, Housekeeping: true},
 		Builds: []prpages.ActivityRow{
 			{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Title: "Fixture pull request 3", Latest: "latest-commit", Requested: "latest-commit",
 				State: "running", RequestCurrent: true, RequestSource: "manual", Available: true, Deadline: at(-3 * time.Minute), StartedAt: at(-2 * time.Minute)},
 			{RepoID: 1, Number: 4, Name: "fixture-owner/repository-1", Title: "Fixture pull request 4", Latest: "latest-commit", Requested: "latest-commit",
 				State: "failed", Failure: "The app did not become ready.", FailureCode: "unhealthy", RequestCurrent: true, RequestSource: "automatic", Available: true,
-				StartedAt: at(-50 * time.Minute), CompletedAt: at(-47 * time.Minute)},
+				StartedAt: at(-50 * time.Minute), CompletedAt: at(-47 * time.Minute), Revision: 3, Attention: "attention"},
+			{RepoID: 1, Number: 5, Name: "fixture-owner/repository-1", Title: "Fixture pull request 5", Latest: "old-commit", Requested: "old-commit",
+				State: "failed", Failure: "The image build failed.", FailureCode: "build_failed", RequestCurrent: true, RequestSource: "manual", Available: true,
+				StartedAt: at(-9 * 24 * time.Hour), CompletedAt: at(-9*24*time.Hour + 2*time.Minute), Revision: 1, Attention: "older", AttentionNote: "Over 7 days old"},
 		},
 		Previews: []prpages.ActivityRow{
 			{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Title: "Fixture pull request 3", Latest: "latest-commit", Deployed: "older-commit",

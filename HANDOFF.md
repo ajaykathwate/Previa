@@ -16,9 +16,9 @@ Last updated: 2026-10-11
 
 ## Run and configuration
 - Go 1.26.9+; make build/test/lint/vuln, river-ui (jobs, :8090), observability-check.
-- PostgreSQL 17 via Compose; make migrate-up applies Goose 20 and River 007. The
-  dev DB was last seen at 19: run make migrate-up before make run-*/make dev.
-  Processes refuse an older schema ("run migrations first").
+  Lint at 0 (gocognit 30, nestif, gocritic, revive): split functions, don't raise limits.
+- PostgreSQL 17 via Compose; make migrate-up applies Goose 21 and River 007 (dev DB at
+  21). Processes refuse an older schema ("run migrations first").
 - Prompt 11 settings: APP_ENV, LOG_LEVEL, INTERNAL_ADDR (127.0.0.1:9090),
   WORKER_INTERNAL_ADDR (:9091), TRUSTED_PROXIES, BACKUP_STATUS_FILE, BUILDS_PAUSED.
   /livez, /readyz, /metrics only on internal listeners; healthcheck/check-config subcommands.
@@ -43,19 +43,22 @@ Last updated: 2026-10-11
   stalls after 5m; mergeability "Unknown" after 8 tries (0019).
 
 ## Dashboard redesign and home page (2026-10-11, committed; docs/21)
-- Header trail (layouts.AppTrail), RepositoryHero, underline tabs, surfaces.css; PR
-  page status card, tracker (progress.go) and diagnosis.go; richer PR list rows.
-- Home page: user-level, hosted, free in early access; the Watch section plays
-  web/static/video (720p cut of root previa-launch.mp4; render sources live outside
-  the repo). Landing page is in its own repo. Proposed, not built: deleting builds.
+- Header trail, RepositoryHero, PR status card, tracker and diagnosis.go; the home page
+  is user-level (hosted, free in early access) with web/static/video; the landing page
+  lives in its own repo. Proposed, not built: deleting builds.
 
-## Starter kits (2026-10-11; 21c57cf committed, editor redesign uncommitted)
+## Starter kits (2026-10-11, committed)
 - /starter-kits (internal/starterkits, web/pages/starterkits, kits.css, ui.js
   initStarterKit; docs/21, DESIGN 5): chips + switch rows beside a sticky two-tab
   editor; edits kept until Reset; POST check of an edited config; Download POSTs text.
 - HTMX settles `class` on id'd elements after a swap: editor state uses data-* attrs.
-  Home page, FAQ, story and diagnosis steps mention Starter kits.
-- Verified: lint 0, make test, browser 48/48 (starter kits scenarios repeated 4x).
+
+## Failure attention + Previews (2026-10-11, uncommitted; docs/21, DESIGN 17)
+- Overview counts and reds a failed request for 7 days (FailureAttentionWindow); older
+  ones grey, counted apart; Dismiss/Undo per attempt (build_failure_dismissals, 0021);
+  Builds filters them (pullrequests/attention.go). Queue tests share the dev schema.
+- Environments page is now Previews (/previews; /environments 301): only environments
+  serving a commit (head_sha); rows not whole-row links; Open preview is the action.
 
 ## Branches and CI (technical-docs/ci-in-action.md, cd-in-action.md)
 - master: default and release branch, changed only through PRs (by convention: the
@@ -75,9 +78,6 @@ Last updated: 2026-10-11
 - Outbound (internal/outbound, web/pages/outbound): <=10 host:port, one per port,
   PREVIEW_OUTBOUND_PORTS (none = off); worker writes allow files on previa-egress
   (outbound_refresh every minute); /etc/hosts maps names to the proxy; forks get none.
-
-## Code quality (2026-10-08)
-- golangci adds gocognit (30), nestif, gocritic, revive; keep lint at 0 by splitting.
 
 ## Regression cycle (2026-10-09, committed e9aac61; test-docs/)
 - test-docs/: 242 cases in 16 files; README has strategy, commands and results.

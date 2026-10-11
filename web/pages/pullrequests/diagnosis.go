@@ -72,7 +72,7 @@ func categoryDiagnosis(code string) Diagnosis {
 	case "capacity":
 		return Diagnosis{Title: "The server had no room for another preview", Stage: "start", Retry: true,
 			Summary: "Every preview slot was in use at that moment.",
-			Steps:   []string{"Tear down previews you no longer need, from their pull requests or Environments.", stepRetry}}
+			Steps:   []string{"Tear down previews you no longer need, from their pull requests or Previews.", stepRetry}}
 	case "unhealthy":
 		return Diagnosis{Title: "Your app didn't become ready", Stage: "start",
 			Summary: "The preview started, but your app never answered its readiness check in time.",

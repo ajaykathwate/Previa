@@ -504,14 +504,14 @@ func (h *Handler) teardown(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	// From the Environments page, return there (a fixed path, never a URL
-	// taken from the form).
-	if r.PostFormValue("return") == "environments" {
+	// From the Previews page, return there (a fixed path, never a URL taken
+	// from the form). "environments" is the page's former name.
+	if ret := r.PostFormValue("return"); ret == "previews" || ret == "environments" {
 		page, err := strconv.ParseInt(r.PostFormValue("page"), 10, 64)
 		if err != nil || page < 1 {
 			page = 1
 		}
-		http.Redirect(w, r, "/environments?page="+strconv.FormatInt(page, 10), http.StatusSeeOther)
+		http.Redirect(w, r, "/previews?page="+strconv.FormatInt(page, 10), http.StatusSeeOther)
 		return
 	}
 	h.finishMutation(w, r, user, id)

@@ -20,7 +20,7 @@ serving preview or anything that is not this instance's.
 
 - [x] **TC-TDN-TD-001 · An owner's teardown is confirmed, owner-only and idempotent**  
   Type: Positive / Security · Priority: P1 · Level: Integration + Browser  
-  Steps: Open the teardown modal and cancel; confirm; post without CSRF and for another owner's PR; repeat; return to Environments with a crafted return value.  
+  Steps: Open the teardown modal and cancel; confirm; post without CSRF and for another owner's PR; repeat; return to Previews with a crafted return value.  
   Expected: Cancel changes nothing and returns focus; the confirmed teardown records a durable route removal and says "Removing"; CSRF-less and foreign requests are refused; a repeat removes nothing twice; the redirect never leaves the site.  
   Evidence: `internal/pullrequests` › `TestTeardownIsConfirmedOwnerOnlyAndIdempotent`; browser › *owner builds once and tears a preview down only after confirming in a modal*
 

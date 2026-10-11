@@ -8,6 +8,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type BuildFailureDismissal struct {
+	UserID        int64
+	PullRequestID int64
+	Revision      int64
+	DismissedAt   pgtype.Timestamptz
+}
+
 type BuildIntent struct {
 	PullRequestID   int64
 	Revision        int64

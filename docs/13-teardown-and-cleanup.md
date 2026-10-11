@@ -131,7 +131,7 @@ in [10](10-preview-runtime.md)). Build logs follow their retention ([08](08-buil
 ## Owner teardown from the dashboard
 
 **Tear down preview** appears on an open PR's page (and **Tear down** on its
-Environments row) while it has a preview or unfinished work. It opens a confirmation
+Previews row) while it has a preview or unfinished work. It opens a confirmation
 dialog; the confirmed form is a CSRF-protected POST to
 `/repositories/{id}/pull-requests/{n}/teardown`. The handler resolves the PR for the
 signed-in owner only (another user's PR is a 404), refuses a closed or merged PR

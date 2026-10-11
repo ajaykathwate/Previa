@@ -190,7 +190,7 @@ func overviewSummary(service *installations.Service, prs *pullrequests.Repositor
 		if err != nil {
 			return dashboardpages.Summary{}, err
 		}
-		delivery, err := prs.Delivery(ctx, userID)
+		delivery, err := prs.Delivery(ctx, userID, pullrequests.AttentionSince(time.Now()))
 		if err != nil {
 			return dashboardpages.Summary{}, err
 		}
@@ -204,9 +204,10 @@ func overviewSummary(service *installations.Service, prs *pullrequests.Repositor
 		}
 		return dashboardpages.Summary{
 			Installations: summary.Installations, Repositories: summary.Repositories, Available: summary.Available,
-			OpenPRs: delivery.OpenPrs, Waiting: delivery.Waiting, Building: delivery.Building, Failed: delivery.Failed, Live: delivery.Live,
-			Workers: dashboardpages.Workers{Discovery: caps.Discovery, Execution: caps.Execution, Reporting: caps.Reporting, Housekeeping: caps.Housekeeping, Paused: caps.Paused},
-			Builds:  builds, Previews: previews,
+			OpenPRs: delivery.OpenPrs, Waiting: delivery.Waiting, Building: delivery.Building, Failed: delivery.Failed, FailedOlder: delivery.FailedOlder, Live: delivery.Live,
+			AttentionDays: int(pullrequests.FailureAttentionWindow / (24 * time.Hour)),
+			Workers:       dashboardpages.Workers{Discovery: caps.Discovery, Execution: caps.Execution, Reporting: caps.Reporting, Housekeeping: caps.Housekeeping, Paused: caps.Paused},
+			Builds:        builds, Previews: previews,
 		}, nil
 	}
 }

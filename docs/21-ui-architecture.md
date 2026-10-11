@@ -43,7 +43,7 @@ Dependencies point one way: feature handler → page package → layouts/compone
 Use import aliases (`authpages`, `dashboardpages`, `prpages`) where names collide.
 Ownership of routes: `internal/dashboard` (home, overview, session, tools, FAQ),
 `internal/installations` (`/repositories`), `internal/pullrequests` (repository and
-PR pages, Builds, Environments, the event stream), `internal/secrets` (a
+PR pages, Builds, Previews, the event stream), `internal/secrets` (a
 repository's Secrets tab).
 
 ## Visual system: the "signal" theme
@@ -72,7 +72,7 @@ repository's Secrets tab).
   between 900 and 1180px; below 900px a drawer opened from the header (a native
   `<details>`, closed by link click, backdrop or Escape).
 - **Navigation groups:** Workspace (Overview, Repositories, Starter kits), Delivery
-  (Builds, Environments), System (Developer tools), Help (FAQ).
+  (Builds, Previews), System (Developer tools), Help (FAQ).
   `layouts.App` receives an explicit `components.NavItem`; titles never decide the
   active item.
 - **Header trail.** The header names only the previous level and the current page
@@ -89,7 +89,7 @@ repository's Secrets tab).
   smooth. PR detail pages do not show the tabs.
 - **Dedicated pages.** `/repositories`, `/repositories/{id}`,
   `/repositories/{id}/pull-requests/{number}` and its `/logs` page are separate,
-  bookmarkable pages. PR detail and every Builds/Environments row link to the logs.
+  bookmarkable pages. PR detail and every Builds/Previews row link to the logs.
   The header trail preserves filters (`q`, `access`, `page` for the
   directory; `pr_q`, `pr_state`, `pr_page` for PRs). Old query-style bookmarks
   redirect after ownership checks.
@@ -150,7 +150,7 @@ current page: labelled title and description, Cancel focused first, Escape/close
 backdrop dismiss without a request, focus returns to the trigger. The caller
 supplies the CSRF-protected form. Logout, enabling Automatic builds, deleting a
 secret or the selected secrets, and tearing a preview down or cancelling an
-unfinished build (on a PR page; per row on Environments) use it.
+unfinished build (on a PR page; per row on Previews) use it.
 Native `commandfor`/`command` attributes open dialogs without JavaScript in
 supporting browsers.
 
@@ -183,7 +183,7 @@ fix, for example a worker without `PREVIEW_BASE_DOMAIN`.
   badge and the tracker, not a full red card. **Technical details** (collapsed)
   holds the exact reason, the recorded sentence, the category, the commit and the
   last twelve lines of the attempt's own output (fenced by generation and revision,
-  so never another attempt's) with error lines highlighted. Builds, Environments
+  so never another attempt's) with error lines highlighted. Builds, Previews
   and the Overview show the same titles, with the recorded sentence as the hover
   title.
 - **Details panel:** the latest commit and its mergeability, the build request (who
@@ -208,17 +208,30 @@ comes from `dashboardpages.Summary`; nothing is simulated.
   and a link; stages with work in progress are marked **Now**; a lane below names
   failed requests. All counts are over open pull requests, and the page says that one
   can count twice (a live preview keeps serving while a newer commit builds).
+- **Failures that need attention.** A failed request needs attention for
+  `pullrequests.FailureAttentionWindow` (7 days) after it finished: only those count
+  in **Needs attention** and turn the failure lane red. Older failures are counted
+  apart in a grey lane ("No new failures · 2 older failures, over 7 days old, not
+  counted") that opens Builds filtered to them. An owner can **Dismiss** one failed
+  attempt (`build_failure_dismissals`, migration 0021: user, pull request and the
+  request revision); it stops counting until the pull request fails again (a new
+  revision), and **Undo** deletes the row. Nothing is hidden for good: Builds lists
+  every failure, and GitHub's check still says the commit failed. The counts
+  (`DeliverySummary`) and the Builds filters (`Activity`) share the same conditions;
+  rows get `Attention` (`attention`, `older`, `dismissed`) and are styled from it
+  (`ActivityRow.StatusTone`).
 - **Stat tiles:** linked repositories, open pull requests, live previews (with
-  coverage) and requests that need attention, each linking to where it comes from.
+  coverage) and failures that need attention, each linking to where it comes from.
 - **Side column:** preview coverage (live previews over open pull requests, an SVG
   ring) and linked repositories (available versus unavailable).
 - **Latest activity** (full width): the newest build requests and live previews as
   two tabs (ARIA tabs with arrow keys; the choice is kept in `sessionStorage`), each a
   table: pull request, commit (or the served commit), status and when (or expiry);
-  failed requests name the failure in plain words. Each row is a `<details>` that
-  expands to how it was requested, eligible, started and finished times and
-  duration, why it waits or failed with the first next step, and links to the pull
-  request and its build logs. Preview rows add publication, expiry and a lifetime
+  failed requests name the failure in plain words (in red only while it needs
+  attention; older and dismissed ones are grey, with why). Each row is a `<details>`
+  that expands to how it was requested, eligible, started and finished times and
+  duration, why it waits or failed with the first next step, links to the pull
+  request and its build logs, and **Dismiss this failure** or **Undo dismiss**. Preview rows add publication, expiry and a lifetime
   bar, with **Open** and **Copy** beside the row. Below 760px the columns fold under
   the title.
 - The worker's state shows only in the header badge and, when nothing can build, the
@@ -310,6 +323,29 @@ Error-looking lines (`error`, `failed`, `fatal`, `panic` as whole words) are tin
 the text is unchanged. **Copy** puts the lines shown on the clipboard and
 **Download** (`…/logs/download`) sends the attempt's whole output as a text file.
 Styles live in `web/styles/logs.css`. See [08](08-build-logs.md).
+
+## Builds and Previews
+
+Two views of delivery, one shared template (`ActivityIndex`) and handler
+(`pullrequests.Handler.activity`), switched by a segmented control:
+
+- **Builds** (`/builds`): each pull request's latest attempt to build a commit
+  (waiting, building, succeeded or failed, and why), most recent first; a new attempt
+  replaces the row. The whole row links to the pull request, the next step after a
+  build. Failures that need attention, older ones and dismissed ones are filtered
+  here (see Overview).
+- **Previews** (`/previews`, formerly **Environments**; `/environments` answers 301):
+  what is live, at which link. It lists only environments that serve a commit
+  (`environments.head_sha` set): a first build that failed before going live
+  reserves an address but is not a preview, so it is on Builds only. Status reads in
+  reviewers' terms (`ActivityRow.PreviewStatus`): **Live**, **Live · updating**
+  (a newer build runs), **Live · update failed** (the last good version keeps
+  serving, with "Newer build failed: …"), **Removing**. The row is not one big link:
+  **Open preview** (new tab) is its action, with Copy, Logs and Tear down; only the
+  title opens the pull request. "Environment" stays the engineering term in code
+  and the database (`internal/environments`).
+- Each page's introduction says what the other is for and links to it; an empty
+  Previews says that failed builds are on Builds.
 
 ## Starter kits
 
@@ -414,8 +450,8 @@ JavaScript, the tracker following progress lines), failed builds (plain title, n
 steps, collapsed technical details, Retry showing **Starting…** then the queued step),
 running builds (the tracker following the log, the clock, the latest line), build
 requests (one per click, no second Build while queued), preview
-teardown confirmed in a modal (PR page and Environments rows, with and without
-JavaScript), unavailable actions, Builds/Environments content, the How it works
+teardown confirmed in a modal (PR page and Previews rows, with and without
+JavaScript), unavailable actions, Builds/Previews content, the How it works
 conversation (one question at a time, stage jumps, start over, reduced motion, stage
 links) and the FAQ (topics, search, empty state, `#faq-…` links, the workspace page and
 palette, signed-out redirect), the Overview (empty and busy workspaces, pipeline
