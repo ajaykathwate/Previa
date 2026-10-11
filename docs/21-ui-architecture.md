@@ -231,8 +231,11 @@ comes from `dashboardpages.Summary`; nothing is simulated.
 ## Public home page
 
 `web/pages/home` (styles in `web/styles/home.css`), in reading order: a hero with an
-example pull request beside its running preview (labelled **Example**), **Why
-Previa** (reviewing before and with Previa, and who it helps), **How it works**,
+example pull request beside its running preview (labelled **Example**), **Watch**
+(the 30-second story video: `preload="none"` with a poster frame so nothing
+downloads until the visitor presses play, never autoplay, a "Read the story
+instead" transcript, and a large play button that `initFilm` adds over the native
+controls), **Why Previa** (reviewing before and with Previa, and who it helps), **How it works**,
 **Features** (build, run, review, control), **Security**, **Built in the open**
 (only what is available today), the FAQ and a call to action. Icons sit on tinted
 `.tile-icon` tiles that read in both themes. Copy stays user-level: what Previa

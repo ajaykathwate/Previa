@@ -282,6 +282,29 @@ test('queue feedback handles pending duplicate failures and expired session', as
   assert.match(await result.innerText(), /session check failed/);
 });
 
+test('the home page story video loads nothing until played and has a transcript', async () => {
+  await page.goto(origin);
+  await page.getByRole('link', {name: /^Watch the story/}).click();
+  assert.equal(new URL(page.url()).hash, '#watch');
+  const video = page.locator('[data-film-video]');
+  assert.equal(await video.getAttribute('preload'), 'none');
+  assert.equal(await video.evaluate(v => v.readyState), 0, 'nothing downloads before play');
+  assert.equal((await context.request.get(`${origin}/static/video/previa-story-poster.jpg`)).status(), 200);
+  const play = page.getByRole('button', {name: /Play the story/});
+  assert(await play.isVisible());
+  assert.equal(await video.evaluate(v => v.controls), false, 'one play button at a time');
+  await play.click();
+  await page.waitForFunction(() => document.querySelector('[data-film]').classList.contains('is-playing'));
+  assert.equal(await play.isVisible(), false);
+  assert.equal(await video.evaluate(v => v.controls), true, 'native controls take over while it plays');
+  await page.locator('.film-transcript summary').click();
+  assert.match(await page.locator('.film-transcript ol').innerText(), /Minutes, not an afternoon/);
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+});
+
 test('home reveals once pauses offscreen and respects reduced motion', async () => {
   await page.goto(origin);
   for (const width of [320, 390, 768, 1024, 1440]) {
@@ -406,6 +429,8 @@ test('content and native confirmation remain usable without JavaScript', async (
     assert.equal(await nativePage.locator('[data-story-outro]').isVisible(), true);
     assert.equal(await nativePage.locator('[data-story-composer]').isVisible(), false);
     assert.equal(await nativePage.locator('[data-faq-tools]').isVisible(), false);
+    assert.equal(await nativePage.locator('[data-film-play]').isVisible(), false);
+    assert.equal(await nativePage.locator('[data-film-video]').getAttribute('controls'), '');
     await nativePage.locator('#faq-secrets summary').click();
     assert.match(await nativePage.locator('#faq-secrets .faq-answer').innerText(), /Encrypted as soon as you save them/);
     await nativePage.goto(`${origin}/auth/github/login`);

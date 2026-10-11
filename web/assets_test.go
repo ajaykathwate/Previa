@@ -61,3 +61,22 @@ func TestBrandAssetsAndFavicon(t *testing.T) {
 		t.Fatalf("/favicon.ico: status=%d type=%q", w.Code, w.Header().Get("Content-Type"))
 	}
 }
+
+func TestStoryVideoIsServedForStreaming(t *testing.T) {
+	h := StaticHandler()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/static/video/previa-story.mp4", nil)
+	r.Header.Set("Range", "bytes=0-1023")
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusPartialContent || w.Body.Len() != 1024 {
+		t.Fatalf("video range response: status=%d bytes=%d", w.Code, w.Body.Len())
+	}
+	if got := w.Header().Get("Content-Type"); got != "video/mp4" {
+		t.Fatalf("video content type: %q", got)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/static/video/previa-story-poster.jpg", nil))
+	if w.Code != http.StatusOK || !strings.HasPrefix(w.Header().Get("Content-Type"), "image/jpeg") {
+		t.Fatalf("poster response: status=%d type=%q", w.Code, w.Header().Get("Content-Type"))
+	}
+}

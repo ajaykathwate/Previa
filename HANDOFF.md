@@ -50,10 +50,10 @@ Last updated: 2026-10-11
   updated time, commit link, one Preview status. Handlers pass existing columns
   only (failure code, html_url, source_updated_at). Button: "Install on GitHub" /
   "Choose repositories on GitHub". Verified: lint 0, make test, browser 45/45.
-- Home page (uncommitted): user-level, hosted, free in early access; "works today"
-  only (no roadmap); FAQ without internals. Must not depend on index.html.
-- The landing page (index.html) moved to its own repository; nothing here uses it.
-  Proposed, not built: more PR detail facts; deleting build attempts.
+- Home page: user-level, hosted, free in early access; "works today" only; FAQ
+  without internals. Watch section plays web/static/video (720p cut of the root
+  previa-launch.mp4; render sources live outside the repo).
+- Landing page moved to its own repo. Proposed, not built: more PR facts; deleting builds.
 
 ## Branches and CI (technical-docs/ci-in-action.md, cd-in-action.md)
 - master: default and release branch, changed only through PRs (by convention: the

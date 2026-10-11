@@ -17,6 +17,7 @@ templ Index(loggedIn bool) {
 		@components.Navbar(loggedIn)
 		<main id="content" tabindex="-1" class="marketing">
 			@hero(loggedIn)
+			@film()
 			@why()
 			@story(loggedIn)
 			@features()
@@ -86,9 +87,12 @@ templ hero(loggedIn bool) {
 				<p class="hero-description reveal delay-2">Previa turns every GitHub pull request into its own live preview: the exact commit, built from your own Dockerfile, running at a private HTTPS link that's posted right on the pull request. Reviewers click, try it and approve with confidence.</p>
 				<div class="hero-actions reveal delay-3">
 					@cta(loggedIn)
-					<a href="#how-it-works" class="text-link hero-secondary">
-						See how it works
-						@components.Arrow()
+					<a href="#watch" class="text-link hero-secondary hero-watch">
+						<span class="hero-watch-icon" aria-hidden="true">
+							@components.PlayIcon()
+						</span>
+						Watch the story
+						<span class="hero-watch-time">0:30</span>
 					</a>
 				</div>
 				<dl class="hero-stats reveal delay-3">
@@ -184,6 +188,56 @@ templ artStep(class, label, value string) {
 		<span>{ label }</span>
 		<code>{ value }</code>
 	</li>
+}
+
+// film is the 30-second story of one review, with and without Previa. It
+// does not play on its own: nothing downloads until the visitor presses play
+// (preload none, a poster frame), and the transcript tells the same story in
+// text. ui.js (initFilm) adds the large play button; without JavaScript the
+// native controls play it.
+templ film() {
+	<section id="watch" class="site-container section-block film-section" aria-labelledby="film-title">
+		<div class="section-heading film-heading" data-scroll-reveal>
+			<span class="eyebrow">Watch</span>
+			<h2 id="film-title">One review, <em>two ways.</em></h2>
+			<p>Thirty seconds on what changes when every pull request comes with a link to the running app.</p>
+		</div>
+		<figure class="film" data-film data-scroll-reveal>
+			<div class="film-frame">
+				<video class="film-video" controls preload="none" playsinline poster="/static/video/previa-story-poster.jpg" aria-label="Previa in 30 seconds: one review, two ways" data-film-video>
+					<source src="/static/video/previa-story.mp4" type="video/mp4"/>
+					<p>Your browser can't play this video. <a href="/static/video/previa-story.mp4">Download it</a> instead.</p>
+				</video>
+				<button type="button" class="film-play" data-film-play hidden>
+					<span class="film-play-badge">
+						<span class="film-play-icon" aria-hidden="true">
+							@components.PlayIcon()
+						</span>
+						Play the story
+						<span class="film-play-time">0:30</span>
+					</span>
+				</button>
+			</div>
+			<figcaption>
+				<details class="film-transcript">
+					<summary>
+						@components.ChevronDownIcon()
+						Read the story instead
+					</summary>
+					<ol>
+						<li>Maya asks Kai to review a pull request. Kai replies: “Sure! Let me set it up first.”</li>
+						<li>Kai pulls the branch, installs everything and sets up a test database. 52 minutes later, the app still won't start: “It worked on Maya's machine…”</li>
+						<li>What if every pull request came with a link to the running app?</li>
+						<li>With Previa, Maya opens a pull request. Previa builds that commit and shares a private link on it.</li>
+						<li>Kai clicks the link and the app is already running. Kai tries the change and approves it.</li>
+						<li>Minutes, not an afternoon. Maya: “That was fast!” Kai: “I didn't even pull the branch.”</li>
+						<li>Designers, QA, backend teams and maintainers all see the real thing.</li>
+						<li>Previa. Review the branch, see it running. Free during early access.</li>
+					</ol>
+				</details>
+			</figcaption>
+		</figure>
+	</section>
 }
 
 // why contrasts reviewing with and without a preview, and names who it helps.

@@ -233,6 +233,58 @@
 }
 .section-heading p { margin: 0; color: var(--text-muted); font-size: 16px; line-height: 1.65; }
 
+/* Watch: the 30-second story. The play button is added by ui.js. */
+.film-section { padding-top: 56px; }
+.film-heading { margin-bottom: 30px; }
+.film { margin: 0; }
+.film-frame { position: relative; overflow: hidden; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 22px; background: #07090c; box-shadow: 0 40px 90px -40px rgb(12 16 21 / .55), 0 0 0 6px color-mix(in oklab, var(--surface) 70%, transparent); }
+.film-video { display: block; width: 100%; height: 100%; background: #07090c; object-fit: cover; }
+.film-play {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: radial-gradient(ellipse 60% 55% at 50% 72%, rgb(7 9 12 / .55), transparent 70%);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.film-play[hidden], .film.is-playing .film-play { display: none; }
+.film-play-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  height: 64px;
+  margin-top: 32%;
+  padding: 0 24px 0 11px;
+  border-radius: 999px;
+  background: #b6f23e;
+  color: #0c1408;
+  font-size: 17px;
+  font-weight: 700;
+  box-shadow: 0 22px 50px -12px rgb(182 242 62 / .5);
+  transition: transform .2s var(--ease-out), box-shadow .2s;
+}
+.film-play-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: #0c1408; color: #b6f23e; }
+.film-play-icon svg { width: 18px; height: 18px; margin-left: 2px; }
+.film-play-time { padding: 2px 9px; border-radius: 999px; background: rgb(12 20 8 / .12); font-family: var(--font-code); font-size: 12.5px; font-weight: 500; }
+.film-play:hover .film-play-badge { transform: scale(1.04); box-shadow: 0 26px 60px -12px rgb(182 242 62 / .6); }
+.film-play:focus-visible { outline: 3px solid var(--ring); outline-offset: -3px; border-radius: 22px; }
+.film-transcript { margin-top: 14px; }
+.film-transcript summary { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 14px; font-weight: 600; list-style: none; cursor: pointer; }
+.film-transcript summary::-webkit-details-marker { display: none; }
+.film-transcript summary svg { width: 15px; height: 15px; transform: rotate(-90deg); transition: transform .2s var(--ease-out); }
+.film-transcript[open] summary svg { transform: none; }
+.film-transcript summary:hover { color: var(--ink); }
+.film-transcript ol { display: grid; gap: 6px; max-width: 760px; margin: 12px 0 0; padding-left: 22px; color: var(--text-muted); font-size: 14.5px; line-height: 1.6; }
+.hero-watch { display: inline-flex; align-items: center; gap: 10px; }
+.hero-watch-icon { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--ink); transition: border-color .15s, background .15s; }
+.hero-watch-icon svg { width: 13px; height: 13px; margin-left: 2px; }
+.hero-watch:hover .hero-watch-icon { border-color: var(--signal-strong); background: var(--signal-soft); }
+.hero-watch-time { padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--text-muted); font-family: var(--font-code); font-size: 12px; font-weight: 500; }
+
 /* A tinted icon tile, readable in both themes. */
 .tile-icon {
   display: grid;
@@ -372,6 +424,11 @@
   .start-card { padding: 48px 20px; border-radius: 20px; }
   .hero-actions { gap: 16px; }
   .hero-cta { width: 100%; }
+  .film-section { padding-top: 40px; }
+  .film-frame { border-radius: 16px; }
+  .film-play-badge { height: 48px; margin-top: 30%; padding: 0 16px 0 7px; font-size: 14.5px; }
+  .film-play-icon { width: 36px; height: 36px; }
+  .film-play-time { display: none; }
   .footer-links { flex-wrap: wrap; gap: 12px 18px; }
 }
 

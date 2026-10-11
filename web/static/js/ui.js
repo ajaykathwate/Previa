@@ -404,6 +404,23 @@
     if (!document.hidden) connect(); else setState('paused');
   }
 
+  // The home page film: a large play button over the poster. Playback starts
+  // only when the visitor asks; at the end the poster returns. Without
+  // JavaScript the native controls play it.
+  function initFilm() {
+    document.querySelectorAll('[data-film]').forEach((film) => {
+      const video = film.querySelector('[data-film-video]');
+      const play = film.querySelector('[data-film-play]');
+      if (!video || !play) return;
+      // The native controls return once it plays, so there is one play button at a time.
+      const idle = () => { film.classList.remove('is-playing'); video.controls = false; play.hidden = false; };
+      idle();
+      play.addEventListener('click', () => { video.play().catch(() => {}); video.focus({preventScroll: true}); });
+      video.addEventListener('play', () => { film.classList.add('is-playing'); video.controls = true; });
+      video.addEventListener('ended', () => { idle(); video.load(); });
+    });
+  }
+
   // Build tracker: the runtime's own progress lines (system lines) say which
   // step a build has reached; any other line is the image build's output.
   // Same rules as DetectStage in web/pages/pullrequests/progress.go.
@@ -1317,6 +1334,7 @@
   initBulkDelete();
   initRefreshDeadlines();
   initStory();
+  initFilm();
   initFAQ();
   initOverview();
 })();
