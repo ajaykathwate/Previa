@@ -17,7 +17,8 @@ user's point of view is in the
   can build, no GitHub access, conflicts, builds paused) is shown **disabled**, with
   a notice beside it that says why and what fixes it, so owners can find the action
   and learn how to enable it. A control that does not apply (building a closed PR)
-  is absent. Unbuilt features are labelled ("Coming next" on the home page).
+  is absent. The public home page describes only what works today, at the level
+  a user needs: no roadmap, no internal stack or hosting details.
 - **Strict Content-Security-Policy.** Every page is served with a per-request nonce
   policy: the theme boot script carries the nonce (and passes it to the style it
   creates), `ui.js` gives it to the speculation rules it injects, and HTMX is
@@ -227,6 +228,17 @@ comes from `dashboardpages.Summary`; nothing is simulated.
   inline styles. `initOverview` adds the tabs, lifetime bars and the updated time;
   without JavaScript both activity lists show and rows still expand.
 
+## Public home page
+
+`web/pages/home` (styles in `web/styles/home.css`), in reading order: a hero with an
+example pull request beside its running preview (labelled **Example**), **Why
+Previa** (reviewing before and with Previa, and who it helps), **How it works**,
+**Features** (build, run, review, control), **Security**, **Built in the open**
+(only what is available today), the FAQ and a call to action. Icons sit on tinted
+`.tile-icon` tiles that read in both themes. Copy stays user-level: what Previa
+does for a pull request, never how it is built or hosted; Previa is presented as a
+hosted service, free during early access.
+
 ## Conversations: How it works and the FAQ
 
 The home page explains Previa as a conversation between **Kai**, a maintainer, and
@@ -235,18 +247,19 @@ page. The building blocks are `components.PreviaAvatar`, `PersonAvatar`, `Previa
 `AskerMessage` and `Typing` (`web/components/conversation.templ`); styles live in
 `web/styles/conversation.css`.
 
-- **How it works** (`web/pages/home/story.*`, `#how-it-works`): seven turns, one per
-  pipeline stage (Discover, Gate, Build, Run, Route,
-  Report, Teardown). Each answer carries an example card (webhook, checks, build log,
-  container, address, PR comment, cleanup) tagged **Example**, so nothing reads as live
-  data. With JavaScript, `initStory` turns the transcript into a fixed-height chat:
+- **How it works** (`web/pages/home/story.*`, `#how-it-works`): "From pull request to
+  preview, in seven steps", one turn per step (Notice, Check, Build, Run, Share,
+  Report, Clean up; anchors keep their earlier ids, such as `#story-route` for Share).
+  Each answer carries an example card (pull request, checks, build log, preview,
+  link, PR comment, cleanup) tagged **Example**, so nothing reads as live data. With JavaScript, `initStory` turns the transcript into a fixed-height chat:
   **Ask as Kai** adds the next question, Previa "types" for under 1.5 s, then answers
   (no pause with reduced motion); the stage rail and **Show the whole conversation**
   jump ahead and move focus to the turn; **Start over** resets. Turns enter the
   `role="log"` region as new nodes, so screen readers hear them. A `#story-<stage>`
   link opens the conversation at that stage. Without JavaScript the whole transcript is
   shown and the rail stages are anchor links.
-- **FAQ** (`web/pages/faq`): 22 questions in four topics, as Go data (`Questions`,
+- **FAQ** (`web/pages/faq`): 22 questions in four topics (Getting started, Builds and
+  previews, Security and secrets, Your code and data), as Go data (`Questions`,
   `Topics`) with answers as templ components, so counts and anchors cannot drift. Each
   question is a native `<details>` whose summary is the asker's bubble: outlined until
   asked, then filled with the asker's avatar, Previa's answer below. `initFAQ` adds topic
@@ -256,8 +269,8 @@ page. The building blocks are `components.PreviaAvatar`, `PersonAvatar`, `Previa
   asks as Kai (`faq.Guide`); the workspace page `/faq` (`faq.Page`, sidebar **Help → FAQ**)
   asks as the signed-in owner, with the account avatar. Signed-out visitors to `/faq` are
   redirected to `/#faq`.
-- **Keeping it true:** the answers are static copy describing the current release.
-  Change an answer in the same change that alters the behaviour it describes.
+- **Keeping it true:** the answers are static, user-level copy describing what works
+  today. Change an answer in the same change that alters the behaviour it describes.
 
 ## Secrets tab
 

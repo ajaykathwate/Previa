@@ -227,7 +227,8 @@ items. Ctrl/⌘ K opens a command palette over the same links. Same-origin page
 changes use cross-document view transitions, and workspace links are prefetched
 on hover where the browser supports speculation rules.
 Overview shows real installation/repository/access counts, a setup checklist
-derived from those counts and a pipeline view marking which stages are connected.
+derived from those counts, where open pull requests are in the delivery pipeline
+and the latest build requests and previews.
 Repositories shows a responsive repository card grid (up to three columns, one on
 phones) inside a 1240px content column. Cards show the repository name, owner,
 access state, open pull requests, live previews, build mode and last sync; search

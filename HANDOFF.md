@@ -50,8 +50,10 @@ Last updated: 2026-10-11
   updated time, commit link, one Preview status. Handlers pass existing columns
   only (failure code, html_url, source_updated_at). Button: "Install on GitHub" /
   "Choose repositories on GitHub". Verified: lint 0, make test, browser 45/45.
-- index.html (root, untracked) is the public landing page; leave it unless asked.
-- Proposed, not built: more PR detail facts; deleting build attempts.
+- Home page (uncommitted): user-level, hosted, free in early access; "works today"
+  only (no roadmap); FAQ without internals. Must not depend on index.html.
+- The landing page (index.html) moved to its own repository; nothing here uses it.
+  Proposed, not built: more PR detail facts; deleting build attempts.
 
 ## Branches and CI (technical-docs/ci-in-action.md, cd-in-action.md)
 - master: default and release branch, changed only through PRs (by convention: the

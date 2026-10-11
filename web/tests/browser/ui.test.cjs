@@ -65,8 +65,11 @@ test('public home and protected dashboard access', async () => {
   await page.goto(origin);
   assert.match(await page.locator('h1').innerText(), /Review the branch/);
   assert.equal(await page.locator('[data-queue-form]').count(), 0);
-  await page.getByRole('link', {name: 'The workflow', exact: true}).click();
-  assert.equal(new URL(page.url()).hash, '#workflow');
+  await page.getByRole('link', {name: 'Why Previa', exact: true}).click();
+  assert.equal(new URL(page.url()).hash, '#why');
+  // The home page states only what works today, without the internal stack.
+  const home = await page.locator('main').innerText();
+  assert.doesNotMatch(home, /coming next|coming soon|self-hosted|PostgreSQL 17, which|River|Traefik|BuildKit/i);
   // The FAQ is public: signed out, /faq is the home page's FAQ section.
   const faq = await context.request.get(`${origin}/faq`, {maxRedirects: 0});
   assert.equal(faq.status(), 303);
@@ -286,12 +289,12 @@ test('home reveals once pauses offscreen and respects reduced motion', async () 
     await assertNoOverflow();
   }
   assert(await page.locator('.scroll-pending').count() > 0);
-  await page.locator('#principles').scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelector('#principles [data-scroll-reveal]').classList.contains('is-visible'));
+  await page.locator('#features').scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelector('#features [data-scroll-reveal]').classList.contains('is-visible'));
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.preview-window')).animationPlayState === 'paused');
   await page.evaluate(() => scrollTo({top: 0, behavior: 'instant'}));
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.preview-window')).animationPlayState === 'running');
-  assert(await page.locator('#principles .is-visible').count() > 0);
+  assert(await page.locator('#features .is-visible').count() > 0);
   await page.emulateMedia({reducedMotion: 'reduce'});
   assert.equal(await page.locator('.preview-window').evaluate(e => getComputedStyle(e).animationName), 'none');
   assert.equal(await page.locator('.scroll-pending').count(), 0);
@@ -311,12 +314,12 @@ test('how it works asks one question at a time and jumps to any stage', async ()
   assert.equal(await next.getAttribute('aria-disabled'), 'true');
   await page.waitForFunction(() => !document.querySelector('[data-story-next]').hasAttribute('aria-disabled'));
   assert(await story.locator('#story-discover [data-story-answer]').isVisible());
-  assert.match(await story.locator('#story-discover').innerText(), /signed webhook/);
-  assert.match(await story.locator('[data-story-stage][aria-current="step"]').innerText(), /^Discover/);
+  assert.match(await story.locator('#story-discover').innerText(), /I pick it up/);
+  assert.match(await story.locator('[data-story-stage][aria-current="step"]').innerText(), /^01\s*Notice/);
   assert.match(await next.innerText(), /when does it actually build/);
   assert(await page.evaluate(() => document.activeElement.matches('[data-story-next]')));
   // A stage reveals every turn up to it and moves focus there.
-  await story.locator('[data-story-stage]', {hasText: 'Route'}).click();
+  await story.locator('[data-story-stage]', {hasText: 'Share'}).click();
   assert.equal(await turns.count(), 5);
   await page.waitForFunction(() => document.activeElement?.id === 'story-route');
   assert.equal(await story.locator('[data-story-count]').innerText(), '5 / 7');
@@ -352,14 +355,14 @@ test('the FAQ answers as a conversation on the home page, from a link and in the
   await item.locator('summary').click();
   assert.equal(await item.evaluate(e => e.classList.contains('is-typing')), true);
   await page.waitForFunction(() => !document.querySelector('#faq-fork-pull-requests').classList.contains('is-typing'));
-  assert.match(await item.locator('.faq-answer .chat-bubble').innerText(), /rootless BuildKit/);
+  assert.match(await item.locator('.faq-answer .chat-bubble').innerText(), /never receive your secrets/);
   // Topics and search narrow the questions; a status line counts them.
   const visible = faq.locator('[data-faq-item]:not([hidden])');
   await faq.getByRole('button', {name: /^Security/}).click();
   assert.equal(await visible.count(), 5);
   assert.deepEqual([...new Set(await visible.evaluateAll(items => items.map(i => i.dataset.topic)))], ['security']);
   await faq.getByRole('button', {name: /^All topics/}).click();
-  await faq.locator('[data-faq-search]').fill('kernel');
+  await faq.locator('[data-faq-search]').fill('frameworks');
   assert.equal(await visible.count(), 1);
   assert.equal(await faq.locator('[data-faq-status]').innerText(), '1 of 22 questions shown.');
   await faq.locator('[data-faq-search]').fill('zzz-nothing');
@@ -397,14 +400,14 @@ test('content and native confirmation remain usable without JavaScript', async (
   try {
     const nativePage = await noJS.newPage();
     await nativePage.goto(origin);
-    assert.equal(await nativePage.locator('#principles .principles-grid').evaluate(e => getComputedStyle(e).opacity), '1');
+    assert.equal(await nativePage.locator('#security .security-grid').evaluate(e => getComputedStyle(e).opacity), '1');
     // How it works is a full transcript, and FAQ questions open natively.
     assert.equal(await nativePage.locator('[data-story-turn]').count(), 7);
     assert.equal(await nativePage.locator('[data-story-outro]').isVisible(), true);
     assert.equal(await nativePage.locator('[data-story-composer]').isVisible(), false);
     assert.equal(await nativePage.locator('[data-faq-tools]').isVisible(), false);
     await nativePage.locator('#faq-secrets summary').click();
-    assert.match(await nativePage.locator('#faq-secrets .faq-answer').innerText(), /AES-256-GCM/);
+    assert.match(await nativePage.locator('#faq-secrets .faq-answer').innerText(), /Encrypted as soon as you save them/);
     await nativePage.goto(`${origin}/auth/github/login`);
     await nativePage.waitForURL(`${origin}/dashboard`);
     await nativePage.goto(`${origin}/repositories?page=2`);

@@ -452,7 +452,7 @@ docs_path: /docs
   tools** (development only) and **FAQ**. On phones, the menu button opens it.
 - **FAQ** answers common questions as a conversation with Previa; the home page has
   the same answers plus **How it works**, a step-by-step conversation you advance with
-  **Ask as Kai** or by choosing a pipeline stage.
+  **Ask as Kai** or by choosing one of its seven steps.
 - **Ctrl K** (**⌘K** on macOS) opens a command palette to jump anywhere.
 - The sun/moon button switches light and dark themes (remembered in this browser).
 - Pages are bookmarkable; Back/Forward keep filters; everything works without
@@ -692,7 +692,7 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | J5 | Disable JavaScript; sync, change mode, build, tear down | All work through normal page loads |
 | J6 | Bookmark a filtered repository list; open it later | Same filters |
 | J7 | Home page, **How it works**: **Ask as Kai** a few times, then choose **Route** | Previa types, then answers each question; choosing a stage shows every answer up to it; **Start over** resets |
-| J8 | **FAQ** (home page and sidebar): filter **Security**, search "kernel", open a question | Only matching questions remain; the answer appears after a short pause; `/faq#faq-secrets` opens that answer directly |
+| J8 | **FAQ** (home page and sidebar): filter **Security**, search "frameworks", open a question | Only matching questions remain; the answer appears after a short pause; `/faq#faq-secrets` opens that answer directly |
 
 ### K. Operator behaviour you can observe
 

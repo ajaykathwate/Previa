@@ -23,7 +23,7 @@ func TestHomeUsesLayout(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("unexpected response: %d %s", w.Code, w.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{"<!doctype html>", "Review the branch.", "/static/htmx.min.js", "/static/css/app.css", "/static/js/ui.js", "Main navigation", "Get started with GitHub", "NOT A LIVE PREVIEW"} {
+	for _, want := range []string{"<!doctype html>", "Review the branch.", "/static/htmx.min.js", "/static/css/app.css", "/static/js/ui.js", "Main navigation", "Get started with GitHub", "Example: a pull request and its live preview"} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Errorf("page missing %q", want)
 		}

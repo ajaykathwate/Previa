@@ -46,9 +46,9 @@ html:not(.js-enabled) .account-popover { animation: none; }
   92%, 100% { color: #6b7480; background: transparent; }
 }
 @keyframes dot-cycle {
-  0%, 8% { border-color: #39424d; background: transparent; box-shadow: none; }
-  14%, 82% { border-color: #b6f23e; background: #b6f23e; box-shadow: 0 0 0 4px rgb(182 242 62 / .14); }
-  92%, 100% { border-color: #39424d; background: transparent; box-shadow: none; }
+  0%, 8% { border-color: #39424d; background: transparent; color: transparent; box-shadow: none; }
+  14%, 82% { border-color: #b6f23e; background: #b6f23e; color: #0c1408; box-shadow: 0 0 0 4px rgb(182 242 62 / .14); }
+  92%, 100% { border-color: #39424d; background: transparent; color: transparent; box-shadow: none; }
 }
 @keyframes url-reveal {
   0%, 62% { opacity: .25; transform: translateY(4px); }
