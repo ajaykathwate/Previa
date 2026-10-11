@@ -42,18 +42,18 @@ Last updated: 2026-10-11
 - UX pass (docs/21): disabled actions say why; secrets editor and .env import; sync
   stalls after 5m; mergeability "Unknown" after 8 tries (0019).
 
-## Dashboard redesign (2026-10-11, uncommitted; UI only, docs/21)
-- Header trail (layouts.AppTrail, components.Crumb), RepositoryHero, underline tabs,
-  web/styles/surfaces.css. Overview: stat tiles, activity table; Workers panel removed.
-- PR page: status card + Details panel; tracker (progress.go, ui.js
-  initBuildProgress); diagnosis.go explains FailureCode. PR list: author, branch,
-  updated time, commit link, one Preview status. Handlers pass existing columns
-  only (failure code, html_url, source_updated_at). Button: "Install on GitHub" /
-  "Choose repositories on GitHub". Verified: lint 0, make test, browser 45/45.
-- Home page: user-level, hosted, free in early access; "works today" only; FAQ
-  without internals. Watch section plays web/static/video (720p cut of the root
-  previa-launch.mp4; render sources live outside the repo).
-- Landing page moved to its own repo. Proposed, not built: more PR facts; deleting builds.
+## Dashboard redesign and home page (2026-10-11, committed; docs/21)
+- Header trail (layouts.AppTrail), RepositoryHero, underline tabs, surfaces.css; PR
+  page status card, tracker (progress.go) and diagnosis.go; richer PR list rows.
+- Home page: user-level, hosted, free in early access; the Watch section plays
+  web/static/video (720p cut of root previa-launch.mp4; render sources live outside
+  the repo). Landing page is in its own repo. Proposed, not built: deleting builds.
+
+## Starter kits (2026-10-11, uncommitted; an addition not in DESIGN.md)
+- /starter-kits (internal/starterkits, web/pages/starterkits, kits.css; docs/21, user
+  guide 5): 10 stacks; HTMX swaps one GET form; Dockerfile + .previewrc.yaml checked
+  by repoconfig.ParseFor (internal/app/starterkits.go); versions from worker caps.
+- kits_test parses every stack x service x command; lint 0, make test, browser 48/48.
 
 ## Branches and CI (technical-docs/ci-in-action.md, cd-in-action.md)
 - master: default and release branch, changed only through PRs (by convention: the

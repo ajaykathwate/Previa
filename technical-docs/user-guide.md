@@ -26,6 +26,8 @@ and a checklist to test it all by hand, including the edge cases. Labels in
   or when GitHub access is removed.
 - **Repository secrets**: values your previews need (sandbox API keys), stored
   encrypted and never shown again.
+- **Starter kits**: pick your stack and what it uses, and Previa writes the
+  `Dockerfile` and `.previewrc.yaml` your repository needs, ready to copy.
 
 ## The journey at a glance
 
@@ -237,7 +239,22 @@ To add or remove repositories later, use **Choose repositories on GitHub**.
 
 ## 5. Prepare a repository for previews
 
-At the repository root (on the commit you want to preview):
+The quickest start is **Starter kits** in the sidebar:
+
+1. Choose your stack: Next.js, React + Vite, Node.js API, Django, FastAPI, Ruby on
+   Rails, Go, Spring Boot or Laravel. Choose **Own Dockerfile** if you already have
+   one; you then get only `.previewrc.yaml`.
+2. Turn on what your app uses: **PostgreSQL** (sets `DATABASE_URL`), **Redis** (sets
+   `REDIS_URL`), **Run migrations first**, **Run a background worker** and **Link API
+   docs**. Each command has ready-made choices or **My own command…**.
+3. Open **Advanced** to change the port, health check path or preview size.
+4. The files update as you choose. **Passes Previa's checks** means a build will
+   accept them; otherwise each problem is named. **Copy** or **Download** each file,
+   then read **Check in your app** for anything your code must do (for example,
+   allowing the preview's address).
+
+Or write the files yourself. At the repository root (on the commit you want to
+preview):
 
 1. A `Dockerfile` that builds and starts your app.
 2. A `.previewrc.yaml`, for example:
@@ -448,8 +465,8 @@ docs_path: /docs
 
 ## 17. Everyday navigation
 
-- Sidebar: **Overview**, **Repositories**, **Builds**, **Environments**, **Developer
-  tools** (development only) and **FAQ**. On phones, the menu button opens it.
+- Sidebar: **Overview**, **Repositories**, **Starter kits**, **Builds**,
+  **Environments**, **Developer tools** (development only) and **FAQ**. On phones, the menu button opens it.
 - **FAQ** answers common questions as a conversation with Previa; the home page has
   the same answers plus **How it works**, a step-by-step conversation you advance with
   **Ask as Kai** or by choosing one of its seven steps.
@@ -693,6 +710,7 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | J6 | Bookmark a filtered repository list; open it later | Same filters |
 | J7 | Home page, **How it works**: **Ask as Kai** a few times, then choose **Route** | Previa types, then answers each question; choosing a stage shows every answer up to it; **Start over** resets |
 | J8 | **FAQ** (home page and sidebar): filter **Security**, search "frameworks", open a question | Only matching questions remain; the answer appears after a short pause; `/faq#faq-secrets` opens that answer directly |
+| J9 | **Starter kits**: choose Django, turn on PostgreSQL and a worker, set the port to 70000, then 8001; copy and download both files | The files update in place; 70000 shows "1 to fix" and the files keep the stack's default port, 8000; the copied and downloaded files match the page; reloading the address shows the same kit |
 
 ### K. Operator behaviour you can observe
 

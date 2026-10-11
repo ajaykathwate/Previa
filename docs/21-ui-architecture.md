@@ -71,8 +71,8 @@ repository's Secrets tab).
 - **Responsive sidebar.** Full grouped sidebar at 1180px and wider; an icon rail
   between 900 and 1180px; below 900px a drawer opened from the header (a native
   `<details>`, closed by link click, backdrop or Escape).
-- **Navigation groups:** Workspace (Overview, Repositories), Delivery (Builds,
-  Environments), System (Developer tools), Help (FAQ).
+- **Navigation groups:** Workspace (Overview, Repositories, Starter kits), Delivery
+  (Builds, Environments), System (Developer tools), Help (FAQ).
   `layouts.App` receives an explicit `components.NavItem`; titles never decide the
   active item.
 - **Header trail.** The header names only the previous level and the current page
@@ -311,6 +311,46 @@ the text is unchanged. **Copy** puts the lines shown on the clipboard and
 **Download** (`…/logs/download`) sends the attempt's whole output as a text file.
 Styles live in `web/styles/logs.css`. See [08](08-build-logs.md).
 
+## Starter kits
+
+`/starter-kits` (`internal/starterkits`, templates in `web/pages/starterkits`, styles
+in `web/styles/kits.css`) writes a `Dockerfile` and `.previewrc.yaml` for one of ten
+stacks: Next.js, React + Vite (static), Node.js API, Django, FastAPI, Ruby on Rails,
+Go, Spring Boot, Laravel, or **Own Dockerfile** (only `.previewrc.yaml`). The page is
+one plain GET form beside the files: stack cards, PostgreSQL and Redis switches with
+version chips, migrations, a background worker and a docs link (each with ready-made
+commands or **My own command…**), and **Advanced** (port, health check path, preview
+size and a stack detail such as the Django project package).
+
+- **One form, swapped whole.** With JavaScript, every change sends the form with
+  `hx-get` and swaps `#kit` (`hx-select`), with `#kit-status` out of band so screen
+  readers hear "Files updated: …"; typing waits 500 ms. The address follows the
+  form (`hx-replace-url`), so a kit is shareable. Without JavaScript, **Update
+  files** reloads the same page. The hidden `from` field tells the server the stack
+  changed: the new stack's defaults are taken, keeping services, the switches and
+  the preview size.
+- **Checked like a build.** `starterkits.Generate` corrects and reports bad choices
+  (port, paths, a version the server does not offer, shell syntax in a Go image
+  without a shell); the server then parses the YAML with `repoconfig.ParseFor`, the
+  build's own parser (`internal/app/starterkits.go`). The badge says **Passes
+  Previa's checks** or **N to fix**, with each problem named above the files and
+  beside its field. A unit test parses every stack × service × command combination.
+- **Offered versions are live.** Service versions come from the running worker's
+  catalog (`workers.Reader`), or Previa's default catalog when none that builds is
+  running; the hint under the services says which.
+- **Code you can copy exactly.** **Copy** uses the file itself; **Download**
+  (`/starter-kits/download/{dockerfile|previewrc}?…`) regenerates it from the same
+  query. The highlighted body is written in Go (`code()` in `highlight.go`), not the
+  template, so no template whitespace reaches the text, and line numbers live in a
+  separate gutter, so selecting the code copies blank lines and nothing else.
+- **Runtime rules built in.** Dockerfiles keep caches and storage in `/tmp`, bind
+  `0.0.0.0` and expose the chosen port. Spring Boot and Laravel get a small
+  `preview-env` entrypoint that maps `DATABASE_URL`/`PG*` and `REDIS_URL` to the
+  names the framework reads; setup and processes call it too, since they replace the
+  entrypoint. Per-stack notes (**Check in your app**) and **Need something else?**
+  cover secrets, other databases (via Outbound), plain settings, more workers and
+  seed data.
+
 ## Preview unavailable page
 
 `web/pages/routing/unavailable.templ` is the public page the router redirects unknown
@@ -376,4 +416,5 @@ lifetime, both lists without JavaScript), reduced motion and no-JavaScript flows
 | View transitions + prefetch, not `hx-boost` | Smooth navigation while keeping real document loads and no-JS behaviour. | Effects only in supporting browsers. |
 | Command palette as a layer over links | Faster navigation for keyboard users without a second navigation model. | Duplicate entry points to keep in sync. |
 | System fonts, no CDNs | Self-hosted, private, fast first paint. | Less typographic control. |
+| Starter kits generated on the server from one form | Every kit passes the build's own parser; works without JavaScript; one address per kit. | A round trip per change (small, and replaced if superseded). |
 | SSE invalidation, refetch via GET | No polling; authorization stays in ordinary handlers ([20](20-realtime-updates.md)). | One connection per open page. |

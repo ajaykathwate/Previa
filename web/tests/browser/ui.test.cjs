@@ -1285,3 +1285,69 @@ test('every page passes basic accessibility checks', async () => {
     assert.deepEqual(await page.evaluate(audit), [], path);
   }
 });
+
+test('starter kits write both files for the chosen stack, update in place and copy or download them',async()=>{
+ await login();
+ await page.locator('.app-sidebar a[href="/starter-kits"]').click();await page.waitForURL(`${origin}/starter-kits`);
+ assert.equal(await page.locator('.app-sidebar a[href="/starter-kits"]').getAttribute('aria-current'),'page');
+ assert.equal(await page.locator('h1').innerText(),'Starter kits');
+ const code=name=>page.locator(`.kit-file[aria-label="${name}"] .kit-code code`);
+ assert.match(await code('.previewrc.yaml').innerText(),/^port: 3000/m);
+ assert.match(await code('Dockerfile').innerText(),/^FROM node:/m);
+ assert.match(await page.locator('.kit-valid').innerText(),/Passes Previa's checks/);
+ // Choosing a stack swaps in its own defaults and keeps the address shareable.
+ await page.locator('.kit-stack',{hasText:'Django'}).click();
+ await page.waitForURL(url=>url.searchParams.get('stack')==='django');
+ await page.waitForFunction(()=>/^port: 8000/m.test(document.querySelector('.kit-file[aria-label=".previewrc.yaml"] .kit-code code').innerText));
+ assert(await page.locator('input[name="stack"][value="django"]').evaluate(e=>e.checked));
+ await page.getByRole('switch',{name:/^Redis/}).check();
+ await page.waitForFunction(()=>/^\s+redis:/m.test(document.querySelector('.kit-file[aria-label=".previewrc.yaml"] .kit-code code').innerText));
+ assert.match(await page.locator('#kit-status').innerText(),/updated/i);
+ // A custom worker command with shell syntax runs through sh -c; typing keeps focus.
+ await page.getByRole('switch',{name:/^Run a background worker/}).check();
+ await page.locator('#kit-worker-with').waitFor();
+ await page.locator('#kit-worker-with').selectOption('custom');
+ const custom=page.locator('#kit-worker-cmd');await custom.waitFor();
+ await custom.fill('celery -A mysite worker && echo done');
+ await page.waitForFunction(()=>/"sh", "-c", "celery -A mysite worker && echo done"/.test(document.querySelector('.kit-file[aria-label=".previewrc.yaml"] .kit-code code').innerText));
+ assert(await page.locator('#kit-worker-cmd').evaluate(e=>e===document.activeElement),'typing keeps focus in the command');
+ // Out-of-range values are reported, never written.
+ await page.locator('.kit-advanced summary').click();
+ await page.locator('#kit-port').fill('70000');
+ await page.waitForFunction(()=>/1 to fix/.test(document.querySelector('.kit-valid').innerText));
+ assert.match(await page.locator('.kit-problems').innerText(),/port/i);
+ assert.match(await code('.previewrc.yaml').innerText(),/^port: 8000/m);
+ await page.locator('#kit-port').fill('8001');
+ await page.waitForFunction(()=>/^port: 8001/m.test(document.querySelector('.kit-file[aria-label=".previewrc.yaml"] .kit-code code').innerText));
+ // Copy gives the exact file; download names it.
+ const yaml=await page.locator('.kit-file[aria-label=".previewrc.yaml"] .copy-button').getAttribute('data-copy');
+ assert.equal(await code('.previewrc.yaml').innerText(),yaml.replace(/\n$/,''),'the page shows exactly the file, blank lines included');
+ await context.grantPermissions(['clipboard-read','clipboard-write'],{origin});
+ await page.getByRole('button',{name:'Copy .previewrc.yaml',exact:true}).click();
+ assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),yaml);
+ const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('link',{name:'Download Dockerfile',exact:true}).click()]);
+ assert.equal(download.suggestedFilename(),'Dockerfile');
+ assert.match(await (await context.request.get(download.url())).text(),/EXPOSE 8001/);
+ // A static site needs no services, setup or worker.
+ await page.locator('.kit-stack',{hasText:'Vite'}).click();
+ await page.waitForFunction(()=>document.querySelector('.kit-quiet'));
+ assert.doesNotMatch(await code('.previewrc.yaml').innerText(),/services:|setup:|processes:/);
+ for(const width of [390,820]){await page.setViewportSize({width,height:900});await assertNoOverflow();}
+});
+
+test('starter kits work without JavaScript and need a signed-in user',async()=>{
+ assert.equal((await context.request.get(`${origin}/starter-kits`,{maxRedirects:0})).status(),303);
+ const noJS=await browser.newContext({javaScriptEnabled:false});
+ try {
+  const plain=await noJS.newPage();
+  await plain.goto(`${origin}/auth/github/login`);await plain.waitForURL(`${origin}/dashboard`);
+  await plain.goto(`${origin}/starter-kits`);
+  await plain.locator('.kit-stack',{hasText:'Ruby on Rails'}).click();
+  await plain.getByRole('switch',{name:/^PostgreSQL/}).check();
+  await plain.getByRole('button',{name:'Update files',exact:true}).click();
+  await plain.waitForURL(url=>url.searchParams.get('stack')==='rails');
+  const config=await plain.locator('.kit-file[aria-label=".previewrc.yaml"] .kit-code code').innerText();
+  assert.match(config,/^port: 3000/m);assert.match(config,/postgres: 17 /);assert.match(config,/health_check_path: \/up/);
+  assert.match(await plain.locator('.kit-file[aria-label="Dockerfile"] .kit-code code').innerText(),/libpq-dev/);
+ } finally {await noJS.close();}
+});

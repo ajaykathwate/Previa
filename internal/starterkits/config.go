@@ -1,0 +1,111 @@
+package starterkits
+
+import (
+	"encoding/json"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+// commentColumn aligns the inline comments that explain each key.
+const commentColumn = 30
+
+// renderConfig writes .previewrc.yaml with a short comment on every key. The
+// keys and value formats are the ones Previa's own parser accepts; a test
+// runs every kit through it.
+func renderConfig(s Stack, c Choices, setup, worker []string, workerName string) string {
+	var b strings.Builder
+	b.WriteString("# .previewrc.yaml: how Previa runs this repository's previews.\n")
+	b.WriteString("# Starter kit: " + s.Name + ".\n\n")
+	if s.OwnFile && c.Detail != "Dockerfile" {
+		entry(&b, "dockerfile: "+scalar(c.Detail), "your Dockerfile, from the repository root")
+	}
+	entry(&b, "port: "+strconv.Itoa(c.Port), "your app listens here, on 0.0.0.0")
+	if c.Health != "" {
+		entry(&b, "health_check_path: "+scalar(c.Health), "ready once this answers 200 to 399")
+	} else {
+		b.WriteString("# health_check_path: /health   # optional; else Previa waits for the port\n")
+	}
+	entry(&b, "resource_tier: "+c.Tier, "small, standard or large")
+	if c.Postgres != "" || c.Redis != "" {
+		b.WriteString("\n")
+		entry(&b, "services:", "fresh and empty for every preview")
+		if c.Postgres != "" {
+			entry(&b, "  postgres: "+c.Postgres, "sets DATABASE_URL and PGHOST, PGUSER…")
+		}
+		if c.Redis != "" {
+			entry(&b, "  redis: "+c.Redis, "sets REDIS_URL")
+		}
+	}
+	if len(setup) > 0 {
+		b.WriteString("\n# Runs once, after the services are ready and before the app.\n")
+		b.WriteString("setup: " + flow(setup) + "\n")
+	}
+	if len(worker) > 0 {
+		b.WriteString("\n")
+		entry(&b, "processes:", "up to 3, from the same image")
+		b.WriteString("  - name: " + workerName + "\n")
+		b.WriteString("    command: " + flow(worker) + "\n")
+	}
+	if c.Docs && c.DocsPath != "" {
+		b.WriteString("\n")
+		entry(&b, "docs_path: "+scalar(c.DocsPath), "linked from the pull request")
+	}
+	b.WriteString("\n# Plain settings only. Keep API keys and passwords in Secrets.\n")
+	b.WriteString("# env:\n#   - FEATURE_FLAGS=preview\n")
+	return b.String()
+}
+
+// entry writes one line with its comment aligned.
+func entry(b *strings.Builder, line, comment string) {
+	pad := commentColumn - len([]rune(line))
+	if pad < 2 {
+		pad = 2
+	}
+	b.WriteString(line + strings.Repeat(" ", pad) + "# " + comment + "\n")
+}
+
+var plainScalar = regexp.MustCompile(`^[A-Za-z0-9/._-]+$`)
+
+// scalar writes a path or name plainly when YAML reads it unchanged, and
+// quoted otherwise.
+func scalar(s string) string {
+	if plainScalar.MatchString(s) {
+		return s
+	}
+	return quote(s)
+}
+
+// flow writes argv as a YAML flow sequence of double-quoted strings. JSON
+// string escapes are valid YAML, so any argument round-trips.
+func flow(argv []string) string {
+	quoted := make([]string, len(argv))
+	for i, arg := range argv {
+		quoted[i] = quote(arg)
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
+}
+
+func quote(s string) string {
+	var b strings.Builder
+	e := json.NewEncoder(&b)
+	e.SetEscapeHTML(false) // keep && and < readable
+	_ = e.Encode(s)        // a string always encodes
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// notesFor lists what to check in the app itself: what Previa provides,
+// then the stack's own advice.
+func notesFor(s Stack, c Choices) []string {
+	var notes []string
+	if c.Postgres != "" {
+		notes = append(notes, "Your app, setup and processes get DATABASE_URL (and PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE). Each preview starts with an empty database: seed it in the setup command if reviewers need data.")
+	}
+	if c.Redis != "" {
+		notes = append(notes, "They also get REDIS_URL for Redis.")
+	}
+	if s.notes != nil {
+		notes = append(notes, s.notes(c)...)
+	}
+	return notes
+}

@@ -27,6 +27,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/secrets"
+	"github.com/ajaykathwatee/previa/internal/starterkits"
 	"github.com/ajaykathwatee/previa/internal/webhooks"
 	"github.com/ajaykathwatee/previa/web"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
@@ -107,12 +108,18 @@ type serverFeatures struct {
 	summary       dashboard.SummaryReader
 	environments  *environments.Repository
 	capabilities  *workers.Reader
+	kits          *starterkits.Handler
 }
 
 func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
 	f := &serverFeatures{capabilities: workers.NewReader(pool)}
 	f.sessions = auth.NewSessionManager(store, strings.HasPrefix(strings.ToLower(cfg.AppBaseURL), "https://"), logger)
 	f.auth = auth.NewHandler(cfg, f.sessions, auth.NewRepository(pool), auth.NewGitHubOAuth(cfg), logger)
+	kits, err := newStarterKits(f.auth, f.capabilities, logger)
+	if err != nil {
+		return nil, err
+	}
+	f.kits = kits
 	producer, err := queue.NewProducer(pool, logger)
 	if err != nil {
 		return nil, err
@@ -279,6 +286,7 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 		f.secrets.Mount(r, auth.RequireUser)
 		f.outbound.Mount(r, auth.RequireUser)
 		f.logs.Mount(r, auth.RequireUser)
+		f.kits.Mount(r, auth.RequireUser)
 		if !cfg.Production() {
 			dashboard.MountPing(r, f.pings, auth.RequireUser, logger)
 		}

@@ -7,6 +7,7 @@ const (
 	NavNone         NavItem = ""
 	NavOverview     NavItem = "overview"
 	NavRepositories NavItem = "repositories"
+	NavStarterKits  NavItem = "starter-kits"
 	NavEnvironments NavItem = "environments"
 	NavBuilds       NavItem = "builds"
 	NavTools        NavItem = "tools"

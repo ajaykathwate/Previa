@@ -14,6 +14,7 @@ templ CommandPalette() {
 				<p class="command-group-label" aria-hidden="true">Navigate</p>
 				@CommandItem("cmd-overview", "/dashboard", "", "Overview", "Workspace summary", "home dashboard summary", OverviewIcon())
 				@CommandItem("cmd-repositories", "/repositories", "", "Repositories", "Connected sources", "repos sources github", RepositoryIcon())
+				@CommandItem("cmd-starter-kits", "/starter-kits", "", "Starter kits", "Dockerfile and .previewrc.yaml for your stack", "templates dockerfile previewrc yaml setup config generate", KitIcon())
 				@CommandItem("cmd-builds", "/builds", "", "Builds", "Current build requests", "build intents queue", BuildIcon())
 				@CommandItem("cmd-environments", "/environments", "", "Environments", "Deployment state", "previews deployments", EnvironmentIcon())
 				@CommandItem("cmd-tools", "/developer-tools", "", "Developer tools", "Queue diagnostics", "ping river worker queue", TerminalIcon())

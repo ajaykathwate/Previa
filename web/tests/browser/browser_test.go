@@ -30,6 +30,7 @@ import (
 	pr "github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/secrets"
+	"github.com/ajaykathwatee/previa/internal/starterkits"
 	"github.com/ajaykathwatee/previa/web"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
 	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
@@ -112,6 +113,9 @@ func TestBrowserRegression(t *testing.T) {
 			Mount(r, auth.RequireUser)
 		// The Overview shows an empty workspace until a test asks for a busy one
 		// (GET /__fixture/overview?state=busy), kept in the session.
+		// Starter kits with Previa's default service versions and no worker.
+		starterkits.NewHandler(handler, nil, starterkits.Offer{Postgres: []string{"17", "16"}, Redis: []string{"8", "7"}}, nil, logger).
+			Mount(r, auth.RequireUser)
 		dashboard.MountWithSummary(r, handler, auth.RequireUser, dashboard.Options{
 			DeveloperTools: true, Identity: handler.UserIDs,
 			Summary: func(ctx context.Context, _ int64) (dashboardpages.Summary, error) {
