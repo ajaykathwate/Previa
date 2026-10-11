@@ -16,9 +16,15 @@ Git-ignored, embedded at Go build time, and served at `/static/css/app.css`.
 `favicon-32.png` (also served at `/favicon.ico`), `apple-touch-icon.png`, and
 downloadable PNGs: `previa-mark.png` / `previa-mark-on-dark.png` (512 px mark) and
 `previa-logo.png` / `previa-logo-on-dark.png` (mark and wordmark, transparent, for
-light and dark backgrounds). They share the geometry of `components.BrandMark`;
+light and dark backgrounds), and `previa-linkedin-cover.png` (1128 × 191, LinkedIn's
+company cover size) with `previa-linkedin-cover@2x.png` (2256 × 382, sharper on
+high-resolution screens), in the light theme. They share the geometry of `components.BrandMark`;
 the wordmark is set in Inter Bold. Download them from the repository or from
 `/static/brand/<file>` on a running dashboard.
 `js/ui.js` is the one first-party script: small initializers for navigation,
 dialogs, live updates and build logs that enhance working server-rendered pages.
 Add behaviour there only when a page actually needs it.
+`video/previa-story.mp4` (720p, H.264 and AAC) and `video/previa-story-poster.jpg`
+are the home page's 30-second story, a smaller cut of the 1080p launch video
+(`previa-launch.mp4` at the repository root). The static handler serves `.mp4`
+as `video/mp4` with byte ranges, so browsers can stream and seek it.
