@@ -350,9 +350,9 @@ func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool) pages.Act
 		if row.FailureCurrent {
 			code = row.FailureCode
 		}
-		out.Failure = environments.FailureMessage(code)
+		out.Failure, out.FailureCode = environments.FailureMessage(code), code
 	case deployments && row.EnvironmentStatus == "failed":
-		out.Failure = environments.FailureMessage(row.FailureCode)
+		out.Failure, out.FailureCode = environments.FailureMessage(row.FailureCode), row.FailureCode
 	}
 	// Environments offers teardown for published previews; an unfinished
 	// build is cancelled from its pull request page.

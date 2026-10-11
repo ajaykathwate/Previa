@@ -202,7 +202,7 @@ func (h *Handler) describeFailure(ctx context.Context, pr *pages.PR, row dbgen.O
 		if row.FailureCurrent {
 			code = row.FailureCode
 		}
-		pr.Failure = environments.FailureMessage(code)
+		pr.Failure, pr.FailureCode = environments.FailureMessage(code), code
 		if h.logs != nil && row.EnvironmentID > 0 {
 			lines, err := h.logs.Tail(ctx, row.EnvironmentID, row.Generation, row.RequestRevision.Int64, failureLogLines)
 			if err != nil {
@@ -212,7 +212,7 @@ func (h *Handler) describeFailure(ctx context.Context, pr *pages.PR, row dbgen.O
 			pr.FailureLog = lines
 		}
 	case row.EnvironmentStatus == environments.StatusFailed && row.FailureCode == "preview_missing":
-		pr.Failure = environments.FailureMessage(row.FailureCode)
+		pr.Failure, pr.FailureCode = environments.FailureMessage(row.FailureCode), row.FailureCode
 	}
 }
 
@@ -313,7 +313,7 @@ func (h *Handler) actionsFor(ctx context.Context, row dbgen.OwnedPRRow, noWorker
 	switch {
 	case !row.Available.Bool:
 		a.Unavailable, a.Hint, a.Blocked = "GitHub access to this repository is unavailable.",
-			"Restore access with Manage connections on the Repositories page.", label
+			"Restore access on the Repositories page: choose repositories on GitHub and select this one again.", label
 		return a, nil
 	case row.State != "open":
 		a.Unavailable = "Closed and merged pull requests are not built."

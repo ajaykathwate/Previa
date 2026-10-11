@@ -9,8 +9,8 @@ import (
 )
 
 // Index is the Overview: where the owner's open pull requests are in the
-// delivery pipeline, the newest builds and previews, and what the running
-// workers provide. Every number comes from Summary; proportions are drawn as
+// delivery pipeline and the newest builds and previews. Every number comes
+// from Summary; proportions are drawn as
 // SVG attributes (no inline styles under the CSP). ui.js (initOverview) adds
 // the activity tabs, preview lifetimes and the "updated" time; without
 // JavaScript both activity lists show and rows still expand.
@@ -38,19 +38,103 @@ templ Index(username string, csrfToken string, summary Summary) {
 			if !summary.SetupDone() {
 				@setup(summary)
 			}
+			@kpis(summary)
 			<div class="ov-grid">
 				<div class="ov-main">
 					@flow(summary)
-					@activity(summary)
 				</div>
 				<div class="ov-side">
 					@coverage(summary)
-					@platform(summary, note, attention)
 					@sources(summary)
 				</div>
 			</div>
+			@activity(summary)
 		</div>
 	}
+}
+
+// kpis is the workspace in four numbers, each linking to where it comes from.
+templ kpis(summary Summary) {
+	{{ unavailable := summary.Unavailable() }}
+	{{ coverage := percent(summary.Live, summary.OpenPRs) }}
+	<ul class="ov-kpis" aria-label="Workspace at a glance">
+		<li>
+			<a class="ov-kpi" href="/repositories">
+				<span class="ov-kpi-head">
+					<span class="ov-kpi-label">Linked repositories</span>
+					<span class="ov-kpi-icon" aria-hidden="true">
+						@components.RepositoryIcon()
+					</span>
+				</span>
+				<strong class="ov-kpi-value">{ count(summary.Repositories) }</strong>
+				<span class="ov-kpi-note">
+					{ count(summary.Available) } available
+					if unavailable > 0 {
+						· <span class="tone-warn-text">{ count(unavailable) } { plural(unavailable, "needs", "need") } access</span>
+					}
+				</span>
+			</a>
+		</li>
+		<li>
+			<a class="ov-kpi" href="/repositories?access=available">
+				<span class="ov-kpi-head">
+					<span class="ov-kpi-label">Open pull requests</span>
+					<span class="ov-kpi-icon" aria-hidden="true">
+						@components.PullRequestIcon()
+					</span>
+				</span>
+				<strong class="ov-kpi-value">{ count(summary.OpenPRs) }</strong>
+				<span class="ov-kpi-note">
+					if summary.Waiting+summary.Building > 0 {
+						{ count(summary.Waiting) } waiting · { count(summary.Building) } building
+					} else {
+						Nothing waiting or building
+					}
+				</span>
+			</a>
+		</li>
+		<li>
+			<a class="ov-kpi" href="/environments">
+				<span class="ov-kpi-head">
+					<span class="ov-kpi-label">Live previews</span>
+					<span class="ov-kpi-icon is-ok" aria-hidden="true">
+						@components.EnvironmentIcon()
+					</span>
+				</span>
+				<strong class="ov-kpi-value">{ count(summary.Live) }</strong>
+				<span class="ov-kpi-note">
+					if summary.OpenPRs > 0 {
+						{ strconv.Itoa(coverage) }% of open pull requests
+					} else {
+						No open pull requests yet
+					}
+				</span>
+				@bar(coverage, "tone-ok")
+			</a>
+		</li>
+		<li>
+			<a class={ "ov-kpi", templ.KV("is-attention", summary.Failed > 0) } href="/builds">
+				<span class="ov-kpi-head">
+					<span class="ov-kpi-label">Needs attention</span>
+					<span class={ "ov-kpi-icon", templ.KV("is-danger", summary.Failed > 0), templ.KV("is-ok", summary.Failed == 0) } aria-hidden="true">
+						if summary.Failed > 0 {
+							@components.AlertIcon()
+						} else {
+							@components.CheckIcon()
+						}
+					</span>
+				</span>
+				<strong class="ov-kpi-value">{ count(summary.Failed) }</strong>
+				<span class="ov-kpi-note">
+					if summary.Failed > 0 {
+						{ plural(summary.Failed, "failed build request", "failed build requests") } · see why
+					} else {
+						No failed build requests
+					}
+				</span>
+			</a>
+		</li>
+	</ul>
 }
 
 // percent is part of whole in whole percent, 0 when there is no whole.
@@ -80,7 +164,7 @@ func prTitle(row prpages.ActivityRow) string {
 }
 
 templ workerStatus(w Workers) {
-	switch {
+	switch  {
 		case w.Execution:
 			<span class="ov-status tone-ok"><span class="pulse-dot" aria-hidden="true"></span>Worker connected</span>
 		case w.Paused:
@@ -219,7 +303,7 @@ templ flowNode(href, label, hint string, n, whole int64, tone string, share, act
 			<span class="ov-flow-label">{ label }</span>
 			<span class="ov-flow-hint">{ hint }</span>
 			<span class="ov-flow-share">
-				switch {
+				switch  {
 					case whole == 0:
 						@bar(0, tone)
 						<small>No open PRs yet</small>
@@ -255,11 +339,19 @@ templ activity(summary Summary) {
 			if len(summary.Builds) == 0 {
 				<p class="ov-empty">No build has been requested yet. Open a pull request and choose <strong>Build latest commit</strong>.</p>
 			} else {
-				<ul class="ov-rows">
-					for _, row := range summary.Builds {
-						@buildRow(row)
-					}
-				</ul>
+				<div class="ov-table">
+					<div class="ov-table-head" aria-hidden="true">
+						<span>Pull request</span>
+						<span>Commit</span>
+						<span>Status</span>
+						<span>Updated</span>
+					</div>
+					<ul class="ov-rows">
+						for _, row := range summary.Builds {
+							@buildRow(row)
+						}
+					</ul>
+				</div>
 			}
 			<p class="ov-panel-foot">
 				<span>The newest request of each pull request. Open a row for its details.</span>
@@ -274,11 +366,19 @@ templ activity(summary Summary) {
 			if len(summary.Previews) == 0 {
 				<p class="ov-empty">No preview is live. Open a pull request and choose <strong>Build latest commit</strong>.</p>
 			} else {
-				<ul class="ov-rows">
-					for _, row := range summary.Previews {
-						@previewRow(row)
-					}
-				</ul>
+				<div class="ov-table has-quick">
+					<div class="ov-table-head" aria-hidden="true">
+						<span>Pull request</span>
+						<span>Serving</span>
+						<span>Status</span>
+						<span>Expires</span>
+					</div>
+					<ul class="ov-rows">
+						for _, row := range summary.Previews {
+							@previewRow(row)
+						}
+					</ul>
+				</div>
 			}
 			<p class="ov-panel-foot">
 				<span>Showing { strconv.Itoa(len(summary.Previews)) } of { count(summary.Live) } live { plural(summary.Live, "preview", "previews") }, newest first.</span>
@@ -307,13 +407,23 @@ templ buildRow(row prpages.ActivityRow) {
 	<li class="ov-row">
 		<details class="ov-row-details">
 			<summary class="ov-row-summary">
-				<span class={ "ov-row-dot", prpages.Tone(row.State) } aria-hidden="true"></span>
 				<span class="ov-row-main">
 					<strong>{ prTitle(row) }</strong>
 					<small>{ row.Name }</small>
 				</span>
-				<span class="ov-row-meta">
+				<span class="ov-col ov-col-commit">
+					if row.Requested != "" {
+						<span class="sr-only">Commit</span>
+						@sha(row.Requested)
+					}
+				</span>
+				<span class="ov-col ov-col-status">
 					@stateBadge(row)
+				</span>
+				<span class="ov-col ov-col-when">
+					if row.Failure != "" {
+						<span class="ov-col-reason">{ row.Diagnosis().Title }</span>
+					}
 					if row.CompletedAt != "" {
 						<small>
 							@components.Time(row.CompletedAt, prpages.TimeLabel(row.CompletedAt))
@@ -381,7 +491,11 @@ templ buildRow(row prpages.ActivityRow) {
 						<div><dt>Waiting</dt><dd>{ row.Waiting }</dd></div>
 					}
 					if row.Failure != "" {
-						<div class="is-danger"><dt>Why it failed</dt><dd>{ row.Failure }</dd></div>
+						{{ d := row.Diagnosis() }}
+						<div class="is-danger"><dt>Why it failed</dt><dd><strong>{ d.Title }.</strong> { row.Failure }</dd></div>
+						if len(d.Steps) > 0 {
+							<div><dt>What to do</dt><dd>{ d.Steps[0] } The pull request page has every step.</dd></div>
+						}
 					}
 					if !row.Available {
 						<div class="is-warn"><dt>Access</dt><dd>GitHub access to this repository is unavailable.</dd></div>
@@ -406,20 +520,27 @@ templ previewRow(row prpages.ActivityRow) {
 	<li class="ov-row has-quick">
 		<details class="ov-row-details">
 			<summary class="ov-row-summary">
-				<span class={ "ov-row-dot", prpages.Tone(row.State) } aria-hidden="true"></span>
 				<span class="ov-row-main">
 					<strong>{ prTitle(row) }</strong>
 					<small>{ row.Name }</small>
 				</span>
-				<span class="ov-row-meta">
-					if row.State != "running" {
-						@stateBadge(row)
+				<span class="ov-col ov-col-commit">
+					if row.Deployed != "" {
+						<span class="sr-only">Serving</span>
+						@sha(row.Deployed)
 					}
+				</span>
+				<span class="ov-col ov-col-status">
+					@stateBadge(row)
+				</span>
+				<span class="ov-col ov-col-when">
 					if row.ExpiresAt != "" {
 						<small>
-							Expires { " " }
+							<span class="ov-col-label">Expires</span>{ " " }
 							@components.Time(row.ExpiresAt, prpages.TimeLabel(row.ExpiresAt))
 						</small>
+					} else {
+						<small>Does not expire</small>
 					}
 				</span>
 				<span class="ov-row-chevron" aria-hidden="true">
@@ -439,12 +560,6 @@ templ previewRow(row prpages.ActivityRow) {
 							</dd>
 						</div>
 					}
-					<div>
-						<dt>Status</dt>
-						<dd>
-							@stateBadge(row)
-						</dd>
-					</div>
 					if row.PublishedAt != "" {
 						<div>
 							<dt>Published</dt>
@@ -531,55 +646,6 @@ templ coverage(summary Summary) {
 				}
 			</div>
 		</div>
-	</section>
-}
-
-// platform shows which pipeline stages the running workers provide now.
-templ platform(summary Summary, note string, attention bool) {
-	{{ stages := summary.Stages() }}
-	{{ live := 0 }}
-	for _, stage := range stages {
-		if stage.Live {
-			{{ live++ }}
-		}
-	}
-	<section class="panel ov-platform" aria-labelledby="platform-title">
-		<header class="panel-header">
-			<div><span class="eyebrow">Workers</span><h2 id="platform-title">Pipeline stages</h2></div>
-			<span class={ "badge", templ.KV("tone-ok", live == len(stages)), templ.KV("tone-warn", live < len(stages)) }>
-				<span class="badge-dot" aria-hidden="true"></span>{ strconv.Itoa(live) } of { strconv.Itoa(len(stages)) } connected
-			</span>
-		</header>
-		<ol class="ov-stages">
-			for i, stage := range stages {
-				<li class={ "ov-stage", templ.KV("is-live", stage.Live) }>
-					<span class="ov-stage-node" aria-hidden="true">
-						if stage.Live {
-							@components.CheckIcon()
-						} else {
-							{ strconv.Itoa(i + 1) }
-						}
-					</span>
-					<span class="ov-stage-text">
-						<strong>{ stage.Name }</strong>
-						<small>{ stage.Detail }</small>
-					</span>
-					<span class="ov-stage-state">
-						if stage.Live {
-							Connected
-						} else {
-							Not running
-						}
-					</span>
-				</li>
-			}
-		</ol>
-		if !attention {
-			<p class="panel-note">
-				@components.InfoIcon()
-				{ note }
-			</p>
-		}
 	</section>
 }
 

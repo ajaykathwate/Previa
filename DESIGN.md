@@ -138,7 +138,7 @@ High. Two credential types, a private key to protect, short-lived tokens to mana
 - `ghinstallation` for minting installation tokens; `go-github` for API calls.
 
 ### Technical implementation
-1. From the dashboard, the user clicks "Install on a repo", which sends them to GitHub's installation page for the App.
+1. From the dashboard, the user clicks "Install on GitHub", which sends them to GitHub's installation page for the App.
 2. GitHub asks which repositories to grant access to and shows the permissions requested.
 3. On approval, GitHub redirects back with an installation ID and also sends an `installation` webhook.
 4. The server associates the installation ID with the logged-in user and records the selected repositories.
@@ -700,7 +700,7 @@ sequenceDiagram
     GH-->>Web: GitHub user ID and username
     Web->>DB: Upsert user
     Web->>Owner: Create session and show dashboard
-    Owner->>Web: Click Install on a repo
+    Owner->>Web: Click Install on GitHub
     Web->>GH: Redirect to GitHub App install page
     Owner->>GH: Choose repos and approve
     GH->>Web: Installation webhook and redirect with installation ID

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ajaykathwatee/previa/web/components"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 )
 
@@ -91,4 +92,39 @@ func (p LogPage) Name() string {
 		return p.Repository
 	}
 	return name
+}
+
+// Progress places the attempt on the build tracker from its status and the
+// output shown: the step the output has reached, failed or in progress.
+// ok is false when no attempt applies (none requested, cancelled, replaced).
+func (p LogPage) Progress() (pages.Progress, bool) {
+	entries := make([]pages.LogEntry, len(p.Lines))
+	for i, l := range p.Lines {
+		entries[i] = pages.LogEntry{System: l.System, Text: l.Text}
+	}
+	reached := pages.DetectStage(entries)
+	switch p.StatusLabel {
+	case pages.Label("pending"), pages.Label("queued"):
+		return pages.TrackAt("queue", "current"), true
+	case pages.Label("running"):
+		if reached == "" {
+			reached = "code"
+		}
+		progress := pages.TrackAt(reached, "current")
+		progress.Active = true
+		return progress, true
+	case pages.Label("failed"):
+		if reached == "" {
+			reached = "code"
+		}
+		return pages.TrackAt(reached, "failed"), true
+	case pages.Label("succeeded"):
+		return pages.TrackAt("live", "done"), true
+	}
+	return pages.Progress{}, false
+}
+
+// TrailParent is the pull request this log belongs to, one level up.
+func (p LogPage) TrailParent() components.Crumb {
+	return components.Crumb{Label: "#" + strconv.Itoa(int(p.Number)) + " " + p.Title, Href: p.PRURL()}
 }

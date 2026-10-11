@@ -115,7 +115,7 @@ test('Overview places open PRs along the pipeline and its activity tabs and rows
   assert(await page.locator('.ov-alert').isVisible());
   assert.match(await page.locator('.ov-setup-progress').innerText(), /1 of 5\s+done/);
   assert.deepEqual(await page.locator('.ov-flow-count').allInnerTexts(), ['0', '0', '0', '0']);
-  assert.match(await page.locator('.ov-platform .badge').innerText(), /0 of 7 connected/);
+  assert.match(await page.locator('.ov-status').innerText(), /No worker running/);
   // A busy workspace.
   await page.goto(`${origin}/__fixture/overview?state=busy`);
   await page.waitForURL(`${origin}/dashboard`);
@@ -127,7 +127,9 @@ test('Overview places open PRs along the pipeline and its activity tabs and rows
   assert.deepEqual(await page.locator('.ov-flow-share small').allInnerTexts(), ['All tracked', '16% of open PRs', '8% of open PRs', '33% of open PRs']);
   assert.match(await page.locator('.ov-flow-failed').innerText(), /1 failed request/);
   assert.equal(await page.locator('.ov-ring').getAttribute('aria-label'), '33% of open pull requests have a live preview');
-  assert.match(await page.locator('.ov-platform .badge').innerText(), /7 of 7 connected/);
+  // Activity reads as a table: commit, status and when, with the failure in plain words.
+  assert.deepEqual(await page.locator('#ov-panel-builds .ov-table-head span').allTextContents(), ['Pull request', 'Commit', 'Status', 'Updated']);
+  assert.match(await page.locator('#ov-panel-builds .ov-row', {hasText: 'Fixture pull request 4'}).locator('.ov-col-reason').innerText(), /Your app didn't become ready/);
   // Tabs switch by click or arrow keys, and the choice is kept for the session.
   const builds = page.locator('#ov-panel-builds');
   const previews = page.locator('#ov-panel-previews');
@@ -509,7 +511,7 @@ test('owners approve outbound destinations and remove them only after confirming
 test('unavailable repository PRs offer no actions and say why', async () => {
   await login();
   await page.goto(`${origin}/repositories/2/pull-requests/1`);
-  assert.match(await page.locator('[data-build-unavailable]').innerText(), /GitHub access to this repository is unavailable[\s\S]*Manage connections/);
+  assert.match(await page.locator('[data-build-unavailable]').innerText(), /GitHub access to this repository is unavailable[\s\S]*choose repositories on GitHub/);
   assert(await page.getByRole('button', {name: 'Build latest commit', exact: true}).isDisabled(), 'the action is shown, disabled');
   assert.equal(await page.getByRole('button', {name: /Retry|Rebuild|Tear down|Cancel build/}).count(), 0);
   assert.equal(await page.locator('form[action$="/build"]').count(), 0, 'nothing can be submitted');
@@ -530,13 +532,75 @@ test('a blocked build stays visible, disabled, with the reason and the fix', asy
   }
 });
 
+test('a failed build says what went wrong and what to do, with the technical details one click away', async () => {
+  await login();
+  await page.goto(`${origin}/repositories/1/pull-requests/4`);
+  const status = page.locator('[data-pr-status]');
+  assert.equal(await status.locator('h2').innerText(), "GitHub didn't let Previa download your code");
+  assert.match(await status.locator('.pr-status-kicker').innerText(), /Build failed/);
+  assert.equal(await status.locator('.tracker-step.is-failed').getAttribute('data-stage'), 'code');
+  assert.deepEqual(await status.locator('.tracker-step.is-done').evaluateAll(steps => steps.map(step => step.dataset.stage)), ['queue']);
+  const steps = await status.locator('.diagnosis-steps li').allInnerTexts();
+  assert.match(steps[0], /Contents to Read-only/);
+  assert.equal(steps.at(-1), 'Choose Retry build.');
+  const details = status.locator('.diagnosis-details');
+  assert.equal(await details.evaluate(element => element.open), false, 'technical details start collapsed');
+  await details.locator('summary').click();
+  assert.match(await details.locator('.diagnosis-reason').innerText(), /GitHub denied access to this commit's files/);
+  assert.match(await details.innerText(), /source_failed/);
+  assert.equal(await details.getByRole('link', {name: 'Open the full log'}).getAttribute('href'), '/repositories/1/pull-requests/4/logs');
+  assert.match(await page.locator('[data-failure]').innerText(), /GitHub didn't let Previa download your code/);
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+  // Retry says it is starting while the request is on its way, then shows the queued step.
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route('**/repositories/1/pull-requests/4/build', async route => { await held; await route.continue(); });
+  await page.getByRole('button', {name: 'Retry build', exact: true}).click();
+  const starting = page.getByRole('button', {name: 'Starting…', exact: true});
+  await starting.waitFor();
+  assert(await starting.isDisabled(), 'a starting build cannot be sent twice');
+  assert(await starting.locator('.spinner').isVisible());
+  release();
+  await page.waitForFunction(() => document.querySelector('.build-tracker .is-current')?.dataset.stage === 'queue');
+  await page.unroute('**/repositories/1/pull-requests/4/build');
+  assert.equal(await page.locator('[data-diagnosis]').count(), 0, 'a new request replaces the old explanation');
+});
+
+test('a running build follows its log to the current step, with a clock and the latest line', async () => {
+  await context.request.post(`${origin}/__fixture/logs/seed`);
+  await login();
+  await page.goto(`${origin}/repositories/1/pull-requests/6`);
+  const tracker = page.locator('[data-pr-status] .build-tracker');
+  // Output from the image build means the code is in and the image is building.
+  await page.waitForFunction(() => document.querySelector('.build-tracker .is-current')?.dataset.stage === 'image');
+  assert.deepEqual(await tracker.locator('.is-done').evaluateAll(steps => steps.map(step => step.dataset.stage)), ['queue', 'code']);
+  assert.equal(await tracker.locator('[data-progress-text]').innerText(), 'indented output');
+  await context.request.post(`${origin}/__fixture/logs/append`, {form: {text: 'Pulling the postgres:17 image.', system: '1'}});
+  await page.waitForFunction(() => document.querySelector('.build-tracker .is-current')?.dataset.stage === 'start');
+  assert.equal(await tracker.locator('[data-progress-text]').innerText(), 'Pulling the postgres:17 image.');
+  assert.match(await tracker.locator('.is-current .sr-only').innerText(), /in progress/);
+  const clock = page.locator('time[data-elapsed]');
+  const first = await clock.innerText();
+  assert.match(first, /^\d+m \d+s$/);
+  await page.waitForFunction(text => document.querySelector('time[data-elapsed]').textContent !== text, first);
+  assert(await page.getByRole('link', {name: 'Follow the build log', exact: true}).isVisible());
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+});
+
 test('Environments and Builds show addresses, waits and failures, and teardown confirms per row', async () => {
   await login();
   await page.goto(`${origin}/environments?fixture=rows`);
   const preview = page.getByRole('link', {name: 'Open preview'});
   assert.equal(await preview.getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
   assert.match(await page.locator('.activity-table').innerText(), /Earlier than the latest commit/);
-  assert.match(await page.locator('.activity-table').innerText(), /The app did not become ready/);
+  assert.match(await page.locator('.activity-table').innerText(), /Your app didn't become ready/);
+  assert.equal(await page.locator('.activity-table [title="The app did not become ready."]').count(), 1, 'the recorded sentence stays one hover away');
   for (const width of [320, 390, 768, 1440]) {
     await page.setViewportSize({width, height: 844});
     await assertNoOverflow();
@@ -561,7 +625,7 @@ test('repository pagination preserves filters and connection action is in the he
   const form = page.locator('form[action="/installations/start"]');
   assert.equal(await form.getAttribute('method'), 'post');
   assert(await form.locator('[name="csrf_token"]').inputValue());
-  const manage = page.getByRole('button', {name: 'Manage connections'});
+  const manage = page.getByRole('button', {name: 'Choose repositories on GitHub'});
   assert(await manage.isEnabled());
   assert.equal(await manage.evaluate(e => getComputedStyle(e).cursor), 'pointer');
   assert.equal(await page.locator('.workspace-page-heading form').count(), 1);
@@ -634,7 +698,7 @@ test('PR workspace live search pagination modal and build control', async () => 
     assert.equal(await page.locator('.app-header').evaluate(e=>Math.round(e.getBoundingClientRect().top)),0);
     assert(await page.locator('#pull-request-results .repository-table-scroll').evaluate(e=>e.clientHeight>60),'table must remain usable');
   }
-  await page.locator('.pr-table tbody a').first().click();
+  await page.locator('.pr-table tbody .pr-cell-text a').first().click();
   await page.waitForURL(url=>url.pathname.includes('/pull-requests/'));
   assert(await page.getByRole('button',{name:'Build latest commit'}).isEnabled());
   assert.match(await page.locator('.pr-detail-grid').innerText(),/No build requested yet/);
@@ -651,8 +715,8 @@ test('PR search and pagination work without JavaScript', async () => {
     await p.getByRole('button',{name:'Apply filters',exact:true}).click();
     assert.equal(await p.locator('.pr-table tbody tr').count(),1);
     assert.match(await p.locator('.pr-table').innerText(),/#25/);
-    await p.locator('.pr-table tbody a').click();assert.equal(new URL(p.url()).pathname,'/repositories/1/pull-requests/25');
-    await p.locator('.pr-directory-link').click();assert.equal(await p.locator('#pull-request-search').inputValue(),'preview 25');
+    await p.locator('.pr-table tbody .pr-cell-text a').click();assert.equal(new URL(p.url()).pathname,'/repositories/1/pull-requests/25');
+    await p.locator('[data-trail-parent]').click();assert.equal(await p.locator('#pull-request-search').inputValue(),'preview 25');
     await p.getByRole('switch',{name:'Automatic builds',exact:true}).click();
     assert(await p.locator('#build-policy').evaluate(e=>e.matches(':modal')));
     await p.locator('#build-policy').getByRole('button',{name:'Enable automatic',exact:true}).click();
@@ -734,17 +798,19 @@ test('dedicated repository and PR pages preserve filters through breadcrumbs and
  await page.locator('[data-repo-link="25"]').click();await page.waitForURL(url=>url.pathname==='/repositories/25');
  assert.equal(await page.locator('#repository-filters').count(),0);
  assert.equal(await page.evaluate(()=>document===window.directoryDocument),false);
- assert.match(await page.locator('.pr-breadcrumb').innerText(),/fixture-owner.*repository-25/s);
+ assert.match(await page.locator('.pr-panel-heading').innerText(),/fixture-owner[\s\S]*repository-25/);
+ assert.equal(await page.locator('[data-trail-parent]').innerText(),'Repositories','the header trail is the previous page and this one');
  const synced=page.locator('.pr-summary time');
  assert.equal(await synced.getAttribute('title'),'4 Oct 2026, 10:00 UTC');
  assert.notEqual(await synced.innerText(),'4 Oct 2026, 10:00 UTC','shown relative, with the exact time as its title');
  await page.locator('#pull-request-search').fill('preview 25');await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
- await page.locator('.pr-table tbody a').click();await page.waitForURL(url=>url.pathname==='/repositories/25/pull-requests/25');
- assert.match(await page.locator('.pr-breadcrumb [aria-current=page]').innerText(),/#25.*A careful change to preview 25/);
+ await page.locator('.pr-table tbody .pr-cell-text a').click();await page.waitForURL(url=>url.pathname==='/repositories/25/pull-requests/25');
+ assert.match(await page.locator('.app-breadcrumb-current').innerText(),/#25.*A careful change to preview 25/);
  assert.equal(await page.locator('#pull-request-search').count(),0);
- await page.locator('.pr-breadcrumb').getByRole('link',{name:'repository-25',exact:true}).click();await page.waitForURL(url=>url.pathname==='/repositories/25');
+ assert.equal(await page.locator('.app-breadcrumb a').count(),1,'only the previous page is a link');
+ await page.locator('.app-breadcrumb').getByRole('link',{name:'repository-25',exact:true}).click();await page.waitForURL(url=>url.pathname==='/repositories/25');
  assert.equal(await page.locator('#pull-request-search').inputValue(),'preview 25');assert.equal(await page.locator('.pr-table tbody tr').count(),1);
- await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories');
+ await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories');
  assert.equal(await page.locator('#repository-search').inputValue(),'fixture');assert.equal(new URL(page.url()).searchParams.get('page'),'2');
  await page.goBack();await page.waitForURL(url=>url.pathname==='/repositories/25');
  assert.equal(await page.locator('#pull-request-search').inputValue(),'preview 25');
@@ -770,14 +836,14 @@ test('full pages align desktop filters and remain usable on short mobile and tab
  assert(await page.getByRole('button',{name:'Build latest commit'}).isEnabled());
  const github=page.getByRole('link',{name:'View on GitHub',exact:true});
  assert(await github.locator('svg').count()>=1);assert.equal(await github.getAttribute('target'),'_blank');
- await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+ await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
 });
 
 test('failed PR searches preserve records and query bookmarks redirect to dedicated pages',async()=>{
  await login();await page.goto(`${origin}/repositories?repo_id=1&pr=7&pr_q=preview`);
  await page.waitForURL(url=>url.pathname==='/repositories/1/pull-requests/7');
  assert.match(await page.locator('.pr-detail-grid').innerText(),/No build requested yet/);
- await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+ await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
  await page.route('**/repositories/1?*',route=>route.fulfill({status:503,body:'fixture unavailable'}));
  await page.locator('#pull-request-search').fill('preview 25');
  await page.locator('#pull-request-filters [data-repository-feedback][data-error]').waitFor();
@@ -795,15 +861,15 @@ test('sync and automatic controls appear only on the PR list and breadcrumbs use
  assert.notEqual(await page.locator('.automatic-switch').evaluate(e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)');
  await page.getByRole('button',{name:'Sync Pull Requests'}).click();await page.locator('.sync-state').filter({hasText:'Syncing'}).waitFor();
  await page.waitForFunction(()=>!document.querySelector('.pr-summary').textContent.includes('Syncing'));await readyPanel('1');
- await page.locator('.pr-table tbody a').first().click();await page.waitForURL(url=>url.pathname.includes('/pull-requests/'));
+ await page.locator('.pr-table tbody .pr-cell-text a').first().click();await page.waitForURL(url=>url.pathname.includes('/pull-requests/'));
  assert.equal(await page.getByRole('switch',{name:'Automatic builds'}).count(),0);
  assert.equal(await page.getByRole('button',{name:'Sync Pull Requests'}).count(),0);assert.equal(await page.locator('#build-policy').count(),0);
- const sizes=await page.locator('.pr-breadcrumb').evaluate(e=>Array.from(e.children).map(child=>getComputedStyle(child).fontSize));
+ const sizes=await page.locator('.app-breadcrumb').evaluate(e=>Array.from(e.children).map(child=>getComputedStyle(child).fontSize));
  assert(sizes.length>2 && sizes.every(size=>size===sizes[0]), 'breadcrumb text and separators share one size');
- await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+ await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
  assert.equal(await page.locator('.automatic-switch').getAttribute('aria-checked'),'true');
  assert.equal(new URL(page.url()).searchParams.get('page'),'2');
- await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories');
+ await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories');
  assert.equal(await page.getByRole('switch',{name:'Automatic builds'}).count(),0);assert.equal(await page.getByRole('button',{name:'Sync Pull Requests'}).count(),0);
 });
 
@@ -814,8 +880,9 @@ test('small repository collections use compact cards with natural height and no 
   assert.equal(await page.locator('.repository-row').count(),count);
   assert.equal(await page.getByRole('navigation',{name:'Repository pages'}).count(),0);
   assert.match(await page.locator('.repository-count').innerText(),new RegExp(`${count} repositor`));
-  assert.equal(await page.locator('.repository-select').first().locator(':scope > :not(.repository-card-facts) svg').count(),2);
-  assert.equal(await page.locator('.repository-select').first().locator('.repository-card-facts li').count(),4,'open PRs, live previews, build mode and last sync');
+  assert.equal(await page.locator('.repository-select').first().locator('svg').count(),2,'the repository icon and the arrow');
+  assert.deepEqual(await page.locator('.repository-select').first().locator('.repository-card-stats dt').allInnerTexts(),['Open pull requests','Live previews']);
+  assert.match(await page.locator('.repository-select').first().locator('.repository-card-foot').innerText(),/(Manual|Automatic) builds[\s\S]*(Synced|Not synced yet)/);
   assert.equal(await page.locator('.repository-card-name p').first().innerText(),'fixture-owner');
   assert.equal(await page.locator('.repository-card-name h2').first().innerText().then(v=>v.includes('fixture-owner/')),false);
   for(const width of [320,390,768,1440,1917]) {
@@ -826,7 +893,7 @@ test('small repository collections use compact cards with natural height and no 
    assert(cards.every(c=>c.height<280), 'long repository names fit compact cards');
    if(count<=2 && width>700) {
     const catalog=await page.locator('.repository-catalog').boundingBox();
-    // Cards include a facts row (open PRs, previews, mode, sync); a 960px screen leaves room to spare.
+    // Cards include two stats and a footer (mode, sync); a 960px screen leaves room to spare.
     assert(catalog.height<560, 'small collections do not stretch toward the footer: '+catalog.height+' at '+width);
     assert(catalog.width<=1241,'catalog stays within the content column');
    }
@@ -897,7 +964,7 @@ test('repository secrets editor saves several at once, never shows values, and d
  await login();await page.goto(`${origin}/repositories/1`);await readyPanel('1');
  await page.locator('.repo-tabs').getByRole('link',{name:'Secrets',exact:true}).click();
  await page.waitForURL(`${origin}/repositories/1/secrets`);
- assert.match(await page.locator('.pr-breadcrumb').innerText(),/repository-1/);
+ assert.match(await page.locator('.app-breadcrumb').innerText(),/repository-1[\s\S]*Secrets/);
  assert.equal(await page.locator('.repo-tabs a[aria-current=page]').innerText(),'Secrets');
  const name=n=>page.getByRole('textbox',{name:`Name, line ${n}`,exact:true});
  const value=n=>page.getByRole('textbox',{name:`Value, line ${n}`,exact:true});
@@ -973,7 +1040,8 @@ test('build logs stream live, reset for a new attempt and render output as text'
  await login();await page.goto(`${origin}/repositories/1/pull-requests/3`);
  await page.getByRole('link',{name:'Build logs',exact:true}).click();
  await page.waitForURL(`${origin}/repositories/1/pull-requests/3/logs`);
- assert.match(await page.locator('.pr-breadcrumb').innerText(),/repository-1[\s\S]*#3[\s\S]*Build logs/);
+ assert.match(await page.locator('.app-breadcrumb').innerText(),/#3[\s\S]*Build logs/);
+ assert.match(await page.locator('.page-hero-kicker').innerText(),/repository-1[\s\S]*#3/);
  await page.waitForFunction(()=>document.querySelector('[data-log-connection]')?.dataset.state==='live');
  assert.equal(await page.locator('.log-line').count(),500,'the newest 500 lines render first');
  assert.equal(await page.evaluate(()=>window.__pwned),undefined,'script-looking output must stay inert');
@@ -996,6 +1064,11 @@ test('build logs stream live, reset for a new attempt and render output as text'
  await page.locator('.log-line').filter({hasText:'Retry attempt output'}).waitFor();
  assert.equal(await page.locator('.log-line').count(),1);
  assert.equal(await page.locator('#L1 .log-text').innerText(),'Retry attempt output');
+ // The step tracker follows the runtime's own progress lines as they arrive.
+ assert.equal(await page.locator('.build-tracker .is-current').getAttribute('data-stage'),'image');
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'The preview is healthy. It is not routed yet.',system:'1'}});
+ await page.waitForFunction(()=>document.querySelector('.build-tracker .is-current')?.dataset.stage==='publish');
+ assert(await page.locator('.log-line.log-system').filter({hasText:'The preview is healthy'}).isVisible());
  assert.equal(documents,0,'live logs never reload the page');
  for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
 });
@@ -1147,7 +1220,7 @@ test('the workspace loads within its page weight and stays usable on a slow netw
   assert(loadMs < 15000, `slow-network load took ${loadMs} ms`);
   await page.locator('#pull-request-search').fill('preview 25');
   await page.waitForFunction(() => document.querySelectorAll('.pr-table tbody tr').length === 1, null, {timeout: 15000});
-  await page.locator('.pr-table tbody a').first().click();
+  await page.locator('.pr-table tbody .pr-cell-text a').first().click();
   await page.waitForURL(url => url.pathname === '/repositories/1/pull-requests/25', {timeout: 15000});
   assert(await page.getByRole('button', {name: 'Build latest commit', exact: true}).isEnabled());
   console.log(`# slow network: ${Math.round(bytes / 1024)} KiB in ${loadMs} ms`);

@@ -404,6 +404,106 @@
     if (!document.hidden) connect(); else setState('paused');
   }
 
+  // Build tracker: the runtime's own progress lines (system lines) say which
+  // step a build has reached; any other line is the image build's output.
+  // Same rules as DetectStage in web/pages/pullrequests/progress.go.
+  const stageMarks = /^(Pulling the |Waiting up to |Running the setup command|The setup command finished|Starting the process |The image runs as root)/;
+  const lineStage = (line, reached) => {
+    const text = line.text.trim();
+    if (!line.system) return reached === 1 ? 2 : -1;
+    if (text.startsWith('Preparing commit ') || text.startsWith('Source preparation failed: ')) return 1;
+    if (text.startsWith('The preview is healthy')) return 4;
+    if (stageMarks.test(text) || text.includes('approved outbound connection') || text.includes(' is ready at ')) return 3;
+    return -1;
+  };
+  const stageStatus = {done: '(done)', current: '(in progress)', failed: '(failed here)', pending: '(not started)'};
+
+  // trackBuild drives one rendered tracker from lines and state labels. It
+  // starts from the server's rendering, so it only ever moves forward.
+  function trackBuild(tracker) {
+    const steps = [...tracker.querySelectorAll('[data-stage]')];
+    const now = tracker.querySelector('[data-progress-line]');
+    const nowText = tracker.querySelector('[data-progress-text]');
+    let reached = steps.findIndex((step) => step.matches('.is-current, .is-failed'));
+    let output = false;
+    const paint = (at, state) => steps.forEach((step, i) => {
+      const next = i < at ? 'done' : i === at ? state : 'pending';
+      if (step.classList.contains('is-' + next)) return;
+      step.className = 'tracker-step is-' + next;
+      const label = step.querySelector('.sr-only');
+      if (label) label.textContent = stageStatus[next];
+    });
+    const at = () => (output && reached < 2 ? 2 : reached);
+    return {
+      lines(lines) {
+        let latest = '';
+        for (const line of lines) {
+          output = output || !line.system;
+          reached = Math.max(reached, lineStage(line, reached));
+          if (line.text.trim()) latest = line.text.trim();
+        }
+        if (!tracker.classList.contains('is-active')) return;
+        if (at() >= 0) paint(at(), 'current');
+        if (latest && now && nowText) { nowText.textContent = latest; now.hidden = false; }
+      },
+      reset() { reached = -1; output = false; },
+      state(label) {
+        const active = label === 'Running' || label === 'Queued' || label === 'Waiting';
+        tracker.classList.toggle('is-active', active);
+        tracker.classList.toggle('is-failed', label === 'Failed');
+        if (now && !active) now.hidden = true;
+        if (label === 'Queued' || label === 'Waiting') paint(0, 'current');
+        else if (label === 'Running') paint(Math.max(at(), 1), 'current');
+        else if (label === 'Failed') paint(Math.max(at(), 1), 'failed');
+        else if (label === 'Succeeded') paint(steps.length, 'done');
+      },
+    };
+  }
+
+  // On a pull request whose build is in flight, the tracker follows the
+  // attempt's log stream to name the exact step. Live panel refreshes replace
+  // the tracker, so each render gets its own stream; a stream that cannot
+  // open (limit reached, logs unavailable) leaves the server's rendering.
+  function initBuildProgress() {
+    if (!('EventSource' in window)) return;
+    let source = null;
+    let element = null;
+    const stop = () => { source?.close(); source = null; };
+    const start = () => {
+      const tracker = document.querySelector('[data-build-progress][data-progress-events]');
+      if (tracker === element && source) return;
+      stop();
+      element = tracker;
+      if (!tracker || document.hidden) return;
+      const progress = trackBuild(tracker);
+      source = new EventSource(new URL(tracker.dataset.progressEvents, window.location.href));
+      source.addEventListener('reset', progress.reset);
+      source.addEventListener('lines', (event) => progress.lines(JSON.parse(event.data).lines));
+      source.addEventListener('error', () => { if (source?.readyState === EventSource.CLOSED) source = null; });
+    };
+    document.addEventListener('htmx:afterSettle', start);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else start(); });
+    window.addEventListener('pagehide', stop);
+    window.addEventListener('pageshow', (event) => { if (event.persisted) start(); });
+    start();
+  }
+
+  // Elapsed clocks (time[data-elapsed]) count up from their datetime.
+  function initElapsed() {
+    const render = () => document.querySelectorAll('time[data-elapsed]').forEach((element) => {
+      const since = Date.parse(element.dateTime);
+      if (Number.isNaN(since)) return;
+      const seconds = Math.max(0, Math.floor((Date.now() - since) / 1000));
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor(seconds / 60) % 60;
+      const text = (hours ? hours + 'h ' : '') + (hours || minutes ? minutes + 'm ' : '') + (seconds % 60) + 's';
+      if (element.textContent !== text) element.textContent = text;
+    });
+    render();
+    setInterval(render, 1000);
+    document.addEventListener('htmx:afterSettle', render);
+  }
+
   // Build logs: the server streams the current attempt's lines with ids
   // "<epoch>.<next>". A "reset" means a new attempt replaced the logs. Lines are
   // inserted as text, never markup. Hidden tabs release the connection.
@@ -416,6 +516,8 @@
     const follow = panel.querySelector('[data-log-follow]');
     const connection = document.querySelector('[data-log-connection]');
     const status = document.querySelector('.log-status');
+    const trackerElement = status?.querySelector('[data-build-progress]');
+    const tracker = trackerElement ? trackBuild(trackerElement) : null;
     let cursor = panel.dataset.logCursor || '';
     let source = null;
     let failures = 0;
@@ -492,18 +594,23 @@
         remember(event);
         list.replaceChildren();
         if (empty) empty.hidden = false;
+        tracker?.reset();
       });
       source.addEventListener('lines', (event) => {
         remember(event);
         failures = 0;
         setState('live', 'Live');
-        append(JSON.parse(event.data).lines);
+        const lines = JSON.parse(event.data).lines;
+        append(lines);
+        tracker?.lines(lines);
       });
       source.addEventListener('state', (event) => {
         remember(event);
         failures = 0;
         setState('live', 'Live');
-        showState(JSON.parse(event.data));
+        const state = JSON.parse(event.data);
+        showState(state);
+        tracker?.state(state.label);
       });
       source.addEventListener('error', () => {
         if (source?.readyState !== EventSource.CLOSED) { setState('reconnecting', 'Reconnecting…'); return; }
@@ -1202,6 +1309,8 @@
   initRepositorySearch();
   initLiveUpdates();
   initBuildLogs();
+  initBuildProgress();
+  initElapsed();
   initRelativeTimes();
   initCopyButtons();
   initSecretEditor();

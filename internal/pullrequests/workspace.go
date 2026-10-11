@@ -99,7 +99,8 @@ func (h *Handler) listPR(row dbgen.ListPRsRow, noWorker bool) pages.PR {
 	pr := pages.PR{Number: row.Number, Title: row.Title, Author: row.Author,
 		Branch: row.HeadBranch, SHA: row.HeadSha, State: DisplayStatus(row.State, row.BuildStatus), Build: row.BuildState,
 		Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh, RequestCurrent: row.RequestCurrent,
-		DeployedSHA: row.DeployedSha, Environment: row.EnvironmentStatus, NoWorker: noWorker}
+		DeployedSHA: row.DeployedSha, Environment: row.EnvironmentStatus, NoWorker: noWorker,
+		URL: row.HtmlUrl, UpdatedAt: timestamp(row.SourceUpdatedAt)}
 	if url := h.previewURL(row.Hostname); url != "" && previewDeployed(row.DeployedSha, row.EnvironmentStatus) {
 		pr.PreviewURL, pr.OlderPreview = url, row.DeployedSha != row.HeadSha
 	}

@@ -74,14 +74,22 @@ repository's Secrets tab).
   Environments), System (Developer tools), Help (FAQ).
   `layouts.App` receives an explicit `components.NavItem`; titles never decide the
   active item.
+- **Header trail.** The header names only the previous level and the current page
+  (`layouts.AppTrail` with a `components.Crumb`): "Repositories / repository-1",
+  "repository-1 / #42 Title", "#42 Title / Build logs". The previous level is the
+  page's one link back and keeps that page's filters; top-level pages show
+  "Workspace / Overview" with no link. Below 650px the label folds into a back
+  arrow. Pages under a repository open with a shared hero
+  (`components.RepositoryHero`: owner, name, one line of context).
 - **Repository tabs.** `components.RepositoryTabs` switches a repository between
-  **Pull requests** (`/repositories/{id}`) and **Secrets** (`/repositories/{id}/secrets`).
-  Both are full pages, so the switch works without JavaScript and view transitions
-  keep it smooth. PR detail pages do not show the tabs.
+  **Pull requests** (`/repositories/{id}`), **Secrets** (`/repositories/{id}/secrets`)
+  and **Outbound** (`/repositories/{id}/outbound`) as an underlined tab bar. Each is
+  a full page, so the switch works without JavaScript and view transitions keep it
+  smooth. PR detail pages do not show the tabs.
 - **Dedicated pages.** `/repositories`, `/repositories/{id}`,
   `/repositories/{id}/pull-requests/{number}` and its `/logs` page are separate,
   bookmarkable pages. PR detail and every Builds/Environments row link to the logs.
-  Breadcrumbs and Back links preserve filters (`q`, `access`, `page` for the
+  The header trail preserves filters (`q`, `access`, `page` for the
   directory; `pr_q`, `pr_state`, `pr_page` for PRs). Old query-style bookmarks
   redirect after ownership checks.
 
@@ -121,8 +129,12 @@ offscreen), `initTheme`, `initNavigation` (drawer dismissal, platform shortcut l
 `initCommandPalette`, `initRepositorySearch` (request/feedback/focus handling),
 `initLiveUpdates` (repository EventSource lifecycle), `initBuildLogs` (the log
 page's EventSource: appends lines as text nodes, clears on `reset`, updates the
-status card from `state`, follows output only while the reader is at the bottom,
-pauses in hidden tabs, marks error-looking lines), `initRelativeTimes` (rewrites
+status card and its step tracker from `lines` and `state`, follows output only
+while the reader is at the bottom, pauses in hidden tabs, marks error-looking
+lines), `initBuildProgress` (on a PR page whose build is in flight, follows the
+attempt's log stream to name the current step and its latest line; closes on
+swaps and hidden tabs; a stream that cannot open leaves the server's rendering),
+`initElapsed` (counts `time[data-elapsed]` up every second), `initRelativeTimes` (rewrites
 `time[data-relative]` as "3 minutes ago" every 30 s and after swaps, keeping the
 exact UTC time as the title), `initCopyButtons` (`data-copy` text or a log list's
 lines to the clipboard, confirmed for two seconds), `initSecretEditor` and
@@ -143,20 +155,41 @@ supporting browsers.
 
 ## Pull request page
 
-One status panel answers "what is happening with this preview?": a headline with a
-tone (Preview is live, Building, Build failed, Blocked by merge conflicts, No
-preview yet, ...), the preview address with **Copy**, and every action in one row
-(**Open preview** first when one is live, then Build/Retry/Rebuild, Tear down or
-**Cancel build** when nothing is deployed, and **Build logs**). When building is
-blocked, the build action is shown disabled (`aria-describedby` points at the
-notice) and the notice names the reason and the fix, for example a worker without
-`PREVIEW_BASE_DOMAIN`. A failed build quotes the last twelve lines of its own output
-(fenced by generation and revision, so never another attempt's), with error lines
-highlighted. Three lifecycle cards follow: the latest commit (linked to GitHub) and
-its mergeability, the build request (who or what asked, when it started and
-finished, how long it took, whether it is for an earlier commit), and the deployed
-preview (published and expiry times). Times are relative with the exact UTC time as
-their title. The back link returns to the repository's PR list with its filters.
+A status card beside a **Details** panel. The card answers "what is happening with
+this preview?": an icon and headline in the state's tone (Preview is live,
+Building, Build failed, Blocked by merge conflicts, No preview yet, ...), an
+elapsed clock while work is in flight, the preview address with **Copy**, and every
+action in one row (**Open preview** first when one is live, then
+Build/Retry/Rebuild, Tear down or **Cancel build** when nothing is deployed, and
+**Build logs**, which reads **Follow the build log** while a build runs). Build
+buttons show a spinner and **Starting…** and are disabled while their request is
+on its way. When building is blocked, the build action is shown disabled
+(`aria-describedby` points at the notice) and the notice names the reason and the
+fix, for example a worker without `PREVIEW_BASE_DOMAIN`.
+
+- **Step tracker** (`pages.Tracker`, `progress.go`): Queued → Get code → Build image →
+  Start preview → Publish → Live, shown while a request is queued, running or
+  publishing, and after a failure (the step it stopped at is marked). The server
+  places the request from its state; while it runs, `initBuildProgress` reads the
+  attempt's log stream and moves the tracker by the runtime's own progress lines
+  (`DetectStage` in Go and `lineStage` in `ui.js` apply the same rules), with the
+  latest output line under it. Each step has a screen-reader state.
+- **Failures** (`diagnosis.go`): a failed build gets a plain-language title, one
+  sentence of context and numbered **What to do next** steps, derived from the
+  stored failure category and, for source failures, the runtime's own reason
+  (missing App permission, no `.previewrc.yaml`, rate limits, unreachable GitHub,
+  Dockerfile and config problems, size and archive limits). It is flagged with a
+  badge and the tracker, not a full red card. **Technical details** (collapsed)
+  holds the exact reason, the recorded sentence, the category, the commit and the
+  last twelve lines of the attempt's own output (fenced by generation and revision,
+  so never another attempt's) with error lines highlighted. Builds, Environments
+  and the Overview show the same titles, with the recorded sentence as the hover
+  title.
+- **Details panel:** the latest commit and its mergeability, the build request (who
+  or what asked, when it started and finished, how long it took, whether it is for
+  an earlier commit, the failure title), the deployed preview (published and expiry
+  times) and the environment (managed services, docs, outbound). Times are relative
+  with the exact UTC time as their title. Below 1100px it follows the card.
 
 ## Overview
 
@@ -174,15 +207,22 @@ comes from `dashboardpages.Summary`; nothing is simulated.
   and a link; stages with work in progress are marked **Now**; a lane below names
   failed requests. All counts are over open pull requests, and the page says that one
   can count twice (a live preview keeps serving while a newer commit builds).
-- **Latest activity:** the newest build requests and live previews as two tabs (ARIA
-  tabs with arrow keys; the choice is kept in `sessionStorage`). Each row is a
-  `<details>` that expands to its commit, how it was requested, eligible, started and
-  finished times and duration, why it waits or failed, and links to the pull request
-  and its build logs. Preview rows show the served commit, status, publication,
-  expiry and a lifetime bar, with **Open** and **Copy** beside the row.
+- **Stat tiles:** linked repositories, open pull requests, live previews (with
+  coverage) and requests that need attention, each linking to where it comes from.
 - **Side column:** preview coverage (live previews over open pull requests, an SVG
-  ring), the worker pipeline stages (connected or not running) and linked
-  repositories (available versus unavailable).
+  ring) and linked repositories (available versus unavailable).
+- **Latest activity** (full width): the newest build requests and live previews as
+  two tabs (ARIA tabs with arrow keys; the choice is kept in `sessionStorage`), each a
+  table: pull request, commit (or the served commit), status and when (or expiry);
+  failed requests name the failure in plain words. Each row is a `<details>` that
+  expands to how it was requested, eligible, started and finished times and
+  duration, why it waits or failed with the first next step, and links to the pull
+  request and its build logs. Preview rows add publication, expiry and a lifetime
+  bar, with **Open** and **Copy** beside the row. Below 760px the columns fold under
+  the title.
+- The worker's state shows only in the header badge and, when nothing can build, the
+  blocked notice; the per-stage worker panel was removed to keep the page about
+  pull requests.
 - Proportions are SVG attributes (`width`, `stroke-dasharray`), so the CSP needs no
   inline styles. `initOverview` adds the tabs, lifetime bars and the updated time;
   without JavaScript both activity lists show and rows still expand.
@@ -196,7 +236,7 @@ page. The building blocks are `components.PreviaAvatar`, `PersonAvatar`, `Previa
 `web/styles/conversation.css`.
 
 - **How it works** (`web/pages/home/story.*`, `#how-it-works`): seven turns, one per
-  pipeline stage with the Overview's stage names (Discover, Gate, Build, Run, Route,
+  pipeline stage (Discover, Gate, Build, Run, Route,
   Report, Teardown). Each answer carries an example card (webhook, checks, build log,
   container, address, PR comment, cleanup) tagged **Example**, so nothing reads as live
   data. With JavaScript, `initStory` turns the transcript into a fixed-height chat:
@@ -221,7 +261,9 @@ page. The building blocks are `components.PreviaAvatar`, `PersonAvatar`, `Previa
 
 ## Secrets tab
 
-Write-only by design. The **Stored secrets** table lists names and update times,
+Write-only by design. The list and editor sit beside a **How secrets reach your
+previews** panel (below 1100px it follows them); the Outbound tab uses the same
+layout for **How outbound connections work**. The **Stored secrets** table lists names and update times,
 each with Replace and Delete; checkboxes and **Delete selected** remove several
 after one confirmation (the checkboxes belong to the dialog's form, so this works
 without JavaScript). The editor below adds or replaces several values at once, one
@@ -239,11 +281,12 @@ names with the reason but never a value or the pasted text. See
 
 ## Build log page
 
-`web/pages/builds/logs.templ` renders a status card (badge, one-sentence summary that
-is a polite `role="status"` region, commit, connection indicator, notices) and an
-output panel: an ordered list in its own scroll area (so following output never moves
-the page), monospace, with per-line anchor links and system notices in the info
-tone. Without JavaScript it is a complete page: the newest 500 lines plus
+`web/pages/builds/logs.templ` renders a hero (repository, PR number and title, a link
+back to the pull request), a status card (badge, one-sentence summary that is a
+polite `role="status"` region, commit, connection indicator, the step tracker,
+notices) and a dark terminal-style output panel: an ordered list in its own scroll
+area (so following output never moves the page), monospace, with per-line anchor
+links and the runtime's own lines marked with `›` in the info tone. Without JavaScript it is a complete page: the newest 500 lines plus
 **Earlier lines**, **Later lines** and **Refresh**; the indicator says **Live
 updates off** and the follow control stays hidden. Notices are cloned from a
 server-rendered `<template>` so live updates look identical to the first render.
@@ -275,7 +318,10 @@ redirect to the last valid page. The PR list follows the same 10-row pattern.
 - **Tailwind CSS v4.1.18** standalone CLI, checksum-pinned. `make assets` compiles
   `web/styles/app.css` into `web/static/css/app.css` (ignored, embedded at build).
   `site.css` imports `base`, `home`, `conversation`, `workspace`, `overview`,
-  `command`, `repositories`, `logs`, `confirmation` and `motion` modules.
+  `command`, `repositories`, `logs`, `surfaces`, `confirmation` and `motion`
+  modules. `surfaces.css` holds the shared page pieces (header trail, heroes, tabs,
+  two-column sections, tracker, diagnosis, busy buttons, terminal panel, stat
+  tiles, activity table).
 - **templUI v1.13.2** (MIT) supplies copied button, card, alert and input source;
   provenance and local changes are in [web/components/README.md](../web/components/README.md).
   Use complete class strings so Tailwind can find them.
@@ -292,13 +338,17 @@ dismissal, logout, CSRF, live search, pagination, Automatic confirmation, live
 updates without polling, the command palette, theme persistence, the repository
 Secrets tab (write-only saving, replacing, modal deletion), build logs (live append,
 following, reset for a new attempt, inert script-looking output, paging without
-JavaScript), build requests (one per click, no second Build while queued), preview
+JavaScript, the tracker following progress lines), failed builds (plain title, next
+steps, collapsed technical details, Retry showing **Starting…** then the queued step),
+running builds (the tracker following the log, the clock, the latest line), build
+requests (one per click, no second Build while queued), preview
 teardown confirmed in a modal (PR page and Environments rows, with and without
 JavaScript), unavailable actions, Builds/Environments content, the How it works
 conversation (one question at a time, stage jumps, start over, reduced motion, stage
 links) and the FAQ (topics, search, empty state, `#faq-…` links, the workspace page and
 palette, signed-out redirect), the Overview (empty and busy workspaces, pipeline
-shares, coverage, tabs with arrow keys and session memory, expandable rows, preview
+shares, coverage, tabs with arrow keys and session memory, the activity table and
+its plain-language failures, expandable rows, preview
 lifetime, both lists without JavaScript), reduced motion and no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-optional).
 
 ## Decisions and trade-offs

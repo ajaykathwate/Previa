@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ajaykathwatee/previa/web/components"
 	"github.com/ajaykathwatee/previa/web/components/button"
 	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
 )
@@ -19,6 +20,8 @@ type PR struct {
 	// List only: the request is for the latest commit, and the PR's preview
 	// address when one is live.
 	RequestCurrent bool
+	// List only: when GitHub last changed the pull request (RFC 3339).
+	UpdatedAt string
 	// MergeUnknown: the bounded mergeability check gave up without an answer
 	// from GitHub (State is then "unknown").
 	MergeUnknown bool
@@ -29,6 +32,7 @@ type PR struct {
 	Waiting       string // why the current request waits ("Waiting for capacity"), if it does
 	WaitingNote   string
 	Failure       string   // safe sentence for the latest failure of the current request
+	FailureCode   string   // its stored category, which Diagnosis explains in the owner's words
 	FailureLog    []string // the failed attempt's last output lines, already redacted
 	RequestSource string   // "manual" or "automatic"
 	RequestedBy   string   // login of the owner who asked, for manual requests
@@ -339,6 +343,7 @@ type ActivityRow struct {
 	Latest, Requested, Deployed, State, Deadline string
 	Available                                    bool
 	Waiting, Failure, PreviewURL, ExpiresAt      string
+	FailureCode                                  string // Failure's stored category, for Diagnosis
 	OlderPreview, Teardown                       bool
 	RequestCurrent                               bool   // the request is for the latest commit
 	RequestSource                                string // "manual" or "automatic"
@@ -433,4 +438,30 @@ func (p Page) PolicyAction(modal bool) string {
 		return "Turn off automatic"
 	}
 	return "Enable automatic"
+}
+
+// TrailParent is the header trail's previous level: the repository directory
+// for a repository's list and the repository's list for a pull request, each
+// keeping the filters the owner came from.
+func (p Page) TrailParent() components.Crumb {
+	if p.SelectedPR != nil {
+		return components.Crumb{Label: p.RepositoryName(), Href: p.PageURL(p.Number)}
+	}
+	return components.Crumb{Label: "Repositories", Href: p.CloseURL()}
+}
+
+// TrailCurrent names this page in the header trail.
+func (p Page) TrailCurrent() string {
+	if p.SelectedPR != nil {
+		return "#" + strconv.Itoa(int(p.SelectedPR.Number)) + " " + p.SelectedPR.Title
+	}
+	return p.RepositoryName()
+}
+
+// DocumentTitle names the browser tab.
+func (p Page) DocumentTitle() string {
+	if p.SelectedPR != nil {
+		return "#" + strconv.Itoa(int(p.SelectedPR.Number)) + " " + p.SelectedPR.Title + " · " + p.RepositoryName()
+	}
+	return p.RepositoryName() + " · Pull requests"
 }

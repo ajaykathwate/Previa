@@ -35,7 +35,7 @@ title: "From sign-in to a preview and back"
 ---
 flowchart TD
     A["Home: Get started with GitHub"] --> B["Overview"]
-    B --> C["Repositories: Install on a repo"]
+    B --> C["Repositories: Install on GitHub"]
     C --> D["GitHub: choose repositories,<br/>authorize the App"]
     D --> E["Repository card appears<br/>(Available)"]
     E --> F["Repository page: pull requests<br/>(Sync Pull Requests)"]
@@ -147,22 +147,24 @@ What you see on **Overview**, top to bottom:
 - When no worker can build, a notice first that says exactly what to fix (for
   example "set `PREVIEW_BASE_DOMAIN` on the worker").
 - **Your next steps**, with progress, until every step is done.
+- Four tiles: **Linked repositories**, **Open pull requests**, **Live previews** and
+  **Needs attention** (failed requests); each opens where the number comes from.
 - **Delivery pipeline**: **Open pull requests** → **Waiting or queued** →
   **Building** → **Live previews**, each with its share of open pull requests, plus
   **Failed requests**.
-- **Latest activity**: **Build requests** and **Live previews** tabs. Click a row to
-  see its commit, how it was requested, when it started and finished, why it waits
-  or failed, and links to the pull request and its build logs; a preview also shows
-  **Open**, a copy button and how much of its lifetime is left.
 - **Preview coverage**: how many open pull requests have a live preview.
-- The pipeline stages **Discover, Gate, Build, Run, Route, Report, Teardown**, each
-  **Connected** or **Not running** depending on the worker.
 - **Linked repositories**: available and unavailable.
+- **Latest activity**: **Build requests** and **Live previews** tabs, each a table
+  of pull request, commit, status and when (a failed request says why in plain
+  words, for example **Your app didn't become ready**). Click a row to see how it
+  was requested, when it started and finished, why it waits or failed with what to
+  do first, and links to the pull request and its build logs; a preview also shows
+  **Open**, a copy button and how much of its lifetime is left.
 
 ## 2. Connect your repositories
 
-1. Open **Repositories** and click **Install on a repo** (later **Manage
-   connections**).
+1. Open **Repositories** and click **Install on GitHub** (later **Choose
+   repositories on GitHub**).
 2. On GitHub, pick the account and the repositories Previa may use.
 3. GitHub returns to Previa and asks you to authorize the App with the **same
    account**. Previa checks you really own that installation before linking it.
@@ -170,7 +172,7 @@ What you see on **Overview**, top to bottom:
    the build mode and when pull requests were last synced. Linking never builds
    anything; it starts a first discovery of open pull requests.
 
-To add or remove repositories later, use **Manage connections** (GitHub's page).
+To add or remove repositories later, use **Choose repositories on GitHub**.
 
 ## 3. Find your repositories
 
@@ -205,22 +207,33 @@ To add or remove repositories later, use **Manage connections** (GitHub's page).
    | **Conflicts** | It conflicts with its base branch | No; resolve and push |
    | **Refresh required** | Two observations arrived at the same instant | Sync again |
 
-6. The list's **Preview** column opens each live preview directly, and **Latest
-   request** notes when a request was for an earlier commit. A repository never
-   synced shows a **Sync Pull Requests** button in its empty list.
+6. Each row shows the title with its number, author, branch and when GitHub last
+   updated it; the head **Commit** (opens it on GitHub); the **State**; and
+   **Preview**: **Live** with **Open**, or where the latest build stands
+   (**Not built yet**, **Queued**, **Building**, **Build failed**), noting when it
+   was for an earlier commit. A repository never synced shows a **Sync Pull
+   Requests** button in its empty list.
 7. Click a pull request to open its page:
-   - At the top, the **status panel**: a headline (**Preview is live**, **Building
-     …**, **Build failed**, **Blocked by merge conflicts**, **No preview yet**, …),
-     the preview address with **Copy**, and every action (**Open preview**,
-     Build/Retry/Rebuild, **Tear down preview** or **Cancel build**, **Build
-     logs**). A failed build also shows **Last lines of the build output** with
-     error lines in red.
-   - Three cards: **Latest commit** (linked to GitHub, with **Ready to build**,
-     **Checking mergeability** or **Has merge conflicts**), **Build request** (who
-     asked or **Automatic build**, when it started and finished, how long it took)
-     and **Deployed preview** (when it was published and expires).
+   - The **status card**: a headline (**Preview is live**, **Building …**, **Build
+     failed**, **Blocked by merge conflicts**, **No preview yet**, …), the preview
+     address with **Copy**, and every action (**Open preview**, Build/Retry/Rebuild,
+     **Tear down preview** or **Cancel build**, **Build logs**).
+   - While a build is queued or running, a step tracker shows **Queued → Get code →
+     Build image → Start preview → Publish → Live**, follows the build live with the
+     latest output line under it, and a clock counts the time since it started.
+   - A failed build says what went wrong in plain words (for example **GitHub didn't
+     let Previa download your code**) and lists **What to do next**. **Technical
+     details** opens the exact reason, the failure category, the commit and the
+     **Last lines of the build output** with error lines in red.
+   - The **Details** panel beside it: **Latest commit** (linked to GitHub, with
+     **Ready to build**, **Checking mergeability** or **Has merge conflicts**),
+     **Build request** (who asked or **Automatic build**, when it started and
+     finished, how long it took), **Deployed preview** (when it was published and
+     expires) and **Environment** (managed services and, when live, docs and
+     outbound connections).
    - Times read "3 minutes ago"; hover for the exact UTC time. **View on GitHub**
-     opens the pull request; the back link returns to the list with its filters.
+     opens the pull request; the repository name at the top of the page returns to
+     the list with its filters.
 
 ## 5. Prepare a repository for previews
 
@@ -258,9 +271,10 @@ On the repository page (pull request list only):
 1. Open the pull request's page.
 2. Click **Build latest commit**. Previa first reads the pull request fresh from
    GitHub, then records one request (double clicks count once).
-3. The status panel shows **Queued to build …**, then **Building …**; the **Build
-   request** card shows who asked and when it started. Open **Build logs** to watch
-   the output live.
+3. The button shows **Starting…** while the request is sent. The status card then
+   shows **Queued to build …**, then **Building …** with the step tracker moving as
+   the build goes; **Build request** in the Details panel shows who asked and when
+   it started. Open **Follow the build log** to watch the output live.
 4. When the app answers its health check, the preview goes live: the headline says
    **Preview is live**, the address appears with **Copy** and **Open preview**, and
    **Deployed preview** shows **Running**, when it was published and when it
@@ -466,7 +480,7 @@ out, and the box beside it shows the message and the fix below.
 
 | Message | Why | What to do |
 | --- | --- | --- |
-| GitHub access to this repository is unavailable. | The App no longer has access | Restore access in **Manage connections** |
+| GitHub access to this repository is unavailable. | The App no longer has access | Restore access with **Choose repositories on GitHub** |
 | Closed and merged pull requests are not built. | The PR is closed | Reopen it on GitHub |
 | Build refused: resolve merge conflicts and push a new commit first. | **Conflicts** | Fix the conflict and push |
 | Build paused: GitHub is checking mergeability… | **Checking** | Wait or **Sync Pull Requests**; if it says no worker is running, start the worker |
@@ -483,7 +497,7 @@ out, and the box beside it shows the message and the fix below.
 
 ## 20. Uninstall the GitHub App or remove access
 
-On GitHub, open **Manage connections** from Previa (or **Settings → Applications →
+On GitHub, open **Choose repositories on GitHub** from Previa (or **Settings → Applications →
 Installed GitHub Apps → Configure**; for an organization, its settings).
 
 | What you do on GitHub | What Previa does |
@@ -540,7 +554,7 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 
 | # | Steps | Expected |
 | --- | --- | --- |
-| B1 | **Repositories**, **Install on a repo**, choose one repository | Its card appears under **Available** |
+| B1 | **Repositories**, **Install on GitHub**, choose one repository | Its card appears under **Available** |
 | B2 | Install with a different GitHub account than the one signed in | Linking is refused (the installation is not yours) |
 | B3 | On GitHub, remove the repository from the App | The card moves to **Unavailable**; its previews are removed |
 | B4 | Add it back | **Available** again; nothing rebuilds by itself |

@@ -78,7 +78,7 @@ plus any `index.html`. Commit to its default branch, then open a PR that changes
 
 ## Step 8: Test the full journey
 Follow the user guide's **manual test checklist (A–K)**:
-1. Sign in → **Repositories → Install on a repo** → pick the test repo → **Sync Pull Requests**.
+1. Sign in → **Repositories → Install on GitHub** → pick the test repo → **Sync Pull Requests**.
 2. Open the PR → **Build latest commit** → watch **Build logs** stream.
 3. **Preview is live** → **Open preview** at `https://pr-…preview.localtest.me` (accept the certificate warning) → the PR gets a comment and a check run.
 4. Push a failing commit (`RUN exit 1`) → rebuild → the old preview keeps serving.

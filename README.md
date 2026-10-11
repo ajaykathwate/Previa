@@ -81,7 +81,7 @@ Steps:
    - Events to subscribe to: `pull_request`.
    - A webhook URL: `https://yourdomain.com/webhooks/github`.
 2. Repo Owner, from your dashboard (after logging in via A), clicks
-   "Install on a repo" — this sends them to GitHub's App installation flow.
+   "Install on GitHub" — this sends them to GitHub's App installation flow.
 3. GitHub asks the Repo Owner to pick which repo(s) to install it on, and shows
    them exactly what permissions it's requesting.
 4. Repo Owner approves. GitHub creates an "installation" record and redirects
@@ -234,13 +234,14 @@ access state, open pull requests, live previews, build mode and last sync; searc
 and access filters share a sticky toolbar.
 Pagination appears only when more than one page is needed.
 Selecting a source opens its dedicated repository page; selecting a PR opens its
-dedicated detail page. Clickable owner/repository/PR breadcrumbs and Back links
-preserve list filters. Search and filters share a row on desktop and stack on
+dedicated detail page. The header trail names the previous page (a link that
+preserves its list filters) and the current one. Search and filters share a row on desktop and stack on
 narrow screens. The PR list page shows **Sync Pull Requests** and an **Automatic
 builds** switch with a subtle background, plus each PR's preview link. These
 controls are absent from individual PR detail pages, which open with one status
-panel: a headline, the preview address with Copy, every action, and the last lines
-of a failed build. The switch is off in Manual mode; enabling
+card (a headline, a live step tracker while a build runs, the preview address with
+Copy and every action; a failed build gets a plain-language cause, next steps and
+collapsible technical details) beside a details panel. The switch is off in Manual mode; enabling
 requires an owner-controlled, CSRF-protected confirmation modal. Search, sync
 progress and policy saves update in place through HTMX, and committed changes
 (sync progress, webhook and mergeability updates) are pushed to open repository

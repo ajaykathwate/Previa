@@ -284,7 +284,7 @@ marked *command line* are typed before a `make` command instead.
   and checks). No default.
 - **What it is:** the numeric ID of your **GitHub App**, the registration that gives
   Previa access to the repositories you choose.
-- **Where it's used:** **Repositories → Install on a repo / Manage connections**,
+- **Where it's used:** **Repositories → Install on GitHub / Choose repositories on GitHub**,
   **Sync Pull Requests**, mergeability checks, every build (reading the commit),
   and the Previa comment and check run on each pull request. The worker uses it
   too.
@@ -332,7 +332,7 @@ marked *command line* are typed before a `make` command instead.
 
 - **Type:** Required for connecting repositories. No default.
 - **What it is:** the GitHub App's URL name.
-- **Where it's used:** **Install on a repo** and **Manage connections** send you to
+- **Where it's used:** **Install on GitHub** and **Choose repositories on GitHub** send you to
   `https://github.com/apps/<slug>`.
 - **How to get it:**
   1. Open your GitHub App → **General**.

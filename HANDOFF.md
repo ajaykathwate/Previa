@@ -1,12 +1,10 @@
 # Project handoff
-Last updated: 2026-10-10
+Last updated: 2026-10-11
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
-- docs/README.md indexes 25 docs (02 setup, 11 backend previews, 19 publication
-  decision + fencing, 22 operations, 23 observability, 24 incidents, 25 deployment,
-  26 release report, 27 roadmap). 03 and 18 are retired (user guide in
-  technical-docs, decision merged into 19); numbers are not reused or shifted.
+- docs/README.md indexes 25 docs (02 setup, 21 UI, 22 operations, 25 deployment,
+  26 release report, 27 roadmap); 03 and 18 are retired, numbers never reused.
   Do not edit technical-docs/inside-previa.md (owner's rule, 2026-10-09).
 - docs/27-roadmap.md: Prompts 1-13 done. Prompt 14 (detect missed uninstall/suspend/
   repository-removal webhooks by reconciliation) is planned, not started (an attempt
@@ -38,15 +36,22 @@ Last updated: 2026-10-10
 - Source, secrets, logs, BuildKit builds, hardened previews, fenced routing,
   teardown, PR feedback, housekeeping; the worker composes the pipeline from
   validated dependencies (internal/app/pipeline.go); server records, worker executes.
-- Prompt 11 (docs/23, 24): platform/logging redaction, bounded metrics,
-  httpx/ingress.go (client IP, host check, nonce CSP, body/rate/concurrency limits);
-  headline metric previa_request_to_preview_seconds; kill switch Service.Paused().
-- Prompt 12 (docs/25, 26): distroless Dockerfile (UID 65532), deploy/production
-  (compose, setup/backup/restore/smoke), deploy/observability, CI/release workflows,
-  .goreleaser.yaml; router-config writes previa-dashboard.yml; TLS-ALPN-01.
-- UX pass (docs/21): disabled actions say why; PR status panel; secrets editor and
-  .env import; sync stalls after 5m; mergeability "Unknown" after 8 tries (0019);
-  .env.example lines all labelled (config/example_test.go).
+- Prompt 11 (docs/23, 24): log redaction, bounded metrics, httpx/ingress.go (nonce
+  CSP, limits), kill switch Service.Paused(). Prompt 12 (docs/25, 26): distroless
+  image, deploy/production, deploy/observability, CI/release, .goreleaser.yaml.
+- UX pass (docs/21): disabled actions say why; secrets editor and .env import; sync
+  stalls after 5m; mergeability "Unknown" after 8 tries (0019).
+
+## Dashboard redesign (2026-10-11, uncommitted; UI only, docs/21)
+- Header trail (layouts.AppTrail, components.Crumb), RepositoryHero, underline tabs,
+  web/styles/surfaces.css. Overview: stat tiles, activity table; Workers panel removed.
+- PR page: status card + Details panel; tracker (progress.go, ui.js
+  initBuildProgress); diagnosis.go explains FailureCode. PR list: author, branch,
+  updated time, commit link, one Preview status. Handlers pass existing columns
+  only (failure code, html_url, source_updated_at). Button: "Install on GitHub" /
+  "Choose repositories on GitHub". Verified: lint 0, make test, browser 45/45.
+- index.html (root, untracked) is the public landing page; leave it unless asked.
+- Proposed, not built: more PR detail facts; deleting build attempts.
 
 ## Branches and CI (technical-docs/ci-in-action.md, cd-in-action.md)
 - master: default and release branch, changed only through PRs (by convention: the
@@ -67,28 +72,21 @@ Last updated: 2026-10-10
   PREVIEW_OUTBOUND_PORTS (none = off); worker writes allow files on previa-egress
   (outbound_refresh every minute); /etc/hosts maps names to the proxy; forks get none.
 
-## Code quality pass (2026-10-08; behavior unchanged)
-- .golangci.yml adds gocognit (30, tests exempt), nestif, gocritic and revive style
-  rules; make lint must stay at 0 issues. Split rather than raise limits.
-- Long functions became named steps (environments operation_finalize.go; runtime
-  candidate/services/outbound.go; app execution.go, process.go). Shared rules:
-  cleanupFence, lockOwnerIntentScope, transitionAllowed, judgeObservation.
+## Code quality (2026-10-08)
+- .golangci.yml adds gocognit (30), nestif, gocritic, revive; make lint stays at 0
+  issues. Split long functions into named steps rather than raising limits.
 
 ## Regression cycle (2026-10-09, committed e9aac61; test-docs/)
 - test-docs/: 242 cases in 16 module files (ID, type, priority, level, steps,
   expected, evidence); README holds strategy, commands and cycle results.
   Tick a case only when its evidence passed in a recorded run.
-- Fixed: D-01 htmx auth refusals now plain text (shown as the reason); D-02 GitHub
-  link only for https://; D-03 Go 1.26.9 + x/net v0.60.0 (13 new advisories);
-  D-04 smoke.sh reads the Go version from the Dockerfile's GO_IMAGE pin.
+- Fixed D-01..D-04 (auth refusals as text, https-only links, Go/x-net, GO_IMAGE).
 - Open (owner decision): install-tailwind.sh curl has no retry/time limit; a GitHub
   download stall hung a release-images run for 27 minutes.
 
 ## Deployment and next features (2026-10-09)
-- docs/25 is the one deployment guide (cd-in-action §9-11 point to it): OVHcloud
-  VPS-2 + Cloudflare DNS + R2 backups (~€7/mo), the owner's choice for cost and
-  account handling. Do not reintroduce the earlier providers (owner's request).
-  Starter/VPS-4 budgets; "Account safety" (Manual builds for public repos).
+- docs/25 is the one deployment guide: OVHcloud VPS-2 + Cloudflare DNS + R2 backups
+  (~€7/mo), the owner's choice. Do not reintroduce the earlier providers.
 - NEXT-FEATURES.md (root): 10 candidate features, none built.
 
 ## Pending (docs/26)

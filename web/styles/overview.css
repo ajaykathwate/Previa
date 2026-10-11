@@ -261,7 +261,7 @@
 .ov-row:has(> .ov-row-details[open]) { background: var(--surface-muted); box-shadow: 0 0 0 1px var(--line); }
 .ov-row-summary {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto 18px;
+  grid-template-columns: var(--ov-columns);
   align-items: center;
   gap: 12px;
   min-height: 56px;
@@ -270,16 +270,13 @@
   cursor: pointer;
 }
 .ov-row-summary:focus-visible { outline-offset: -2px; }
-.ov-row-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tone-dot); box-shadow: 0 0 0 3px var(--tone-soft); }
 .ov-row-main { display: grid; gap: 2px; min-width: 0; }
 .ov-row-main strong { overflow: hidden; color: var(--ink); font-size: 13.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .ov-row-main small { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.ov-row-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; text-align: right; }
-.ov-row-meta small { color: var(--text-muted); font-size: 11.5px; white-space: nowrap; }
 .ov-row-chevron { display: grid; place-items: center; color: var(--text-faint); transition: transform .25s var(--ease-out), color .15s; }
 .ov-row-chevron svg { width: 16px; height: 16px; }
 .ov-row-details[open] .ov-row-chevron { transform: rotate(180deg); color: var(--ink); }
-.ov-row-body { padding: 4px 14px 14px 34px; }
+.ov-row-body { padding: 4px 14px 16px; }
 html.js-enabled .ov-row-details[open] .ov-row-body { animation: fade-in .25s ease both; }
 .ov-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 20px; margin: 0; }
 .ov-facts > div { display: grid; align-content: start; gap: 3px; min-width: 0; }
@@ -357,41 +354,6 @@ html.js-enabled .ov-row-details[open] .ov-row-body { animation: fade-in .25s eas
 .ov-coverage-text strong { color: var(--ink); }
 .ov-coverage-text .ov-muted { color: var(--text-muted); font-size: 12.5px; }
 
-/* Worker stages */
-.ov-stages { position: relative; display: grid; margin: 0; padding: 12px 22px 14px; list-style: none; }
-.ov-stages::before {
-  content: "";
-  position: absolute;
-  top: 30px;
-  bottom: 30px;
-  left: 34px;
-  width: 2px;
-  background: repeating-linear-gradient(var(--line-strong) 0 4px, transparent 4px 8px);
-}
-.ov-stage { position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 6px 0; }
-.ov-stage-node {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border: 1.5px dashed var(--line-strong);
-  border-radius: 50%;
-  background: var(--surface);
-  color: var(--text-muted);
-  font-family: var(--font-code);
-  font-size: 11px;
-  font-weight: 600;
-}
-.ov-stage-node svg { width: 13px; height: 13px; }
-.ov-stage.is-live .ov-stage-node { border: 0; background: var(--signal); color: var(--on-signal); box-shadow: 0 0 0 4px var(--surface), 0 0 0 5px var(--signal-line); }
-.ov-stage-text { display: grid; gap: 1px; min-width: 0; }
-.ov-stage-text strong { font-size: 13.5px; font-weight: 620; }
-.ov-stage-text small { color: var(--text-muted); font-size: 12px; line-height: 1.35; }
-.ov-stage-state { color: var(--text-faint); font-size: 11.5px; white-space: nowrap; }
-.ov-stage.is-live .ov-stage-state { color: var(--ok-ink); font-weight: 560; }
-
 /* Sources */
 .ov-sources-body { display: grid; gap: 12px; padding: 14px 22px 20px; }
 .ov-sources-total { margin: 0; color: var(--text-muted); font-size: 13px; }
@@ -410,10 +372,9 @@ html.js-enabled .ov-row-details[open] .ov-row-body { animation: fade-in .25s eas
 @media (max-width: 1240px) {
   .ov-grid { grid-template-columns: minmax(0, 1fr); }
 }
-/* Side by side below the main column: the stages beside coverage and sources. */
+/* Side by side below the main column: coverage beside sources. */
 @media (min-width: 651px) and (max-width: 1240px) {
   .ov-side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ov-side > .ov-platform { grid-column: 2; grid-row: 1 / span 2; }
 }
 @media (max-width: 650px) {
   .ov { gap: 14px; }
@@ -423,17 +384,10 @@ html.js-enabled .ov-row-details[open] .ov-row-body { animation: fade-in .25s eas
   .ov-activity-head { padding-bottom: 12px; }
   .ov-rows { padding: 6px; }
   .ov-row.has-quick { grid-template-columns: minmax(0, 1fr); }
-  .ov-row-quick { min-height: 0; padding: 0 12px 10px 34px; }
-  .ov-row-summary { grid-template-columns: 10px minmax(0, 1fr) 18px; }
-  .ov-row-meta { grid-column: 2; grid-row: 2; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-start; text-align: left; }
-  .ov-row-chevron { grid-column: 3; grid-row: 1; }
-  .ov-row-body { padding: 4px 12px 14px 34px; }
   .ov-facts { grid-template-columns: minmax(0, 1fr); }
   .ov-panel-foot { padding: 12px 16px 14px; }
   .ov-coverage-body { padding: 14px 16px 18px; gap: 14px; }
   .ov-ring-wrap { width: 96px; height: 96px; }
   .ov-ring-label strong { font-size: 22px; }
-  .ov-stages { padding: 10px 16px 12px; }
-  .ov-stages::before { left: 28px; }
   .ov-sources-body { padding: 12px 16px 18px; }
 }

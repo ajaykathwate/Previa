@@ -91,7 +91,11 @@ func TestBrowserRegression(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	router.Post("/__fixture/logs/append", func(w http.ResponseWriter, r *http.Request) {
-		logs.add(r.FormValue("text"))
+		if r.FormValue("system") == "1" {
+			logs.addSystem(r.FormValue("text"))
+		} else {
+			logs.add(r.FormValue("text"))
+		}
 		publishLogs()
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -129,7 +133,7 @@ func TestBrowserRegression(t *testing.T) {
 					activity.Rows = []prpages.ActivityRow{
 						{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Latest: "latest-commit", Requested: "latest-commit", Deployed: "older-commit", State: "running", Available: true,
 							PreviewURL: "https://pr-3-1-fixture.preview.example.com", ExpiresAt: "2026-10-07T10:00:00Z", OlderPreview: true, Teardown: true, Waiting: "Waiting for capacity"},
-						{RepoID: 1, Number: 4, Name: "fixture-owner/repository-1", Latest: "latest-commit", Requested: "latest-commit", State: "failed", Available: true, Failure: "The app did not become ready."},
+						{RepoID: 1, Number: 4, Name: "fixture-owner/repository-1", Latest: "latest-commit", Requested: "latest-commit", State: "failed", Available: true, Failure: "The app did not become ready.", FailureCode: "unhealthy"},
 					}
 					if activity.Environments {
 						activity.Rows[0].Waiting = ""
@@ -178,7 +182,17 @@ func TestBrowserRegression(t *testing.T) {
 					if p.Search != "" && !strings.Contains(title, p.Search) {
 						continue
 					}
-					p.Rows = append(p.Rows, prpages.PR{Number: n, Title: title, Author: "design-review", Branch: "feature/preview", SHA: "1234567890abcdef", State: "open", Build: "Not requested"})
+					row := prpages.PR{Number: n, Title: title, Author: "design-review", Branch: "feature/preview", SHA: "1234567890abcdef", State: "open", Build: "Not requested",
+						URL: "https://github.com/fixture-owner/repository/pull/" + strconv.Itoa(int(n)), UpdatedAt: "2026-10-04T09:00:00Z", RequestCurrent: true}
+					switch n { // the states the detail fixture shows for these PRs
+					case 3:
+						row.Build, row.PreviewURL, row.OlderPreview = "succeeded", "https://pr-3-1-fixture.preview.example.com", true
+					case 4:
+						row.Build = "failed"
+					case 6:
+						row.Build = "running"
+					}
+					p.Rows = append(p.Rows, row)
 				}
 			}
 			p.Total = int64(len(p.Rows))
@@ -474,6 +488,13 @@ func (f *fixtureLogs) add(texts ...string) {
 	}
 }
 
+// addSystem appends one of the runtime's own progress lines.
+func (f *fixtureLogs) addSystem(text string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lines = append(f.lines, buildlogs.Line{Sequence: int64(len(f.lines)), System: true, Text: text})
+}
+
 func (f *fixtureLogs) restart(text string) {
 	f.mu.Lock()
 	f.epoch++
@@ -483,12 +504,13 @@ func (f *fixtureLogs) restart(text string) {
 }
 
 func (f *fixtureLogs) Target(_ context.Context, userID, repoID int64, number int32) (buildlogs.Target, error) {
-	if userID <= 0 || repoID != 1 || number != 3 {
+	// PR 3's logs, also streamed as running PR 6's so its tracker can follow them.
+	if userID <= 0 || repoID != 1 || (number != 3 && number != 6) {
 		return buildlogs.Target{}, buildlogs.ErrUnavailable
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return buildlogs.Target{PullRequestID: 3, RepoID: 1, Number: 3, Title: "A careful change to preview 3", Repository: "fixture-owner/repository-1", Available: true,
+	return buildlogs.Target{PullRequestID: int64(number), RepoID: 1, Number: number, Title: "A careful change to preview " + strconv.Itoa(int(number)), Repository: "fixture-owner/repository-1", Available: true,
 		EnvironmentID: fixtureLogEnvironment, Intent: &buildlogs.Intent{Generation: 1, Revision: f.epoch, HeadSHA: "1234567890abcdef", State: "running"}}, nil
 }
 
@@ -529,7 +551,7 @@ func fixturePR(r *http.Request, sessions *scs.SessionManager, number int32, avai
 		Headline: prpages.Headline{Tone: "tone-neutral", Title: "No preview yet", Detail: "Build the latest commit to get a preview address for this pull request."}}
 	if !available {
 		pr.Actions = prpages.Actions{Unavailable: "GitHub access to this repository is unavailable.",
-			Hint: "Restore access with Manage connections on the Repositories page.", Blocked: "Build latest commit"}
+			Hint: "Restore access on the Repositories page: choose repositories on GitHub and select this one again.", Blocked: "Build latest commit"}
 		pr.Headline = prpages.Headline{Tone: "tone-neutral", Title: "GitHub access to this repository is unavailable"}
 		return pr
 	}
@@ -539,6 +561,21 @@ func fixturePR(r *http.Request, sessions *scs.SessionManager, number int32, avai
 		pr.PreviewURL, pr.ExpiresAt, pr.OlderPreview = "https://pr-3-1-fixture.preview.example.com", "2026-10-07T10:00:00Z", true
 		pr.Actions = prpages.Actions{Build: true, Teardown: true, ExpectedRevision: 1, RequestKey: "fixture-request-key-0003"}
 		pr.Headline = prpages.Headline{Tone: "tone-warn", Title: "Preview live on an earlier commit"}
+	case 4:
+		// The commit could not be downloaded: the page explains it and offers a retry.
+		pr.Build, pr.RequestedSHA, pr.RequestCurrent = "failed", "latest-commit", true
+		pr.Failure, pr.FailureCode = "The commit could not be prepared.", "source_failed"
+		pr.FailureLog = []string{"Preparing commit 1234567 from fixture-owner/repository-1.",
+			"Source preparation failed: GitHub denied access to this commit's files. Give the GitHub App Contents: read, then retry."}
+		pr.StartedAt, pr.CompletedAt = "2026-10-04T09:58:00Z", "2026-10-04T09:58:04Z"
+		pr.Actions = prpages.Actions{Retry: true, RequestKey: "fixture-request-key-0004"}
+		pr.Headline = prpages.Headline{Tone: "tone-danger", Title: "Build failed", Detail: pr.Failure}
+	case 6:
+		// A build is running; the tracker follows its live log.
+		pr.Build, pr.RequestedSHA, pr.RequestCurrent = "running", "latest-commit", true
+		pr.StartedAt = time.Now().Add(-75 * time.Second).UTC().Format(time.RFC3339)
+		pr.Actions = prpages.Actions{Teardown: true, CancelOnly: true}
+		pr.Headline = prpages.Headline{Tone: "tone-info", Title: "Building latest-commi", Detail: "The preview address appears here when it is live."}
 	case 9:
 		// A worker runs but has no preview domain: the action is shown disabled.
 		pr.Actions = prpages.Actions{Unavailable: "The running worker cannot build previews: it has no preview domain.",
@@ -549,6 +586,7 @@ func fixturePR(r *http.Request, sessions *scs.SessionManager, number int32, avai
 	switch sessions.GetString(r.Context(), "fixture-pr-"+strconv.Itoa(int(number))) {
 	case "queued":
 		pr.Build, pr.RequestedSHA, pr.RequestCurrent = "queued", "latest-commit", true
+		pr.Failure, pr.FailureCode, pr.FailureLog = "", "", nil // the handler explains only a failed current request
 		pr.Actions = prpages.Actions{Teardown: true, CancelOnly: pr.DeployedSHA == ""}
 		pr.Headline = prpages.Headline{Tone: "tone-info", Title: "Queued to build latest-commi"}
 	case "removing":
@@ -572,7 +610,7 @@ func fixtureOverview(now time.Time) dashboardpages.Summary {
 			{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Title: "Fixture pull request 3", Latest: "latest-commit", Requested: "latest-commit",
 				State: "running", RequestCurrent: true, RequestSource: "manual", Available: true, Deadline: at(-3 * time.Minute), StartedAt: at(-2 * time.Minute)},
 			{RepoID: 1, Number: 4, Name: "fixture-owner/repository-1", Title: "Fixture pull request 4", Latest: "latest-commit", Requested: "latest-commit",
-				State: "failed", Failure: "The app did not become ready.", RequestCurrent: true, RequestSource: "automatic", Available: true,
+				State: "failed", Failure: "The app did not become ready.", FailureCode: "unhealthy", RequestCurrent: true, RequestSource: "automatic", Available: true,
 				StartedAt: at(-50 * time.Minute), CompletedAt: at(-47 * time.Minute)},
 		},
 		Previews: []prpages.ActivityRow{

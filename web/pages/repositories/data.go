@@ -108,3 +108,11 @@ func (r Row) Owner() string {
 	}
 	return owner
 }
+
+// plural picks the singular or plural label for n.
+func plural(n int64, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
