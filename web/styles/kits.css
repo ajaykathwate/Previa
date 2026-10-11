@@ -2,7 +2,8 @@
    files. The editor uses the dark terminal look of the build logs. */
 .kit-page { display: grid; gap: 4px; }
 .page-hero-sub code { padding: 1px 5px; border-radius: 5px; background: var(--surface-muted); font-family: var(--font-code); font-size: .9em; }
-.kit { display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.kit { display: grid; gap: 20px; }
+.kit-main { display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); gap: 20px; align-items: start; }
 
 /* Choices */
 .kit-form { display: grid; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-sm); }
@@ -155,7 +156,7 @@ html:not(.js-enabled) .kit-copy { display: none; }
 .kit-status-meta { color: #6b7480; }
 
 /* Guidance */
-.kit-guide { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 6px; }
+.kit-guide { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .kit-card { padding: 16px 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
 .kit-card h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--ink); font-size: 14px; font-weight: 680; }
 .kit-card h3 svg { width: 16px; height: 16px; color: var(--signal-ink); }
@@ -172,7 +173,7 @@ html:not(.js-enabled) .kit-copy { display: none; }
 .kit-more p { margin: 0 0 11px; color: var(--text-muted); font-size: 12.8px; line-height: 1.6; }
 
 @media (max-width: 1100px) {
-  .kit { grid-template-columns: minmax(0, 1fr); }
+  .kit-main { grid-template-columns: minmax(0, 1fr); }
   .kit-workbench { position: static; }
   .kit-editor.has-tabs { height: min(75vh, 720px); }
   .kit-guide { grid-template-columns: repeat(2, minmax(0, 1fr)); }

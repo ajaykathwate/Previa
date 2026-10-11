@@ -1369,6 +1369,13 @@ test('starter kits write both files for the chosen stack as editable tabs, and e
  assert.match(await yaml.inputValue(),/postgres: 17/);
  assert.equal(await page.locator('#kit-tab-previewrc[data-edited]').count(),0);
  assert.match(await status(),/Passes Previa's checks/);
+ // The sticky editor stays beside the choices: it never covers the guidance below.
+ await page.setViewportSize({width:1280,height:640});
+ for(const card of await page.locator('.kit-guide .kit-card').all()){
+  await card.scrollIntoViewIfNeeded();
+  assert(await card.evaluate(e=>{const r=e.getBoundingClientRect();return e.contains(document.elementFromPoint(r.left+r.width/2,r.top+24));}),'a guidance card is covered by the editor');
+ }
+ await page.setViewportSize({width:1440,height:900});
  // A static site needs no services, setup or worker.
  await kitIdle(page);await page.locator('.kit-stack',{hasText:'React + Vite'}).click();
  await page.waitForFunction(()=>document.querySelector('.kit-quiet'));

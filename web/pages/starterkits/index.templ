@@ -36,37 +36,41 @@ templ Index(username string, p Page) {
 // Kit is the choices, the editor and the guidance; HTMX replaces it whole.
 templ Kit(p Page) {
 	<div id="kit" class="kit">
-		<form
-			class="kit-form"
-			method="get"
-			action="/starter-kits"
-			hx-get="/starter-kits"
-			hx-trigger="change, input changed delay:500ms from:.kit-text"
-			hx-target="#kit"
-			hx-select="#kit"
-			hx-select-oob="#kit-status:innerHTML"
-			hx-swap="outerHTML"
-			hx-replace-url="true"
-			hx-sync="this:replace"
-			aria-label="Your starter kit"
-		>
-			<input type="hidden" name="from" value={ p.Form.Stack }/>
-			@stackSection(p)
-			if p.Form.Static {
-				<section class="kit-section" aria-labelledby="kit-uses-title">
-					<h2 class="kit-section-title" id="kit-uses-title">What it uses</h2>
-					<p class="kit-quiet">A static site is served as files, so it needs no database, setup or worker. Previa builds it and serves it at the pull request's link.</p>
-				</section>
-			} else {
-				@servicesSection(p)
-				@extrasSection(p)
-			}
-			@advanced(p)
-			<div class="kit-submit">
-				<button type="submit" class="kit-update">Update files</button>
-			</div>
-		</form>
-		@editor(p)
+		// The editor is sticky within this wrapper only, so it stops before
+		// the guidance below instead of sliding over it.
+		<div class="kit-main">
+			<form
+				class="kit-form"
+				method="get"
+				action="/starter-kits"
+				hx-get="/starter-kits"
+				hx-trigger="change, input changed delay:500ms from:.kit-text"
+				hx-target="#kit"
+				hx-select="#kit"
+				hx-select-oob="#kit-status:innerHTML"
+				hx-swap="outerHTML"
+				hx-replace-url="true"
+				hx-sync="this:replace"
+				aria-label="Your starter kit"
+			>
+				<input type="hidden" name="from" value={ p.Form.Stack }/>
+				@stackSection(p)
+				if p.Form.Static {
+					<section class="kit-section" aria-labelledby="kit-uses-title">
+						<h2 class="kit-section-title" id="kit-uses-title">What it uses</h2>
+						<p class="kit-quiet">A static site is served as files, so it needs no database, setup or worker. Previa builds it and serves it at the pull request's link.</p>
+					</section>
+				} else {
+					@servicesSection(p)
+					@extrasSection(p)
+				}
+				@advanced(p)
+				<div class="kit-submit">
+					<button type="submit" class="kit-update">Update files</button>
+				</div>
+			</form>
+			@editor(p)
+		</div>
 		@guide(p)
 	</div>
 }

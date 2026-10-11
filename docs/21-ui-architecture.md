@@ -318,7 +318,9 @@ in `web/styles/kits.css`, behaviour in `ui.js` `initStarterKit`) writes a `Docke
 and `.previewrc.yaml` for one of nine stacks (Next.js, React + Vite (static), Node.js
 API, Django, FastAPI, Ruby on Rails, Go, Spring Boot, Laravel) or **Own Dockerfile**
 (only `.previewrc.yaml`). The page is two columns that fit one screen: the choices in
-one compact card beside a sticky editor, with the guidance in a row underneath.
+one compact card beside a sticky editor, with the guidance in a row underneath. The
+choices and the editor share their own wrapper (`.kit-main`), so the editor stays in
+view only beside the choices and never slides over the guidance.
 
 - **Choices.** Stacks are a row of chips (monogram and name) with the chosen stack's
   kind and language under them. Services and extras are switch rows: PostgreSQL and
