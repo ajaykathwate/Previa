@@ -15,7 +15,7 @@ Last updated: 2026-10-11
   theme, modal confirmations, server-rendered navigation and GET/POST fallbacks.
 
 ## Run and configuration
-- Go 1.26.9+; make build/test/lint/vuln; make observability-check (promtool via Docker).
+- Go 1.26.9+; make build/test/lint/vuln, river-ui (jobs, :8090), observability-check.
 - PostgreSQL 17 via Compose; make migrate-up applies Goose 20 and River 007. The
   dev DB was last seen at 19: run make migrate-up before make run-*/make dev.
   Processes refuse an older schema ("run migrations first").

@@ -75,6 +75,7 @@ marked *command line* are typed before a `make` command instead.
 | [TEST_E2E_LOG](#test_e2e_log) | Optional | End-to-end tests | `.env` |
 | [TEST_ROUTING_LOG](#test_routing_log) | Optional | Routing tests | `.env` |
 | [WORKSPACES](#workspaces) | Optional | Housekeeping dry run | `.env` |
+| [RIVER_UI_PORT](#river_ui_port) | Optional | Job queue view | `.env` |
 | [ENV_FILE](#env_file) | Optional | Choosing another settings file | command line |
 | [UI_BROWSER_EXECUTABLE](#ui_browser_executable) | Optional | Browser tests | command line |
 | [UI_BROWSER_SCREENSHOTS](#ui_browser_screenshots) | Optional | Browser tests | command line |
@@ -900,6 +901,16 @@ marked *command line* are typed before a `make` command instead.
 - **How to get it:** leave empty, or use the folder from
   [SOURCE_WORKSPACE_ROOT](#source_workspace_root).
 - **Example:** `WORKSPACES=`
+
+### `RIVER_UI_PORT`
+
+- **Type:** Optional. Default `8090`.
+- **What it is:** the port of River UI, the browser view of the job queue that
+  `make river-ui` starts on `127.0.0.1`.
+- **Where it's used:** `make river-ui` (open `http://localhost:<port>`).
+- **How to get it:** keep `8090` unless something else uses it; `8080` is the
+  dashboard.
+- **Example:** `RIVER_UI_PORT=8090`
 
 ### `ENV_FILE`
 

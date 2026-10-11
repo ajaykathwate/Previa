@@ -58,6 +58,8 @@ make run-worker        # terminal 2
 
 To check both are healthy: `curl -s localhost:9090/readyz` and `curl -s localhost:9091/readyz`. In the dashboard, **Overview** should show every pipeline stage as **Connected**.
 
+To watch the job queue (builds, syncs, housekeeping) in a browser, run `make river-ui` in a third terminal and open http://localhost:8090.
+
 ## Step 6 (optional): Webhooks
 These let PRs appear by themselves and make **Automatic** builds work. Run a tunnel to port 8080 (for example `cloudflared tunnel --url http://localhost:8080`), put `<tunnel URL>/webhooks/github` and `GITHUB_WEBHOOK_SECRET` into the App, restart the server, then run `make test-webhook` (expect `HTTP 204`). Without webhooks, use **Sync Pull Requests** and **Build latest commit**.
 

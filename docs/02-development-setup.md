@@ -151,7 +151,7 @@ production only. The rules that most often stop a first run:
 | Command | Loads `.env`? |
 | --- | --- |
 | `make run-server`, `make run-worker`, `make dev` | Yes; already-exported variables take precedence. Restart Air after editing `.env`. |
-| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `test-webhook`, `test-github-app`, `test-source`, `test-reporting`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e`, `housekeeping-dry-run`, `router-up`, `router-down`, `route-sync` | Yes; falls back to `.env.example` for migrations if `.env` is absent. `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e` and `test-reporting` use `DATABASE_URL` as `TEST_DATABASE_URL` unless that is exported (they create and drop their own schemas). |
+| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `river-ui`, `test-webhook`, `test-github-app`, `test-source`, `test-reporting`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e`, `housekeeping-dry-run`, `router-up`, `router-down`, `route-sync` | Yes; falls back to `.env.example` for migrations and `river-ui` if `.env` is absent. `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e` and `test-reporting` use `DATABASE_URL` as `TEST_DATABASE_URL` unless that is exported (they create and drop their own schemas). |
 | Direct `go run`, manual Goose commands | No; run `set -a; . ./.env; set +a` once per terminal. |
 | `make build`, `make lint`, `make generate`, `make vuln`, `make observability-check`, `make release-images` | No configuration needed (the last two need Docker). |
 | `make prod-smoke` | No; it writes its own settings into a temporary directory ([25](25-production-deployment.md#local-staging-smoke-test)). |
@@ -538,6 +538,35 @@ make test-webhook   # expect: HTTP 204: signed fixture accepted
 ```
 
 ## 7. Inspect jobs and operations
+
+### In the browser: River UI
+
+```sh
+make river-ui
+```
+
+**Expected:** the first run compiles River UI (pinned in `tools/go.mod`, about a
+minute), then prints `River UI: http://localhost:8090 (Ctrl+C stops it)` and
+`Starting server addr=127.0.0.1:8090`. Open http://localhost:8090 to see every job
+by state (available, scheduled, running, retryable, completed, discarded,
+cancelled), filter by kind or queue, and open a job for its arguments, attempts and
+errors. Ctrl+C stops it.
+
+- It reads `DATABASE_URL` like the other targets: the exported variable first, then
+  `.env`, then `.env.example`. It needs only PostgreSQL; the server and worker may be
+  stopped.
+- `RIVER_UI_PORT` (default `8090`, in `.env` or on the command line:
+  `RIVER_UI_PORT=8091 make river-ui`) sets the port. It listens on `127.0.0.1` only,
+  so it is reachable from this machine (including the Windows browser under WSL),
+  not the network.
+- River UI can also cancel, retry and delete jobs. Use it to look: cancelling or
+  deleting a `build` or `environment_operation` job does not update Previa's own
+  build and preview state; use the dashboard to build or tear down.
+- `bind: address already in use` means something already serves that port (for
+  example an earlier River UI container: `docker stop previa-riverui`); stop it or
+  pick another `RIVER_UI_PORT`.
+
+### In SQL
 
 ```sh
 docker compose -f deploy/docker-compose.yml exec postgres psql -U previa -d previa

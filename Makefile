@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status river-ui
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -228,6 +228,18 @@ river-migrate-up river-status:
 	: "$${DATABASE_URL:?DATABASE_URL must be set}"; \
 	export DATABASE_URL; \
 	$(GO) run ./cmd/river-migrate $(if $(filter river-status,$@),status,up)
+
+# River UI: a web view of every queued, running, retried and finished job, at
+# http://localhost:$RIVER_UI_PORT (default 8090), reading the app's DATABASE_URL
+# (environment, then the env file, then .env.example). It listens on loopback
+# only; Ctrl+C stops it. It can also cancel, retry and delete jobs.
+river-ui:
+	@$(load_run_env) \
+	if [ -z "$${DATABASE_URL:-}" ] && [ ! -f "$(ENV_FILE)" ]; then set -a; . ./.env.example; set +a; fi; \
+	: "$${DATABASE_URL:?DATABASE_URL must be set}"; \
+	previa_port="$${RIVER_UI_PORT:-8090}"; \
+	echo "River UI: http://localhost:$$previa_port (Ctrl+C stops it)"; \
+	RIVER_HOST=127.0.0.1 PORT="$$previa_port" exec $(TOOLS) riverui
 
 # Signs a local fixture in memory; secret is never a command argument.
 .PHONY: test-webhook
