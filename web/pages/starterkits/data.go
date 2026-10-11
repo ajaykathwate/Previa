@@ -4,6 +4,8 @@
 // shows them.
 package starterkits
 
+import "strings"
+
 // Page is everything the page shows.
 type Page struct {
 	Stacks   []StackOption
@@ -11,9 +13,19 @@ type Page struct {
 	Files    []File
 	Notes    []string // what to check in the app itself
 	Problems []Problem
-	Offer    string   // which service versions this server offers
-	Summary  []string // the kit at a glance: stack, services, setup, worker
-	Status   string   // read aloud when the files change
+	Offer    string // which service versions this server offers
+	Status   string // read aloud when the files change
+	CSRF     string // for the download forms and the check of an edited file
+}
+
+// Selected is the chosen stack.
+func (p Page) Selected() StackOption {
+	for _, s := range p.Stacks {
+		if s.Selected {
+			return s
+		}
+	}
+	return StackOption{}
 }
 
 // StackOption is one stack card.
@@ -68,19 +80,25 @@ type Detail struct {
 	Options            []string
 }
 
-// File is one generated file.
+// File is one generated file, an editor tab.
 type File struct {
-	Name     string // Dockerfile or .previewrc.yaml
-	Kind     string // dockerfile or yaml, for highlighting
-	Content  string
-	Download string
-	Purpose  string
+	ID      string // dockerfile or previewrc: its tab, panel and download path
+	Name    string // Dockerfile or .previewrc.yaml
+	Kind    string // dockerfile or yaml, for highlighting
+	Content string
+	Purpose string
 }
 
-// Problem is a choice to fix. Field names the form control it belongs to;
-// Label names it for the list above the files ("" when it needs none).
+// Lines counts the file's lines as an editor numbers them, the empty line
+// after a final newline included.
+func (f File) Lines() int { return strings.Count(f.Content, "\n") + 1 }
+
+// Problem is a choice or a line to fix. Field names the form control it
+// belongs to; Label names it in the list under the files ("" when it needs
+// none); Line is set for a problem in an edited file.
 type Problem struct {
 	Field, Label, Message string
+	Line                  int
 }
 
 // ProblemFor returns the message for one field, if any.

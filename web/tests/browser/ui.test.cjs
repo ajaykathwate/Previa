@@ -1286,58 +1286,99 @@ test('every page passes basic accessibility checks', async () => {
   }
 });
 
-test('starter kits write both files for the chosen stack, update in place and copy or download them',async()=>{
+// What a Download button posts: the file's text from the editor. The server
+// echoes it back as an attachment (unit tested); browsers send CRLF breaks.
+function postedContent(request) {
+  return new URLSearchParams(request.postData()).get('content').replace(/\r\n/g, '\n');
+}
+// The kit is idle: no request in flight and the last swap has settled.
+const kitIdle = target => target.waitForFunction(() => !document.querySelector('.htmx-request, .htmx-settling, .htmx-added'));
+
+test('starter kits write both files for the chosen stack as editable tabs, and edits survive until reset',async()=>{
  await login();
  await page.locator('.app-sidebar a[href="/starter-kits"]').click();await page.waitForURL(`${origin}/starter-kits`);
  assert.equal(await page.locator('.app-sidebar a[href="/starter-kits"]').getAttribute('aria-current'),'page');
  assert.equal(await page.locator('h1').innerText(),'Starter kits');
- const code=name=>page.locator(`.kit-file[aria-label="${name}"] .kit-code code`);
- assert.match(await code('.previewrc.yaml').innerText(),/^port: 3000/m);
- assert.match(await code('Dockerfile').innerText(),/^FROM node:/m);
- assert.match(await page.locator('.kit-valid').innerText(),/Passes Previa's checks/);
- // Choosing a stack swaps in its own defaults and keeps the address shareable.
+ const file=id=>page.locator(`#kit-code-${id}`);
+ const tab=name=>page.getByRole('tab',{name,exact:false});
+ const status=()=>page.locator('.kit-check').innerText();
+ // Two tabs; the Dockerfile shows first, highlighted, and the other panel is hidden.
+ assert.equal(await page.getByRole('tab').count(),2);
+ assert.equal(await tab('Dockerfile').getAttribute('aria-selected'),'true');
+ assert(await page.locator('#kit-panel-previewrc').isHidden());
+ assert.match(await file('dockerfile').inputValue(),/^FROM node:/m);
+ assert(await page.locator('#kit-panel-dockerfile .kit-highlight .tk-kw').count()>3,'the Dockerfile is highlighted');
+ assert.match(await status(),/Passes Previa's checks/);
+ await tab('.previewrc.yaml').click();
+ assert(await page.locator('#kit-panel-dockerfile').isHidden());
+ assert.match(await file('previewrc').inputValue(),/^port: 3000/m);
+ await tab('.previewrc.yaml').press('ArrowLeft');
+ assert.equal(await tab('Dockerfile').getAttribute('aria-selected'),'true');
+ await tab('Dockerfile').press('ArrowRight');
+ // Choosing a stack swaps in its defaults, keeps the open tab and the address shareable.
  await page.locator('.kit-stack',{hasText:'Django'}).click();
  await page.waitForURL(url=>url.searchParams.get('stack')==='django');
- await page.waitForFunction(()=>/^port: 8000/m.test(document.querySelector('.kit-file[aria-label=".previewrc.yaml"] .kit-code code').innerText));
- assert(await page.locator('input[name="stack"][value="django"]').evaluate(e=>e.checked));
- await page.getByRole('switch',{name:/^Redis/}).check();
- await page.waitForFunction(()=>/^\s+redis:/m.test(document.querySelector('.kit-file[aria-label=".previewrc.yaml"] .kit-code code').innerText));
+ await page.waitForFunction(()=>/^port: 8000/m.test(document.querySelector('#kit-code-previewrc').value));
+ assert.equal(await tab('.previewrc.yaml').getAttribute('aria-selected'),'true','the open tab stays open');
+ assert.match(await page.locator('.kit-stack-about').innerText(),/Django · Full-stack · Python/);
+ await kitIdle(page);await page.getByRole('switch',{name:/^Redis/}).check();
+ await page.waitForFunction(()=>/^\s+redis:/m.test(document.querySelector('#kit-code-previewrc').value));
  assert.match(await page.locator('#kit-status').innerText(),/updated/i);
  // A custom worker command with shell syntax runs through sh -c; typing keeps focus.
- await page.getByRole('switch',{name:/^Run a background worker/}).check();
- await page.locator('#kit-worker-with').waitFor();
+ await kitIdle(page);await page.getByRole('switch',{name:/^Background worker/}).check();
+ await page.locator('#kit-worker-with').waitFor();await kitIdle(page);
  await page.locator('#kit-worker-with').selectOption('custom');
- const custom=page.locator('#kit-worker-cmd');await custom.waitFor();
+ const custom=page.locator('#kit-worker-cmd');await custom.waitFor();await kitIdle(page);
  await custom.fill('celery -A mysite worker && echo done');
- await page.waitForFunction(()=>/"sh", "-c", "celery -A mysite worker && echo done"/.test(document.querySelector('.kit-file[aria-label=".previewrc.yaml"] .kit-code code').innerText));
+ await page.waitForFunction(()=>/"sh", "-c", "celery -A mysite worker && echo done"/.test(document.querySelector('#kit-code-previewrc').value));
  assert(await page.locator('#kit-worker-cmd').evaluate(e=>e===document.activeElement),'typing keeps focus in the command');
- // Out-of-range values are reported, never written.
- await page.locator('.kit-advanced summary').click();
+ // Out-of-range choices are reported, never written.
+ await kitIdle(page);await page.locator('.kit-advanced summary').click();
  await page.locator('#kit-port').fill('70000');
- await page.waitForFunction(()=>/1 to fix/.test(document.querySelector('.kit-valid').innerText));
- assert.match(await page.locator('.kit-problems').innerText(),/port/i);
- assert.match(await code('.previewrc.yaml').innerText(),/^port: 8000/m);
+ await page.waitForFunction(()=>/1 to fix/.test(document.querySelector('.kit-check').innerText));
+ assert.match(await page.locator('.kit-problems').innerText(),/Port: Use a port/);
+ assert.match(await file('previewrc').inputValue(),/^port: 8000/m);
  await page.locator('#kit-port').fill('8001');
- await page.waitForFunction(()=>/^port: 8001/m.test(document.querySelector('.kit-file[aria-label=".previewrc.yaml"] .kit-code code').innerText));
- // Copy gives the exact file; download names it.
- const yaml=await page.locator('.kit-file[aria-label=".previewrc.yaml"] .copy-button').getAttribute('data-copy');
- assert.equal(await code('.previewrc.yaml').innerText(),yaml.replace(/\n$/,''),'the page shows exactly the file, blank lines included');
+ await page.waitForFunction(()=>/^port: 8001/m.test(document.querySelector('#kit-code-previewrc').value));
+ // Editing marks the tab, is checked by the server as you type, and survives a change of choices.
+ await kitIdle(page);const yaml=file('previewrc');
+ await yaml.click();await page.keyboard.press('Control+End');
+ await page.keyboard.type('\nenv:\n  - FEATURE_FLAGS=preview');
+ assert(await page.locator('#kit-tab-previewrc[data-edited]').count()===1,'the tab shows the file was edited');
+ assert(await page.locator('#kit-panel-previewrc [data-kit-edited]').isVisible());
+ await page.waitForFunction(()=>/Your edited .previewrc.yaml passes/.test(document.querySelector('.kit-check').innerText));
+ await yaml.evaluate(e=>{e.value=e.value.replace('port: 8001','port: eighty');e.dispatchEvent(new Event('input',{bubbles:true}));});
+ await page.waitForFunction(()=>/1 to fix/.test(document.querySelector('.kit-check').innerText));
+ assert.match(await page.locator('.kit-problems').innerText(),/Line 4 port:/);
+ assert(await page.locator('#kit-panel-previewrc .kit-highlight').evaluate(e=>e.textContent.includes('FEATURE_FLAGS=preview')),'the highlight follows the text');
+ await kitIdle(page);await page.getByRole('switch',{name:/^PostgreSQL/}).check();
+ await page.waitForFunction(()=>document.querySelector('#kit-postgres').closest('.kit-row').classList.contains('is-on'));await kitIdle(page);
+ assert(await page.locator('#kit-tab-previewrc[data-edited]').count()===1,'the new editor keeps the edit');
+ assert.match(await yaml.inputValue(),/FEATURE_FLAGS=preview/,'edits survive a change of choices');
+ assert.doesNotMatch(await yaml.inputValue(),/postgres:/,'an edited file no longer follows the choices');
+ await page.waitForFunction(()=>/1 to fix/.test(document.querySelector('.kit-check').innerText));
+ // Copy and Download use the editor's text.
  await context.grantPermissions(['clipboard-read','clipboard-write'],{origin});
  await page.getByRole('button',{name:'Copy .previewrc.yaml',exact:true}).click();
- assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),yaml);
- const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('link',{name:'Download Dockerfile',exact:true}).click()]);
- assert.equal(download.suggestedFilename(),'Dockerfile');
- assert.match(await (await context.request.get(download.url())).text(),/EXPOSE 8001/);
+ assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),await yaml.inputValue());
+ const [request,download]=await Promise.all([page.waitForRequest(r=>r.url().endsWith('/starter-kits/download/previewrc')),page.waitForEvent('download'),page.getByRole('button',{name:'Download .previewrc.yaml',exact:true}).click()]);
+ assert.match(download.suggestedFilename(),/^\.?previewrc\.yaml$/,'browsers may drop the leading dot');
+ assert.equal(postedContent(request),await yaml.inputValue(),'Download sends the edited file');
+ // Reset brings back the newest generated file and its checks.
+ await page.locator('#kit-panel-previewrc [data-kit-reset]').click();
+ assert.match(await yaml.inputValue(),/postgres: 17/);
+ assert.equal(await page.locator('#kit-tab-previewrc[data-edited]').count(),0);
+ assert.match(await status(),/Passes Previa's checks/);
  // A static site needs no services, setup or worker.
- await page.locator('.kit-stack',{hasText:'Vite'}).click();
+ await kitIdle(page);await page.locator('.kit-stack',{hasText:'React + Vite'}).click();
  await page.waitForFunction(()=>document.querySelector('.kit-quiet'));
- assert.doesNotMatch(await code('.previewrc.yaml').innerText(),/services:|setup:|processes:/);
+ assert.doesNotMatch(await yaml.inputValue(),/services:|setup:|processes:/);
  for(const width of [390,820]){await page.setViewportSize({width,height:900});await assertNoOverflow();}
 });
 
 test('starter kits work without JavaScript and need a signed-in user',async()=>{
  assert.equal((await context.request.get(`${origin}/starter-kits`,{maxRedirects:0})).status(),303);
- const noJS=await browser.newContext({javaScriptEnabled:false});
+ const noJS=await browser.newContext({javaScriptEnabled:false,acceptDownloads:true});
  try {
   const plain=await noJS.newPage();
   await plain.goto(`${origin}/auth/github/login`);await plain.waitForURL(`${origin}/dashboard`);
@@ -1346,8 +1387,15 @@ test('starter kits work without JavaScript and need a signed-in user',async()=>{
   await plain.getByRole('switch',{name:/^PostgreSQL/}).check();
   await plain.getByRole('button',{name:'Update files',exact:true}).click();
   await plain.waitForURL(url=>url.searchParams.get('stack')==='rails');
-  const config=await plain.locator('.kit-file[aria-label=".previewrc.yaml"] .kit-code code').innerText();
+  // Without tabs, both files show as text areas, one under the other.
+  assert(await plain.locator('[data-kit-tabs]').isHidden());
+  assert(await plain.locator('#kit-code-dockerfile').isVisible()&&await plain.locator('#kit-code-previewrc').isVisible());
+  const config=await plain.locator('#kit-code-previewrc').inputValue();
   assert.match(config,/^port: 3000/m);assert.match(config,/postgres: 17 /);assert.match(config,/health_check_path: \/up/);
-  assert.match(await plain.locator('.kit-file[aria-label="Dockerfile"] .kit-code code').innerText(),/libpq-dev/);
+  assert.match(await plain.locator('#kit-code-dockerfile').inputValue(),/libpq-dev/);
+  await plain.locator('#kit-code-previewrc').fill(config.replace('resource_tier: standard','resource_tier: large'));
+  const [request,download]=await Promise.all([plain.waitForRequest(r=>r.url().endsWith('/starter-kits/download/previewrc')),plain.waitForEvent('download'),plain.getByRole('button',{name:'Download .previewrc.yaml',exact:true}).click()]);
+  assert.match(download.suggestedFilename(),/^\.?previewrc\.yaml$/,'browsers may drop the leading dot');
+  assert.match(postedContent(request),/resource_tier: large/,'Download posts the edited text');
  } finally {await noJS.close();}
 });

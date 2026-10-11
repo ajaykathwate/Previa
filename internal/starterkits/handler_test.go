@@ -31,11 +31,25 @@ func (f fakeCaps) Current(context.Context) (workers.Capabilities, error) { retur
 
 func serve(t *testing.T, caps Capabilities, validate Validator, target string) *httptest.ResponseRecorder {
 	t.Helper()
+	return send(t, caps, validate, httptest.NewRequest(http.MethodGet, target, nil))
+}
+
+// post sends the editor's text, with the CRLF line breaks a browser sends.
+func post(t *testing.T, validate Validator, target, content string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := url.Values{"content": {strings.ReplaceAll(content, "\n", "\r\n")}}.Encode()
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return send(t, nil, validate, req)
+}
+
+func send(t *testing.T, caps Capabilities, validate Validator, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
 	r := chi.NewRouter()
 	h := NewHandler(fakeUsers{}, caps, defaults, validate, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	h.Mount(r, func(next http.Handler) http.Handler { return next })
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	r.ServeHTTP(rec, req)
 	return rec
 }
 
@@ -47,25 +61,45 @@ func TestPageShowsTheFirstStacksKit(t *testing.T) {
 	}
 }
 
-func TestDownloadsSendTheKitsFiles(t *testing.T) {
-	c := Fresh("django")
-	c.Port = 8100
-	q := c.Query()
+func TestDownloadsSendTheEditorsText(t *testing.T) {
+	edited := "FROM python:3.13-slim\nEXPOSE 8100\n"
 	for file, name := range map[string]string{"dockerfile": "Dockerfile", "previewrc": ".previewrc.yaml"} {
-		rec := serve(t, nil, nil, "/starter-kits/download/"+file+"?"+q.Encode())
+		rec := post(t, nil, "/starter-kits/download/"+file, edited)
 		if rec.Code != http.StatusOK || rec.Header().Get("Content-Disposition") != `attachment; filename="`+name+`"` {
 			t.Fatalf("%s: status %d, disposition %q", file, rec.Code, rec.Header().Get("Content-Disposition"))
 		}
-		if !strings.Contains(rec.Body.String(), "8100") {
-			t.Fatalf("%s must follow the query:\n%s", file, rec.Body.String())
+		if rec.Body.String() != edited {
+			t.Fatalf("%s must be the posted text with LF line breaks, got %q", file, rec.Body.String())
 		}
 	}
-	if rec := serve(t, nil, nil, "/starter-kits/download/secrets?"+q.Encode()); rec.Code != http.StatusNotFound {
+	if rec := post(t, nil, "/starter-kits/download/secrets", edited); rec.Code != http.StatusNotFound {
 		t.Fatalf("an unknown file is not found, got %d", rec.Code)
 	}
-	own := Fresh("custom").Query()
-	if rec := serve(t, nil, nil, "/starter-kits/download/dockerfile?"+own.Encode()); rec.Code != http.StatusNotFound {
-		t.Fatalf("a repository with its own Dockerfile gets none, got %d", rec.Code)
+	if rec := post(t, nil, "/starter-kits/download/dockerfile", strings.Repeat("a", maxFileBytes+1)); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("a file over 64 KiB is refused, got %d", rec.Code)
+	}
+}
+
+func TestEditedConfigIsCheckedWithLines(t *testing.T) {
+	validate := func(config []byte, _ Offer) []Problem {
+		if strings.Contains(string(config), "\r") {
+			t.Error("the check must see LF line breaks")
+		}
+		if strings.Contains(string(config), "port: 0") {
+			return []Problem{{Field: "port", Message: "Port must be between 1 and 65535.", Line: 2}}
+		}
+		return nil
+	}
+	rec := post(t, validate, "/starter-kits/check", "# kit\nport: 0\n")
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "Line 2") || !strings.Contains(body, "1 to fix") {
+		t.Fatalf("an edited file's problems are listed by line, got %d:\n%s", rec.Code, body)
+	}
+	if !strings.Contains(body, `id="kit-status" hx-swap-oob="innerHTML"`) {
+		t.Fatal("the result is also announced to screen readers")
+	}
+	if body := post(t, validate, "/starter-kits/check", "port: 3000\n").Body.String(); !strings.Contains(body, "Your edited .previewrc.yaml passes Previa") {
+		t.Fatalf("a valid edit says it passes, got:\n%s", body)
 	}
 }
 

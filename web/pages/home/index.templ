@@ -300,7 +300,7 @@ templ features() {
 			@featureGroup("Build") {
 				@feature("Manual or Automatic", "Manual by default: you press Build latest commit. Or switch on Automatic and Previa builds five minutes after your last push.", components.SyncIcon())
 				@feature("Only buildable changes", "Pull requests with merge conflicts don't build. Previa checks again right before it starts, so nothing runs by mistake.", components.MergeIcon())
-				@feature("Your own Dockerfile", "If it runs in Docker and answers HTTP, it runs on Previa: Node.js, Python, Ruby, Go, PHP, Java or a static site.", components.BuildIcon())
+				@feature("Your Dockerfile, or ours", "If it runs in Docker and answers HTTP, it runs on Previa. No setup yet? Starter kits write both files for Next.js, Django, Rails, Laravel and more.", components.BuildIcon())
 			}
 			@featureGroup("Run") {
 				@feature("Databases included", "Ask for PostgreSQL or Redis, run a setup command and up to three background processes. Each preview gets fresh data.", components.DatabaseIcon())
@@ -383,7 +383,7 @@ templ available() {
 			<p class="available-status"><span class="badge tone-ok"><span class="badge-dot" aria-hidden="true"></span>Available today</span>Early access</p>
 			<div class="available-columns">
 				@availableArea("Connect", []string{"Sign in with GitHub", "Install on the repositories you choose", "Pull requests appear by themselves", "Sync on demand"})
-				@availableArea("Build", []string{"Manual or Automatic builds", "Only mergeable pull requests build", "Your Dockerfile, from the exact commit", "Live build logs, secrets masked"})
+				@availableArea("Build", []string{"Starter kits for popular stacks", "Manual or Automatic builds", "Only mergeable pull requests build", "Your Dockerfile, from the exact commit", "Live build logs, secrets masked"})
 				@availableArea("Run", []string{"Isolated previews in three sizes", "PostgreSQL, Redis, setup and workers", "Encrypted secrets, never for forks", "Approved outside connections"})
 				@availableArea("Review", []string{"A private HTTPS link per pull request", "Health-checked switch to new commits", "A living comment and a commit check", "Cleanup on merge, close or after 48 h"})
 			</div>

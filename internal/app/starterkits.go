@@ -37,7 +37,7 @@ func validateKit(data []byte, offer starterkits.Offer) []starterkits.Problem {
 	}
 	problems := make([]starterkits.Problem, 0, len(invalid.Issues))
 	for _, issue := range invalid.Issues {
-		problems = append(problems, starterkits.Problem{Field: issue.Field, Message: issue.Message})
+		problems = append(problems, starterkits.Problem{Field: issue.Field, Message: issue.Message, Line: issue.Line})
 	}
 	return problems
 }

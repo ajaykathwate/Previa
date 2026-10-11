@@ -148,7 +148,8 @@ func sourceDiagnosis(reason string) Diagnosis {
 	case has("add .previewrc.yaml", "add the config file"):
 		d.Title = "This commit has no .previewrc.yaml"
 		d.Summary = "Previa needs a .previewrc.yaml file at the repository root to know how to run your app."
-		d.Steps = []string{"Add .previewrc.yaml to the repository root. It can be as short as {} when your app listens on port 3000.", stepPushBuild}
+		d.Steps = []string{"Add .previewrc.yaml to the repository root. It can be as short as {} when your app listens on port 3000.",
+			"Or open Starter kits in the sidebar: it writes the file for your stack, already checked.", stepPushBuild}
 	case has("authentication is unavailable", "app configuration", "client configuration"):
 		d.Title = "Previa couldn't sign in to GitHub as your app"
 		d.Summary = "The worker's GitHub App credentials were missing or not accepted."
@@ -166,7 +167,8 @@ func sourceDiagnosis(reason string) Diagnosis {
 	case has("dockerfile"):
 		d.Title = "Previa couldn't find a usable Dockerfile"
 		d.Summary = "The Dockerfile named in .previewrc.yaml is missing or is not a regular file."
-		d.Steps = []string{"Check the dockerfile path in .previewrc.yaml (./Dockerfile by default) points to a file inside the repository.", stepPushBuild}
+		d.Steps = []string{"Check the dockerfile path in .previewrc.yaml (./Dockerfile by default) points to a file inside the repository.",
+			"No Dockerfile yet? Starter kits in the sidebar writes one for your stack.", stepPushBuild}
 	case has(".previewrc", "configuration", "yaml", "port must", "choose small", "environment variable", "process", "relative file path", "absolute http path", "absolute path on the preview", "command arguments", "name the program", "reserved"):
 		d.Title = "Your .previewrc.yaml has a problem"
 		d.Summary = "Previa read the file but one of its settings isn't valid."

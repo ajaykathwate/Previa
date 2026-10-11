@@ -667,12 +667,13 @@
     document.addEventListener('htmx:afterSettle', render);
   }
 
-  // Copy buttons: data-copy holds the text, or data-copy-lines names a log
-  // list whose line texts are copied. The label confirms for two seconds.
+  // Copy buttons: data-copy holds the text, data-copy-lines names a log list
+  // whose line texts are copied, or data-copy-from names a field whose value
+  // is copied. The label confirms for two seconds.
   function initCopyButtons() {
     const timers = new WeakMap();
     document.addEventListener('click', async (event) => {
-      const button = event.target.closest('[data-copy], [data-copy-lines]');
+      const button = event.target.closest('[data-copy], [data-copy-lines], [data-copy-from]');
       if (!button) return;
       const status = button.querySelector('[data-copy-status]');
       const label = status?.textContent;
@@ -681,6 +682,7 @@
         const list = document.querySelector(button.dataset.copyLines);
         text = [...(list?.querySelectorAll('.log-text') || [])].map(line => line.textContent).join('\n');
       }
+      if (button.dataset.copyFrom) text = document.querySelector(button.dataset.copyFrom)?.value ?? '';
       try {
         await navigator.clipboard.writeText(text);
         button.dataset.copied = '';
@@ -1315,6 +1317,160 @@
     setInterval(refresh, 30000);
   }
 
+  // Starter kits: the files become tabs of a small editor. Each text area
+  // sits over a highlighted copy of its text, so typing stays native. Edits
+  // survive a change of choices until Reset (the newest generated file is
+  // what Reset restores), and an edited .previewrc.yaml is checked by the
+  // server as you type. Without JavaScript both files show as plain text areas.
+  function initStarterKit() {
+    const edits = new Map();
+    let active = '';
+    const escape = text => text.replace(/[&<>]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]));
+    const html = tokens => tokens.map(([cls, text]) => (cls ? `<span class="${cls}">${escape(text)}</span>` : escape(text))).join('');
+    // The same colours as the generated files: instructions, keys, strings,
+    // numbers, comments and here-documents.
+    const quoted = (text) => {
+      const out = [];
+      while (text) {
+        const start = text.indexOf('"');
+        if (start < 0) { out.push(['', text]); break; }
+        let end = start + 1;
+        while (end < text.length && text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+        end = Math.min(end, text.length - 1);
+        if (start > 0) out.push(['', text.slice(0, start)]);
+        out.push(['tk-str', text.slice(start, end + 1)]);
+        text = text.slice(end + 1);
+      }
+      return out;
+    };
+    const instruction = /^(FROM|RUN|COPY|ADD|ENV|ARG|WORKDIR|EXPOSE|CMD|ENTRYPOINT|USER|LABEL|HEALTHCHECK|SHELL|VOLUME|STOPSIGNAL|ONBUILD)\b/;
+    const yamlKey = /^(\s*)(- )?([a-z_]+)(:)/;
+    const yamlLine = (line) => {
+      let body = line;
+      let comment = '';
+      const hash = line.indexOf('  # ');
+      if (hash >= 0 && !line.slice(0, hash).includes('"')) { body = line.slice(0, hash); comment = line.slice(hash); }
+      const out = [];
+      const key = body.match(yamlKey);
+      if (key) {
+        out.push(['', key[1]]);
+        if (key[2]) out.push(['tk-punct', key[2]]);
+        out.push(['tk-key', key[3]], ['tk-punct', key[4]]);
+        body = body.slice(key[0].length);
+      }
+      quoted(body).forEach(([cls, text]) => out.push([!cls && /^\s*[\d.]+\s*$/.test(text) ? 'tk-num' : cls, text]));
+      if (comment) out.push(['tk-cm', comment]);
+      return out;
+    };
+    const highlight = (lang, text) => {
+      let heredoc = false;
+      return text.split('\n').map((line) => {
+        if (line.trim().startsWith('#') && !heredoc) return html([['tk-cm', line]]);
+        if (lang === 'yaml') return html(yamlLine(line));
+        if (heredoc) { heredoc = line.trim() !== 'EOF'; return html([['tk-here', line]]); }
+        heredoc = line.includes("<<'EOF'");
+        const word = line.match(instruction);
+        return html(word ? [['tk-kw', word[0]], ...quoted(line.slice(word[0].length))] : quoted(line));
+      }).join('\n');
+    };
+
+    const setup = () => {
+      const editor = document.querySelector('[data-kit-editor]');
+      if (!editor || editor.dataset.ready === '1') return;
+      editor.dataset.ready = '1';
+      const status = document.getElementById('kit-status');
+      const checks = editor.querySelector('#kit-checks');
+      const generatedChecks = checks.innerHTML;
+      const panels = [...editor.querySelectorAll('[data-kit-file]')];
+      const tablist = editor.querySelector('[data-kit-tabs]');
+      const tabs = [...tablist.querySelectorAll('[role="tab"]')];
+
+      panels.forEach((panel, index) => {
+        const id = panel.dataset.kitFile;
+        const lang = panel.dataset.lang;
+        const input = panel.querySelector('textarea');
+        const gutter = panel.querySelector('[data-kit-gutter]');
+        const reset = panel.querySelector('[data-kit-reset]');
+        const marker = panel.querySelector('[data-kit-edited]');
+        const generated = input.value;
+        const layer = document.createElement('pre');
+        layer.className = 'kit-highlight';
+        layer.setAttribute('aria-hidden', 'true');
+        input.before(layer);
+        panel.dataset.enhanced = '';
+        let timer = 0;
+        const render = () => {
+          const text = input.value;
+          // A final newline opens an empty line in the text area; the space
+          // gives the highlighted copy the same line.
+          layer.innerHTML = highlight(lang, text) + (text.endsWith('\n') ? ' ' : '');
+          const lines = text.split('\n').length;
+          if (Number(input.rows) !== lines) {
+            input.rows = lines;
+            gutter.textContent = Array.from({length: lines}, (_, i) => i + 1).join('\n');
+          }
+        };
+        const mark = () => {
+          const edited = input.value !== generated;
+          if (edited) edits.set(id, input.value); else edits.delete(id);
+          reset.hidden = !edited;
+          marker.hidden = !edited;
+          tabs[index]?.toggleAttribute('data-edited', edited);
+        };
+        const check = () => {
+          if (lang !== 'yaml') return;
+          clearTimeout(timer);
+          if (input.value === generated) { checks.innerHTML = generatedChecks; return; }
+          timer = setTimeout(() => htmx.trigger(input, 'kit-check'), 400);
+        };
+        if (edits.has(id)) input.value = edits.get(id);
+        mark();
+        render();
+        if (edits.has(id)) check();
+        input.addEventListener('input', () => { mark(); render(); check(); });
+        reset.addEventListener('click', () => {
+          input.value = generated;
+          mark();
+          render();
+          check();
+          if (status) status.textContent = `${panel.querySelector('.kit-crumb code').textContent} is back to the generated file.`;
+          input.focus();
+        });
+      });
+
+      const select = (index, focus) => {
+        tabs.forEach((tab, i) => {
+          tab.setAttribute('aria-selected', String(i === index));
+          tab.tabIndex = i === index ? 0 : -1;
+          panels[i].hidden = i !== index;
+        });
+        active = panels[index].dataset.kitFile;
+        if (focus) tabs[index].focus();
+      };
+      panels.forEach((panel, i) => {
+        panel.setAttribute('role', 'tabpanel');
+        panel.setAttribute('aria-labelledby', tabs[i].id);
+      });
+      tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => select(index, false));
+        tab.addEventListener('keydown', (event) => {
+          const moves = {ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabs.length - 1};
+          if (!(event.key in moves)) return;
+          event.preventDefault();
+          select((moves[event.key] + tabs.length) % tabs.length, true);
+        });
+      });
+      tablist.hidden = false;
+      editor.classList.add('has-tabs');
+      select(Math.max(0, panels.findIndex(panel => panel.dataset.kitFile === active)), false);
+    };
+    setup();
+    // On swap, before the new kit is painted, so it never flashes both files
+    // or the generated text. State lives in data attributes: HTMX settles the
+    // class of elements with an id back to the server's after a swap.
+    document.addEventListener('htmx:afterSwap', setup);
+  }
+
   initMotion();
   initTheme();
   initNavigation();
@@ -1337,4 +1493,5 @@
   initFilm();
   initFAQ();
   initOverview();
+  initStarterKit();
 })();

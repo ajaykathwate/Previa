@@ -83,6 +83,7 @@ type Offer struct {
 // Problem is something to fix before the files will work.
 type Problem struct {
 	Field, Message string
+	Line           int // in an edited .previewrc.yaml; 0 for a choice
 }
 
 // Kit is a generated starter kit.
@@ -130,11 +131,11 @@ func Generate(c Choices, offer Offer) Kit {
 	kit := Kit{Stack: s, Choices: c, Problems: problems}
 	setup, problem := commandFor(s, c.Setup, c.SetupWith, c.SetupCommand, s.Setup, c)
 	if problem != "" {
-		kit.Problems = append(kit.Problems, Problem{"setup", problem})
+		kit.Problems = append(kit.Problems, Problem{Field: "setup", Message: problem})
 	}
 	worker, problem := commandFor(s, c.Worker, c.WorkerWith, c.WorkerCommand, s.Workers, c)
 	if problem != "" {
-		kit.Problems = append(kit.Problems, Problem{"worker", problem})
+		kit.Problems = append(kit.Problems, Problem{Field: "worker", Message: problem})
 	}
 	if !s.OwnFile {
 		kit.Dockerfile = s.dockerfile(c)
@@ -160,12 +161,12 @@ func normalize(s Stack, c Choices, offer Offer) (Choices, []Problem) {
 		c.Port = s.Port
 	}
 	if c.Port < 1 || c.Port > 65535 {
-		problems = append(problems, Problem{"port", "Use a port from 1 to 65535."})
+		problems = append(problems, Problem{Field: "port", Message: "Use a port from 1 to 65535."})
 		c.Port = s.Port
 	}
 	c.Health = strings.TrimSpace(c.Health)
 	if !validPath(c.Health) {
-		problems = append(problems, Problem{"health", "Use a path that starts with /, such as /health, without spaces, ? or #."})
+		problems = append(problems, Problem{Field: "health", Message: "Use a path that starts with /, such as /health, without spaces, ? or #."})
 		c.Health = s.Health
 	}
 	c.DocsPath = strings.TrimSpace(c.DocsPath)
@@ -173,7 +174,7 @@ func normalize(s Stack, c Choices, offer Offer) (Choices, []Problem) {
 		c.DocsPath = cmpOr(s.Docs, "/docs")
 	}
 	if !validPath(c.DocsPath) {
-		problems = append(problems, Problem{"docs", "Use a path on the preview that starts with /, such as /docs."})
+		problems = append(problems, Problem{Field: "docs", Message: "Use a path on the preview that starts with /, such as /docs."})
 		c.DocsPath = cmpOr(s.Docs, "/docs")
 	}
 	if !slices.Contains(Tiers, c.Tier) {
@@ -188,7 +189,7 @@ func serviceVersion(field, name, version string, offered []string, problems []Pr
 	case version == "":
 		return "", problems
 	case len(offered) == 0:
-		return "", append(problems, Problem{field, "This server offers no " + name + " right now, so previews that ask for it won't start."})
+		return "", append(problems, Problem{Field: field, Message: "This server offers no " + name + " right now, so previews that ask for it won't start."})
 	case !slices.Contains(offered, version):
 		return offered[0], problems
 	}
@@ -221,7 +222,7 @@ func detailValue(d *Detail, value string, problems []Problem) (string, []Problem
 	case len(d.Options) > 0 && !slices.Contains(d.Options, value):
 		return d.Default, problems
 	case len(d.Options) == 0 && !d.Pattern.MatchString(value):
-		return d.Default, append(problems, Problem{"detail", d.Hint})
+		return d.Default, append(problems, Problem{Field: "detail", Message: d.Hint})
 	}
 	return value, problems
 }

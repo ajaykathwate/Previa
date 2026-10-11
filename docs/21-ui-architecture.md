@@ -314,42 +314,56 @@ Styles live in `web/styles/logs.css`. See [08](08-build-logs.md).
 ## Starter kits
 
 `/starter-kits` (`internal/starterkits`, templates in `web/pages/starterkits`, styles
-in `web/styles/kits.css`) writes a `Dockerfile` and `.previewrc.yaml` for one of ten
-stacks: Next.js, React + Vite (static), Node.js API, Django, FastAPI, Ruby on Rails,
-Go, Spring Boot, Laravel, or **Own Dockerfile** (only `.previewrc.yaml`). The page is
-one plain GET form beside the files: stack cards, PostgreSQL and Redis switches with
-version chips, migrations, a background worker and a docs link (each with ready-made
-commands or **My own command…**), and **Advanced** (port, health check path, preview
-size and a stack detail such as the Django project package).
+in `web/styles/kits.css`, behaviour in `ui.js` `initStarterKit`) writes a `Dockerfile`
+and `.previewrc.yaml` for one of nine stacks (Next.js, React + Vite (static), Node.js
+API, Django, FastAPI, Ruby on Rails, Go, Spring Boot, Laravel) or **Own Dockerfile**
+(only `.previewrc.yaml`). The page is two columns that fit one screen: the choices in
+one compact card beside a sticky editor, with the guidance in a row underneath.
 
-- **One form, swapped whole.** With JavaScript, every change sends the form with
-  `hx-get` and swaps `#kit` (`hx-select`), with `#kit-status` out of band so screen
-  readers hear "Files updated: …"; typing waits 500 ms. The address follows the
-  form (`hx-replace-url`), so a kit is shareable. Without JavaScript, **Update
-  files** reloads the same page. The hidden `from` field tells the server the stack
-  changed: the new stack's defaults are taken, keeping services, the switches and
-  the preview size.
-- **Checked like a build.** `starterkits.Generate` corrects and reports bad choices
-  (port, paths, a version the server does not offer, shell syntax in a Go image
-  without a shell); the server then parses the YAML with `repoconfig.ParseFor`, the
-  build's own parser (`internal/app/starterkits.go`). The badge says **Passes
-  Previa's checks** or **N to fix**, with each problem named above the files and
-  beside its field. A unit test parses every stack × service × command combination.
-- **Offered versions are live.** Service versions come from the running worker's
-  catalog (`workers.Reader`), or Previa's default catalog when none that builds is
-  running; the hint under the services says which.
-- **Code you can copy exactly.** **Copy** uses the file itself; **Download**
-  (`/starter-kits/download/{dockerfile|previewrc}?…`) regenerates it from the same
-  query. The highlighted body is written in Go (`code()` in `highlight.go`), not the
-  template, so no template whitespace reaches the text, and line numbers live in a
-  separate gutter, so selecting the code copies blank lines and nothing else.
+- **Choices.** Stacks are a row of chips (monogram and name) with the chosen stack's
+  kind and language under them. Services and extras are switch rows: PostgreSQL and
+  Redis with their version as a segmented control in the same row, migrations and a
+  background worker with ready-made commands or **My own command…**, and a docs link.
+  **Advanced** holds the port, health check path, preview size and a stack detail
+  (such as the Django project package).
+- **One form, swapped whole.** It is a plain GET form: every change sends it with
+  `hx-get` and swaps `#kit` (`hx-select`), with `#kit-status:innerHTML` out of band so
+  screen readers hear "Files updated: …"; typing waits 500 ms. The address follows the
+  form (`hx-replace-url`), so a kit is shareable. Without JavaScript, **Update files**
+  reloads the page. The hidden `from` field tells the server the stack changed: the
+  new stack's defaults are taken, keeping services, the switches and the size.
+- **Editor.** The files are tabs (`role="tablist"`, arrow keys, Home and End), like a
+  code editor: a bar with the file's purpose, **Reset**, **Copy** and **Download**,
+  line numbers, and a status bar with the checks. Each file is a `<textarea>` over a
+  highlighted copy of its text (`<pre aria-hidden>`, coloured by `ui.js`), so typing,
+  selection, undo and screen readers stay native. Editing marks the tab with a dot
+  and the bar with **Edited**. Edits survive a change of choices (kept in memory and
+  put back on `htmx:afterSwap`, before paint) until **Reset**, which restores the
+  newest generated file. Without JavaScript the tabs stay hidden and both files show
+  as plain, still editable text areas.
+- **Checked like a build.** `starterkits.Generate` corrects and reports bad choices;
+  the server parses the YAML with `repoconfig.ParseFor`, the build's own parser
+  (`internal/app/starterkits.go`), against the versions the running worker offers
+  (Previa's default catalog when none that builds is running). An edited
+  `.previewrc.yaml` is posted to `POST /starter-kits/check` 400 ms after typing stops
+  and the status bar shows the result, each problem with its key and, where the
+  parser knows it, its line. Problems with choices also show beside their field.
+- **Copy and Download use the editor's text.** **Copy** reads the text area
+  (`data-copy-from`). **Download** submits the file's own form, `POST
+  /starter-kits/download/{dockerfile|previewrc}` with the CSRF token; the server
+  sends the text back as an attachment with LF line breaks (at most 64 KiB). Browsers
+  drop a downloaded file's leading dot, so **Next steps** says to rename
+  `previewrc.yaml`.
+- **HTMX settling.** HTMX settles the `class` of elements with an id back to the
+  server's after a swap, so the editor keeps its own state in data attributes
+  (`data-edited`, `data-enhanced`) and sets the tabs up on swap, before paint.
 - **Runtime rules built in.** Dockerfiles keep caches and storage in `/tmp`, bind
   `0.0.0.0` and expose the chosen port. Spring Boot and Laravel get a small
   `preview-env` entrypoint that maps `DATABASE_URL`/`PG*` and `REDIS_URL` to the
   names the framework reads; setup and processes call it too, since they replace the
-  entrypoint. Per-stack notes (**Check in your app**) and **Need something else?**
-  cover secrets, other databases (via Outbound), plain settings, more workers and
-  seed data.
+  entrypoint. **Check in your app** lists what the code itself must do, and **Need
+  something else?** covers secrets, other databases (via Outbound), plain settings,
+  more workers and seed data.
 
 ## Preview unavailable page
 
@@ -417,4 +431,5 @@ lifetime, both lists without JavaScript), reduced motion and no-JavaScript flows
 | Command palette as a layer over links | Faster navigation for keyboard users without a second navigation model. | Duplicate entry points to keep in sync. |
 | System fonts, no CDNs | Self-hosted, private, fast first paint. | Less typographic control. |
 | Starter kits generated on the server from one form | Every kit passes the build's own parser; works without JavaScript; one address per kit. | A round trip per change (small, and replaced if superseded). |
+| Starter kit editor as a text area over a highlighted copy | Native typing, selection, undo and screen reader support; no editor library to ship or keep in sync with the CSP. | Highlighting is simple (keys, strings, comments), not a full grammar. |
 | SSE invalidation, refetch via GET | No polling; authorization stays in ordinary handlers ([20](20-realtime-updates.md)). | One connection per open page. |

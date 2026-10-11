@@ -49,11 +49,13 @@ Last updated: 2026-10-11
   web/static/video (720p cut of root previa-launch.mp4; render sources live outside
   the repo). Landing page is in its own repo. Proposed, not built: deleting builds.
 
-## Starter kits (2026-10-11, uncommitted; an addition not in DESIGN.md)
-- /starter-kits (internal/starterkits, web/pages/starterkits, kits.css; docs/21, user
-  guide 5): 10 stacks; HTMX swaps one GET form; Dockerfile + .previewrc.yaml checked
-  by repoconfig.ParseFor (internal/app/starterkits.go); versions from worker caps.
-- kits_test parses every stack x service x command; lint 0, make test, browser 48/48.
+## Starter kits (2026-10-11; 21c57cf committed, editor redesign uncommitted)
+- /starter-kits (internal/starterkits, web/pages/starterkits, kits.css, ui.js
+  initStarterKit; docs/21, DESIGN 5): chips + switch rows beside a sticky two-tab
+  editor; edits kept until Reset; POST check of an edited config; Download POSTs text.
+- HTMX settles `class` on id'd elements after a swap: editor state uses data-* attrs.
+  Home page, FAQ, story and diagnosis steps mention Starter kits.
+- Verified: lint 0, make test, browser 48/48 (starter kits scenarios repeated 4x).
 
 ## Branches and CI (technical-docs/ci-in-action.md, cd-in-action.md)
 - master: default and release branch, changed only through PRs (by convention: the
@@ -75,12 +77,10 @@ Last updated: 2026-10-11
   (outbound_refresh every minute); /etc/hosts maps names to the proxy; forks get none.
 
 ## Code quality (2026-10-08)
-- .golangci.yml adds gocognit (30), nestif, gocritic, revive; make lint stays at 0
-  issues. Split long functions into named steps rather than raising limits.
+- golangci adds gocognit (30), nestif, gocritic, revive; keep lint at 0 by splitting.
 
 ## Regression cycle (2026-10-09, committed e9aac61; test-docs/)
-- test-docs/: 242 cases in 16 module files (ID, type, priority, level, steps,
-  expected, evidence); README holds strategy, commands and cycle results.
+- test-docs/: 242 cases in 16 files; README has strategy, commands and results.
   Tick a case only when its evidence passed in a recorded run.
 - Fixed D-01..D-04 (auth refusals as text, https-only links, Go/x-net, GO_IMAGE).
 - Open (owner decision): install-tailwind.sh curl has no retry/time limit; a GitHub

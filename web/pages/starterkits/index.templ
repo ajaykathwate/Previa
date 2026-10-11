@@ -8,11 +8,12 @@ import (
 	"github.com/ajaykathwatee/previa/web/layouts"
 )
 
-// Index is the Starter kits page. The form is a plain GET form: without
-// JavaScript, Update files reloads the page; with it, HTMX swaps the kit in
-// place on every change and keeps the address shareable.
-templ Index(username, csrf string, p Page) {
-	@layouts.App("Starter kits", username, csrf, components.NavStarterKits) {
+// Index is the Starter kits page: the choices beside an editor holding the
+// files. The choices are a plain GET form: without JavaScript, Update files
+// reloads the page; with it, HTMX swaps the kit in place on every change and
+// keeps the address shareable.
+templ Index(username string, p Page) {
+	@layouts.App("Starter kits", username, p.CSRF, components.NavStarterKits) {
 		<div class="kit-page">
 			<header class="page-hero">
 				<div class="page-hero-main">
@@ -22,7 +23,7 @@ templ Index(username, csrf string, p Page) {
 					<div class="page-hero-text">
 						<p class="page-hero-kicker">Set up a repository</p>
 						<h1>Starter kits</h1>
-						<p class="page-hero-sub">Pick your stack and what it uses. Previa writes the two files your repository needs for previews, a <code>Dockerfile</code> and <code>.previewrc.yaml</code>, ready to copy.</p>
+						<p class="page-hero-sub">Pick your stack and what it uses. Previa writes the <code>Dockerfile</code> and <code>.previewrc.yaml</code> your repository needs; edit them here, then copy or download.</p>
 					</div>
 				</div>
 			</header>
@@ -32,7 +33,7 @@ templ Index(username, csrf string, p Page) {
 	}
 }
 
-// Kit is the form and the files; HTMX replaces it as a whole.
+// Kit is the choices, the editor and the guidance; HTMX replaces it whole.
 templ Kit(p Page) {
 	<div id="kit" class="kit">
 		<form
@@ -43,145 +44,107 @@ templ Kit(p Page) {
 			hx-trigger="change, input changed delay:500ms from:.kit-text"
 			hx-target="#kit"
 			hx-select="#kit"
-			hx-select-oob="#kit-status"
+			hx-select-oob="#kit-status:innerHTML"
 			hx-swap="outerHTML"
 			hx-replace-url="true"
 			hx-sync="this:replace"
-			aria-label="Build your starter kit"
+			aria-label="Your starter kit"
 		>
 			<input type="hidden" name="from" value={ p.Form.Stack }/>
-			@stackStep(p)
+			@stackSection(p)
 			if p.Form.Static {
-				<section class="kit-step" aria-labelledby="kit-step-2">
-					<h2 class="kit-step-title" id="kit-step-2"><span class="kit-step-num">2</span>What it uses</h2>
+				<section class="kit-section" aria-labelledby="kit-uses-title">
+					<h2 class="kit-section-title" id="kit-uses-title">What it uses</h2>
 					<p class="kit-quiet">A static site is served as files, so it needs no database, setup or worker. Previa builds it and serves it at the pull request's link.</p>
 				</section>
 			} else {
-				@servicesStep(p)
-				@extrasStep(p)
+				@servicesSection(p)
+				@extrasSection(p)
 			}
 			@advanced(p)
 			<div class="kit-submit">
 				<button type="submit" class="kit-update">Update files</button>
 			</div>
 		</form>
-		@output(p)
-		<div class="kit-guide">
-			<section class="kit-card" aria-labelledby="kit-next-title">
-				<h3 id="kit-next-title">
-					@components.CheckIcon()
-					Next steps
-				</h3>
-				<ol class="kit-next">
-					if p.Form.OwnFile {
-						<li>Save <code>.previewrc.yaml</code> at the root of your repository, next to your project files.</li>
-					} else {
-						<li>Save both files at the root of your repository, next to <code>package.json</code>, <code>requirements.txt</code> or your project's equivalent.</li>
-					}
-					<li>Commit them on a branch and open a pull request.</li>
-					<li>On the pull request's page, choose <strong>Build latest commit</strong>, or let Automatic builds start it.</li>
-				</ol>
-				<a class="text-link kit-repos-link" href="/repositories">
-					Open your repositories
-					@components.Arrow()
-				</a>
-			</section>
-			if len(p.Notes) > 0 {
-				<section class="kit-card kit-notes" aria-labelledby="kit-notes-title">
-					<h3 id="kit-notes-title">
-						@components.InfoIcon()
-						Check in your app
-					</h3>
-					<ul>
-						for _, n := range p.Notes {
-							<li>{ n }</li>
-						}
-					</ul>
-				</section>
-			}
-			@more()
-		</div>
+		@editor(p)
+		@guide(p)
 	</div>
 }
 
-templ stackStep(p Page) {
-	<fieldset class="kit-step">
-		<legend class="kit-step-title"><span class="kit-step-num">1</span>Your stack</legend>
+templ stackSection(p Page) {
+	<fieldset class="kit-section">
+		<legend class="kit-section-title">Stack</legend>
 		<div class="kit-stacks">
 			for _, s := range p.Stacks {
-				<label class={ "kit-stack", templ.KV("is-selected", s.Selected) }>
+				<label class={ "kit-stack", templ.KV("is-selected", s.Selected) } title={ s.Kind + " · " + s.Language }>
 					<input class="sr-only" type="radio" name="stack" value={ s.ID } checked?={ s.Selected }/>
 					<span class={ "kit-mono", "is-" + s.ID } aria-hidden="true">{ Monogram(s.ID) }</span>
-					<span class="kit-stack-text">
-						<strong>{ s.Name }</strong>
-						<small>{ s.Kind } · { s.Language }</small>
-					</span>
-					<span class="kit-stack-check" aria-hidden="true">
-						@components.CheckIcon()
-					</span>
+					{ s.Name }
 				</label>
 			}
 		</div>
+		if s := p.Selected(); s.ID != "" {
+			<p class="kit-stack-about"><strong>{ s.Name }</strong> · { s.Kind } · { s.Language }</p>
+		}
 	</fieldset>
 }
 
-templ servicesStep(p Page) {
-	<fieldset class="kit-step">
-		<legend class="kit-step-title"><span class="kit-step-num">2</span>What it uses</legend>
-		<div class="kit-services">
-			@service("postgres", "PostgreSQL", "A fresh database for every preview. Sets DATABASE_URL.", p.Form.Postgres, components.DatabaseIcon(), p.ProblemFor("postgres"))
-			@service("redis", "Redis", "A fresh cache or queue for every preview. Sets REDIS_URL.", p.Form.Redis, components.ServerIcon(), p.ProblemFor("redis"))
+templ servicesSection(p Page) {
+	<fieldset class="kit-section">
+		<legend class="kit-section-title">Services</legend>
+		<div class="kit-rows">
+			@service("postgres", "PostgreSQL", "Sets DATABASE_URL", p.Form.Postgres, components.DatabaseIcon(), p.ProblemFor("postgres"))
+			@service("redis", "Redis", "Sets REDIS_URL", p.Form.Redis, components.ServerIcon(), p.ProblemFor("redis"))
 		</div>
 		<p class="kit-hint">
 			@components.InfoIcon()
-			{ p.Offer }
+			Each preview gets its own, empty. { p.Offer }
 		</p>
 	</fieldset>
 }
 
 templ service(id, name, hint string, s Service, icon templ.Component, problem string) {
-	<div class={ "kit-service", templ.KV("is-on", s.On) }>
-		<label class="kit-switch-row" for={ "kit-" + id }>
-			<span class="kit-service-icon" aria-hidden="true">
+	<div class={ "kit-row", templ.KV("is-on", s.On) }>
+		<label class="kit-row-main" for={ "kit-" + id }>
+			<span class="kit-row-icon" aria-hidden="true">
 				@icon
 			</span>
-			<span class="kit-service-text"><strong>{ name }</strong><small>{ hint }</small></span>
-			<input class="kit-switch" type="checkbox" role="switch" id={ "kit-" + id } name={ id } value="on" checked?={ s.On } disabled?={ len(s.Versions) == 0 }/>
+			<span class="kit-row-text"><strong>{ name }</strong><small>{ hint }</small></span>
 		</label>
 		if s.On && len(s.Versions) > 0 {
-			<div class="kit-versions" role="radiogroup" aria-label={ name + " version" }>
+			<div class="kit-seg" role="radiogroup" aria-label={ name + " version" }>
 				for _, v := range s.Versions {
-					<label class={ "kit-chip", templ.KV("is-selected", v == s.Version) }>
+					<label class={ "kit-seg-item", templ.KV("is-selected", v == s.Version) }>
 						<input class="sr-only" type="radio" name={ id + "_version" } value={ v } checked?={ v == s.Version }/>
-						{ name } { v }
+						{ v }
 					</label>
 				}
 			</div>
 		}
+		<input class="kit-switch" type="checkbox" role="switch" id={ "kit-" + id } name={ id } value="on" checked?={ s.On } disabled?={ len(s.Versions) == 0 }/>
 		if problem != "" {
 			<p class="kit-field-problem">{ problem }</p>
 		}
 	</div>
 }
 
-templ extrasStep(p Page) {
-	<fieldset class="kit-step">
-		<legend class="kit-step-title"><span class="kit-step-num">3</span>Before and beside your app</legend>
-		<div class="kit-extras">
-			@commandRow("setup", "Run migrations first", "Once per preview, after the services are ready and before the app starts.", p.Form.Setup, p.ProblemFor("setup"))
-			@commandRow("worker", "Run a background worker", "A queue worker or scheduler next to your app, from the same image.", p.Form.Worker, p.ProblemFor("worker"))
-			<div class={ "kit-extra", templ.KV("is-on", p.Form.Docs) }>
-				<label class="kit-switch-row" for="kit-docs">
-					<span class="kit-service-icon" aria-hidden="true">
+templ extrasSection(p Page) {
+	<fieldset class="kit-section">
+		<legend class="kit-section-title">Before and beside your app</legend>
+		<div class="kit-rows">
+			@commandRow("setup", "Migrations", "Run once before the app starts", p.Form.Setup, components.RestartIcon(), p.ProblemFor("setup"))
+			@commandRow("worker", "Background worker", "A queue worker next to your app", p.Form.Worker, components.BuildIcon(), p.ProblemFor("worker"))
+			<div class={ "kit-row", templ.KV("is-on", p.Form.Docs) }>
+				<label class="kit-row-main" for="kit-docs">
+					<span class="kit-row-icon" aria-hidden="true">
 						@components.LinkIcon()
 					</span>
-					<span class="kit-service-text"><strong>Link API docs</strong><small>Adds a docs link to the pull request comment and the dashboard.</small></span>
-					<input class="kit-switch" type="checkbox" role="switch" id="kit-docs" name="docs" value="on" checked?={ p.Form.Docs }/>
+					<span class="kit-row-text"><strong>API docs link</strong><small>On the pull request and the dashboard</small></span>
 				</label>
+				<input class="kit-switch" type="checkbox" role="switch" id="kit-docs" name="docs" value="on" checked?={ p.Form.Docs }/>
 				if p.Form.Docs {
-					<div class="kit-extra-body">
-						<label class="kit-label" for="kit-docs-path">Docs path</label>
-						<input class="kit-input kit-text" id="kit-docs-path" name="docs_path" value={ p.Form.DocsPath } spellcheck="false" autocomplete="off"/>
+					<div class="kit-row-body">
+						<input class="kit-input kit-text kit-mono-input" id="kit-docs-path" name="docs_path" value={ p.Form.DocsPath } aria-label="Docs path" spellcheck="false" autocomplete="off"/>
 						if problem := p.ProblemFor("docs"); problem != "" {
 							<p class="kit-field-problem">{ problem }</p>
 						}
@@ -194,31 +157,25 @@ templ extrasStep(p Page) {
 	</fieldset>
 }
 
-templ commandRow(id, title, hint string, c Command, problem string) {
-	<div class={ "kit-extra", templ.KV("is-on", c.On) }>
-		<label class="kit-switch-row" for={ "kit-" + id }>
-			<span class="kit-service-icon" aria-hidden="true">
-				if id == "setup" {
-					@components.RestartIcon()
-				} else {
-					@components.BuildIcon()
-				}
+templ commandRow(id, title, hint string, c Command, icon templ.Component, problem string) {
+	<div class={ "kit-row", templ.KV("is-on", c.On) }>
+		<label class="kit-row-main" for={ "kit-" + id }>
+			<span class="kit-row-icon" aria-hidden="true">
+				@icon
 			</span>
-			<span class="kit-service-text"><strong>{ title }</strong><small>{ hint }</small></span>
-			<input class="kit-switch" type="checkbox" role="switch" id={ "kit-" + id } name={ id } value="on" checked?={ c.On }/>
+			<span class="kit-row-text"><strong>{ title }</strong><small>{ hint }</small></span>
 		</label>
+		<input class="kit-switch" type="checkbox" role="switch" id={ "kit-" + id } name={ id } value="on" checked?={ c.On }/>
 		if c.On {
-			<div class="kit-extra-body">
-				<label class="kit-label" for={ "kit-" + id + "-with" }>Command</label>
-				<select class="kit-input" id={ "kit-" + id + "-with" } name={ id + "_with" }>
+			<div class="kit-row-body">
+				<select class="kit-input" id={ "kit-" + id + "-with" } name={ id + "_with" } aria-label={ title + " command" }>
 					for _, o := range c.Options {
 						<option value={ o.Value } selected?={ o.Value == c.With }>{ o.Label }</option>
 					}
 					<option value="custom" selected?={ c.Custom() }>My own command…</option>
 				</select>
 				if c.Custom() {
-					<label class="kit-label" for={ "kit-" + id + "-cmd" }>Your command</label>
-					<input class="kit-input kit-text kit-mono-input" id={ "kit-" + id + "-cmd" } name={ id + "_cmd" } value={ c.Text } placeholder={ c.Placeholder } spellcheck="false" autocomplete="off"/>
+					<input class="kit-input kit-text kit-mono-input" id={ "kit-" + id + "-cmd" } name={ id + "_cmd" } value={ c.Text } placeholder={ c.Placeholder } aria-label={ "Your " + strings.ToLower(title) + " command" } spellcheck="false" autocomplete="off"/>
 				}
 				if problem != "" {
 					<p class="kit-field-problem">{ problem }</p>
@@ -234,7 +191,7 @@ templ commandRow(id, title, hint string, c Command, problem string) {
 }
 
 templ advanced(p Page) {
-	<details class="kit-advanced" open?={ p.ProblemFor("port") != "" || p.ProblemFor("health") != "" || p.ProblemFor("detail") != "" }>
+	<details class="kit-section kit-advanced" open?={ p.ProblemFor("port") != "" || p.ProblemFor("health") != "" || p.ProblemFor("detail") != "" }>
 		<summary>
 			@components.ChevronDownIcon()
 			Advanced
@@ -275,11 +232,11 @@ templ advanced(p Page) {
 			</div>
 			<fieldset class="kit-field kit-field-wide">
 				<legend class="kit-label">Preview size</legend>
-				<div class="kit-tiers">
+				<div class="kit-seg kit-tiers">
 					for _, t := range p.Form.Tiers {
-						<label class={ "kit-chip", templ.KV("is-selected", t == p.Form.Tier) }>
+						<label class={ "kit-seg-item", templ.KV("is-selected", t == p.Form.Tier) }>
 							<input class="sr-only" type="radio" name="tier" value={ t } checked?={ t == p.Form.Tier }/>
-							{ t }
+							<span>{ t }</span>
 							<small>{ tierSize(t) }</small>
 						</label>
 					}
@@ -289,76 +246,155 @@ templ advanced(p Page) {
 	</details>
 }
 
-templ output(p Page) {
-	<section class="kit-output" aria-labelledby="kit-output-title">
-		<header class="kit-output-head">
-			<div>
-				<h2 id="kit-output-title">Your starter kit</h2>
-				<ul class="kit-summary" aria-label="This kit">
-					for _, s := range p.Summary {
-						<li>{ s }</li>
-					}
-				</ul>
-			</div>
-			if len(p.Problems) == 0 {
-				<span class="badge tone-ok kit-valid" title="Checked with the same rules a build uses">
-					<span class="badge-dot" aria-hidden="true"></span>Passes Previa's checks
-				</span>
-			} else {
-				<span class="badge tone-warn kit-valid"><span class="badge-dot" aria-hidden="true"></span>{ strconv.Itoa(len(p.Problems)) } to fix</span>
-			}
-		</header>
-		if len(p.Problems) > 0 {
-			<ul class="kit-problems" role="alert">
-				for _, problem := range p.Problems {
-					<li>
-						@components.AlertIcon()
-						<span>
-							if problem.Label != "" {
-								<strong>{ problem.Label }:</strong>
-							}
-							{ problem.Message }
+// editor shows the files as tabs. Each file is a form whose text area is the
+// file: Download posts what is there, edits included. Without JavaScript the
+// tabs stay hidden and both files show one under the other.
+templ editor(p Page) {
+	<section class="kit-workbench" aria-labelledby="kit-files-title">
+		<h2 class="sr-only" id="kit-files-title">Your files</h2>
+		<div class="kit-editor" data-kit-editor>
+			<div class="kit-tabs" role="tablist" aria-label="Files" data-kit-tabs hidden>
+				for i, f := range p.Files {
+					<button
+						type="button"
+						class="kit-tab"
+						role="tab"
+						id={ "kit-tab-" + f.ID }
+						aria-controls={ "kit-panel-" + f.ID }
+						aria-selected={ strconv.FormatBool(i == 0) }
+						if i > 0 {
+							tabindex="-1"
+						}
+					>
+						<span class={ "kit-file-icon", "is-" + f.Kind } aria-hidden="true">
+							@components.KitIcon()
 						</span>
-					</li>
+						{ f.Name }
+						<span class="kit-tab-dot" title="Edited"><span class="sr-only">, edited</span></span>
+					</button>
 				}
-			</ul>
-		}
-		for _, f := range p.Files {
-			@file(f)
-		}
+			</div>
+			for _, f := range p.Files {
+				<form class="kit-panel" id={ "kit-panel-" + f.ID } data-kit-file={ f.ID } data-lang={ f.Kind } method="post" action={ templ.SafeURL("/starter-kits/download/" + f.ID) }>
+					<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+					<div class="kit-panel-bar">
+						<p class="kit-crumb"><code>{ f.Name }</code><span aria-hidden="true">›</span>{ f.Purpose }</p>
+						<span class="kit-edited" data-kit-edited hidden>Edited</span>
+						<span class="kit-actions">
+							<button type="button" class="kit-action" data-kit-reset hidden>
+								@components.RestartIcon()
+								Reset
+							</button>
+							<button type="button" class="kit-action kit-copy" data-copy-from={ "#kit-code-" + f.ID } aria-label={ "Copy " + f.Name } title={ "Copy " + f.Name }>
+								@components.CopyIcon()
+								<span data-copy-status aria-live="polite">Copy</span>
+							</button>
+							<button type="submit" class="kit-action" aria-label={ "Download " + f.Name } title={ "Download " + f.Name }>
+								@components.DownloadIcon()
+								<span>Download</span>
+							</button>
+						</span>
+					</div>
+					<div class="kit-code">
+						<span class="kit-gutter" aria-hidden="true" data-kit-gutter>{ gutter(f.Lines()) }</span>
+						<div class="kit-area">
+							if f.Kind == "yaml" {
+								<textarea id={ "kit-code-" + f.ID } class="kit-textarea" name="content" rows={ strconv.Itoa(f.Lines()) } wrap="off" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label={ f.Name } hx-post="/starter-kits/check" hx-trigger="kit-check" hx-target="#kit-checks" hx-swap="innerHTML" hx-sync="this:replace">{ f.Content }</textarea>
+							} else {
+								<textarea id={ "kit-code-" + f.ID } class="kit-textarea" name="content" rows={ strconv.Itoa(f.Lines()) } wrap="off" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label={ f.Name }>{ f.Content }</textarea>
+							}
+						</div>
+					</div>
+				</form>
+			}
+			<div id="kit-checks" class="kit-checks">
+				@Checks(p.Problems, false)
+			</div>
+		</div>
 	</section>
 }
 
-templ file(f File) {
-	<article class="kit-file" aria-label={ f.Name }>
-		<header class="kit-file-head">
-			<span class="kit-file-icon" aria-hidden="true">
-				@components.KitIcon()
+// Checks is the editor's status bar, with any problems listed above it.
+// Edited is true when the problems are from an edited .previewrc.yaml.
+templ Checks(problems []Problem, edited bool) {
+	if len(problems) > 0 {
+		<ul class="kit-problems" aria-label="Problems">
+			for _, problem := range problems {
+				<li>
+					@components.AlertIcon()
+					<span>
+						if problem.Line > 0 {
+							<span class="kit-problem-line">Line { strconv.Itoa(problem.Line) }</span>
+						}
+						if problem.Label != "" {
+							<strong>{ problem.Label }:</strong>
+						}
+						{ problem.Message }
+					</span>
+				</li>
+			}
+		</ul>
+	}
+	<div class="kit-statusbar">
+		if len(problems) == 0 {
+			<span class="kit-check is-ok">
+				@components.CheckIcon()
+				{ checkSummary(problems, edited) }
 			</span>
-			<span class="kit-file-title">
-				<code>{ f.Name }</code>
-				<small>{ f.Purpose }</small>
+		} else {
+			<span class="kit-check is-warn">
+				@components.AlertIcon()
+				{ checkSummary(problems, edited) }
 			</span>
-			<span class="kit-file-actions">
-				@components.CopyButton(f.Content, "Copy "+f.Name)
-				<a class="kit-download" href={ templ.SafeURL(f.Download) } download={ f.Name } aria-label={ "Download " + f.Name }>
-					@components.DownloadIcon()
-					<span>Download</span>
-				</a>
-			</span>
-		</header>
-		// The code holds only the file, so a selection copies it exactly; line
-		// numbers sit in a separate gutter that is never selected.
-		{{ lines := Highlight(f.Kind, f.Content) }}
-		<div class="kit-code" tabindex="0" role="region" aria-label={ f.Name + " contents" }>
-			<span class="kit-gutter" aria-hidden="true">{ gutter(len(lines)) }</span>
-			<pre>
-				<code>
-					@code(lines)
-				</code>
-			</pre>
-		</div>
-	</article>
+		}
+		<span class="kit-status-meta">Checked with the rules a build uses</span>
+	</div>
+}
+
+// CheckResult answers a check of an edited .previewrc.yaml: the status bar,
+// and the same summary for screen readers.
+templ CheckResult(problems []Problem) {
+	@Checks(problems, true)
+	<p id="kit-status" hx-swap-oob="innerHTML">{ checkSummary(problems, true) + "." }</p>
+}
+
+templ guide(p Page) {
+	<div class="kit-guide">
+		<section class="kit-card" aria-labelledby="kit-next-title">
+			<h3 id="kit-next-title">
+				@components.CheckIcon()
+				Next steps
+			</h3>
+			<ol class="kit-next">
+				if p.Form.OwnFile {
+					<li>Save <code>.previewrc.yaml</code> at the root of your repository, next to your project files.</li>
+				} else {
+					<li>Save both files at the root of your repository, next to <code>package.json</code>, <code>requirements.txt</code> or your project's equivalent.</li>
+				}
+				<li>Downloaded files may lose their leading dot: rename <code>previewrc.yaml</code> to <code>.previewrc.yaml</code>.</li>
+				<li>Commit them on a branch and open a pull request.</li>
+				<li>On the pull request's page, choose <strong>Build latest commit</strong>, or let Automatic builds start it.</li>
+			</ol>
+			<a class="text-link kit-repos-link" href="/repositories">
+				Open your repositories
+				@components.Arrow()
+			</a>
+		</section>
+		if len(p.Notes) > 0 {
+			<section class="kit-card kit-notes" aria-labelledby="kit-notes-title">
+				<h3 id="kit-notes-title">
+					@components.InfoIcon()
+					Check in your app
+				</h3>
+				<ul>
+					for _, n := range p.Notes {
+						<li>{ n }</li>
+					}
+				</ul>
+			</section>
+		}
+		@more()
+	</div>
 }
 
 // more answers what the kit does not cover.
@@ -382,7 +418,7 @@ templ more() {
 		</details>
 		<details>
 			<summary>More than one worker</summary>
-			<p>Add up to three entries under <code>processes</code>, each with its own <code>name</code> and <code>command</code>, and optionally a <code>resource_tier</code>.</p>
+			<p>Add up to three entries under <code>processes</code>, each with its own <code>name</code> and <code>command</code>, and optionally a <code>resource_tier</code>. Edit the file here and Previa checks it as you type.</p>
 		</details>
 		<details>
 			<summary>Writing files at runtime</summary>
@@ -393,6 +429,16 @@ templ more() {
 			<p>Every preview starts with empty services. Under migrations, choose <strong>My own command…</strong> and chain your seed step, such as <code>npm run migrate &amp;&amp; npm run seed</code>.</p>
 		</details>
 	</section>
+}
+
+func checkSummary(problems []Problem, edited bool) string {
+	switch {
+	case len(problems) == 0 && edited:
+		return "Your edited .previewrc.yaml passes Previa's checks"
+	case len(problems) == 0:
+		return "Passes Previa's checks"
+	}
+	return strconv.Itoa(len(problems)) + " to fix"
 }
 
 // gutter numbers n lines, one per line.

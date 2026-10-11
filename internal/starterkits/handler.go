@@ -46,12 +46,14 @@ func NewHandler(users UserSession, caps Capabilities, fallback Offer, validate V
 	return &Handler{users: users, caps: caps, fallback: fallback, validate: validate, logger: logger}
 }
 
-// Mount registers the page for signed-in users.
+// Mount registers the page for signed-in users. Downloads and checks are
+// POSTs because they carry the editor's text, edits included.
 func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handler) {
 	r.Group(func(r chi.Router) {
 		r.Use(requireUser)
 		r.Get("/starter-kits", h.page)
-		r.Get("/starter-kits/download/{file}", h.download)
+		r.Post("/starter-kits/download/{file}", h.download)
+		r.Post("/starter-kits/check", h.check)
 	})
 }
 
@@ -59,27 +61,67 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 	offer := h.offer(r.Context())
 	kit := h.generate(r.URL.Query(), offer)
 	username, _ := h.users.Username(r.Context())
-	templ.Handler(kitpages.Index(username, h.users.CSRFToken(r.Context()), view(kit, offer))).ServeHTTP(w, r)
+	p := view(kit, offer)
+	p.CSRF = h.users.CSRFToken(r.Context())
+	templ.Handler(kitpages.Index(username, p)).ServeHTTP(w, r)
 }
 
-// download sends one file of the kit described by the query.
+// maxFileBytes bounds an edited file; a build reads at most this much of
+// .previewrc.yaml, and no Dockerfile a kit starts from comes close.
+const maxFileBytes = 64 * 1024
+
+// fileNames are the files a kit has, by download path.
+var fileNames = map[string]string{"dockerfile": "Dockerfile", "previewrc": ".previewrc.yaml"}
+
+// download sends the editor's text back as the named file.
 func (h *Handler) download(w http.ResponseWriter, r *http.Request) {
-	kit := h.generate(r.URL.Query(), h.offer(r.Context()))
-	name, content := "", ""
-	switch chi.URLParam(r, "file") {
-	case "dockerfile":
-		name, content = "Dockerfile", kit.Dockerfile
-	case "previewrc":
-		name, content = ".previewrc.yaml", kit.Config
-	}
-	if content == "" {
+	name, ok := fileNames[chi.URLParam(r, "file")]
+	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	content, ok := posted(w, r)
+	if !ok {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write([]byte(content))
+}
+
+// check validates an edited .previewrc.yaml as a build would and answers
+// with the editor's status bar.
+func (h *Handler) check(w http.ResponseWriter, r *http.Request) {
+	content, ok := posted(w, r)
+	if !ok {
+		return
+	}
+	var problems []kitpages.Problem
+	if h.validate != nil {
+		for _, problem := range h.validate([]byte(content), h.offer(r.Context())) {
+			// The key names the problem: an edited file has no form field.
+			problems = append(problems, kitpages.Problem{Field: problem.Field, Label: problem.Field, Message: problem.Message, Line: problem.Line})
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	templ.Handler(kitpages.CheckResult(problems)).ServeHTTP(w, r)
+}
+
+// posted reads the editor's text. Browsers send a text area's line breaks as
+// CRLF; the files use LF.
+func posted(w http.ResponseWriter, r *http.Request) (string, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, 2*maxFileBytes)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "The file could not be read.", http.StatusBadRequest)
+		return "", false
+	}
+	content := strings.ReplaceAll(r.PostForm.Get("content"), "\r\n", "\n")
+	if len(content) > maxFileBytes {
+		http.Error(w, "The file is larger than 64 KiB.", http.StatusRequestEntityTooLarge)
+		return "", false
+	}
+	return content, true
 }
 
 func (h *Handler) generate(q url.Values, offer Offer) Kit {

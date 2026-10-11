@@ -27,7 +27,8 @@ and a checklist to test it all by hand, including the edge cases. Labels in
 - **Repository secrets**: values your previews need (sandbox API keys), stored
   encrypted and never shown again.
 - **Starter kits**: pick your stack and what it uses, and Previa writes the
-  `Dockerfile` and `.previewrc.yaml` your repository needs, ready to copy.
+  `Dockerfile` and `.previewrc.yaml` your repository needs, checked and editable,
+  ready to copy or download.
 
 ## The journey at a glance
 
@@ -245,13 +246,18 @@ The quickest start is **Starter kits** in the sidebar:
    Rails, Go, Spring Boot or Laravel. Choose **Own Dockerfile** if you already have
    one; you then get only `.previewrc.yaml`.
 2. Turn on what your app uses: **PostgreSQL** (sets `DATABASE_URL`), **Redis** (sets
-   `REDIS_URL`), **Run migrations first**, **Run a background worker** and **Link API
-   docs**. Each command has ready-made choices or **My own command…**.
+   `REDIS_URL`), **Migrations**, a **Background worker** and an **API docs link**.
+   Each command has ready-made choices or **My own command…**.
 3. Open **Advanced** to change the port, health check path or preview size.
-4. The files update as you choose. **Passes Previa's checks** means a build will
-   accept them; otherwise each problem is named. **Copy** or **Download** each file,
-   then read **Check in your app** for anything your code must do (for example,
-   allowing the preview's address).
+4. The files update as you choose, as two tabs: **Dockerfile** and
+   **.previewrc.yaml**. You can edit either one in place. An edited tab shows a dot;
+   your edits stay when you change a choice, and **Reset** brings back the generated
+   file. Previa checks `.previewrc.yaml` as you type: the bar under the file says
+   **Passes Previa's checks** or lists each problem.
+5. **Copy** or **Download** each file (edits included), then read **Check in your
+   app** for anything your code must do (for example, allowing the preview's
+   address). A downloaded `previewrc.yaml` may lose its leading dot: rename it to
+   `.previewrc.yaml`.
 
 Or write the files yourself. At the repository root (on the commit you want to
 preview):
@@ -710,7 +716,8 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | J6 | Bookmark a filtered repository list; open it later | Same filters |
 | J7 | Home page, **How it works**: **Ask as Kai** a few times, then choose **Route** | Previa types, then answers each question; choosing a stage shows every answer up to it; **Start over** resets |
 | J8 | **FAQ** (home page and sidebar): filter **Security**, search "frameworks", open a question | Only matching questions remain; the answer appears after a short pause; `/faq#faq-secrets` opens that answer directly |
-| J9 | **Starter kits**: choose Django, turn on PostgreSQL and a worker, set the port to 70000, then 8001; copy and download both files | The files update in place; 70000 shows "1 to fix" and the files keep the stack's default port, 8000; the copied and downloaded files match the page; reloading the address shows the same kit |
+| J9 | **Starter kits**: choose Django, turn on PostgreSQL and a worker, set the port to 70000, then 8001; switch to the **.previewrc.yaml** tab | The files update in place; 70000 shows "1 to fix" and the files keep the stack's default port, 8000; reloading the address shows the same kit |
+| J10 | In **.previewrc.yaml**, change `port: 8001` to `port: eighty`, then turn on Redis; copy, download, then **Reset** | The tab shows a dot; the bar names the problem on line 4; the edit stays after turning on Redis; copy and download give the edited text; Reset brings back the generated file with Redis |
 
 ### K. Operator behaviour you can observe
 

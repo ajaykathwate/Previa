@@ -185,6 +185,7 @@ Low to Medium. Parsing is easy; useful validation and safe defaults take care.
 - **Safety:** 64 KiB config / 128 KiB API response envelope; 15-second overall fetch context plus existing HTTP timeouts. GitHub 404 is called missing-file only after the installation can verify the exact commit. Errors expose safe fields/codes/locations rather than YAML/env values or raw API bodies.
 - **Filesystem boundary:** validation is lexical; later source extraction/build adapters must reject unsafe symlinks and enforce actual repository containment.
 - **Backend previews (Prompt 13):** optional `services` (PostgreSQL/Redis versions from the worker's digest-pinned catalog, `PREVIEW_SERVICE_CATALOG`), `setup` (argv), `processes` (at most 3) and `docs_path`, validated against the catalog during preparation (`repoconfig.ParseFor` with a `Platform`) and part of the effective hash. See [11-backend-previews.md](docs/11-backend-previews.md).
+- **Starter kits (an addition after Prompt 13):** a signed-in page writes a `Dockerfile` and `.previewrc.yaml` for one of nine stacks (or only the config, for an existing Dockerfile) from a few choices (services, migrations, a worker, docs link, port, health path, size). Files open in an editable two-tab editor; every generated config and every edit of `.previewrc.yaml` is checked with `repoconfig.ParseFor` against the versions the running worker offers, so the page never suggests a file a build would refuse. `internal/starterkits` owns generation and the handler; `web/pages/starterkits` the view. See [21-ui-architecture.md](docs/21-ui-architecture.md#starter-kits).
 - **Current implementation:** standalone `internal/repoconfig` fetch/parse/effective-limit/hash APIs and fixtures are implemented. Config hash excludes requested tier metadata and uses resolved resources plus sorted unique env entries. No database persistence, webhook/job/UI wiring, health execution or GitHub comments are implemented here. See [06-source-and-configuration.md](docs/06-source-and-configuration.md).
 
 ---
@@ -917,6 +918,11 @@ preview/
 │   ├── outbound/                   # FEATURE: owner-approved outbound connections
 │   │   ├── handler.go  outbound.go  repository.go  jobs.go
 │   │
+│   ├── starterkits/                # FEATURE: Dockerfile + .previewrc.yaml per stack
+│   │   ├── kits.go  stacks.go      # choices, the ten stacks, Dockerfile writers
+│   │   ├── config.go  view.go      # commented .previewrc.yaml; page view model
+│   │   ├── handler.go              # page, download and check of an edited file
+│   │
 │   ├── secrets/                    # FEATURE: encrypted env vars for previewed apps
 │   │   ├── handler.go  service.go  repository.go
 │   │   ├── crypto.go               # AES-GCM, key versioning
@@ -973,6 +979,7 @@ preview/
 │   │   ├── pullrequests/           # repository/PR detail and shared current activity
 │   │   ├── builds/                 # Builds page, current-attempt build log page
 │   │   ├── environments/           # Environments page (shares the activity view)
+│   │   ├── starterkits/            # Starter kits: choices beside a two-tab editor
 │   │   └── routing/                # "preview not found or expired" (public)
 │   ├── components/                 # local, reusable UI; no backend imports
 │   ├── styles/                     # Tailwind entry CSS and theme tokens

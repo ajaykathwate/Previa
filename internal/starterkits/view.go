@@ -1,47 +1,16 @@
 package starterkits
 
 import (
-	"net/url"
-	"strconv"
 	"strings"
 
 	kitpages "github.com/ajaykathwatee/previa/web/pages/starterkits"
 )
 
-// Query writes the choices as the form would submit them, for downloads and
-// shareable links.
-func (c Choices) Query() url.Values {
-	q := url.Values{"stack": {c.Stack}, "from": {c.Stack}, "port": {strconv.Itoa(c.Port)}, "health": {c.Health}, "tier": {c.Tier}}
-	for kind, version := range map[string]string{"postgres": c.Postgres, "redis": c.Redis} {
-		if version != "" {
-			q.Set(kind, "on")
-			q.Set(kind+"_version", version)
-		}
-	}
-	setFlag(q, "setup", c.Setup)
-	setFlag(q, "worker", c.Worker)
-	setFlag(q, "docs", c.Docs)
-	for key, value := range map[string]string{"setup_with": c.SetupWith, "setup_cmd": c.SetupCommand, "worker_with": c.WorkerWith,
-		"worker_cmd": c.WorkerCommand, "docs_path": c.DocsPath, "detail": c.Detail} {
-		if value != "" {
-			q.Set(key, value)
-		}
-	}
-	return q
-}
-
-func setFlag(q url.Values, key string, on bool) {
-	if on {
-		q.Set(key, "on")
-	}
-}
-
 // view turns a kit into what the page shows.
 func view(kit Kit, offer Offer) kitpages.Page {
 	s, c := kit.Stack, kit.Choices
-	query := c.Query().Encode()
-	p := kitpages.Page{Notes: kit.Notes, Offer: offerText(offer), Summary: summary(kit)}
-	p.Status = "Files updated: " + strings.Join(p.Summary, ", ") + "."
+	p := kitpages.Page{Notes: kit.Notes, Offer: offerText(offer)}
+	p.Status = "Files updated: " + strings.Join(summary(kit), ", ") + "."
 	for _, st := range catalog {
 		p.Stacks = append(p.Stacks, kitpages.StackOption{ID: st.ID, Name: st.Name, Kind: st.Kind, Language: st.Language, Selected: st.ID == s.ID})
 	}
@@ -58,11 +27,11 @@ func view(kit Kit, offer Offer) kitpages.Page {
 		p.Form.Detail = &kitpages.Detail{Label: d.Label, Hint: d.Hint, Value: c.Detail, Options: d.Options}
 	}
 	if kit.Dockerfile != "" {
-		p.Files = append(p.Files, kitpages.File{Name: "Dockerfile", Kind: "dockerfile", Content: kit.Dockerfile,
-			Download: "/starter-kits/download/dockerfile?" + query, Purpose: "How Previa builds your app"})
+		p.Files = append(p.Files, kitpages.File{ID: "dockerfile", Name: "Dockerfile", Kind: "dockerfile", Content: kit.Dockerfile,
+			Purpose: "How Previa builds your app"})
 	}
-	p.Files = append(p.Files, kitpages.File{Name: ".previewrc.yaml", Kind: "yaml", Content: kit.Config,
-		Download: "/starter-kits/download/previewrc?" + query, Purpose: "How Previa runs each preview"})
+	p.Files = append(p.Files, kitpages.File{ID: "previewrc", Name: ".previewrc.yaml", Kind: "yaml", Content: kit.Config,
+		Purpose: "How Previa runs each preview"})
 	for _, problem := range kit.Problems {
 		p.Problems = append(p.Problems, kitpages.Problem{Field: problem.Field, Label: fieldLabel(kit.Stack, problem.Field), Message: problem.Message})
 	}

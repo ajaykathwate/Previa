@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	pr "github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/ajaykathwatee/previa/internal/repoconfig"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/starterkits"
@@ -114,7 +116,7 @@ func TestBrowserRegression(t *testing.T) {
 		// The Overview shows an empty workspace until a test asks for a busy one
 		// (GET /__fixture/overview?state=busy), kept in the session.
 		// Starter kits with Previa's default service versions and no worker.
-		starterkits.NewHandler(handler, nil, starterkits.Offer{Postgres: []string{"17", "16"}, Redis: []string{"8", "7"}}, nil, logger).
+		starterkits.NewHandler(handler, nil, starterkits.Offer{Postgres: []string{"17", "16"}, Redis: []string{"8", "7"}}, fixtureKitCheck, logger).
 			Mount(r, auth.RequireUser)
 		dashboard.MountWithSummary(r, handler, auth.RequireUser, dashboard.Options{
 			DeveloperTools: true, Identity: handler.UserIDs,
@@ -674,4 +676,27 @@ func (f *fixtureOutbound) Remove(_ context.Context, _ int64, repoID, id int64) (
 		}
 	}
 	return egress.Destination{}, outbound.ErrUnavailable
+}
+
+// fixtureKitCheck checks a starter kit's .previewrc.yaml with the parser a
+// build uses, as internal/app wires it in production.
+func fixtureKitCheck(config []byte, offer starterkits.Offer) []starterkits.Problem {
+	catalog := fixtureCatalog{"postgres": offer.Postgres, "redis": offer.Redis}
+	_, err := repoconfig.ParseFor(config, repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: catalog})
+	var invalid *repoconfig.ValidationError
+	if !errors.As(err, &invalid) {
+		return nil
+	}
+	problems := make([]starterkits.Problem, 0, len(invalid.Issues))
+	for _, issue := range invalid.Issues {
+		problems = append(problems, starterkits.Problem{Field: issue.Field, Message: issue.Message, Line: issue.Line})
+	}
+	return problems
+}
+
+type fixtureCatalog map[string][]string
+
+func (c fixtureCatalog) Versions(kind string) []string { return c[kind] }
+func (c fixtureCatalog) Image(kind, version string) (string, bool) {
+	return kind + ":" + version, slices.Contains(c[kind], version)
 }
