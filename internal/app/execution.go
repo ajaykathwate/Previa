@@ -159,7 +159,7 @@ func newPreparer(in pipelineInput, workspaces *source.Workspaces, catalog config
 	if err != nil {
 		return nil, err
 	}
-	return source.NewPreparer(archives, workspaces, source.DefaultLimits(), repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: catalog})
+	return source.NewPreparer(archives, workspaces, source.DefaultLimits(), repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: catalog, BuildTimeout: in.cfg.BuildTimeout})
 }
 
 func newRuntime(in pipelineInput, instance string, gateway *egress.Gateway, preparer *source.Preparer, builder *builds.Builder, provider *secrets.Provider, logStore *buildlogs.Store) (*runtime.Runtime, error) {

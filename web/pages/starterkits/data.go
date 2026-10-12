@@ -36,20 +36,20 @@ type StackOption struct {
 
 // Form holds the current choices.
 type Form struct {
-	Stack, StackName string
-	Static, OwnFile  bool
-	Postgres, Redis  Service
-	Setup, Worker    Command
-	Docs             bool
-	DocsPath         string
-	Port             int
-	Health           string
-	Tier             string
-	Tiers            []string
-	Detail           *Detail
+	Stack, StackName       string
+	Static, OwnFile        bool
+	Postgres, Redis, MySQL Service
+	Setup, Worker          Command
+	Docs                   bool
+	DocsPath               string
+	Port                   int
+	Health                 string
+	Tier                   string
+	Tiers                  []string
+	Detail                 *Detail
 }
 
-// Service is PostgreSQL or Redis.
+// Service is a managed database or cache offered by the worker.
 type Service struct {
 	On       bool
 	Version  string

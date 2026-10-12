@@ -27,7 +27,7 @@ func renderConfig(s Stack, c Choices, setup, worker []string, workerName string)
 		b.WriteString("# health_check_path: /health   # optional; else Previa waits for the port\n")
 	}
 	entry(&b, "resource_tier: "+c.Tier, "small, standard or large")
-	if c.Postgres != "" || c.Redis != "" {
+	if c.Postgres != "" || c.Redis != "" || c.MySQL != "" {
 		b.WriteString("\n")
 		entry(&b, "services:", "fresh and empty for every preview")
 		if c.Postgres != "" {
@@ -35,6 +35,9 @@ func renderConfig(s Stack, c Choices, setup, worker []string, workerName string)
 		}
 		if c.Redis != "" {
 			entry(&b, "  redis: "+c.Redis, "sets REDIS_URL")
+		}
+		if c.MySQL != "" {
+			entry(&b, "  mysql: "+c.MySQL, "sets MYSQL_URL and MYSQL_HOST, MYSQL_USER…")
 		}
 	}
 	if len(setup) > 0 {
@@ -103,6 +106,12 @@ func notesFor(s Stack, c Choices) []string {
 	}
 	if c.Redis != "" {
 		notes = append(notes, "They also get REDIS_URL for Redis.")
+	}
+	if c.MySQL != "" {
+		notes = append(notes, "MySQL sets MYSQL_URL, MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD and MYSQL_DATABASE. DATABASE_URL also points to MySQL unless PostgreSQL is selected. Each rebuild starts empty; install your stack's MySQL driver and read these settings before running migrations.")
+		if s.ID == "rails" {
+			notes = append(notes, "For Rails, add the mysql2 gem and configure database.yml with adapter: mysql2 and the MYSQL_* settings. Rails expects mysql2:// rather than the supplied mysql:// URL.")
+		}
 	}
 	if s.notes != nil {
 		notes = append(notes, s.notes(c)...)

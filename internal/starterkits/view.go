@@ -18,6 +18,7 @@ func view(kit Kit, offer Offer) kitpages.Page {
 		Stack: s.ID, StackName: s.Name, Static: s.Static, OwnFile: s.OwnFile,
 		Postgres: kitpages.Service{On: c.Postgres != "", Version: c.Postgres, Versions: offer.Postgres},
 		Redis:    kitpages.Service{On: c.Redis != "", Version: c.Redis, Versions: offer.Redis},
+		MySQL:    kitpages.Service{On: c.MySQL != "", Version: c.MySQL, Versions: offer.MySQL},
 		Setup:    command(c.Setup, c.SetupWith, c.SetupCommand, s.Setup, "npm run migrate && npm run seed"),
 		Worker:   command(c.Worker, c.WorkerWith, c.WorkerCommand, s.Workers, "npm run worker"),
 		Docs:     c.Docs, DocsPath: cmpOr(c.DocsPath, cmpOr(s.Docs, "/docs")),
@@ -56,6 +57,8 @@ func fieldLabel(s Stack, field string) string {
 		return "PostgreSQL"
 	case "redis":
 		return "Redis"
+	case "mysql":
+		return "MySQL"
 	case "detail":
 		if s.Detail != nil {
 			return s.Detail.Label
@@ -82,6 +85,9 @@ func summary(kit Kit) []string {
 	if c.Redis != "" {
 		out = append(out, "Redis "+c.Redis)
 	}
+	if c.MySQL != "" {
+		out = append(out, "MySQL "+c.MySQL)
+	}
 	if c.Setup {
 		out = append(out, "migrations")
 	}
@@ -101,6 +107,9 @@ func offerText(o Offer) string {
 	}
 	if len(o.Redis) > 0 {
 		parts = append(parts, "Redis "+strings.Join(o.Redis, " or "))
+	}
+	if len(o.MySQL) > 0 {
+		parts = append(parts, "MySQL "+strings.Join(o.MySQL, " or "))
 	}
 	switch {
 	case o.Known && len(parts) == 0:

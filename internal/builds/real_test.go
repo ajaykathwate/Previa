@@ -3,6 +3,7 @@ package builds
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log/slog"
@@ -299,6 +300,41 @@ func TestRealBuilderReachesOnlyRegistriesWhenLimited(t *testing.T) {
 		}
 	}
 	f.assertNoSandboxes(t, job.PullRequestID)
+}
+
+// A Dockerfile step reads an allowed build secret through a secret mount;
+// the value never reaches the image, and without it the step fails.
+func TestRealBuilderMountsBuildSecrets(t *testing.T) {
+	f := newRealFixture(t, nil)
+	const value = "build-secret-value-42"
+	files := map[string]string{"Dockerfile": "FROM alpine:3.22\n" +
+		"RUN --mount=type=secret,id=NPM_TOKEN,required=true sha256sum /run/secrets/NPM_TOKEN\n" +
+		"RUN test ! -e /run/secrets/NPM_TOKEN && echo IMAGE_CLEAN\n"}
+	job, logs := f.job(t, 6, 1, f.base, files)
+	job.Secrets = map[string][]byte{"NPM_TOKEN": []byte(value)}
+	img, err := f.builder.Build(buildCtx(t, 8*time.Minute), job)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, logs)
+	}
+	if out := logs.String(); !strings.Contains(out, fmt.Sprintf("%x", sha256.Sum256([]byte(value)))) || !strings.Contains(out, "IMAGE_CLEAN") || strings.Contains(out, value) {
+		t.Fatalf("secret mount:\n%s", out)
+	}
+	inspected, err := f.docker.ImageInspect(t.Context(), img.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, env := range inspected.Config.Env {
+		if strings.Contains(env, value) {
+			t.Fatal("the build secret reached the image's environment")
+		}
+	}
+	without, logs := f.job(t, 7, 1, f.base+1, files)
+	// Deliberately give a fork credentials: the builder must withhold them
+	// and use a separate cache instead of a trusted cached secret step.
+	without.Secrets = job.Secrets
+	if _, err := f.builder.Build(buildCtx(t, 8*time.Minute), without); CodeOf(err) != CodeBuildFailed {
+		t.Fatalf("a step needing a secret the build was not given must fail: %v\n%s", err, logs)
+	}
 }
 
 func pullImage(ctx context.Context, docker *client.Client, ref string) error {

@@ -17,11 +17,11 @@ func (c testCatalog) Image(kind, version string) (string, bool) {
 	return "example/" + kind + ":" + version, slices.Contains(c[kind], version)
 }
 
-var defaults = Offer{Postgres: []string{"17", "16"}, Redis: []string{"8", "7"}}
+var defaults = Offer{Postgres: []string{"17", "16"}, Redis: []string{"8", "7"}, MySQL: []string{"8.4"}}
 
 func parse(t *testing.T, config string) repoconfig.Config {
 	t.Helper()
-	platform := repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: testCatalog{"postgres": defaults.Postgres, "redis": defaults.Redis}}
+	platform := repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: testCatalog{"postgres": defaults.Postgres, "redis": defaults.Redis, "mysql": defaults.MySQL}}
 	result, err := repoconfig.ParseFor([]byte(config), platform)
 	if err != nil {
 		t.Fatalf("Previa rejects the generated config: %v\n%s", err, config)
@@ -32,17 +32,17 @@ func parse(t *testing.T, config string) repoconfig.Config {
 // Every combination of every stack writes a .previewrc.yaml that Previa's
 // own parser accepts, with the choices it was asked for.
 func TestEveryKitPassesPreviasConfigRules(t *testing.T) {
-	services := [][2]string{{"", ""}, {"17", ""}, {"", "8"}, {"16", "7"}}
+	services := [][3]string{{"", "", ""}, {"17", "", ""}, {"", "8", ""}, {"16", "7", ""}, {"", "", "8.4"}, {"17", "7", "8.4"}}
 	for _, s := range Stacks() {
 		setups := append(presetKeys(s.Setup), Custom, "")
 		workers := append(presetKeys(s.Workers), Custom, "")
 		for _, svc := range services {
 			for _, setup := range setups {
 				for _, worker := range workers {
-					name := fmt.Sprintf("%s/pg%s-redis%s/setup-%s/worker-%s", s.ID, svc[0], svc[1], setup, worker)
+					name := fmt.Sprintf("%s/pg%s-redis%s-mysql%s/setup-%s/worker-%s", s.ID, svc[0], svc[1], svc[2], setup, worker)
 					t.Run(name, func(t *testing.T) {
 						c := Fresh(s.ID)
-						c.Postgres, c.Redis = svc[0], svc[1]
+						c.Postgres, c.Redis, c.MySQL = svc[0], svc[1], svc[2]
 						c.Setup, c.SetupWith, c.SetupCommand = setup != "", setup, "npm run seed && echo seeded"
 						c.Worker, c.WorkerWith, c.WorkerCommand = worker != "", worker, "bin/worker --queue default"
 						c.Docs = true
@@ -72,7 +72,7 @@ func checkKit(t *testing.T, s Stack, kit Kit, cfg repoconfig.Config) {
 		t.Fatalf("port/health/tier: got %d %q %q, chose %d %q %q", cfg.Port, cfg.HealthCheckPath, cfg.ResourceTier, c.Port, c.Health, c.Tier)
 	}
 	wantServices := 0
-	for _, v := range []string{c.Postgres, c.Redis} {
+	for _, v := range []string{c.Postgres, c.Redis, c.MySQL} {
 		if v != "" && !s.Static {
 			wantServices++
 		}

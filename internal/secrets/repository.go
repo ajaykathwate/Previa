@@ -51,7 +51,7 @@ func (r *Repository) List(ctx context.Context, userID, repoID int64) ([]Summary,
 	}
 	result := make([]Summary, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, Summary{Name: row.Key, UpdatedAt: row.UpdatedAt.Time})
+		result = append(result, Summary{Name: row.Key, UpdatedAt: row.UpdatedAt.Time, Build: row.Build})
 	}
 	return result, nil
 }
@@ -112,6 +112,20 @@ func (r *Repository) DeleteMany(ctx context.Context, userID, repoID int64, names
 	return int(n), nil
 }
 
+// SetBuild lets Dockerfile steps of trusted builds read a secret, or stops
+// it; false when the secret does not exist or already had that setting.
+func (r *Repository) SetBuild(ctx context.Context, userID, repoID int64, name string, build bool) (bool, error) {
+	q := dbgen.New(r.pool)
+	if _, err := q.OwnedRepository(ctx, dbgen.OwnedRepositoryParams{ID: repoID, OwnerUserID: owner(userID)}); err != nil {
+		return false, ownedError(err)
+	}
+	n, err := q.SetSecretBuild(ctx, dbgen.SetSecretBuildParams{RepoID: repoID, OwnerUserID: owner(userID), Key: name, Build: build})
+	if err != nil {
+		return false, fmt.Errorf("set build use of secret: %w", err)
+	}
+	return n == 1, nil
+}
+
 func (r *Repository) SealedSecrets(ctx context.Context, repoID int64) ([]SealedSecret, error) {
 	rows, err := dbgen.New(r.pool).SealedSecrets(ctx, repoID)
 	if err != nil {
@@ -119,7 +133,7 @@ func (r *Repository) SealedSecrets(ctx context.Context, repoID int64) ([]SealedS
 	}
 	result := make([]SealedSecret, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, SealedSecret{Name: row.Key, Value: row.EncryptedValue, Version: row.KeyVersion})
+		result = append(result, SealedSecret{Name: row.Key, Value: row.EncryptedValue, Version: row.KeyVersion, Build: row.Build})
 	}
 	return result, nil
 }

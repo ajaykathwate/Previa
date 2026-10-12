@@ -105,7 +105,7 @@ var catalog = []Stack{
 				"Add SECRET_KEY_BASE on the repository's Secrets tab (bin/rails secret makes one), or RAILS_MASTER_KEY.",
 				"Using jsbundling or cssbundling? Install Node.js in the image before assets:precompile.",
 			}
-			if c.Postgres == "" {
+			if c.Postgres == "" && c.MySQL == "" {
 				n = append(n, "Rails 8 uses SQLite by default, but previews keep no files outside /tmp: turn on PostgreSQL and the pg gem for a database.")
 			}
 			return n
@@ -139,6 +139,9 @@ var catalog = []Stack{
 			n := []string{"Flyway and Liquibase run when the app starts, so most Spring apps need no setup step."}
 			if c.Postgres != "" {
 				n = append(n, "preview-env turns Previa's PostgreSQL into SPRING_DATASOURCE_URL, username and password. Add the org.postgresql:postgresql driver.")
+			}
+			if c.MySQL != "" {
+				n = append(n, "preview-env maps MySQL to SPRING_DATASOURCE_URL, username and password when PostgreSQL is not selected. Add the MySQL JDBC driver to your project.")
 			}
 			return append(n, "Using Spring Boot Actuator? Set the health check path to /actuator/health under Advanced.")
 		},
@@ -285,6 +288,9 @@ func railsDockerfile(c Choices) string {
 	if c.Postgres != "" {
 		packages += " libpq-dev"
 	}
+	if c.MySQL != "" {
+		packages += " default-libmysqlclient-dev"
+	}
 	return lines(
 		"# Dockerfile for Ruby on Rails, from Previa's starter kits.",
 		"FROM ruby:3.4-slim",
@@ -374,6 +380,10 @@ func springDockerfile(c Choices) string {
 		`  export SPRING_DATASOURCE_URL="jdbc:postgresql://$PGHOST:$PGPORT/$PGDATABASE"`,
 		`  export SPRING_DATASOURCE_USERNAME="$PGUSER"`,
 		`  export SPRING_DATASOURCE_PASSWORD="$PGPASSWORD"`,
+		`elif [ -n "$MYSQL_HOST" ]; then`,
+		`  export SPRING_DATASOURCE_URL="jdbc:mysql://$MYSQL_HOST:$MYSQL_PORT/$MYSQL_DATABASE"`,
+		`  export SPRING_DATASOURCE_USERNAME="$MYSQL_USER"`,
+		`  export SPRING_DATASOURCE_PASSWORD="$MYSQL_PASSWORD"`,
 		`fi`,
 		`if [ -n "$REDIS_URL" ]; then`,
 		`  export SPRING_DATA_REDIS_URL="$REDIS_URL"`,
@@ -391,6 +401,9 @@ func laravelDockerfile(c Choices) string {
 	extensions, system := "zip", "libzip-dev unzip"
 	if c.Postgres != "" {
 		extensions, system = "pdo_pgsql zip", "libpq-dev libzip-dev unzip"
+	}
+	if c.MySQL != "" {
+		extensions += " pdo_mysql"
 	}
 	out := []string{
 		"# syntax=docker/dockerfile:1",
@@ -426,7 +439,14 @@ func laravelDockerfile(c Choices) string {
 		`mkdir -p /tmp/storage/logs /tmp/storage/framework/cache`,
 		`mkdir -p /tmp/storage/framework/sessions /tmp/storage/framework/views`,
 		`if [ -n "$DATABASE_URL" ]; then`,
-		`  export DB_CONNECTION=pgsql DB_URL="$DATABASE_URL"`,
+		`  export DB_URL="$DATABASE_URL"`,
+		`  if [ -n "$PGHOST" ]; then`,
+		`    export DB_CONNECTION=pgsql`,
+		`  elif [ -n "$MYSQL_HOST" ]; then`,
+		`    export DB_CONNECTION=mysql`,
+		`  else`,
+		`    export DB_CONNECTION=pgsql`,
+		`  fi`,
 		`fi`,
 	)...)
 	out = append(out, "",

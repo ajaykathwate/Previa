@@ -27,6 +27,11 @@ func Diagnose(code string, output []string) Diagnosis {
 	if code == "source_failed" {
 		d = sourceDiagnosis(reason)
 	}
+	if code == "build_failed" || code == "crashed" || code == "unhealthy" || code == "runtime_unavailable" {
+		if refined, ok := compatibilityDiagnosis(code, output); ok {
+			d = refined
+		}
+	}
 	d.Code, d.Reason = code, reason
 	return d
 }
@@ -60,11 +65,15 @@ func categoryDiagnosis(code string) Diagnosis {
 	case "build_failed":
 		return Diagnosis{Title: "Your Dockerfile build failed", Stage: "image",
 			Summary: "The image build stopped on an error from a step in your Dockerfile.",
-			Steps:   []string{"Find the first error in the build output (shown in red under Technical details).", "Fix the failing step in your Dockerfile or code.", stepPushBuild}}
+			Steps:   []string{"Find the first error in the build output (shown in red under Technical details).", "Fix the failing step in your Dockerfile or code.", "Private dependencies need an explicitly allowed build secret in the Secrets tab; private base images use REGISTRY_AUTH. Fork builds receive neither.", stepPushBuild}}
 	case "timeout":
 		return Diagnosis{Title: "The build ran out of time", Stage: "image", Retry: true,
 			Summary: "It took longer than the server allows for one build and was stopped.",
-			Steps:   []string{"Check the build log for the slowest step, such as a large dependency install.", "Speed it up: cache dependencies and keep the build context small with a .dockerignore file.", stepRetry}}
+			Steps:   []string{"Check the build log for the slowest step, such as a large dependency install.", "Cache dependencies and keep the build context small with .dockerignore or a context subfolder.", "Set build_timeout in .previewrc.yaml within the operator's BUILD_TIMEOUT limit; source preparation and startup also consume that overall deadline.", stepRetry}}
+	case "image_too_large":
+		return Diagnosis{Title: "Your image is too large", Stage: "image",
+			Summary: "The image exceeded the server's size limit (4 GiB by default) and was removed.",
+			Steps:   []string{"Use a multi-stage Dockerfile and copy only the files needed at runtime.", "Exclude caches and build output with .dockerignore.", stepPushBuild}}
 	case "secrets_unavailable":
 		return Diagnosis{Title: "Repository secrets couldn't be unlocked", Stage: "start",
 			Summary: "The server couldn't decrypt this repository's secrets, so the preview was not started.",
@@ -77,18 +86,19 @@ func categoryDiagnosis(code string) Diagnosis {
 		return Diagnosis{Title: "Your app didn't become ready", Stage: "start",
 			Summary: "The preview started, but your app never answered its readiness check in time.",
 			Steps: []string{"Make sure the app listens on the port set in .previewrc.yaml (3000 by default) on all interfaces (0.0.0.0), not only localhost.",
+				"For nginx, use port 8080 or nginxinc/nginx-unprivileged: previews run without root privileges or capabilities. Update the app's port and the config together.",
 				"If you set health_check_path, make sure that path answers with a 2xx status.", "Read the app's output at the end of the build log.", stepPushBuild}}
 	case "crashed":
 		return Diagnosis{Title: "Your app stopped while starting", Stage: "start",
 			Summary: "The app's process exited before the preview was ready.",
-			Steps:   []string{"Read the app's output at the end of the build log for the error.", "Check that every environment variable and secret the app needs is set.", stepPushBuild}}
+			Steps:   []string{"Read the app's output at the end of the build log for the error.", "Check that every environment variable and secret the app needs is set.", "If nginx fails during startup, use port 8080 or nginxinc/nginx-unprivileged, and set port: 8080 in .previewrc.yaml. Keep writable caches and PID files in /tmp.", stepPushBuild}}
 	case "service_unavailable":
 		return Diagnosis{Title: "A database or cache image couldn't be downloaded", Stage: "start", Retry: true,
-			Summary: "The server couldn't pull the PostgreSQL or Redis image this preview asked for.",
+			Summary: "The server couldn't pull the PostgreSQL, Redis or MySQL image this preview asked for.",
 			Steps:   []string{"This is usually temporary.", stepRetry, "If it keeps happening, check that the server can reach its image registry."}}
 	case "service_failed":
 		return Diagnosis{Title: "Your database or cache didn't start", Stage: "start",
-			Summary: "PostgreSQL or Redis did not become ready, or stopped while the preview started.",
+			Summary: "PostgreSQL, Redis or MySQL did not become ready, or stopped while the preview started.",
 			Steps:   []string{"Check that the service versions in .previewrc.yaml are ones this server offers.", "Read the service's output in the build log.", stepRetry}}
 	case "setup_failed":
 		return Diagnosis{Title: "Your setup command failed", Stage: "start",
@@ -139,6 +149,14 @@ func sourceDiagnosis(reason string) Diagnosis {
 	}
 	d := Diagnosis{Stage: "code"}
 	switch {
+	case has("git submodules"):
+		d.Title = "Your build context needs Git submodules"
+		d.Summary = "GitHub's archive does not include submodule contents, so Previa stopped before building."
+		d.Steps = []string{"Vendor the needed files into Git, or choose a context subfolder that does not use submodules.", "Automatic submodule fetching is not available.", stepPushBuild}
+	case has("git lfs pointer"):
+		d.Title = "Your build context contains Git LFS pointers"
+		d.Summary = "The archive contains pointer files instead of the real assets, so Previa stopped before building."
+		d.Steps = []string{"Include the real files in Git, or choose a context that does not need them.", "Automatic LFS fetching is not available.", stepPushBuild}
 	case has("denied access", "access was denied"):
 		d.Title = "GitHub didn't let Previa download your code"
 		d.Summary = "GitHub refused to send this commit's files, so nothing could be built."
@@ -182,10 +200,10 @@ func sourceDiagnosis(reason string) Diagnosis {
 		d.Summary = "GitHub answered with a download Previa doesn't accept. This is usually temporary."
 		d.Steps = []string{stepRetry, "If it keeps happening, check that the server talks to github.com directly, not through a proxy that rewrites downloads."}
 		d.Retry = true
-	case has("size limit", "exceed"):
+	case has("size limit", "exceed", "entries"):
 		d.Title = "Your repository is too large to download"
-		d.Summary = "The source archive for this commit is over the server's download limit."
-		d.Steps = []string{"Remove large files or build output committed to the repository.", stepPushBuild}
+		d.Summary = "This commit exceeded a source safety limit: 256 MiB downloaded, 1 GiB unpacked or 100,000 entries by default."
+		d.Steps = []string{"Remove large files or build output committed to the repository.", "A context subfolder reduces what reaches BuildKit, but the full GitHub archive still has to fit these limits.", stepPushBuild}
 	case has("archive"):
 		d.Title = "Your repository has files Previa can't safely unpack"
 		d.Summary = "The source archive contains links, devices or paths that point outside the repository."

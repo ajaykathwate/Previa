@@ -39,6 +39,7 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 		r.Get("/repositories/{repoID}/secrets", h.page)
 		r.Post("/repositories/{repoID}/secrets", h.put)
 		r.Post("/repositories/{repoID}/secrets/delete", h.delete)
+		r.Post("/repositories/{repoID}/secrets/build", h.setBuild)
 	})
 }
 
@@ -84,6 +85,10 @@ func notice(query url.Values) string {
 		return fmt.Sprintf("Saved %d secrets (%d new, %d replaced). Their values are encrypted and will not be shown again.", count, created, count-created)
 	case namePattern.MatchString(query.Get("deleted")):
 		return "Deleted " + query.Get("deleted") + "."
+	case namePattern.MatchString(query.Get("build_on")):
+		return "Builds of this repository's own branches can now read " + query.Get("build_on") + ". It takes effect at the next build."
+	case namePattern.MatchString(query.Get("build_off")):
+		return "Builds no longer receive " + query.Get("build_off") + "."
 	case deleted > 1:
 		return fmt.Sprintf("Deleted %d secrets.", deleted)
 	}
@@ -258,6 +263,36 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, secretsURL(repoID, query), http.StatusSeeOther)
 }
 
+// setBuild lets Dockerfile steps of trusted builds read one secret, or stops
+// it.
+func (h *Handler) setBuild(w http.ResponseWriter, r *http.Request) {
+	user, repoID, ok := h.identity(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	name, build := r.PostFormValue("name"), r.PostFormValue("build") == "true"
+	if _, err := h.service.SetBuild(r.Context(), user, repoID, name, build); err != nil {
+		var invalid *InvalidError
+		switch {
+		case errors.As(err, &invalid):
+			http.Error(w, invalid.Message, http.StatusBadRequest)
+		case errors.Is(err, ErrUnavailable):
+			h.render(w, r, user, repoID, http.StatusConflict, pages.Page{Error: "GitHub access to this repository was removed, so builds cannot be given new secrets."})
+		default:
+			h.logger.ErrorContext(r.Context(), "set build use of a secret failed", "repo_id", repoID)
+			http.Error(w, "Secrets are temporarily unavailable. Please retry.", http.StatusServiceUnavailable)
+		}
+		return
+	}
+	h.logger.InfoContext(r.Context(), "secret build use changed", "repo_id", repoID, "build", build)
+	key := "build_off"
+	if build {
+		key = "build_on"
+	}
+	http.Redirect(w, r, secretsURL(repoID, url.Values{key: {name}}), http.StatusSeeOther)
+}
+
 // render loads the owned repository and its secret names. It never receives or
 // renders a value.
 func (h *Handler) render(w http.ResponseWriter, r *http.Request, user, repoID int64, status int, view pages.Page) {
@@ -280,7 +315,7 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, user, repoID in
 	view.RepoID, view.FullName, view.Available, view.Configured = repo.ID, repo.FullName, repo.Available, h.service.Configured()
 	view.Limit = MaxSecretsPerRepository
 	for _, s := range list {
-		view.Secrets = append(view.Secrets, pages.Secret{Name: s.Name, UpdatedAt: s.UpdatedAt})
+		view.Secrets = append(view.Secrets, pages.Secret{Name: s.Name, UpdatedAt: s.UpdatedAt, Build: s.Build})
 	}
 	if view.Replacing != "" && !view.Exists(view.Replacing) {
 		view.Replacing, view.Rows = "", nil

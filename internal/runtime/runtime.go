@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/builds"
@@ -42,6 +43,9 @@ type Builder interface {
 // implements it.
 type Secrets interface {
 	ForContainer(ctx context.Context, repoID int64, source secrets.Source, yamlEnv []string) (*secrets.ContainerEnv, error)
+	// ForBuild decrypts the secrets the owner allowed Dockerfile steps to
+	// read; none for untrusted sources.
+	ForBuild(ctx context.Context, repoID int64, source secrets.Source) (*secrets.BuildSecrets, error)
 }
 
 // LogSink receives an attempt's build and startup output; *buildlogs.Writer
@@ -175,8 +179,18 @@ func (r *Runtime) Build(ctx context.Context, request environments.Request, attem
 	if err != nil {
 		return environments.Artifact{}, err
 	}
-	buildLogs := r.openLogs(ctx, attempt, nil)
-	image, settings, err := r.buildImage(ctx, request, target, buildLogs)
+	buildSecrets, err := r.secrets.ForBuild(ctx, target.RepoID, target.secretSource())
+	if err != nil {
+		return environments.Artifact{}, failure(CodeSecrets, "Build secrets could not be decrypted on the worker; nothing was built.", false, err)
+	}
+	defer buildSecrets.Wipe()
+	buildRedactor, err := buildSecrets.Redactor()
+	if err != nil {
+		return environments.Artifact{}, failure(CodeSecrets, "Build secrets could not be prepared for log redaction.", false, err)
+	}
+	buildLogs := r.openLogs(ctx, attempt, buildRedactor)
+	announceBuildSecrets(buildLogs, buildSecrets)
+	image, settings, err := r.buildImage(ctx, request, target, buildLogs, buildSecrets)
 	r.closeLogs(ctx, buildLogs)
 	if err != nil {
 		return environments.Artifact{}, err
@@ -221,8 +235,25 @@ func (r *Runtime) Build(ctx context.Context, request environments.Request, attem
 	return environments.Artifact{ContainerID: containerID, ImageTag: image.Ref}, nil
 }
 
+// announceBuildSecrets says, by name only, what this build may read.
+func announceBuildSecrets(logs LogSink, b *secrets.BuildSecrets) {
+	for _, notice := range b.Notices {
+		logs.System(notice)
+	}
+	if names := b.Names(); len(names) > 0 {
+		logs.System("Build secrets available to Dockerfile steps (RUN --mount=type=secret,id=NAME): " + strings.Join(names, ", ") + ".")
+	}
+	if registries := b.Registries(); len(registries) > 0 {
+		hosts := make([]string, len(registries))
+		for i, l := range registries {
+			hosts[i] = l.Host
+		}
+		logs.System("Base images are pulled with your registry login for: " + strings.Join(hosts, ", ") + ".")
+	}
+}
+
 // buildImage prepares the commit and builds it, always releasing the source.
-func (r *Runtime) buildImage(ctx context.Context, request environments.Request, t Target, logs LogSink) (builds.Image, repoconfig.Config, error) {
+func (r *Runtime) buildImage(ctx context.Context, request environments.Request, t Target, logs LogSink, buildSecrets *secrets.BuildSecrets) (builds.Image, repoconfig.Config, error) {
 	logs.System("Preparing commit " + request.HeadSHA[:min(12, len(request.HeadSHA))] + " from GitHub.")
 	prepared, err := r.sources.Prepare(ctx, source.Request{
 		InstallationID: t.InstallationID, BaseRepoID: t.BaseRepoID, CommitSHA: request.HeadSHA,
@@ -250,27 +281,56 @@ func (r *Runtime) buildImage(ctx context.Context, request environments.Request, 
 	for _, notice := range prepared.Config.Notices {
 		logs.System(notice.Message)
 	}
-	image, err := r.builder.Build(ctx, builds.Job{
+	// Preparation can take minutes. Recheck the current request and source
+	// before allowing its Dockerfile to read any decrypted build credential.
+	t, err = r.targets.Current(ctx, request)
+	if err != nil {
+		return builds.Image{}, repoconfig.Config{}, err
+	}
+	values, logins := buildSecrets.Values(), buildSecrets.Registries()
+	if !t.secretSource().Trusted() {
+		values, logins = nil, nil
+		logs.System("Build secrets were withheld after the source was rechecked: forks and unverified heads receive none.")
+	}
+	duration := settings.BuildTimeout
+	if duration <= 0 {
+		duration = 12 * time.Minute
+	}
+	buildCtx, cancel := context.WithTimeout(ctx, duration)
+	defer cancel()
+	logs.System(fmt.Sprintf("Building context %s with up to %s, within the operator's overall deadline.", settings.Context, duration))
+	image, err := r.builder.Build(buildCtx, builds.Job{
 		Instance: r.instance, PullRequestID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, HeadSHA: request.HeadSHA,
 		BaseRepoID: t.BaseRepoID, HeadRepoID: t.HeadRepoID, ContextDir: prepared.ContextDir, Dockerfile: prepared.Dockerfile, Logs: logs,
+		Secrets: values, Registries: registryLogins(logins),
 	})
 	if err != nil {
+		// BuildKit errors can quote a command containing a secret. Keep the
+		// original only while classifying it; callers may log the safe copy.
+		redactor, redactErr := buildSecrets.Redactor()
+		if redactErr != nil {
+			return builds.Image{}, repoconfig.Config{}, failure(CodeSecrets, "Build error redaction could not be prepared.", false, redactErr)
+		}
+		safeErr := errors.New(string(redactor.Redact([]byte(err.Error()))))
 		var buildErr *builds.Error
 		message, retryable := "The image build failed.", false
 		if errors.As(err, &buildErr) {
 			message, retryable = buildErr.Message, buildErr.Retryable
 		}
+		message = string(redactor.Redact([]byte(message)))
 		switch builds.CodeOf(err) {
 		case builds.CodeCancelled:
-			return builds.Image{}, repoconfig.Config{}, failure(CodeCancelled, message, false, err)
+			return builds.Image{}, repoconfig.Config{}, failure(CodeCancelled, message, false, safeErr)
 		case builds.CodeTimeout:
-			return builds.Image{}, repoconfig.Config{}, failure(CodeTimeout, message, false, err)
+			return builds.Image{}, repoconfig.Config{}, failure(CodeTimeout, message, false, safeErr)
 		case builds.CodeSuperseded:
-			return builds.Image{}, repoconfig.Config{}, failure(CodeNotCurrent, message, false, err)
+			return builds.Image{}, repoconfig.Config{}, failure(CodeNotCurrent, message, false, safeErr)
 		case builds.CodeDiskLow:
-			return builds.Image{}, repoconfig.Config{}, failure(CodeDiskLow, message, true, err)
+			return builds.Image{}, repoconfig.Config{}, failure(CodeDiskLow, message, true, safeErr)
+		case builds.CodeImageTooLarge:
+			return builds.Image{}, repoconfig.Config{}, failure(CodeImageTooLarge, message, false, safeErr)
 		}
-		return builds.Image{}, repoconfig.Config{}, failure(CodeBuild, message, retryable, err)
+		return builds.Image{}, repoconfig.Config{}, failure(CodeBuild, message, retryable, safeErr)
 	}
 	return image, settings, nil
 }
@@ -330,3 +390,11 @@ type discardSink struct{}
 func (discardSink) Write(p []byte) (int, error) { return len(p), nil }
 func (discardSink) System(string)               {}
 func (discardSink) Close(context.Context) error { return nil }
+
+func registryLogins(logins []secrets.RegistryLogin) []builds.RegistryLogin {
+	out := make([]builds.RegistryLogin, len(logins))
+	for i, l := range logins {
+		out[i] = builds.RegistryLogin(l)
+	}
+	return out
+}

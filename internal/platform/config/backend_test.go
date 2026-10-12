@@ -40,7 +40,7 @@ func TestServiceCatalog(t *testing.T) {
 
 	for _, bad := range []string{
 		"postgres=postgres" + pinned,                         // no version
-		"mysql:8=mysql" + pinned,                             // unsupported kind
+		"mongo:8=mongo" + pinned,                             // unsupported kind
 		"postgres:latest=postgres" + pinned,                  // not a numeric version
 		"postgres:17=postgres:17",                            // not pinned by digest
 		"postgres:17=postgres@sha256:abc",                    // malformed digest

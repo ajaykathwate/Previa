@@ -146,7 +146,7 @@ func (h *Handler) offer(ctx context.Context) Offer {
 	if !caps.Execution && !caps.Paused {
 		return h.fallback
 	}
-	o := Offer{Known: true}
+	o := Offer{Known: true, BuildTimeout: caps.BuildTimeout}
 	for _, entry := range caps.Services { // "postgres 17, 16"
 		kind, versions, _ := strings.Cut(entry, " ")
 		list := strings.Split(versions, ", ")
@@ -155,6 +155,8 @@ func (h *Handler) offer(ctx context.Context) Offer {
 			o.Postgres = list
 		case "redis":
 			o.Redis = list
+		case "mysql":
+			o.MySQL = list
 		}
 	}
 	return o
@@ -177,7 +179,7 @@ func choicesFrom(q url.Values) Choices {
 	}
 	if from := q.Get("from"); from != "" && from != id {
 		c := Fresh(id)
-		c.Postgres, c.Redis = version("postgres"), version("redis")
+		c.Postgres, c.Redis, c.MySQL = version("postgres"), version("redis"), version("mysql")
 		c.Setup = on("setup") && c.SetupWith != ""
 		c.Worker = on("worker") && len(Find(id).Workers) > 0
 		c.Tier = q.Get("tier")
@@ -191,7 +193,7 @@ func choicesFrom(q url.Values) Choices {
 		}
 	}
 	return Choices{
-		Stack: id, Postgres: version("postgres"), Redis: version("redis"),
+		Stack: id, Postgres: version("postgres"), Redis: version("redis"), MySQL: version("mysql"),
 		Setup: on("setup"), SetupWith: q.Get("setup_with"), SetupCommand: q.Get("setup_cmd"),
 		Worker: on("worker"), WorkerWith: q.Get("worker_with"), WorkerCommand: q.Get("worker_cmd"),
 		Docs: on("docs"), DocsPath: q.Get("docs_path"),

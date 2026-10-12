@@ -1,7 +1,7 @@
 # 11 · Backend previews
 
 Backend and API repositories preview as well as web frontends: a commit can ask
-for platform-managed **PostgreSQL** and **Redis**, a **setup command** (migrations,
+for platform-managed **PostgreSQL**, **Redis** and **MySQL**, a **setup command** (migrations,
 seed data), a few unrouted **processes** (a queue worker) and a **docs path**, and
 its owner can approve **outbound connections** to an external database or message
 broker. This narrows README §2.5's exclusion of multi-service apps: services come
@@ -20,7 +20,7 @@ orchestrator.
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Which services | PostgreSQL and Redis only, at versions in `PREVIEW_SERVICE_CATALOG`, each image **pinned by digest**; empty uses Previa's pinned catalog (PostgreSQL 17/16, Redis 8/7), `none` offers none | A PR chooses a version, never an image; the operator decides what runs. |
+| Which services | PostgreSQL, Redis and MySQL only, at versions in `PREVIEW_SERVICE_CATALOG`, each image **pinned by digest**; empty uses Previa's pinned catalog (PostgreSQL 17/16, Redis 8/7), `none` offers none | A PR chooses a version, never an image; the operator decides what runs. |
 | Ownership | Every service belongs to its **candidate**: each build revision gets its own, with credentials generated for it | A failed rebuild cannot touch the serving preview's data; nothing is shared between previews. |
 | Data | On a size-capped **tmpfs** inside the service's memory limit; **data does not survive a rebuild** | Bounded storage that cannot fill the host disk, and no stale state between commits. |
 | Network | A per-PR **services network** (internal) joined only by the PR's candidates and their services: no egress proxy, no router | Services reach nothing outside their candidate, and nothing else reaches them. *(The roadmap said "the PR's internal network"; a separate network was chosen so a service can never use the egress proxy. Flagged deviation.)* |
@@ -45,7 +45,7 @@ docs_path: /docs        # a path on the preview's own host
 
 | Key | Type | Rules |
 | --- | --- | --- |
-| `services` | mapping of `postgres`/`redis` to a version (`17`, `"17"` or `7.4`) | Each kind once; the version must be in the catalog. An unknown service or version fails preparation with a message naming what this server offers. |
+| `services` | mapping of `postgres`/`redis`/`mysql` to a version (`17`, `"17"` or `7.4`) | Each kind once; the version must be in the catalog. An unknown service or version fails preparation with a message naming what this server offers. |
 | `setup` | list of strings (argv) | Program first; at most 64 arguments and 4 KiB; no NUL bytes. It **replaces the image's entrypoint and command**; no shell parses it (use `["sh", "-c", "…"]` for one). |
 | `processes` | list of `{name, command, resource_tier}` | At most 3; names `^[a-z][a-z0-9-]{0,30}$`, unique, not `app`, `setup`, `postgres` or `redis`; command as for `setup`; tier default `small`, clamped like the app's. |
 | `docs_path` | string | An absolute path on the preview, validated like `health_check_path`; never an external URL. |
@@ -108,6 +108,7 @@ Previa sets, for the app, the setup container and every process:
 | --- | --- |
 | PostgreSQL | `DATABASE_URL` (`postgres://preview:…@postgres-<id>:5432/preview?sslmode=disable`), `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGSSLMODE` |
 | Redis | `REDIS_URL` (`redis://:…@redis-<id>:6379/0`) |
+| MySQL | `MYSQL_URL` (`mysql://preview:…@mysql-<id>:3306/preview`), `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`; also `DATABASE_URL` unless PostgreSQL is requested |
 
 Previa's values **override** `.previewrc.yaml` and repository secrets; the build
 log says which names were replaced. Passwords are 32 random characters generated
@@ -124,7 +125,7 @@ to the Docker host can read them with `docker inspect`, as with secrets.)
    the setup container) must fit the preview budget; every container is created,
    labelled and counted, then the lock is released. Nothing has started yet.
 4. **Services** start and must answer their protocol from inside their container:
-   PostgreSQL an authenticated `SELECT 1`, Redis an authenticated `PING` (a TCP
+   PostgreSQL and MySQL an authenticated `SELECT 1`, Redis an authenticated `PING` (a TCP
    accept is not enough), within `PREVIEW_STARTUP_TIMEOUT`.
 5. **Setup** runs once, as a one-off container with the app's hardening, within
    `PREVIEW_SETUP_TIMEOUT`; its output streams into the build log. A non-zero exit
@@ -141,23 +142,25 @@ Any failure removes **every** container of the candidate after copying the faili
 part's last output into the build log. A failed rebuild therefore leaves the old
 preview and **its** data serving.
 
+MySQL 8.4 is included in the default digest-pinned catalog. It runs as `mysql`, with its socket and PID in `/tmp`, binary logging and MySQL X disabled, and a separate generated root password restricted to localhost. App credentials grant access only to the preview database. Startup follows the [official image entrypoint](https://github.com/docker-library/mysql/blob/01f90d87012e46cd174073bba02d64e9fc693ed3/8.4/docker-entrypoint.sh); later health checks use `mysqladmin ping`, while initial readiness requires an authenticated query. Configure your app's MySQL driver to use the provided variables. Data is empty after a rebuild.
+
 ## Isolation and hardening
 
 | Control | Managed services |
 | --- | --- |
 | Image | The catalog's image, pinned by digest; never chosen by a PR |
-| User | The official image's own unprivileged user (`postgres`, `redis`), not root |
+| User | The official image's own unprivileged user (`postgres`, `redis`, `mysql`), not root |
 | Filesystem | Read-only root; data, `/tmp` and PostgreSQL's socket directory on tmpfs (`nosuid,nodev`); every volume the image declares becomes a tmpfs, so Docker creates no volume |
 | Privileges | Every capability dropped, `no-new-privileges`, Docker's default seccomp/AppArmor, `PREVIEW_OCI_RUNTIME` applies |
 | Network | Only the PR's services network, reachable by a per-candidate hostname; no egress, no route, no published port; IPv6 off |
-| Resources | PostgreSQL 0.5 CPU / 512 MiB (192 MiB of data), Redis 0.25 CPU / 256 MiB (`maxmemory 160mb`, no persistence); 256 processes; half CPU weight; OOM-killed first; logs capped; never restarted |
+| Resources | PostgreSQL 0.5 CPU / 512 MiB (192 MiB of data), Redis 0.25 CPU / 256 MiB (`maxmemory 160mb`, no persistence), MySQL 1 CPU / 1 GiB (384 MiB data tmpfs, 64 MiB buffer pool, 32 MiB redo capacity); 256 processes; half CPU weight; OOM-killed first; logs capped; never restarted |
 
 **Exceptions, stated plainly:** services keep their image's user rather than UID
 65532 (the official images need their own user for their data directory);
 PostgreSQL runs with `fsync=off` because its data never outlives the candidate;
 `PREVIEW_ALLOW_ROOT` and `PREVIEW_WRITABLE_ROOTFS` do not apply to services. The
 operator controls only the catalog (which images, by digest) and the setup
-timeout. An image that is not the official PostgreSQL or Redis image may not work
+timeout. An image that is not the official PostgreSQL, Redis or MySQL image may not work
 under these rules.
 
 The setup container and processes are the app's specification with another

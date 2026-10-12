@@ -19,7 +19,7 @@ without secrets build normally.
 | Key provisioning | `SECRETS_ENCRYPTION_KEYS` + `SECRETS_ACTIVE_KEY_VERSION` environment variables | Matches how `SESSION_SECRET` is provided; versioned for rotation. |
 | Name collision with `.previewrc.yaml` env | **The stored secret wins**, and the override is reported by name | The owner's value must beat contributor-editable YAML. |
 | Fork PRs | **Never** receive secrets: any mode, any retry, any approval | The fork's author controls the code that would receive them. |
-| When values are decrypted | In worker memory, immediately before container creation | Shortest possible plaintext lifetime; never in images or build inputs. |
+| When values are decrypted | In worker memory, before an allowed build or container creation | Decrypted only for verified same-repository heads; build credentials use ephemeral mounts or registry authentication. |
 | Maintainer approval for forks | **Not** part of the MVP | Optional approval would not change the rule above, so it adds risk without benefit now. |
 
 ## Storage format
@@ -31,6 +31,7 @@ without secrets build normally.
   data**. A value copied to another repository or name, or relabelled with another
   version, fails to decrypt.
 - `key_version` records which key sealed it; `updated_at` is shown to owners.
+- Migration 28 adds `build` (false by default); only the owner may allow build use. Replacing or rotating a value preserves that permission; deletion removes it.
 - Database checks enforce the name format and a ciphertext size consistent with
   1 byte – 32 KiB of plaintext, even if application code regressed.
 
@@ -101,14 +102,53 @@ before creating the container. `source` comes from fresh upstream verification
   Forks, deleted head repositories and missing or ambiguous identity are
   untrusted. For untrusted sources nothing is even decrypted; the container gets
   the YAML env and a notice that secrets were withheld.
-- For trusted sources, every value is decrypted; any value that fails (wrong key,
+- For trusted sources, every runtime value except the pull-only `REGISTRY_AUTH` is decrypted; any value that fails (wrong key,
   tampering, unknown version) fails the whole call, so a container never starts with
   a partial environment. Secrets override YAML entries of the same name.
 - The result is a `ContainerEnv`. Its `Environ()` goes only to the runtime's
   container configuration. It must never become Docker build arguments, part of the
-  build context or an image layer: secrets are runtime-only. `Wipe()` clears the
+  build context or an image layer. Explicit build opt-in uses the separate `ForBuild` contract below. `Wipe()` clears the
   decrypted bytes afterwards (Go string copies handed to the runtime cannot be wiped,
   so keep their lifetime short).
+
+## Opt-in build credentials
+
+On the Secrets tab, **Allow** under Builds opens a confirmation modal. Its
+CSRF-protected `POST …/secrets/build` toggles the selected secret's build permission;
+allowing requires current repository access and the installation owner. **Stop**
+withdraws future build access, even if GitHub access was removed. Already-running
+builds keep credentials already handed to them.
+
+The runtime asks `Provider.ForBuild` for the authorized source and rechecks the
+current request after source preparation, immediately before BuildKit execution.
+Forks, deleted heads and unverified identities get no decrypted values; the
+builder independently refuses secret/auth session providers for different or
+missing head repository IDs. Only `build=true` values are available to Dockerfile
+steps, through BuildKit's in-memory secret provider:
+
+```dockerfile
+RUN --mount=type=secret,id=NPM_TOKEN,env=NPM_TOKEN,required=true npm ci
+```
+
+Configure npm to read that variable, for example with a committed `.npmrc`
+containing `//registry.npmjs.org/:_authToken=${NPM_TOKEN}`. For pip or Go, mount the
+credential/configuration file their client reads or use its supported environment
+variable. Secret mounts make the value available; they do not configure the client.
+
+No values are passed as build arguments or written into the build context.
+`REGISTRY_AUTH` is special: one `host username token` per line (blank lines and
+comments allowed), for example `ghcr.io preview-bot <test-token>`. Registry names
+must be unique, ports valid, and tokens at least four characters. Invalid entries
+are refused without echoing them. When allowed, it supplies credentials only for
+matching registry pulls; Dockerfile steps and the application never receive it.
+
+`BuildSecrets.Redactor` masks values and each registry token in the build output;
+returned build failures are redacted too. `Wipe` clears held decrypted bytes after
+the attempt. This cannot stop trusted branch code from deliberately copying a
+mounted secret into layers or caches, transforming it, or sending it elsewhere.
+Review the Dockerfile and use narrowly scoped test credentials. Changing a secret
+does not itself invalidate BuildKit's layer cache; change a non-secret cache input
+when a step must rerun.
 
 ## Redaction
 

@@ -19,14 +19,14 @@ func newStarterKits(users starterkits.UserSession, caps starterkits.Capabilities
 	if err != nil {
 		return nil, fmt.Errorf("read the default service catalog: %w", err)
 	}
-	fallback := starterkits.Offer{Postgres: defaults.Versions("postgres"), Redis: defaults.Versions("redis")}
+	fallback := starterkits.Offer{Postgres: defaults.Versions("postgres"), Redis: defaults.Versions("redis"), MySQL: defaults.Versions("mysql")}
 	return starterkits.NewHandler(users, caps, fallback, validateKit, logger), nil
 }
 
 // validateKit checks a generated .previewrc.yaml as a build would, against
 // the versions offered.
 func validateKit(data []byte, offer starterkits.Offer) []starterkits.Problem {
-	platform := repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: offeredCatalog{"postgres": offer.Postgres, "redis": offer.Redis}}
+	platform := repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: offeredCatalog{"postgres": offer.Postgres, "redis": offer.Redis, "mysql": offer.MySQL}, BuildTimeout: offer.BuildTimeout}
 	_, err := repoconfig.ParseFor(data, platform)
 	if err == nil {
 		return nil

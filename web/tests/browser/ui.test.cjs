@@ -1071,6 +1071,19 @@ test('repository secrets editor saves several at once, never shows values, and d
  assert.match(await page.locator('.connection-notice').innerText(),/Saved 2 secrets \(2 new, 0 replaced\)/);
  assert.match(await page.locator('.secrets-table').innerText(),/API_KEY[\s\S]*WEBHOOK_SECRET/);
  assert(!(await page.content()).includes('sk_test_never_shown_123'),'the value must never be rendered');
+ // Build credentials require a modal opt-in and can be revoked in place.
+ await page.getByRole('button',{name:'Let builds read API_KEY',exact:true}).click();
+ const allow=page.locator('#allow-build-secret-0');
+ assert(await allow.evaluate(e=>e.matches(':modal')));
+ assert.equal(await page.evaluate(()=>document.activeElement.textContent.trim()),'Cancel');
+ await page.keyboard.press('Escape');
+ assert.equal(await allow.evaluate(e=>e.open),false);
+ await page.getByRole('button',{name:'Let builds read API_KEY',exact:true}).click();
+ await allow.getByRole('button',{name:'Allow builds',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('build_on')==='API_KEY');
+ assert.match(await page.locator('.secrets-table tbody tr').first().innerText(),/Allowed/);
+ await page.getByRole('button',{name:'Stop giving API_KEY to builds',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('build_off')==='API_KEY');
  // Pasting NAME=value lines into a name splits them into lines.
  await name(1).evaluate(input=>{const data=new DataTransfer();data.setData('text/plain','API_KEY=replaced\nFEATURE_FLAG=on');input.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));});
  assert.equal(await name(2).inputValue(),'FEATURE_FLAG');
@@ -1116,6 +1129,13 @@ test('the secrets editor works without JavaScript and pasted .env text is saved'
   await plain.locator('[data-secret-submit]').click();
   await plain.waitForURL(url=>url.searchParams.get('saved_count')==='2');
   assert.match(await plain.locator('.secrets-table').innerText(),/DB_URL[\s\S]*PRIVATE_KEY/);
+  await plain.getByRole('button',{name:'Let builds read DB_URL',exact:true}).click();
+  const allow=plain.locator('#allow-build-secret-0');
+  assert(await allow.evaluate(e=>e.matches(':modal')),'build opt-in is a native modal without JavaScript');
+  await allow.getByRole('button',{name:'Allow builds',exact:true}).click();
+  await plain.waitForURL(url=>url.searchParams.get('build_on')==='DB_URL');
+  await plain.getByRole('button',{name:'Stop giving DB_URL to builds',exact:true}).click();
+  await plain.waitForURL(url=>url.searchParams.get('build_off')==='DB_URL');
   await plain.locator('summary').filter({hasText:'Paste or import a .env file'}).click();
   await plain.locator('#secret-dotenv').fill('NOT A LINE');
   await plain.locator('[data-secret-submit]').click();
@@ -1385,6 +1405,9 @@ test('starter kits write both files for the chosen stack as editable tabs, and e
  await kitIdle(page);await page.getByRole('switch',{name:/^Redis/}).check();
  await page.waitForFunction(()=>/^\s+redis:/m.test(document.querySelector('#kit-code-previewrc').value));
  assert.match(await page.locator('#kit-status').innerText(),/updated/i);
+ await kitIdle(page);await page.getByRole('switch',{name:/^MySQL/}).check();
+ await page.waitForFunction(()=>/^\s+mysql: 8\.4/m.test(document.querySelector('#kit-code-previewrc').value));
+ assert.match(await status(),/Passes Previa's checks/);
  // A custom worker command with shell syntax runs through sh -c; typing keeps focus.
  await kitIdle(page);await page.getByRole('switch',{name:/^Background worker/}).check();
  await page.locator('#kit-worker-with').waitFor();await kitIdle(page);

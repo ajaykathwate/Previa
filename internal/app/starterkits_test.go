@@ -2,6 +2,7 @@ package app
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ajaykathwatee/previa/internal/starterkits"
 )
@@ -23,5 +24,15 @@ func TestValidateKitUsesTheBuildsRules(t *testing.T) {
 	}
 	if problems := validateKit([]byte("port: [3000"), offer); len(problems) != 1 {
 		t.Fatalf("unreadable YAML is one problem, got %+v", problems)
+	}
+}
+
+func TestKitBuildTimeoutUsesLiveWorkerCeiling(t *testing.T) {
+	offer := starterkits.Offer{BuildTimeout: 30 * time.Minute}
+	if problems := validateKit([]byte("build_timeout: 20m"), offer); len(problems) != 0 {
+		t.Fatalf("a timeout permitted by the worker was refused: %+v", problems)
+	}
+	if problems := validateKit([]byte("build_timeout: 31m"), offer); len(problems) != 1 || problems[0].Field != "build_timeout" {
+		t.Fatalf("a timeout above the worker limit was accepted: %+v", problems)
 	}
 }

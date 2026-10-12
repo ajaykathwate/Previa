@@ -86,6 +86,16 @@ type Job struct {
 	// From source.Prepared: the extracted tree and the Dockerfile inside it.
 	ContextDir, Dockerfile string
 	Logs                   LogSink
+	// Secrets are the values Dockerfile steps may read with
+	// RUN --mount=type=secret,id=NAME; Registries log base image pulls in.
+	// Both are empty for untrusted sources. Never logged.
+	Secrets    map[string][]byte
+	Registries []RegistryLogin
+}
+
+// RegistryLogin is one registry a build may pull private base images from.
+type RegistryLogin struct {
+	Host, Username, Secret string
 }
 
 // Image is a built image, ready for a candidate container.
@@ -236,6 +246,7 @@ func (b *Builder) solve(ctx context.Context, cancel context.CancelCauseFunc, bk 
 		FrontendAttrs: attrs,
 		LocalMounts:   map[string]fsutil.FS{"context": source, "dockerfile": source},
 		Exports:       []buildkit.ExportEntry{{Type: buildkit.ExporterDocker, Attrs: map[string]string{"name": job.ImageRef()}, Output: loader.output}},
+		Session:       sessionAttachables(job),
 	}, status)
 	<-progressed
 	loadErr := loader.wait(ctx)

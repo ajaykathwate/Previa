@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Stack is a framework Previa has a starter kit for.
@@ -58,6 +59,7 @@ type Choices struct {
 	Stack         string
 	Postgres      string // a version; empty when not used
 	Redis         string
+	MySQL         string
 	Setup         bool
 	SetupWith     string // a preset key or Custom
 	SetupCommand  string
@@ -74,7 +76,8 @@ type Choices struct {
 
 // Offer is the service versions this server offers, newest first.
 type Offer struct {
-	Postgres, Redis []string
+	Postgres, Redis, MySQL []string
+	BuildTimeout           time.Duration
 	// Known: read from a running worker. Otherwise these are Previa's
 	// defaults, which a worker may narrow.
 	Known bool
@@ -151,10 +154,11 @@ func normalize(s Stack, c Choices, offer Offer) (Choices, []Problem) {
 	c.Stack = s.ID
 	var problems []Problem
 	if s.Static {
-		c.Postgres, c.Redis, c.Setup, c.Worker = "", "", false, false
+		c.Postgres, c.Redis, c.MySQL, c.Setup, c.Worker = "", "", "", false, false
 	}
 	c.Postgres, problems = serviceVersion("postgres", "PostgreSQL", c.Postgres, offer.Postgres, problems)
 	c.Redis, problems = serviceVersion("redis", "Redis", c.Redis, offer.Redis, problems)
+	c.MySQL, problems = serviceVersion("mysql", "MySQL", c.MySQL, offer.MySQL, problems)
 	c.SetupWith = presetKey(c.SetupWith, s.Setup)
 	c.WorkerWith = presetKey(c.WorkerWith, s.Workers)
 	if c.Port == 0 {

@@ -631,6 +631,8 @@ a.sha-link:hover { border-color: var(--line-strong); color: var(--ink); }
 html:not(.js-enabled) .secret-select-all { display: none; }
 .secret-name code { color: var(--ink); font-family: var(--font-code); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .secret-updated { color: var(--text-muted); font-size: 12.5px; white-space: nowrap; }
+.secret-build { white-space: nowrap; }
+.secret-build-form { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
 .secret-actions { text-align: right; white-space: nowrap; }
 .secret-actions .text-link + .text-link { margin-left: 14px; }
 .secrets-table .text-link { font-size: 13px; }

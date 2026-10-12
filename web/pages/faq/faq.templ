@@ -154,7 +154,7 @@ templ previewLifetime() {
 
 templ backendApps() {
 	<p>Yes. An API's preview link answers requests just like a website's does.</p>
-	<p>In <code>.previewrc.yaml</code> you can ask for PostgreSQL 17 or 16 and Redis 8 or 7, run a setup command for migrations and seed data, keep up to three background processes running and link your API docs. Each preview gets its own fresh copy of its data.</p>
+	<p>In <code>.previewrc.yaml</code> you can ask for PostgreSQL, Redis or MySQL from the server's catalog, run a setup command for migrations and seed data, keep up to three background processes running and link your API docs. Each preview gets its own fresh copy of its data. Docker Compose and separate app images are not available; processes use the same image as the app.</p>
 	<p>If a preview needs an outside test database or service, approve it on the repository's <strong>Outbound</strong> tab.</p>
 }
 
@@ -184,11 +184,11 @@ templ forkPullRequests() {
 templ secretsProtected() {
 	<ul>
 		<li>Encrypted as soon as you save them, and never shown again.</li>
-		<li>Added only when a preview starts, never to the build or the image.</li>
+		<li>Added when a preview starts by default. Builds receive a value only when you explicitly allow it, through a BuildKit secret mount. REGISTRY_AUTH is reserved for private base image pulls and never reaches the app.</li>
 		<li>Masked in build and preview logs.</li>
 		<li>Never given to pull requests from forks.</li>
 	</ul>
-	<p>Use sandbox keys and test databases, never production credentials.</p>
+	<p>Use sandbox keys and test databases, never production credentials. Review branch code before allowing build access: it can copy a mounted secret into an image or send it elsewhere. Previa never uses secret build arguments.</p>
 }
 
 templ internalNetwork() {

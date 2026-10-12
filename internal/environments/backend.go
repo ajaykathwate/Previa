@@ -44,6 +44,8 @@ func ServiceTitle(kind, version string) string {
 		return "PostgreSQL " + version
 	case "redis":
 		return "Redis " + version
+	case "mysql":
+		return "MySQL " + version
 	}
 	return kind + " " + version
 }

@@ -99,6 +99,7 @@ type EnvSecret struct {
 	CreatedAt      pgtype.Timestamptz
 	KeyVersion     int32
 	UpdatedAt      pgtype.Timestamptz
+	Build          bool
 }
 
 type Environment struct {
@@ -333,14 +334,15 @@ type WebhookDelivery struct {
 }
 
 type WorkerCapability struct {
-	WorkerID     string
-	Execution    bool
-	Routing      bool
-	Reporting    bool
-	Housekeeping bool
-	Discovery    bool
-	StartedAt    pgtype.Timestamptz
-	SeenAt       pgtype.Timestamptz
-	Paused       bool
-	Services     []string
+	WorkerID       string
+	Execution      bool
+	Routing        bool
+	Reporting      bool
+	Housekeeping   bool
+	Discovery      bool
+	StartedAt      pgtype.Timestamptz
+	SeenAt         pgtype.Timestamptz
+	Paused         bool
+	Services       []string
+	BuildTimeoutNs int64
 }

@@ -33,10 +33,11 @@ type serviceProfile struct {
 var serviceProfiles = map[string]serviceProfile{
 	"postgres": {title: "PostgreSQL", user: "postgres", port: 5432, cpuMillis: 500, memory: 512 << 20, dataBytes: 192 << 20, dataPath: "/var/lib/postgresql/data"},
 	"redis":    {title: "Redis", user: "redis", port: 6379, cpuMillis: 250, memory: 256 << 20, dataBytes: 16 << 20, dataPath: "/data"},
+	"mysql":    {title: "MySQL", user: "mysql", port: 3306, cpuMillis: 1000, memory: 1 << 30, dataBytes: 384 << 20, dataPath: "/var/lib/mysql"},
 }
 
 const (
-	// serviceDatabase is the PostgreSQL user and database of every preview.
+	// serviceDatabase is the SQL user and database of every preview.
 	serviceDatabase = "preview"
 	servicePIDs     = 256
 	// redisMaxMemory leaves room inside Redis's memory limit for the server.
@@ -63,7 +64,7 @@ type backend struct {
 // credentialNames are the variables of env that carry a generated password.
 func (b backend) credentialNames() []string {
 	var names []string
-	for _, name := range []string{"DATABASE_URL", "PGPASSWORD", "REDIS_URL"} {
+	for _, name := range []string{"DATABASE_URL", "PGPASSWORD", "REDIS_URL", "MYSQL_URL", "MYSQL_PASSWORD"} {
 		if _, ok := b.env[name]; ok {
 			names = append(names, name)
 		}
@@ -73,9 +74,10 @@ func (b backend) credentialNames() []string {
 
 type serviceRun struct {
 	repoconfig.BackendService
-	profile  serviceProfile
-	alias    string // hostname on the services network
-	password string
+	profile      serviceProfile
+	alias        string // hostname on the services network
+	password     string
+	rootPassword string // MySQL administration stays local to its service.
 }
 
 // planBackend generates the candidate's service hostnames and credentials and
@@ -96,6 +98,13 @@ func planBackend(key string, settings repoconfig.Config) (backend, error) {
 			return backend{}, err
 		}
 		run := serviceRun{BackendService: s, profile: profile, alias: s.Kind + "-" + nonce, password: password}
+		if s.Kind == "mysql" {
+			run.rootPassword, err = randomToken(32)
+			if err != nil {
+				return backend{}, err
+			}
+			b.secrets = append(b.secrets, run.rootPassword)
+		}
 		b.services = append(b.services, run)
 		b.secrets = append(b.secrets, password)
 		port := strconv.Itoa(profile.port)
@@ -106,6 +115,14 @@ func planBackend(key string, settings repoconfig.Config) (backend, error) {
 			b.env["PGPASSWORD"], b.env["PGDATABASE"], b.env["PGSSLMODE"] = password, serviceDatabase, "disable"
 		case "redis":
 			b.env["REDIS_URL"] = "redis://:" + password + "@" + run.alias + ":" + port + "/0"
+		case "mysql":
+			b.env["MYSQL_URL"] = "mysql://" + serviceDatabase + ":" + password + "@" + run.alias + ":" + port + "/" + serviceDatabase
+			b.env["MYSQL_HOST"], b.env["MYSQL_PORT"], b.env["MYSQL_USER"] = run.alias, port, serviceDatabase
+			b.env["MYSQL_PASSWORD"], b.env["MYSQL_DATABASE"] = password, serviceDatabase
+			// Avoid ambiguous DATABASE_URL when both SQL services are requested.
+			if !slices.ContainsFunc(settings.Services, func(s repoconfig.BackendService) bool { return s.Kind == "postgres" }) {
+				b.env["DATABASE_URL"] = b.env["MYSQL_URL"]
+			}
 		}
 	}
 	return b, nil
@@ -218,6 +235,11 @@ func serviceSpec(run serviceRun, volumes []string, networkID string, labels map[
 	case "redis":
 		config.Cmd = []string{"redis-server", "--save", "", "--appendonly", "no", "--dir", data, "--requirepass", run.password,
 			"--maxmemory", redisMaxMemory, "--maxmemory-policy", "noeviction"}
+	case "mysql":
+		config.Env = []string{"MYSQL_DATABASE=" + serviceDatabase, "MYSQL_USER=" + serviceDatabase, "MYSQL_PASSWORD=" + run.password,
+			"MYSQL_ROOT_PASSWORD=" + run.rootPassword, "MYSQL_ROOT_HOST=localhost", "MYSQL_INITDB_SKIP_TZINFO=1"}
+		config.Cmd = []string{"mysqld", "--datadir=" + data, "--socket=/tmp/mysql.sock", "--pid-file=/tmp/mysql.pid", "--mysqlx=0",
+			"--skip-log-bin", "--innodb-buffer-pool-size=64M", "--innodb-redo-log-capacity=32M", "--max-connections=50", "--performance-schema=OFF"}
 	}
 	pids := int64(servicePIDs)
 	host := &container.HostConfig{

@@ -298,8 +298,11 @@ page. The building blocks are `components.PreviaAvatar`, `PersonAvatar`, `Previa
 
 Write-only by design. The list and editor sit beside a **How secrets reach your
 previews** panel (below 1100px it follows them); the Outbound tab uses the same
-layout for **How outbound connections work**. The **Stored secrets** table lists names and update times,
-each with Replace and Delete; checkboxes and **Delete selected** remove several
+layout for **How outbound connections work**. The **Stored secrets** table lists names, build permissions and update times,
+each with Replace and Delete. **Allow** opens a modal explaining that trusted branch
+code can read the credential; **Stop** revokes build use. Values are runtime-only
+by default, while `REGISTRY_AUTH` is reserved for base image pulls. All permission
+changes are owner-only, CSRF-protected POSTs; forks receive none. Checkboxes and **Delete selected** remove several
 after one confirmation (the checkboxes belong to the dialog's form, so this works
 without JavaScript). The editor below adds or replaces several values at once, one
 name and value per line like a key-value table, plus a **Paste or import a .env
@@ -374,8 +377,8 @@ choices and the editor share their own wrapper (`.kit-main`), so the editor stay
 view only beside the choices and never slides over the guidance.
 
 - **Choices.** Stacks are a row of chips (monogram and name) with the chosen stack's
-  kind and language under them. Services and extras are switch rows: PostgreSQL and
-  Redis with their version as a segmented control in the same row, migrations and a
+  kind and language under them. Services and extras are switch rows: PostgreSQL,
+  Redis and MySQL with their version as a segmented control in the same row, migrations and a
   background worker with ready-made commands or **My own command…**, and a docs link.
   **Advanced** holds the port, health check path, preview size and a stack detail
   (such as the Django project package).
@@ -396,7 +399,7 @@ view only beside the choices and never slides over the guidance.
   as plain, still editable text areas.
 - **Checked like a build.** `starterkits.Generate` corrects and reports bad choices;
   the server parses the YAML with `repoconfig.ParseFor`, the build's own parser
-  (`internal/app/starterkits.go`), against the versions the running worker offers
+  (`internal/app/starterkits.go`), against the versions and build deadline the running worker offers
   (Previa's default catalog when none that builds is running). An edited
   `.previewrc.yaml` is posted to `POST /starter-kits/check` 400 ms after typing stops
   and the status bar shows the result, each problem with its key and, where the
@@ -412,11 +415,12 @@ view only beside the choices and never slides over the guidance.
   (`data-edited`, `data-enhanced`) and sets the tabs up on swap, before paint.
 - **Runtime rules built in.** Dockerfiles keep caches and storage in `/tmp`, bind
   `0.0.0.0` and expose the chosen port. Spring Boot and Laravel get a small
-  `preview-env` entrypoint that maps `DATABASE_URL`/`PG*` and `REDIS_URL` to the
+  `preview-env` entrypoint that maps `DATABASE_URL`/`PG*`, `MYSQL_*` and `REDIS_URL` to the
   names the framework reads; setup and processes call it too, since they replace the
   entrypoint. **Check in your app** lists what the code itself must do, and **Need
-  something else?** covers secrets, other databases (via Outbound), plain settings,
-  more workers and seed data.
+  something else?** covers build credentials, monorepo contexts, safety limits,
+  submodules and LFS, Compose, build deadlines, unsupported hardware, other
+  databases (via Outbound), plain settings, more workers and seed data.
 
 ## Preview unavailable page
 

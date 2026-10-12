@@ -10,7 +10,7 @@ WHERE r.id = $1 AND i.owner_user_id = $2
 FOR UPDATE OF r;
 
 -- name: ListSecrets :many
-SELECT key, updated_at FROM env_secrets WHERE repo_id = $1 ORDER BY key;
+SELECT key, updated_at, build FROM env_secrets WHERE repo_id = $1 ORDER BY key;
 
 -- name: CountSecrets :one
 SELECT count(*) FROM env_secrets WHERE repo_id = $1;
@@ -31,7 +31,15 @@ WHERE s.repo_id = r.id AND r.id = sqlc.arg(id) AND i.owner_user_id = sqlc.arg(ow
   AND s.key = ANY(sqlc.arg(keys)::text[]);
 
 -- name: SealedSecrets :many
-SELECT key, encrypted_value, key_version FROM env_secrets WHERE repo_id = $1 ORDER BY key;
+SELECT key, encrypted_value, key_version, build FROM env_secrets WHERE repo_id = $1 ORDER BY key;
+
+-- name: SetSecretBuild :execrows
+-- Whether Dockerfile steps of trusted builds may read the secret.
+UPDATE env_secrets s SET build = sqlc.arg(build)::boolean, updated_at = now()
+FROM repos r JOIN installations i ON i.id = r.installation_id
+WHERE s.repo_id = r.id AND r.id = sqlc.arg(repo_id) AND i.owner_user_id = sqlc.arg(owner_user_id)
+  AND s.key = sqlc.arg(key) AND s.build IS DISTINCT FROM sqlc.arg(build)::boolean
+  AND (NOT sqlc.arg(build)::boolean OR (r.accessible AND i.status = 'active'));
 
 -- name: SecretsNeedingRotation :many
 SELECT id, repo_id, key, encrypted_value, key_version FROM env_secrets

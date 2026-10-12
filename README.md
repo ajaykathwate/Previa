@@ -123,8 +123,8 @@ even if the person who installed it changes their password or leaves the team.
    the dashboard; this policy is stored by the platform, not in PR-controlled YAML.
    Connecting a repository or enabling Automatic does not bulk-build existing PRs.
 
-Backend and API repositories can also declare platform-managed PostgreSQL and
-Redis (`services`), a setup command for migrations and seed data (`setup`), up to
+Backend and API repositories can also declare platform-managed PostgreSQL, Redis
+and MySQL (`services`), a setup command for migrations and seed data (`setup`), up to
 three unrouted processes such as a queue worker (`processes`) and a docs path
 (`docs_path`); see [backend previews](docs/11-backend-previews.md).
 
@@ -142,6 +142,15 @@ Every build fetches and validates the exact commit's configuration first.
 See [repository configuration](docs/06-source-and-configuration.md) for strict validation,
 safe error categories, fixtures and effective config hashing. Build mode remains
 platform-owned and cannot be set through this YAML.
+
+Monorepos may set `context: apps/web`; the Dockerfile path is relative to that
+directory, while `.previewrc.yaml` stays at the repository root. The full archive
+still must fit the source limits (256 MiB download, 1 GiB unpacked, 100,000
+entries). Git submodule manifests and LFS pointers needed by the context are
+detected and refused with guidance; fetching them is not implemented.
+`build_timeout: 20m` bounds the image stage when the operator's `BUILD_TIMEOUT`
+allows it (12m overall by default, including source and startup). Linux images
+must match the worker's architecture; Windows and GPU workloads are unsupported.
 
 **Step 1 — PR opened**
 1. Contributor opens a PR on GitHub.
@@ -275,7 +284,7 @@ See the [user guide](technical-docs/user-guide.md) for the current browser workf
 ### 2.5 Explicit MVP boundaries (what's out of scope for v1)
 
 - Arbitrary multi-service apps (`docker-compose.yml` support). *Narrowed by
-  Prompt 13:* a Dockerfile app may add platform-managed PostgreSQL and Redis from
+  Prompt 13:* a Dockerfile app may add platform-managed PostgreSQL, Redis and MySQL from
   the operator's pinned catalog, a setup command and a few processes from its own
   image ([docs/11](docs/11-backend-previews.md)); Compose files, service images
   chosen in a PR, data that survives a rebuild and non-HTTP ingress stay out.
@@ -548,13 +557,13 @@ This system runs other people's code on your machine, so isolation is a core req
 - Private previews: an owner can require visitors to sign in with GitHub and be able to see the repository; the router checks every request with the server (see [docs/12-routing-and-https.md](docs/12-routing-and-https.md#private-previews))
 - Current implementation: previews run as an unprivileged user with a read-only root, no capabilities and `no-new-privileges` on their own internal network; outbound traffic reaches public addresses only through the egress proxy; probes from a running preview confirm Postgres, the host, metadata and other previews are unreachable. They share the host kernel (see [docs/10-preview-runtime.md](docs/10-preview-runtime.md))
 - Docker socket: only the worker touches it; never mount it into a preview container. The router (Traefik) has no socket either: its routes come from the worker's file and the worker attaches it to preview networks
-- Managed services (PostgreSQL, Redis): the operator's digest-pinned images as their own unprivileged user, read-only root with data on a size-capped tmpfs, no capabilities, on a per-PR services network with no egress and no route; owner-approved outbound connections go only through the egress proxy, which resolves names itself and refuses non-public addresses; forks get none (see [docs/11-backend-previews.md](docs/11-backend-previews.md))
+- Managed services (PostgreSQL, Redis, MySQL): the operator's digest-pinned images as their own unprivileged user, read-only root with data on a size-capped tmpfs, no capabilities, on a per-PR services network with no egress and no route; owner-approved outbound connections go only through the egress proxy, which resolves names itself and refuses non-public addresses; forks get none (see [docs/11-backend-previews.md](docs/11-backend-previews.md))
 - Builds: each runs in a fresh rootless BuildKit container with CPU/memory/PID limits on a private network whose only exit is an egress proxy that reaches public addresses only (see [docs/09-image-builds.md](docs/09-image-builds.md))
 
 ### 4.7 Secrets handling
 
 - Users' env vars for their previewed apps are stored encrypted (AES-GCM, key from server environment) in `env_secrets`, and injected at container start
-- They are never read from the repo's `.previewrc.yaml` and never printed to build logs
+- They are never read from the repo's `.previewrc.yaml`; known values are redacted from logs. Owners may explicitly allow BuildKit secret mounts for trusted branch builds and registry logins for private base images. Forks receive none. `REGISTRY_AUTH` is pull-only; see [repository secrets](docs/07-repository-secrets.md).
 - GitHub App private key and webhook secret come from environment or a secrets file on the host, never committed
 
 ### 4.8 Configuration (environment variables)
@@ -609,4 +618,4 @@ object storage through rclone, with a scripted, rehearsed restore.
 - More capacity: run workers on multiple hosts, add a scheduler, or move to Kubernetes via the `Runtime` interface
 - Stronger isolation: Firecracker microVMs
 - Bigger logs: move build logs to S3/MinIO or Loki
-- Multi-service previews: more managed service kinds, or `docker-compose.yml` support beyond the managed PostgreSQL and Redis of [docs/11](docs/11-backend-previews.md)
+- Multi-service previews: more managed service kinds, or `docker-compose.yml` support beyond the managed PostgreSQL, Redis and MySQL of [docs/11](docs/11-backend-previews.md)

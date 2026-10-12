@@ -209,6 +209,7 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0025 | Live app output ([08](08-build-logs.md#live-app-output)): `app_output_watches` and `app_output_lines` (kept only while someone watches) and the `app_output_watches_realtime` trigger. |
 | 0026 | Idle previews ([10](10-preview-runtime.md#idle-previews-sleep)): `environments.asleep_at`, `woke_at`, `wake_requested_at` and `wake_error`. |
 | 0027 | Private previews ([12](12-routing-and-https.md#private-previews)): `repos.private_previews`. |
+| 0028 | Opt-in build secrets ([07](07-repository-secrets.md)): `env_secrets.build`, false for all existing secrets; `worker_capabilities.build_timeout_ns` lets Starter kits validate against live worker ceilings. Server and worker require this schema. |
 
 Optional check that live updates are wired:
 
@@ -309,6 +310,32 @@ deleting the comment. The database part uses a throwaway schema and leaves nothi
 behind. Without the three variables the target stops with a message; with
 `TEST_REPORTING` unset the test skips.
 
+### Repository compatibility settings
+
+After pulling these changes, run `make migrate-up` before restarting the server
+and worker: Goose must reach **28** (River migrations remain separate). Existing
+secrets remain runtime-only. On the repository's **Secrets** tab, Allow opens a
+confirmation modal; explicitly opt in a scoped test token for private dependency
+builds. Use `RUN --mount=type=secret,id=NAME,required=true` in the Dockerfile.
+For private base images, allow `REGISTRY_AUTH` with one `host username token`
+line per registry. It never reaches app containers or Dockerfile steps. The same
+encryption keyring is required on server and worker; forks receive no credentials.
+
+`.previewrc.yaml` may now set `context: apps/web` (Dockerfile and COPY paths are
+relative to it) and `build_timeout: 10m` (image stage). Keep the config at the root.
+To permit a 20-minute image build, set `BUILD_TIMEOUT=30m` in `.env` and restart
+the worker with `make run-worker`; that command loads `.env` automatically.
+Direct `go run`/`go test` commands do **not** load `.env`: export the needed values
+manually. Requests above the worker ceiling are refused. The overall deadline
+still includes source and startup, and archive limits still cover the whole repo.
+
+An empty `PREVIEW_SERVICE_CATALOG` now also offers pinned **MySQL 8.4**. A custom
+catalog is unchanged: add `mysql:8.4=image@sha256:digest` to offer it, or use `none`
+to turn managed services off. MySQL consumes 1 CPU and 1 GiB per candidate (including
+384 MiB data tmpfs); allow room for the app, setup and any old preview too. The
+service image is pulled by the worker on first use, and readiness requires an
+authenticated query. See [backend previews](11-backend-previews.md) for variables.
+
 ### Real image builder check (optional)
 
 Needs Docker and internet access (Docker pulls the pinned BuildKit image; builds
@@ -326,7 +353,8 @@ make test-builder         # about 4 minutes
 
 **Expected:** every `TestRealBuilder…` test passes: real and cached builds,
 isolation probes (logged as `probe: … blocked`, with only `proxied-public REACHED`),
-memory, disk, image-size, timeout and cancellation limits, fork cache separation and
+memory, disk, image-size, timeout and cancellation limits, opt-in secret mounts,
+missing/fork-secret refusal, fork cache separation and
 cleanup. Afterwards only the long-lived `previa-egress` container and network
 remain. To remove them and any build caches:
 
@@ -344,6 +372,17 @@ access is used; secrets come from an in-memory store sealed with a throwaway key
 ```sh
 make test-runtime         # about 3 minutes
 ```
+
+For the new managed-service check alone (Docker and image download access needed):
+
+```sh
+TEST_RUNTIME=1 go test -count=1 -v -timeout 10m -run '^TestRealRuntimeManagedMySQL$' ./internal/runtime
+```
+
+Expected: MySQL starts under the real service restrictions, accepts authenticated
+queries, refuses a wrong password, starts with empty data on its second candidate,
+creates no persistent volume, and all test containers and the service network are
+removed. The pinned service image remains available for reuse.
 
 **Expected:** every `TestRealRuntime…` test passes: a hardened healthy candidate
 (UID 65532, read-only root, no capabilities, no IPv6, redacted secret), fork secret

@@ -26,6 +26,7 @@ type SealedSecret struct {
 	Name    string
 	Value   []byte
 	Version int32
+	Build   bool // the owner let Dockerfile steps of trusted builds read it
 }
 
 // SealedStore reads a repository's ciphertext without owner checks; callers have
@@ -119,10 +120,13 @@ func (p *Provider) ForContainer(ctx context.Context, repoID int64, source Source
 	if err != nil {
 		return nil, fmt.Errorf("read repository secrets: %w", err)
 	}
-	if len(sealed) > 0 && p.keys == nil {
-		return nil, fmt.Errorf("%w (no keyring is configured on this worker)", ErrSecretsUnavailable)
-	}
 	for _, s := range sealed {
+		if s.Name == RegistryAuthName {
+			continue // Pull-only credentials never reach the application.
+		}
+		if p.keys == nil {
+			return nil, fmt.Errorf("%w (no keyring is configured on this worker)", ErrSecretsUnavailable)
+		}
 		plain, err := p.keys.Open(repoID, s.Name, s.Version, s.Value)
 		if err != nil {
 			env.Wipe()

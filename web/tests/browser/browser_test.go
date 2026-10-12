@@ -116,7 +116,7 @@ func TestBrowserRegression(t *testing.T) {
 		// The Overview shows an empty workspace until a test asks for a busy one
 		// (GET /__fixture/overview?state=busy), kept in the session.
 		// Starter kits with Previa's default service versions and no worker.
-		starterkits.NewHandler(handler, nil, starterkits.Offer{Postgres: []string{"17", "16"}, Redis: []string{"8", "7"}}, fixtureKitCheck, logger).
+		starterkits.NewHandler(handler, nil, starterkits.Offer{Postgres: []string{"17", "16"}, Redis: []string{"8", "7"}, MySQL: []string{"8.4"}}, fixtureKitCheck, logger).
 			Mount(r, auth.RequireUser)
 		dashboard.MountWithSummary(r, handler, auth.RequireUser, dashboard.Options{
 			DeveloperTools: true, Identity: handler.UserIDs,
@@ -409,6 +409,7 @@ func (fixtureProvider) Authenticate(_ context.Context, code string) (auth.Identi
 type fixtureSecrets struct {
 	mu    sync.Mutex
 	names map[int64]map[string]time.Time
+	build map[int64]map[string]bool
 }
 
 func (f *fixtureSecrets) Repository(_ context.Context, _ int64, repoID int64) (secrets.RepositoryView, error) {
@@ -426,7 +427,7 @@ func (f *fixtureSecrets) List(ctx context.Context, user, repoID int64) ([]secret
 	defer f.mu.Unlock()
 	var out []secrets.Summary
 	for name, at := range f.names[repoID] {
-		out = append(out, secrets.Summary{Name: name, UpdatedAt: at})
+		out = append(out, secrets.Summary{Name: name, UpdatedAt: at, Build: f.build[repoID][name]})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -471,9 +472,31 @@ func (f *fixtureSecrets) DeleteMany(ctx context.Context, user, repoID int64, nam
 		if _, exists := f.names[repoID][name]; exists {
 			deleted++
 			delete(f.names[repoID], name)
+			delete(f.build[repoID], name)
 		}
 	}
 	return deleted, nil
+}
+
+func (f *fixtureSecrets) SetBuild(ctx context.Context, user, repoID int64, name string, build bool) (bool, error) {
+	repo, err := f.Repository(ctx, user, repoID)
+	if err != nil || (build && !repo.Available) {
+		return false, secrets.ErrUnavailable
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.names[repoID][name]; !ok {
+		return false, nil
+	}
+	if f.build == nil {
+		f.build = map[int64]map[string]bool{}
+	}
+	if f.build[repoID] == nil {
+		f.build[repoID] = map[string]bool{}
+	}
+	changed := f.build[repoID][name] != build
+	f.build[repoID][name] = build
+	return changed, nil
 }
 
 type fixturePings struct{}
@@ -701,8 +724,8 @@ func (f *fixtureOutbound) Remove(_ context.Context, _ int64, repoID, id int64) (
 // fixtureKitCheck checks a starter kit's .previewrc.yaml with the parser a
 // build uses, as internal/app wires it in production.
 func fixtureKitCheck(config []byte, offer starterkits.Offer) []starterkits.Problem {
-	catalog := fixtureCatalog{"postgres": offer.Postgres, "redis": offer.Redis}
-	_, err := repoconfig.ParseFor(config, repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: catalog})
+	catalog := fixtureCatalog{"postgres": offer.Postgres, "redis": offer.Redis, "mysql": offer.MySQL}
+	_, err := repoconfig.ParseFor(config, repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: catalog, BuildTimeout: offer.BuildTimeout})
 	var invalid *repoconfig.ValidationError
 	if !errors.As(err, &invalid) {
 		return nil

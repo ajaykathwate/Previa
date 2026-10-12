@@ -19,7 +19,9 @@ the worker runs every admitted build through it ([22](22-mvp-operations.md)), up
 | Limits (Balanced, env-overridable) | 2 CPUs, 4 GiB memory, 2,048 processes, 20 GiB disk, 4 GiB image, refuse to start below 15 GiB free | Owner decision; tune per host. |
 | BuildKit versions | Daemon image `moby/buildkit:v0.33.1-rootless` pinned by digest; Go client v0.33.0 | Client v0.33.1 requires Go 1.26.8, but the toolchain is pinned to 1.26.5. Patch versions of client and daemon are compatible. |
 | Egress proxy | Written in Go (`internal/platform/egress`, run as `previa-egress` by `cmd/egress`) rather than Squid; shared with previews ([10](10-preview-runtime.md)) | One language, exact address rules, unit-testable rebinding protection, no new third-party service. |
-| Secrets | **Never** in builds: no build arguments, context or secret mounts | Repository secrets are runtime-only for the MVP ([07](07-repository-secrets.md)). |
+| Secrets | Explicit owner opt-in: BuildKit secret mounts and pull-only registry authentication for trusted heads; never build arguments or context files | Forks and unverified heads receive no providers. Known values and returned errors are redacted; code given a credential can still copy or exfiltrate it ([07](07-repository-secrets.md)). |
+
+Repository `build_timeout` limits the image stage within the overall `BUILD_TIMEOUT` (12m by default). Raising it above the operator ceiling is a validation error; source preparation and startup share the remaining overall time. Repeated builds can reuse layers, but secret value changes do not invalidate BuildKit's cache: change a non-secret cache-busting input or the relevant Dockerfile step when a credential change must rerun it.
 
 ## How a build runs
 
@@ -87,7 +89,7 @@ scope's cache; and two simultaneous builds of one scope never share a cache.
 virtual machines; a kernel exploit is not contained (gVisor or VM isolation is an
 optional upgrade). The outer seccomp and AppArmor profiles are off for the builder (see
 above). Code can still exfiltrate anything it is given over HTTPS to a public host;
-builds are given no secrets. Tools that ignore `HTTP(S)_PROXY` cannot reach the
+builds receive only explicitly allowed credentials for verified same-repository heads. Use scoped test credentials; secret mounts do not stop Dockerfile code from copying values into layers or caches. Tools that ignore `HTTP(S)_PROXY` cannot reach the
 network. The egress proxy is shared by concurrent builds, but it only connects to
 public addresses, so builds cannot reach each other through it. Each build network
 takes an address range from Docker's default pools until it is removed.

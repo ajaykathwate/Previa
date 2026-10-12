@@ -141,8 +141,9 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 	p.addDiscovery(x.sync)
 	p.capabilities.Execution, p.capabilities.Routing, p.capabilities.Reporting, p.capabilities.Housekeeping = true, true, true, true
 	p.capabilities.Services = x.catalog.Offers()
+	p.capabilities.BuildTimeout = cfg.BuildTimeout
 	if x.catalog.Empty() {
-		p.unavailable = append(p.unavailable, "PREVIEW_SERVICE_CATALOG is none: previews cannot request managed PostgreSQL or Redis")
+		p.unavailable = append(p.unavailable, "PREVIEW_SERVICE_CATALOG is none: previews cannot request managed PostgreSQL, Redis or MySQL")
 	}
 	if cfg.BuildsPaused {
 		// The kill switch: everything stays registered so teardown, cleanup,

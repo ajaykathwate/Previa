@@ -99,6 +99,7 @@ templ servicesSection(p Page) {
 		<div class="kit-rows">
 			@service("postgres", "PostgreSQL", "Sets DATABASE_URL", p.Form.Postgres, components.DatabaseIcon(), p.ProblemFor("postgres"))
 			@service("redis", "Redis", "Sets REDIS_URL", p.Form.Redis, components.ServerIcon(), p.ProblemFor("redis"))
+			@service("mysql", "MySQL", "Sets MYSQL_URL", p.Form.MySQL, components.DatabaseIcon(), p.ProblemFor("mysql"))
 		</div>
 		<p class="kit-hint">
 			@components.InfoIcon()
@@ -413,8 +414,8 @@ templ more() {
 			<p>Never put them in these files. Add them on the repository's <strong>Secrets</strong> tab: your preview gets them as environment variables when it starts, and pull requests from forks never do.</p>
 		</details>
 		<details>
-			<summary>Another database, such as MySQL or MongoDB</summary>
-			<p>Previa runs PostgreSQL and Redis for you. For anything else, use a test instance you host, approve its address on the repository's <strong>Outbound</strong> tab, and pass its details as secrets.</p>
+			<summary>Another database, such as MongoDB, Elasticsearch or Kafka</summary>
+			<p>Previa can run PostgreSQL, Redis and MySQL from this server's catalog. For other services, use a test instance you host, approve its address on the repository's <strong>Outbound</strong> tab, and pass its details as secrets.</p>
 		</details>
 		<details>
 			<summary>Plain settings and feature flags</summary>
@@ -426,7 +427,31 @@ templ more() {
 		</details>
 		<details>
 			<summary>Writing files at runtime</summary>
-			<p>Previews keep the file system read-only except <code>/tmp</code>, and an image that runs as root runs as an unprivileged user. Point caches, uploads and temporary files at <code>/tmp</code>.</p>
+			<p>Previews keep the file system read-only except <code>/tmp</code>, and an image that runs as root runs as an unprivileged user. Point caches, uploads and temporary files at <code>/tmp</code>. Use port 8080 for nginx, with <code>nginxinc/nginx-unprivileged</code>; update both the app and <code>port</code> in the config.</p>
+		</details>
+		<details>
+			<summary>Private packages and private base images</summary>
+			<p>Add a test credential on the repository's <strong>Secrets</strong> tab and explicitly allow Builds. Read it with a BuildKit secret mount such as <code>RUN --mount=type=secret,id=NPM_TOKEN,env=NPM_TOKEN npm ci</code>; never use a build argument or copy it into the image. For base images, allow a secret named <code>REGISTRY_AUTH</code> with one <code>ghcr.io username token</code> line per registry. Forks receive neither kind of credential.</p>
+		</details>
+		<details>
+			<summary>Git submodules and Git LFS</summary>
+			<p>Previa downloads a GitHub archive. Submodules are not fetched and LFS files may be pointers. Previa detects these in the build context and stops with guidance. Vendor the files into Git, or choose a context that does not need them. Automatic fetching is not available.</p>
+		</details>
+		<details>
+			<summary>Monorepos and large repositories</summary>
+			<p>Set <code>context: apps/web</code> in the root <code>.previewrc.yaml</code> to send only that directory to the builder. The <code>dockerfile</code> path and COPY sources are relative to that context. The full archive still must fit the safety limits: 256 MiB download, 1 GiB unpacked and 100,000 entries. Images are limited to 4 GiB by default. A subfolder cannot bypass the archive limits.</p>
+		</details>
+		<details>
+			<summary>Docker Compose and several app images</summary>
+			<p>Multi-image previews and Docker Compose are not available. A preview runs one app image, up to three processes from that image, and managed databases or caches. Separate frontend and API images need separate repositories or a single combined image for now.</p>
+		</details>
+		<details>
+			<summary>Long builds</summary>
+			<p>The default overall build limit is 12 minutes. Set <code>build_timeout: 20m</code> to give the image build more time when the operator has raised <code>BUILD_TIMEOUT</code> to allow it. Source preparation and startup also consume the overall deadline. Repeat builds can reuse cached layers; keep dependencies in early layers and trim the context with <code>.dockerignore</code>.</p>
+		</details>
+		<details>
+			<summary>ARM-only, GPU and Windows images</summary>
+			<p>Build and run a Linux image for the worker's CPU architecture (usually amd64). ARM-only images on an amd64 worker, GPU workloads and Windows containers are not supported. Use a compatible or multi-platform base image.</p>
 		</details>
 		<details>
 			<summary>Seed data for reviewers</summary>
