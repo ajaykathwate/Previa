@@ -48,7 +48,8 @@ collectors are included.
 | `previa_request_to_preview_seconds` | histogram | | The headline latency (see Decisions). |
 | `previa_builds_total` | counter | `outcome` (succeeded, failed, superseded, interrupted), `code` (failure category) | Finished build attempts. |
 | `previa_build_duration_seconds` | histogram | `outcome` | Source to healthy candidate. |
-| `previa_build_waits_total` | counter | `reason` (capacity, disk, paused) | Admissions deferred. |
+| `previa_build_waits_total` | counter | `reason` (capacity, disk, paused, account, quota) | Admissions deferred. |
+| `previa_build_egress_bytes` | histogram | `direction` (`up`, `down`) | A finished build's traffic through the egress proxy ([09](09-image-builds.md#build-traffic-and-the-registries-only-mode)). |
 | `previa_build_disk_free_bytes` | gauge | | Free Docker host storage at the last build's disk check (the builder measures its own state directory, the path that actually fills). |
 | `previa_jobs_total` | counter | `kind`, `outcome` (succeeded, failed, snoozed, cancelled) | Every River job worked. |
 | `previa_job_duration_seconds` | histogram | `kind` | Job run time. |
@@ -86,7 +87,7 @@ Both processes refuse to start against a schema older than they were built for.
 ## Dashboards and alerts
 
 `deploy/observability/` holds `prometheus.yml` (scrapes the server, the worker and
-the router's metrics entry point on the control network), `alerts.yml` (24 rules,
+the router's metrics entry point on the control network), `alerts.yml` (27 rules,
 each naming its runbook section), `alerts_test.yml` (promtool unit tests) and a
 provisioned Grafana dashboard (30 panels: headline latency, builds, queues,
 requests, operations, housekeeping, disk, GitHub, webhooks, HTTP, streams, backup
@@ -106,6 +107,8 @@ configures ([25](25-production-deployment.md)).
 | PreviaReconcilerMassDeletion | Housekeeping removed over 20 resources in 30 min. |
 | PreviaWebhookFailures / PreviaHTTPErrors / PreviaStateUnreadable | Failing or badly signed deliveries; over 5% dashboard errors; state unreadable. |
 | PreviaDiskLow / PreviaBuildsWaitingForDisk / PreviaBuildsWaitingForCapacity | Under 20 GiB free; builds waiting 15 min for disk / 30 min for capacity. |
+| PreviaCapacityOutgrown | Builds waited for a slot, preview memory or disk over a quarter of the last day: time to consider a larger server. |
+| PreviaBuildHeavyUpload / PreviaBuildHeavyDownload | A build uploaded over 256 MiB / downloaded over 4 GiB within the hour. |
 | PreviaGitHubRateLimitLow / PreviaGitHubRateLimited | Under 500 requests left; GitHub refused requests. |
 | PreviaBackupStale / PreviaBackupNeverRecorded | No backup for 26 h / none ever recorded. |
 | PreviaCertificateExpiringSoon / PreviaCertificateExpiring | A router certificate expires within 14 / 3 days (renewal is failing). |
@@ -115,7 +118,7 @@ configures ([25](25-production-deployment.md)).
 | Control | Behaviour |
 | --- | --- |
 | Security headers | Every response: a nonce-based Content-Security-Policy (`default-src 'self'`, no inline script without the nonce, no `eval`, `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`, forms only to the dashboard and `https://github.com`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Cross-Origin-Opener-Policy: same-origin`, a restrictive `Permissions-Policy`, and HSTS when `APP_BASE_URL` is HTTPS. The browser suite runs under this policy and fails on any violation. |
-| Host validation | Only `APP_BASE_URL`'s host is served (421 otherwise), and through a trusted proxy the forwarded host must match too. Signed webhooks are exempt so they work through a tunnel. The server never builds URLs from request headers. |
+| Host validation | Only `APP_BASE_URL`'s host is served (421 otherwise), and through a trusted proxy the forwarded host must match too. Signed webhooks are exempt so they work through a tunnel, and so is `/previews/auth`, the router's check for private previews, which answers only from a signed cookie for the forwarded preview host. The server never builds URLs from request headers, except that check's redirect back to a known preview host. |
 | Trusted proxies | `TRUSTED_PROXIES` (addresses or CIDR ranges): `X-Forwarded-For` is read right to left only while hops are trusted; from anyone else forwarded headers are ignored. In production the router's control-network address is the only trusted proxy. |
 | Request limits | 64 KiB of headers; 256 KiB of form body (the largest form is a 32 KiB secret); webhooks keep their own 2 MiB cap. Timeouts: 5 s headers, 30 s read and write, 60 s idle; event streams have their own caps and per-frame deadlines ([20](20-realtime-updates.md)). |
 | Abuse controls | Sign-in and installation callbacks: 20 requests per client at once, then one every 2 s (429 with `Retry-After`; at most 10,000 clients tracked). Webhooks: at most 32 at once; the rest get 503 before anything is recorded, so redelivery and deduplication work as usual. |
@@ -166,7 +169,7 @@ images for fixable HIGH and CRITICAL vulnerabilities ([25](25-production-deploym
   call and resumes (`environments`); the paused message and 503 (`pullrequests`);
   developer tools off in production (`dashboard`).
 - The browser suite (30 scenarios) under the real Content-Security-Policy.
-- `make observability-check`: 24 rules, their unit tests, the configuration and
+- `make observability-check`: 27 rules, their unit tests, the configuration and
   28 dashboard queries.
 - The production smoke test ([25](25-production-deployment.md#local-staging-smoke-test)):
   headers, host validation, rate limits, unpublished internal listeners, readiness,

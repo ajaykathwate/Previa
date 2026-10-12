@@ -149,8 +149,9 @@ Decisions open a shared native `<dialog>` (`components.ConfirmationDialog`) over
 current page: labelled title and description, Cancel focused first, Escape/close/
 backdrop dismiss without a request, focus returns to the trigger. The caller
 supplies the CSRF-protected form. Logout, enabling Automatic builds, deleting a
-secret or the selected secrets, and tearing a preview down or cancelling an
-unfinished build (on a PR page; per row on Previews) use it.
+secret or the selected secrets, tearing a preview down or cancelling an
+unfinished build (on a PR page; per row on Previews), deleting a finished attempt's
+build logs, and making a repository's previews private or public use it.
 Native `commandfor`/`command` attributes open dialogs without JavaScript in
 supporting browsers.
 
@@ -162,7 +163,8 @@ Building, Build failed, Blocked by merge conflicts, No preview yet, ...), an
 elapsed clock while work is in flight, the preview address with **Copy**, and every
 action in one row (**Open preview** first when one is live, then
 Build/Retry/Rebuild, Tear down or **Cancel build** when nothing is deployed, and
-**Build logs**, which reads **Follow the build log** while a build runs). Build
+**Build logs**, which reads **Follow the build log** while a build runs, and **App
+output** while the preview runs). Build
 buttons show a spinner and **Starting…** and are disabled while their request is
 on its way. When building is blocked, the build action is shown disabled
 (`aria-describedby` points at the notice) and the notice names the reason and the
@@ -189,7 +191,11 @@ fix, for example a worker without `PREVIEW_BASE_DOMAIN`.
 - **Details panel:** the latest commit and its mergeability, the build request (who
   or what asked, when it started and finished, how long it took, whether it is for
   an earlier commit, the failure title), the deployed preview (published and expiry
-  times) and the environment (managed services, docs, outbound). Times are relative
+  times, **Asleep since …** while it sleeps, **Last opened … · N requests** from the
+  router's counts) and the environment (managed services, docs, outbound). A fork
+  pull request in an Automatic repository is badged **Fork · waits for your
+  approval**. The repository hero has a **Private previews** switch beside
+  **Automatic builds**; both confirm in a dialog. Times are relative
   with the exact UTC time as their title. Below 1100px it follows the card.
 
 ## Overview
@@ -321,8 +327,17 @@ updates off** and the follow control stays hidden. Notices are cloned from a
 server-rendered `<template>` so live updates look identical to the first render.
 Error-looking lines (`error`, `failed`, `fatal`, `panic` as whole words) are tinted;
 the text is unchanged. **Copy** puts the lines shown on the clipboard and
-**Download** (`…/logs/download`) sends the attempt's whole output as a text file.
-Styles live in `web/styles/logs.css`. See [08](08-build-logs.md).
+**Download** (`…/logs/download`) sends the attempt's whole output as a text file,
+each line prefixed with its UTC time. Every line has a time column (`time.log-time`,
+UTC from the server, rewritten to the reader's time zone by `ui.js`
+`initLogTimes`; hidden below 480px). **Delete logs** (finished attempts only)
+confirms in a dialog. Styles live in `web/styles/logs.css`. See
+[08](08-build-logs.md).
+
+**App output** (`web/pages/appoutput/output.templ`) reuses the same status card,
+panel, classes and `initBuildLogs` client: its stream speaks the same `reset`,
+`lines` and `state` events. Its note says **Live · secrets are masked · not
+stored**, and it links back to Build logs and the pull request.
 
 ## Builds and Previews
 
@@ -411,6 +426,12 @@ layout's signed-out navigation, answers 404, is mounted outside the session/CSRF
 middleware (it reads and sets no cookie), sends `Cache-Control: no-store`,
 `X-Robots-Tag: noindex` and `Referrer-Policy: no-referrer`, and never names the host
 that was requested. Its paragraph uses the shared `.standalone-copy` style.
+
+The same standalone card shows two more public pages. **Waking the preview…**
+(`web/pages/idle`) answers 202 with a `Refresh` header (no script); **The preview did
+not wake** shows the reason and a **Try again** form. **You can't open this
+preview** (`web/pages/previewaccess`, 403) tells a signed-in visitor of a private
+preview that its repository's owner must give them access on GitHub.
 
 ## Repository directory queries
 

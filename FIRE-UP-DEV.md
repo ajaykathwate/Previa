@@ -38,14 +38,14 @@ Always open the dashboard as `localhost`, not `127.0.0.1`, because sign-in cooki
 ## Step 3: Database and migrations
 ```sh
 docker compose -f deploy/docker-compose.yml up -d --wait postgres
-make migrate-up        # brings the dev DB to the current schema, Goose 21
+make migrate-up        # brings the dev DB to the current schema, Goose 27
 ```
 
 ## Step 4: Build, then start the router
 ```sh
 make build             # optionally: make test
-make egress-image      # the outbound proxy every build and preview uses
-make router-up         # local Traefik on ports 80/443
+make egress-image      # the outbound proxy every build and preview uses (rebuild after pulling egress changes)
+make router-up         # local Traefik on ports 80/443 (re-run after pulling router changes)
 ```
 **Expected:** `Routes: … holds route table version …`. Traefik uses its built-in self-signed certificate, so the browser will warn.
 

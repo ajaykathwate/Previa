@@ -1,11 +1,11 @@
 # Project handoff
-Last updated: 2026-10-11
+Last updated: 2026-10-12
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
 - docs/README.md indexes 25 docs (02 setup, 21 UI, 22 operations, 25 deployment,
   26 release report, 27 roadmap); 03 and 18 are retired, numbers never reused.
-  Do not edit technical-docs/inside-previa.md (owner's rule, 2026-10-09).
+  Edit technical-docs/inside-previa.md only when the owner asks (updated on request 2026-10-12).
 - docs/27-roadmap.md: Prompts 1-13 done. Prompt 14 (detect missed uninstall/suspend/
   repository-removal webhooks by reconciliation) is planned, not started (an attempt
   was reverted at the owner's request). docs/26-release-report.md answers the release
@@ -17,8 +17,9 @@ Last updated: 2026-10-11
 ## Run and configuration
 - Go 1.26.9+; make build/test/lint/vuln, river-ui (jobs, :8090), observability-check.
   Lint at 0 (gocognit 30, nestif, gocritic, revive): split functions, don't raise limits.
-- PostgreSQL 17 via Compose; make migrate-up applies Goose 21 and River 007 (dev DB at
-  21). Processes refuse an older schema ("run migrations first").
+- PostgreSQL 17 via Compose; make migrate-up applies Goose 27 and River 007 (dev DB
+  still at 21: run it, then make egress-image and make router-up). Processes refuse
+  an older schema ("run migrations first").
 - Prompt 11 settings: APP_ENV, LOG_LEVEL, INTERNAL_ADDR (127.0.0.1:9090),
   WORKER_INTERNAL_ADDR (:9091), TRUSTED_PROXIES, BACKUP_STATUS_FILE, BUILDS_PAUSED.
   /livez, /readyz, /metrics only on internal listeners; healthcheck/check-config subcommands.
@@ -33,39 +34,39 @@ Last updated: 2026-10-11
   empty ENV_FILE=: unset it after sourcing .env in a script, or Make cannot find it.
 
 ## Prompts 1-12 (details in docs/06-26)
-- Source, secrets, logs, BuildKit builds, hardened previews, fenced routing,
-  teardown, PR feedback, housekeeping; the worker composes the pipeline from
-  validated dependencies (internal/app/pipeline.go); server records, worker executes.
-- Prompt 11 (docs/23, 24): log redaction, bounded metrics, httpx/ingress.go (nonce
-  CSP, limits), kill switch Service.Paused(). Prompt 12 (docs/25, 26): distroless
-  image, deploy/production, deploy/observability, CI/release, .goreleaser.yaml.
-- UX pass (docs/21): disabled actions say why; secrets editor and .env import; sync
-  stalls after 5m; mergeability "Unknown" after 8 tries (0019).
+- Server records, worker executes; internal/app/pipeline.go composes the worker from
+  validated dependencies. Prompt 11: redaction, metrics, nonce CSP, kill switch.
+  Prompt 12: distroless images, deploy/production, observability, CI/release.
 
-## Dashboard redesign and home page (2026-10-11, committed; docs/21)
-- Header trail, RepositoryHero, PR status card, tracker and diagnosis.go; the home page
-  is user-level (hosted, free in early access) with web/static/video; the landing page
-  lives in its own repo. Proposed, not built: deleting builds.
+## Committed 2026-10-11 (docs/21)
+- Dashboard redesign, user-level home page (landing page lives in its own repo),
+  Starter kits (/starter-kits, two-tab editor; HTMX settles `class`, so use data-*),
+  failure attention (7 days, Dismiss/Undo, 0021) and Environments renamed Previews.
+  6a42a66 and 5e4d30a are not pushed.
 
-## Starter kits (2026-10-11, committed)
-- /starter-kits (internal/starterkits, web/pages/starterkits, kits.css, ui.js
-  initStarterKit; docs/21, DESIGN 5): chips + switch rows beside a sticky two-tab
-  editor; edits kept until Reset; POST check of an edited config; Download POSTs text.
-- HTMX settles `class` on id'd elements after a swap: editor state uses data-* attrs.
-
-## Failure attention + Previews (2026-10-11, uncommitted; docs/21, DESIGN 17)
-- Overview counts and reds a failed request for 7 days (FailureAttentionWindow); older
-  ones grey, counted apart; Dismiss/Undo per attempt (build_failure_dismissals, 0021);
-  Builds filters them (pullrequests/attention.go). Queue tests share the dev schema.
-- Environments page is now Previews (/previews; /environments 301): only environments
-  serving a commit (head_sha); rows not whole-row links; Open preview is the action.
+## Safety, capacity, retention, activity (2026-10-12, UNCOMMITTED; migrations 0022-0027)
+- Forks never auto-build (LockIntentPR untrusted + ClaimBuildIntent fence; docs/16).
+- Fairness (docs/17): BUILDS_PER_ACCOUNT, BUILD_MINUTES_PER_ACCOUNT_DAY (waits
+  account/quota), turns by account (waiting_since), wakeNextWaitingTx; per-account
+  previews PREVIEW_MAX_PER_ACCOUNT (io.previa.account-id label). Startup capacity
+  warning (app/capacity_check.go); prod example sized for VPS-2.
+- Build traffic (docs/09): egress meter via loopback control (/_previa/meter,
+  previa-egress meter), build log totals, previa_build_egress_bytes + alerts;
+  BUILD_EGRESS=registries (builds.RegistryHosts, fail closed). 27 alert rules.
+- Retention (docs/08, 15): BUILD_LOG_RETENTION_DAYS, Delete logs (deleted_at),
+  housekeeping_records (30/90 days); line timestamps (local on page, UTC download).
+- Activity (docs/08, 10): crash watch (Docker die events -> build log via
+  Store.OpenFinished; io.previa.redact-env label), visits from Traefik metrics
+  (ROUTER_METRICS_ADDRESS), live App output (internal/appoutput), idle sleep/wake
+  (internal/idle, PREVIEW_IDLE_SLEEP, /previews/wake), private previews
+  (internal/previewaccess, forwardAuth /previews/auth, PREVIEW_ACCESS_URL).
+- Verified: lint 0, all Go tests with DB, make test-builder, make test-runtime,
+  observability-check, browser tests (49). Not run: test-routing/test-e2e; private
+  previews and the wake redirect are untested against a real Traefik.
 
 ## Branches and CI (technical-docs/ci-in-action.md, cd-in-action.md)
-- master: default and release branch, changed only through PRs (by convention: the
-  private repo's Free plan has no branch protection); work happens on main. CI runs
-  for PRs into master, pushes to master and manual runs; Release refuses tags off master.
-- CI green on c94d35f (2026-10-10). Smoke checks that read state settling after
-  startup must retry; userns for rootless BuildKit; "Free runner disk" step.
+- Work on main; master is the release branch, changed only through PRs (main ->
+  master). CI runs for PRs into master and pushes to master; green on c94d35f.
 
 ## Prompt 13: backend previews (docs/11)
 - .previewrc.yaml: services {postgres|redis: version} from PREVIEW_SERVICE_CATALOG
@@ -79,12 +80,9 @@ Last updated: 2026-10-11
   PREVIEW_OUTBOUND_PORTS (none = off); worker writes allow files on previa-egress
   (outbound_refresh every minute); /etc/hosts maps names to the proxy; forks get none.
 
-## Regression cycle (2026-10-09, committed e9aac61; test-docs/)
-- test-docs/: 242 cases in 16 files; README has strategy, commands and results.
-  Tick a case only when its evidence passed in a recorded run.
-- Fixed D-01..D-04 (auth refusals as text, https-only links, Go/x-net, GO_IMAGE).
-- Open (owner decision): install-tailwind.sh curl has no retry/time limit; a GitHub
-  download stall hung a release-images run for 27 minutes.
+## Regression cycle (2026-10-09; test-docs/)
+- 242 cases in 16 files; tick a case only when its evidence passed in a recorded run.
+- Open (owner decision): install-tailwind.sh curl has no retry/time limit.
 
 ## Deployment and next features (2026-10-09)
 - docs/25 is the one deployment guide: OVHcloud VPS-2 + Cloudflare DNS + R2 backups

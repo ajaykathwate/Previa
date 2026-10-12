@@ -40,9 +40,28 @@ elected leader.
 | `housekeeping_pull_requests` | 15 min | Confirms up to 10 live PRs with GitHub. |
 | `housekeeping_expiry` | 10 min | Tears down previews past their expiry. |
 | `housekeeping_prune` | 1 h | Untagged images, leftover source workspaces, build caches. |
+| `housekeeping_records` | 1 h | Deletes history whose retention ended ([below](#retention-of-records)). |
 
 Expired build logs keep their own hourly retention job (`build_log_prune`,
-[08](08-build-logs.md)).
+[08](08-build-logs.md)). Idle previews sleep through `preview_sleep` (every 5
+minutes on the `idle` queue, [10](10-preview-runtime.md#idle-previews-sleep)).
+
+## Retention of records
+
+`housekeeping_records` keeps only the history Previa needs:
+
+| Records | Deleted | Why |
+| --- | --- | --- |
+| Webhook delivery IDs (`webhook_deliveries`) | 30 days after receipt | They only catch duplicate deliveries, which GitHub sends within hours. |
+| Finished operations (`environment_operations`) | 30 days after they finished | Enough for diagnosis. A route operation of a pull request's current generation stays while its preview can be live (it protects what the router serves), and a failed cleanup stays as the sign of something left behind. |
+| Daily build minutes (`account_build_usage`) | after 90 days | Only today's count matters. |
+| App output nobody watches | an hour after its last viewer | The follower deletes its lines itself when the viewer leaves. |
+| Closed and merged pull requests | 90 days after GitHub last updated them | With their environment row, build logs, route record, operations, report, reconciliation, preview records and dismissals. Only once their teardown finished and nothing about them is pending (no operation, active route, build or unwritten report); checked again under the PR's lock. A PR reopened later is recorded afresh. |
+
+Deletions are batched (5,000 rows per statement; 50 pull requests per pass). A dry
+run counts one batch of each and changes nothing (`make housekeeping-dry-run`
+reports them). Backups hold deleted rows until they expire (`BACKUP_RETENTION_DAYS`,
+30 days by default), so deleted data is fully gone within that time.
 
 ## Recovery: crash points and who resumes them
 
@@ -129,6 +148,8 @@ installation lifecycle events and repository sync are the authority on access
 | Control | How it holds |
 | --- | --- |
 | Global build concurrency (`MAX_CONCURRENT_BUILDS`, across every worker) | Admission takes a transaction-scoped advisory lock and counts running requests. A running request holds its slot from admission until its final attempt ends, across River retries and restarts. When all slots are taken the request stays queued, notes that it waits, and its job is snoozed. |
+| Fair sharing between accounts | Optional limits per account (installation owner): `BUILDS_PER_ACCOUNT` running builds, `BUILD_MINUTES_PER_ACCOUNT_DAY` and `PREVIEW_MAX_PER_ACCOUNT`; waiting builds take turns by account ([17](17-build-scheduling.md#fair-sharing-between-accounts)). |
+| Idle previews | With `PREVIEW_IDLE_SLEEP`, a preview nobody opened for that long stops its app and processes until the next visit wakes it, which frees their memory and CPU ([10](10-preview-runtime.md#idle-previews-sleep)). |
 | Preview CPU, memory and per-repository previews | A session advisory lock (`runtime.AdmissionLock`) is held from the capacity check until the candidate container exists with its labels, so concurrent admissions on any worker see each other. Usage is read from the containers' labels: the active preview and its candidate both count during a swap, and capacity is released only when a container is actually removed. The per-repository limit counts PRs, so a PR's own swap never competes with its active preview. A worker that crashes loses its connection and with it the lock; there are no reservations to leak or reconcile. |
 | Before admission | The runtime's `Admit` checks that at least the smallest preview (0.5 CPU, 512 MiB) would fit; if not, the request waits queued instead of building an image it could not start. |
 | Backend previews | A candidate counts its app, processes, managed services and setup container together, all created (and counted) under the admission lock before any starts ([11](11-backend-previews.md)). |
@@ -140,7 +161,12 @@ Limits, stated plainly: CPU and memory budgets count every Previa preview on the
 Docker host, whatever its instance, so a second instance's previews reduce this
 one's room. A request superseded or torn down frees its build slot at once; its
 build process notices within seconds and stops. Waiting requests are retried
-with backoff, not in submission order, and no queue position is shown.
+with backoff; when a slot frees, the next one in turn (by account, then by how long
+it waited) is woken at once. No queue position is shown.
+
+At worker start, the worker compares the budgets with the Docker host (memory, CPUs
+and the disk Docker uses) and logs `capacity settings exceed this host` for each
+that does not fit ([25](25-production-deployment.md#starter-settings-for-a-small-host)).
 
 ## Dry-run diagnostics
 
@@ -159,6 +185,7 @@ Dry run for instance 40faee5f0a2d (nothing was changed):
   objects of PRs the database does not know: 0 from 0 PRs
   previews past their expiry: 0
   untagged images: 0, leftover workspaces: 0, build caches: 0 (0 bytes)
+  expired records (first batch): 0 webhook deliveries, 0 operations, 0 closed pull requests
 ```
 
 ## Configuration
@@ -170,6 +197,9 @@ Dry run for instance 40faee5f0a2d (nothing was changed):
 | `HOUSEKEEPING_GRACE` | 15m | Minimum age of an orphan (1m–24h) |
 | `BUILD_CACHE_BUDGET` | 40GiB | All build caches together (at least 1GiB) |
 | `MAX_CONCURRENT_BUILDS` | (required) | Builds running at once across all workers |
+| `BUILDS_PER_ACCOUNT`, `BUILD_MINUTES_PER_ACCOUNT_DAY`, `PREVIEW_MAX_PER_ACCOUNT` | 0 (no limit) | Fair sharing between accounts |
+| `PREVIEW_IDLE_SLEEP` | 0 (never) | Time without a visit before a preview sleeps |
+| `BUILD_LOG_RETENTION_DAYS` | 14 | Days a finished attempt's logs are kept (1–90) |
 
 ## Wiring
 
@@ -211,7 +241,6 @@ the waiting reason and the expiry on PR pages, Builds and Previews.
 
 - Capacity and disk pressure on a target host's real resources with
   `MAX_CONCURRENT_BUILDS` concurrent builds ([22](22-mvp-operations.md)).
-- A queue position for waiting requests: waits are retried with backoff, not served
-  in strict order, so none is shown.
-- Metrics and alerts for disk pressure and stuck work (Prompt 11).
+- A queue position for waiting requests: waits take turns by account and age, but
+  none is shown.
 - More than one worker host: source workspaces and the route file are per host.

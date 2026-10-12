@@ -92,6 +92,39 @@ network. The egress proxy is shared by concurrent builds, but it only connects t
 public addresses, so builds cannot reach each other through it. Each build network
 takes an address range from Docker's default pools until it is removed.
 
+## Build traffic and the registries-only mode
+
+Every build network is metered. When the sandbox opens, the worker registers the
+build network's egress address with the proxy (`previa-egress meter -start`, which
+reaches the proxy over the egress container's loopback interface only; build and
+preview networks cannot). The proxy counts bytes sent and received through it for
+that network. When the build ends the worker reads and forgets the totals:
+
+- the build log ends with `Network: downloaded … and uploaded ….`;
+- the worker logs `build traffic` with `pr_id`, `bytes_up`, `bytes_down` and
+  `refused`, which identifies a build behind a traffic alert;
+- `previa_build_egress_bytes{direction="up"|"down"}` (a histogram per build) feeds
+  `PreviaBuildHeavyUpload` (over 256 MiB uploaded within an hour; package installs
+  never need that) and `PreviaBuildHeavyDownload` (over 4 GiB)
+  ([24](24-incident-runbook.md#unusual-build-traffic)).
+
+`BUILD_EGRESS=registries` limits builds to package and image registries: npm and
+Yarn, PyPI, the Go proxy and checksum database, RubyGems, Packagist, NuGet,
+crates.io, Maven Central and Gradle, Docker Hub (with its blob hosts), GHCR, Quay,
+MCR, ECR Public, and the Debian, Ubuntu and Alpine package mirrors
+(`builds.RegistryHosts`). `BUILD_EGRESS_HOSTS` adds more (`.example.com` allows its
+subdomains). Everything else gets `403` from the proxy, and the build log names the
+first refused hosts: `This server lets builds reach package registries only. It
+refused 2 request(s) to other hosts: github.com, nodejs.org.` Git dependencies
+(`git+https://github.com/…`) and tools that download from their own sites need
+their hosts added.
+
+The limit fails closed. A build whose network cannot be registered with a limit
+does not start. Registrations live in the proxy's memory, so a proxy that restarts
+during a build forgets the limit. The worker sees that at the end (the network is
+unknown), discards the image, and fails the attempt as retryable. Without a limit,
+counting is best effort: a build whose traffic could not be counted still succeeds.
+
 ## Identity, retries and cleanup
 
 - Image: `previa/pr-<pr id>:g<generation>-r<revision>-<12-char sha>`, labelled
@@ -142,14 +175,20 @@ captured before cleanup; the error remains `builder_unavailable`.
 | `EGRESS_IMAGE` | `previa-egress:dev` | Egress proxy image, shared with previews. |
 | `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS` | `2`, `4GiB`, `2048` | Per-build limits. |
 | `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK` | `20GiB`, `4GiB`, `15GiB` | Disk and image bounds; sizes take `KiB`, `MiB`, `GiB`, `TiB`. |
+| `BUILD_EGRESS`, `BUILD_EGRESS_HOSTS` | `open`, empty | What builds may reach: any public HTTP(S) host, or package registries only (plus the listed hosts). |
 
 ```sh
 make egress-image         # static proxy binary in an empty, non-root image
 make test-builder         # real builds, isolation probes, limits, caching, cleanup (~4 min)
 ```
 
-**Expected:** every `TestRealBuilder…` test passes, the isolation test logs the probe
+**Expected:** every `TestRealBuilder…` test passes (including
+`TestRealBuilderReachesOnlyRegistriesWhenLimited`, which installs a package from
+Alpine's mirror and is refused `example.com`), the isolation test logs the probe
 table above, and afterwards only `previa-egress` (container and network) remains.
+Rebuild the egress image after pulling a change to `cmd/egress` or
+`internal/platform/egress`; the worker replaces a running proxy built from another
+image at its next start.
 
 ## Code and tests
 

@@ -289,6 +289,13 @@ On the repository page (pull request list only):
   not build pull requests that already exist.
 - Turning it off saves Manual at once and cancels automatic requests that have not
   started; running builds and existing previews stay.
+- Pull requests from **forks** never build by themselves, even with Automatic on:
+  they show **Fork · waits for your approval** until you click **Build latest
+  commit**. Read the changes first.
+- **Private previews** switch: a dialog confirms it. When on, people opening a
+  preview of this repository sign in with GitHub, and only those who can see the
+  repository on GitHub get in (for 12 hours on that preview). Turning it off makes
+  the previews public again; it also confirms first.
 
 ## 7. Build a preview (Manual)
 
@@ -344,6 +351,13 @@ again**.
   commit exists but has not been built (Manual) or is building.
 - After teardown, close or expiry, the address shows **Preview not found or
   expired** until the next build.
+- **Last opened 5 min ago · 37 requests** under **Deployed preview** shows that
+  people use it (requests include the page's images and scripts).
+- When the server sleeps idle previews, one nobody opened for a few hours shows
+  **Asleep since …**. Opening its address shows **Waking the preview…** for a few
+  seconds, then the page you asked for. Its databases keep their data.
+- With **Private previews** on, reviewers sign in with GitHub first; anyone who
+  cannot see the repository gets **You can't open this preview**.
 
 ## 11. Feedback on the pull request (GitHub)
 
@@ -373,11 +387,24 @@ A **Previa preview** check run is added for each build request on its exact comm
    the bottom. Scroll up to stop following; **Follow output** resumes.
 4. **Earlier lines** / **Later lines** page through long logs; each line number is a
    link. Lines that look like errors are red.
-5. **Copy** copies the lines shown; **Download** saves the whole output of the
-   attempt as a `.log` file.
+5. Each line shows the time it was printed, in your time zone. **Copy** copies the
+   lines shown; **Download** saves the whole output of the attempt as a `.log` file,
+   each line starting with its UTC time.
 6. Only the current attempt is kept; a new attempt clears the page. Logs are kept
-   14 days after an attempt finishes; at most 5 MiB / 20,000 lines are stored.
-7. Secrets and credentials appear as `[redacted]`.
+   14 days after an attempt finishes (the server's operator may choose up to 90);
+   at most 5 MiB / 20,000 lines are stored.
+7. **Delete logs** (once the attempt finished) removes its output after a
+   confirmation; the page then says you deleted it.
+8. Secrets and credentials appear as `[redacted]`.
+9. If the live preview's app later stops (for example it crashes), its last lines
+   are added at the end with why it stopped and whether it restarts.
+
+### Watch a running preview's output
+
+**App output** on the pull request page (while its preview runs) shows what the app
+prints, live: its own request logs, errors and stack traces, with secrets as
+`[redacted]`. It starts with the last 200 lines. Nothing is kept: a minute after
+you leave the page, the output is deleted.
 
 ## 13. Tear down a preview
 
@@ -512,6 +539,10 @@ to the other.
 | Host busy or short of disk | Builds wait ("Waiting for capacity" / "Waiting for disk space") and start by themselves |
 | Operator pauses builds | Requests wait ("Builds paused"); new build clicks are refused with a message |
 | A container disappears | The preview is marked failed (its container went missing); Retry, Rebuild or a new commit brings it back |
+| A live preview's app crashes | Docker restarts it (three times at most); its last lines go into the build log |
+| Nobody opens a preview for a few hours (if the operator enabled it) | It sleeps; the next visit wakes it in seconds |
+| A shared server is busy | Accounts take turns; your build may wait for **your other build** or until your **daily build minutes** reset at midnight UTC |
+| Old history | Build logs go after 14 days, closed pull requests' records after 90 days |
 
 ## 19. When Previa says no
 

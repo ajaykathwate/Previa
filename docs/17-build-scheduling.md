@@ -161,6 +161,27 @@ build job is snoozed (30 seconds doubling to 5 minutes, no attempt spent). A
 disk refusal after it keeps the running request and its slot while it waits
 ([15](15-housekeeping-and-capacity.md)).
 
+## Fair sharing between accounts
+
+On a server shared by several accounts (an account is the GitHub account that
+installed the App), admission under the same build-slot lock also checks, in order:
+
+| Check | Setting | Wait |
+| --- | --- | --- |
+| Every slot is taken | `MAX_CONCURRENT_BUILDS` | `capacity`: **Waiting for capacity** |
+| The account already runs its share | `BUILDS_PER_ACCOUNT` (0 = no limit) | `account`: **Waiting for your other build** |
+| The account used today's minutes (UTC) | `BUILD_MINUTES_PER_ACCOUNT_DAY` (0 = no limit) | `quota`: **Daily build minutes used**, snoozed until just after midnight UTC |
+| The last free slot, and another account with nothing building has waited longer | always | `capacity` |
+
+Turns: a waiting request records when it started waiting (`waiting_since`, kept
+while the same revision keeps waiting) and when it last looked again
+(`waiting_checked_at`). Only waits that looked again within 10 minutes hold a turn,
+so an abandoned wait never blocks anyone. When a build finishes, its time is added
+to its account's day (`account_build_usage`), and the next request in turn is woken
+at once: accounts with nothing building first, then the longest wait. Its snoozed
+River job is made due now instead of waiting out its backoff. Accounts never see
+each other's builds; the wait text says only what applies to their own.
+
 Migration 9 adds unconditional environment uniqueness by PR. The existing row and
 subdomain survive rebuild, teardown and reopen; fixture tests exercise this lifecycle.
 Admission now provisions the environment, allocating its hostname once, inside the

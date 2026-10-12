@@ -168,6 +168,40 @@ Remove the dry-run line once explained.
    a running container and labelled `io.previa.managed=true`.
 5. If PostgreSQL's volume filled, free space first; PostgreSQL recovers by itself.
 
+## Capacity outgrown
+
+**Alert:** PreviaCapacityOutgrown.
+
+Builds waited for a build slot, preview memory or disk over a quarter of the last
+day. It is a planning signal, not an outage.
+
+1. Grafana "Queues and requests": is it every day, or one busy day?
+2. Cheaper first: `PREVIEW_IDLE_SLEEP=3h` frees idle previews' memory; a lower
+   `ENV_TTL_HOURS` removes old ones sooner; `BUILDS_PER_ACCOUNT` and
+   `PREVIEW_MAX_PER_ACCOUNT` stop one account taking everything.
+3. If it persists, move to a larger server and raise the budgets together
+   ([25](25-production-deployment.md#when-to-upgrade-the-server)). The worker warns
+   at start when budgets exceed the host.
+
+## Unusual build traffic
+
+**Alerts:** PreviaBuildHeavyUpload, PreviaBuildHeavyDownload.
+
+Package installs download a lot but upload almost nothing; a build that uploads
+hundreds of megabytes is moving data out (exfiltration, abuse of the server's
+bandwidth).
+
+1. Find it: `dc logs worker | grep '"msg":"build traffic"'`. Each entry carries
+   `pr_id`, `bytes_up`, `bytes_down` and `refused`; the build log ends with the same
+   totals.
+2. Look at the pull request and its Dockerfile. If it is not legitimate, tear the
+   preview down, switch the repository to Manual builds, and remove the App from
+   that account if needed.
+3. To stop builds reaching anything but package registries, set
+   `BUILD_EGRESS=registries` (add needed hosts to `BUILD_EGRESS_HOSTS`) and restart
+   the worker. Forks never build without the owner's click
+   ([16](16-build-policy-and-intents.md#behaviour-rules)).
+
 ## Backup failed
 
 **Alerts:** PreviaBackupStale, PreviaBackupNeverRecorded.

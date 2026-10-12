@@ -165,6 +165,46 @@ Not guaranteed (stated plainly):
   `/previews/unavailable` on the dashboard: a public 404 page in the signal theme that
   reads no session, sets no cookie, is never cached and says nothing about which host
   existed.
+- A sleeping preview's host is routed (302) to `/previews/wake/<host>/<path>` on the
+  dashboard ([10](10-preview-runtime.md#idle-previews-sleep)). That page is public as
+  well, reads no session, and sends visitors back only to the host of a known preview,
+  so it is no open redirect.
+
+## Private previews
+
+An owner can switch on **Private previews** for a repository (repository page,
+confirmed in a modal). Its previews are then open only to people who sign in to
+Previa with GitHub and can see the repository on GitHub. Changing it advances the
+route table and queues `route_sync`, which a worker turns into the router's file
+within seconds.
+
+1. The router puts Traefik's `forwardAuth` in front of each private preview: before
+   every request it asks the server at `PREVIEW_ACCESS_URL` (`/previews/auth`), which
+   checks a cookie for that host. A valid cookie answers 200 and the request goes
+   through.
+2. Without one, the visitor is redirected to `/previews/access` on the dashboard. It
+   signs them in (GitHub sign-in returns them there) and asks GitHub, with the App's
+   installation token, for their permission on the repository. The installation's
+   owner always gets in. Any role from `read` up does too.
+3. The visitor returns to `https://<host>/__previa/access?t=<token>`. The token is
+   signed (HMAC with a key derived from `SESSION_SECRET`), names the host and the
+   user, and is valid for one minute. The check turns it into the
+   `__Host-previa-access` cookie (host-only, Secure, HttpOnly, SameSite=Lax, 12 hours)
+   and redirects to the path they first asked for.
+
+Notes:
+
+- A cookie opens only the preview host it was issued for. Losing repository access
+  takes effect when the cookie expires (12 hours at most).
+- On a public repository everyone signed in to GitHub can see it, so private
+  previews mostly matter for private repositories.
+- Without the GitHub App on the server, only the installation's owner gets in.
+- The check sees only the host, the path and the cookie; it stores nothing.
+- With `PREVIEW_ACCESS_URL` unset, a private preview fails closed: its host is sent
+  to the unavailable page. Production's Compose file sets it to the server on the
+  control network; see [02](02-development-setup.md) for one machine.
+- The app also receives the cookie. It is signed and valid only for this preview's
+  host, so it lets nobody into anything else.
 
 ## Configuration and operation
 
@@ -176,6 +216,8 @@ Not guaranteed (stated plainly):
 | `ROUTER_CONTAINER` | worker | `previa-router` | Router container to attach and query. |
 | `ROUTER_ENTRYPOINT` | worker | `websecure` | Traefik entry point with the wildcard certificate. |
 | `ROUTER_API_ADDRESS` | worker | `127.0.0.1:8080` | Traefik API inside the router container (must be loopback). |
+| `ROUTER_METRICS_ADDRESS` | worker | the API address | Traefik's Prometheus metrics inside the router container, for preview visit counts. |
+| `PREVIEW_ACCESS_URL` | worker | empty | The server's `/previews/auth` as the router reaches it; empty makes private previews serve nobody. |
 | `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE`, `ACME_CA_SERVER`, `ACME_DNS_RESOLVERS` | router (compose) | staging CA | ACME account, lego DNS provider and its credential file. |
 
 ```sh

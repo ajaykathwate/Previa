@@ -38,6 +38,10 @@ marked *command line* are typed before a `make` command instead.
 | [BUILD_DISK_BUDGET](#build_disk_budget) | Optional | Builds | `.env` |
 | [BUILD_MAX_IMAGE_SIZE](#build_max_image_size) | Optional | Builds | `.env` |
 | [BUILD_MIN_FREE_DISK](#build_min_free_disk) | Optional | Builds | `.env` |
+| [BUILDS_PER_ACCOUNT](#builds_per_account) | Optional | Fair sharing | `.env`, `previa.env` |
+| [BUILD_MINUTES_PER_ACCOUNT_DAY](#build_minutes_per_account_day) | Optional | Fair sharing | `.env`, `previa.env` |
+| [BUILD_EGRESS](#build_egress) | Optional | Builds | `.env`, `previa.env` |
+| [BUILD_EGRESS_HOSTS](#build_egress_hosts) | Optional | Builds | `.env`, `previa.env` |
 | [EGRESS_IMAGE](#egress_image) | Optional | Builds and previews | `.env` |
 | [BUILDKIT_IMAGE](#buildkit_image) | Optional | Builds | `.env` |
 | [SOURCE_WORKSPACE_ROOT](#source_workspace_root) | Optional | Builds | `.env` |
@@ -49,6 +53,8 @@ marked *command line* are typed before a `make` command instead.
 | [PREVIEW_MEMORY_BUDGET](#preview_memory_budget) | Optional | Previews | `.env` |
 | [PREVIEW_CPU_BUDGET](#preview_cpu_budget) | Optional | Previews | `.env` |
 | [PREVIEW_MAX_PER_REPOSITORY](#preview_max_per_repository) | Optional | Previews | `.env` |
+| [PREVIEW_MAX_PER_ACCOUNT](#preview_max_per_account) | Optional | Fair sharing | `.env`, `previa.env` |
+| [PREVIEW_IDLE_SLEEP](#preview_idle_sleep) | Optional | Idle previews | `.env`, `previa.env` |
 | [PREVIEW_OCI_RUNTIME](#preview_oci_runtime) | Optional | Previews | `.env` |
 | [PREVIEW_SERVICE_CATALOG](#preview_service_catalog) | Optional | Backend previews | `.env` |
 | [PREVIEW_SETUP_TIMEOUT](#preview_setup_timeout) | Optional | Backend previews | `.env` |
@@ -58,6 +64,8 @@ marked *command line* are typed before a `make` command instead.
 | [ROUTER_CONTAINER](#router_container) | Optional | Previews | `.env` |
 | [ROUTER_ENTRYPOINT](#router_entrypoint) | Optional | Previews | `.env`, `previa.env` |
 | [ROUTER_API_ADDRESS](#router_api_address) | Optional | Previews | `.env`, `previa.env` |
+| [ROUTER_METRICS_ADDRESS](#router_metrics_address) | Optional | Last opened, idle previews | `.env`, Compose |
+| [PREVIEW_ACCESS_URL](#preview_access_url) | Optional | Private previews | `.env`, Compose |
 | [ACME_EMAIL](#acme_email) | Required | Previews (router) | `.env`, `previa.env` |
 | [ACME_DNS_PROVIDER](#acme_dns_provider) | Required | Previews (router) | `.env`, `previa.env` |
 | [ACME_DNS_CREDENTIAL_VARIABLE](#acme_dns_credential_variable) | Required | Previews (router) | `.env`, `previa.env` |
@@ -65,6 +73,7 @@ marked *command line* are typed before a `make` command instead.
 | [ACME_CA_SERVER](#acme_ca_server) | Required | Previews (router) | `.env`, `previa.env` |
 | [ACME_DNS_RESOLVERS](#acme_dns_resolvers) | Optional | Previews (router) | `.env` |
 | [ENV_TTL_HOURS](#env_ttl_hours) | Optional | Preview expiry | `.env`, `previa.env` |
+| [BUILD_LOG_RETENTION_DAYS](#build_log_retention_days) | Optional | Build logs | `.env`, `previa.env` |
 | [HOUSEKEEPING_DRY_RUN](#housekeeping_dry_run) | Optional | Housekeeping | `.env` |
 | [HOUSEKEEPING_GRACE](#housekeeping_grace) | Optional | Housekeeping | `.env` |
 | [BUILD_CACHE_BUDGET](#build_cache_budget) | Optional | Housekeeping | `.env` |
@@ -496,6 +505,49 @@ marked *command line* are typed before a `make` command instead.
   laptop disk.
 - **Example:** `BUILD_MIN_FREE_DISK=15GiB`
 
+### `BUILDS_PER_ACCOUNT`
+
+- **Type:** Optional. Default `0` (no limit). Between `0` and `1000`.
+- **What it is:** builds one account (the GitHub account that installed the App)
+  may run at once on this server.
+- **Where it's used:** a further build of that account waits as **Waiting for your
+  other build** while other accounts' builds start. Waiting builds always take
+  turns by account, whatever this is.
+- **How to get it:** `1` on a server shared by several accounts; `0` when it is
+  yours alone.
+- **Example:** `BUILDS_PER_ACCOUNT=1`
+
+### `BUILD_MINUTES_PER_ACCOUNT_DAY`
+
+- **Type:** Optional. Default `0` (no limit). Between `0` and `1440`.
+- **What it is:** build minutes one account may use per day (UTC).
+- **Where it's used:** once used, that account's builds wait as **Daily build
+  minutes used** and start by themselves after midnight UTC.
+- **How to get it:** for example `120` on a shared server.
+- **Example:** `BUILD_MINUTES_PER_ACCOUNT_DAY=120`
+
+### `BUILD_EGRESS`
+
+- **Type:** Optional. Default `open`. `open` or `registries`.
+- **What it is:** what build steps may reach through the egress proxy: any public
+  host on ports 80 and 443 (`open`), or only package and image registries
+  (`registries`: npm, PyPI, Go, RubyGems, Packagist, NuGet, crates.io, Maven,
+  Gradle, Docker Hub, GHCR, Quay, MCR, ECR Public and the Debian, Ubuntu and
+  Alpine mirrors).
+- **Where it's used:** every build. With `registries`, a refused host is named in
+  the build log. Every build log ends with its download and upload totals.
+- **How to get it:** keep `open` unless builds should reach nothing else.
+- **Example:** `BUILD_EGRESS=registries`
+
+### `BUILD_EGRESS_HOSTS`
+
+- **Type:** Optional. Default empty. Only with `BUILD_EGRESS=registries`.
+- **What it is:** more hosts builds may reach, comma-separated; `.example.com`
+  allows every subdomain of `example.com`.
+- **Where it's used:** private registries or mirrors your builds need.
+- **How to get it:** the host names from the build log's refusal line.
+- **Example:** `BUILD_EGRESS_HOSTS=npm.example.com,.mirror.example.com`
+
 ### `EGRESS_IMAGE`
 
 - **Type:** Optional. Default `previa-egress:dev`.
@@ -595,6 +647,27 @@ marked *command line* are typed before a `make` command instead.
 - **Where it's used:** more waits as **Waiting for capacity**.
 - **How to get it:** keep the default.
 - **Example:** `PREVIEW_MAX_PER_REPOSITORY=10`
+
+### `PREVIEW_MAX_PER_ACCOUNT`
+
+- **Type:** Optional. Default `0` (no limit). Between `0` and `10000`.
+- **What it is:** previews one account may have on this server.
+- **Where it's used:** a further preview waits as **Waiting for capacity** until
+  one of that account's previews ends. Sleeping previews count.
+- **How to get it:** for example `4` on a shared server.
+- **Example:** `PREVIEW_MAX_PER_ACCOUNT=4`
+
+### `PREVIEW_IDLE_SLEEP`
+
+- **Type:** Optional. Default `0` (never). `0`, or between `15m` and `168h`.
+- **What it is:** how long a preview may go without a visit before its app (and
+  its processes) stop. Its address, route and databases stay; the next visit
+  shows a short "Waking the preview…" page and starts it again in seconds.
+- **Where it's used:** the pull request page says **Asleep since …**. Needs the
+  router's request counts ([ROUTER_METRICS_ADDRESS](#router_metrics_address)); while
+  they cannot be read, nothing sleeps.
+- **How to get it:** `3h` frees memory on a small server.
+- **Example:** `PREVIEW_IDLE_SLEEP=3h`
 
 ### `PREVIEW_OCI_RUNTIME`
 
@@ -708,6 +781,31 @@ marked *command line* are typed before a `make` command instead.
 - **How to get it:** keep the default.
 - **Example:** `ROUTER_API_ADDRESS=127.0.0.1:8080`
 
+### `ROUTER_METRICS_ADDRESS`
+
+- **Type:** Optional. Default empty (the API address). An IP `host:port`.
+- **What it is:** where the router serves Prometheus metrics inside its container.
+- **Where it's used:** every minute the worker reads how many requests each
+  preview received (counts only, never request details) for **Last opened** and
+  idle previews.
+- **How to get it:** keep it empty in development (`make router-up` serves metrics
+  on the API address); production's Compose file sets `172.31.250.10:8082`.
+- **Example:** `ROUTER_METRICS_ADDRESS=172.31.250.10:8082`
+
+### `PREVIEW_ACCESS_URL`
+
+- **Type:** Optional. Default empty. Must end in `/previews/auth`.
+- **What it is:** the server's sign-in check for private previews, at an address
+  the router container can reach.
+- **Where it's used:** previews of a repository whose owner switched on **Private
+  previews**. Without it, those previews serve nobody.
+- **How to get it:** production's Compose file sets
+  `http://172.31.250.20:8080/previews/auth`. On one machine, set
+  `HTTP_ADDR=0.0.0.0:8080` and
+  `PREVIEW_ACCESS_URL=http://host.docker.internal:8080/previews/auth`, then
+  `make router-up`.
+- **Example:** `PREVIEW_ACCESS_URL=http://172.31.250.20:8080/previews/auth`
+
 ### `ACME_EMAIL`
 
 - **Type:** Required for previews (`make router-up` refuses without it).
@@ -802,6 +900,16 @@ marked *command line* are typed before a `make` command instead.
   address.
 - **How to get it:** keep `48`, or choose another number of hours.
 - **Example:** `ENV_TTL_HOURS=48`
+
+### `BUILD_LOG_RETENTION_DAYS`
+
+- **Type:** Optional. Default `14`. Between `1` and `90`.
+- **What it is:** days a finished build attempt's logs are kept.
+- **Where it's used:** the log page says when logs expired. Owners can also delete
+  a finished attempt's logs at any time (**Delete logs**). Backups keep deleted
+  data until they expire (`BACKUP_RETENTION_DAYS`).
+- **How to get it:** keep `14`.
+- **Example:** `BUILD_LOG_RETENTION_DAYS=14`
 
 ### `HOUSEKEEPING_DRY_RUN`
 

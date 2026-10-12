@@ -4,8 +4,11 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 21**, **River 007**. After pulling changes, run
-`make migrate-up` and restart the server and worker.
+Current schema: **Goose 27**, **River 007**. After pulling changes, run
+`make migrate-up` and restart the server and worker. When the egress proxy or the
+router changed (this version changed both), also run `make egress-image` (builds
+are metered and may be limited to package registries) and `make router-up` (the
+router now serves request counts for "Last opened" and idle previews).
 
 ## 1. Prerequisites
 
@@ -200,6 +203,12 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0019 | `pull_requests.mergeability_unresolved_at`: when the mergeability check gave up after eight attempts, so the dashboard shows **Unknown** instead of **Checking** forever; any new observation clears it. |
 | 0020 | Backend previews ([11](11-backend-previews.md)): `preview_components` (what a deployed candidate ran next to its app: services, setup, processes, docs path, outbound count), `repository_destinations` (owner-approved outbound `host:port`) and `worker_capabilities.services` (the managed services a worker offers). |
 | 0021 | `build_failure_dismissals`: a failed build request an owner dismissed (user, pull request, request revision), so it stops needing attention on the Overview until the pull request fails again. |
+| 0022 | Fair sharing between accounts ([17](17-build-scheduling.md)): `build_intents.waiting_since`/`waiting_checked_at` (turns between accounts), waiting reasons `account` and `quota`, and `account_build_usage` (build seconds per account and UTC day). |
+| 0023 | `build_log_streams.deleted_at`: an owner deleted a finished attempt's logs ([08](08-build-logs.md)). |
+| 0024 | Live preview activity ([10](10-preview-runtime.md)): `preview_crashes` (one row per container stop of a live preview, so its output is copied to the build log once), `environments.visits`/`last_visited_at` and `preview_visit_counters` (the router's request counts). |
+| 0025 | Live app output ([08](08-build-logs.md#live-app-output)): `app_output_watches` and `app_output_lines` (kept only while someone watches) and the `app_output_watches_realtime` trigger. |
+| 0026 | Idle previews ([10](10-preview-runtime.md#idle-previews-sleep)): `environments.asleep_at`, `woke_at`, `wake_requested_at` and `wake_error`. |
+| 0027 | Private previews ([12](12-routing-and-https.md#private-previews)): `repos.private_previews`. |
 
 Optional check that live updates are wired:
 
@@ -208,7 +217,8 @@ docker compose -f deploy/docker-compose.yml exec -T postgres psql -U previa -d p
   -c "SELECT tgname FROM pg_trigger WHERE tgname LIKE '%_realtime'"
 ```
 
-**Expected:** seven rows (six repository triggers and `build_log_streams_realtime`).
+**Expected:** eight rows (six repository triggers, `build_log_streams_realtime` and
+`app_output_watches_realtime`).
 Without them the dashboard still works but refreshes only on navigation or your own
 actions, and log pages update only on reload.
 
@@ -472,6 +482,26 @@ router uses it, and the table's fallback router does. Switch `ACME_CA_SERVER` to
 production and remove the `previa-router_acme` volume only after staging works
 ([12](12-routing-and-https.md)).
 
+The router serves Prometheus metrics on its loopback API address; the worker reads
+each preview's request count there every minute (`ROUTER_METRICS_ADDRESS`, empty =
+`ROUTER_API_ADDRESS`). Check it with:
+
+```sh
+docker exec previa-router wget -qO- http://127.0.0.1:8080/metrics | grep -c traefik_service_requests_total
+```
+
+**Expected:** a number above 0 once a preview has been opened. A worker that cannot
+read it logs `preview visits not read; retrying every minute`, and no preview is put
+to sleep while that lasts.
+
+**Private previews on one machine.** The router container must reach the server for
+its sign-in check. Run the server on all interfaces and point the worker at it:
+`HTTP_ADDR=0.0.0.0:8080` and
+`PREVIEW_ACCESS_URL=http://host.docker.internal:8080/previews/auth` in `.env`, then
+`make router-up` and restart both. Without `PREVIEW_ACCESS_URL`, a repository made
+private serves its previews to nobody (the router sends visitors to the unavailable
+page). Production sets it in the Compose file.
+
 ### Browser regression checks (optional)
 
 ```sh
@@ -504,7 +534,7 @@ make run-server
 ```
 
 **Expected:** `internal listener serving /livez, /readyz and /metrics`,
-`database health check passed` (with `version`, `schema=20` and `environment`), then
+`database health check passed` (with `version`, `schema=27` and `environment`), then
 `HTTP server listening`. Open <http://localhost:8080/> and sign in with GitHub.
 `curl -s localhost:9090/readyz` answers `{"checks":{"database":"ok","schema":"ok"},"status":"ready",...}`.
 The server refuses to start if migrations are behind (`run migrations first`).
@@ -521,8 +551,10 @@ unavailable` warning naming each missing dependency. `curl -s localhost:9091/rea
 lists its checks and capabilities. The server records work; the
 worker executes it. With App credentials it runs PR discovery and mergeability
 checks; with builds configured ([22](22-mvp-operations.md#capability-and-configuration-matrix))
-it also builds, publishes, reports and keeps house. It always runs
-`build_log_prune` at start and hourly. `Ctrl+C` removes the worker's capability row,
+it also builds, publishes, reports and keeps house, follows live app output while
+someone watches it, watches for crashed previews, reads preview visit counts from
+the router every minute, and (with `PREVIEW_IDLE_SLEEP`) puts idle previews to
+sleep. It always runs `build_log_prune` at start and hourly. `Ctrl+C` removes the worker's capability row,
 lets running jobs finish for 30 seconds, then cancels them; an interrupted build
 runs again on the next start.
 

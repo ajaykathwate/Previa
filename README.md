@@ -543,7 +543,9 @@ This system runs other people's code on your machine, so isolation is a core req
 - Per container: memory and CPU caps, `pids-limit`, read-only root filesystem where possible, `no-new-privileges`, all Linux capabilities dropped
 - Network: previews live on an isolated Docker network with no route to the host, your control plane, Postgres, or cloud metadata endpoints (169.254.169.254)
 - Runtime: gVisor (`runsc`) as the Docker runtime for a large isolation upgrade at low cost (optional `PREVIEW_OCI_RUNTIME`; Docker's runc by default)
-- Never run builds for fork PRs with secrets available; consider requiring maintainer approval for PRs from forks
+- Never run builds for fork PRs with secrets available. Implemented: forks get no secrets or outbound connections, and they never build automatically; they wait until the owner clicks **Build** (see [docs/16-build-policy-and-intents.md](docs/16-build-policy-and-intents.md#behaviour-rules))
+- Build traffic: every build's download and upload totals are logged and measured (with alerts on heavy uploads); `BUILD_EGRESS=registries` limits builds to package and image registries (see [docs/09-image-builds.md](docs/09-image-builds.md#build-traffic-and-the-registries-only-mode))
+- Private previews: an owner can require visitors to sign in with GitHub and be able to see the repository; the router checks every request with the server (see [docs/12-routing-and-https.md](docs/12-routing-and-https.md#private-previews))
 - Current implementation: previews run as an unprivileged user with a read-only root, no capabilities and `no-new-privileges` on their own internal network; outbound traffic reaches public addresses only through the egress proxy; probes from a running preview confirm Postgres, the host, metadata and other previews are unreachable. They share the host kernel (see [docs/10-preview-runtime.md](docs/10-preview-runtime.md))
 - Docker socket: only the worker touches it; never mount it into a preview container. The router (Traefik) has no socket either: its routes come from the worker's file and the worker attaches it to preview networks
 - Managed services (PostgreSQL, Redis): the operator's digest-pinned images as their own unprivileged user, read-only root with data on a size-capped tmpfs, no capabilities, on a per-PR services network with no egress and no route; owner-approved outbound connections go only through the egress proxy, which resolves names itself and refuses non-public addresses; forks get none (see [docs/11-backend-previews.md](docs/11-backend-previews.md))
@@ -567,10 +569,10 @@ each one turns on, and what happens without it, is in
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
 - `APP_BASE_URL` (server; also the worker once previews are routed: unknown preview hosts redirect to it)
-- `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`; server and worker), `ROUTER_DYNAMIC_DIR`, `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS` (worker; route controller)
+- `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`; server and worker), `ROUTER_DYNAMIC_DIR`, `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS`, `ROUTER_METRICS_ADDRESS` (preview request counts), `PREVIEW_ACCESS_URL` (private previews) (worker; route controller)
 - `SESSION_SECRET` (server); `SECRETS_ENCRYPTION_KEYS`, `SECRETS_ACTIVE_KEY_VERSION` (server and worker; versioned keyring for repository secrets, optional for the worker, which then fails repositories with secrets closed)
-- `MAX_CONCURRENT_BUILDS` (builds at once across all workers), `ENV_TTL_HOURS` (preview lifetime after its latest publication), `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE`, `BUILD_CACHE_BUDGET` (worker; housekeeping and capacity, see [docs/15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md))
-- `BUILD_TIMEOUT`, `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS`, `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK`, `BUILDKIT_IMAGE`, `SOURCE_WORKSPACE_ROOT` (worker; isolated image builds and exact-commit source workspaces)
+- `MAX_CONCURRENT_BUILDS` (builds at once across all workers), `BUILDS_PER_ACCOUNT`, `BUILD_MINUTES_PER_ACCOUNT_DAY`, `PREVIEW_MAX_PER_ACCOUNT` (fair sharing between accounts), `ENV_TTL_HOURS` (preview lifetime after its latest publication), `PREVIEW_IDLE_SLEEP` (idle previews sleep until the next visit), `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE`, `BUILD_CACHE_BUDGET` (worker; housekeeping and capacity, see [docs/15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md)), `BUILD_LOG_RETENTION_DAYS` (server and worker; days finished build logs are kept)
+- `BUILD_TIMEOUT`, `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS`, `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK`, `BUILD_EGRESS`, `BUILD_EGRESS_HOSTS`, `BUILDKIT_IMAGE`, `SOURCE_WORKSPACE_ROOT` (worker; isolated image builds and exact-commit source workspaces)
 - `EGRESS_IMAGE`, `PREVIEW_ALLOW_ROOT`, `PREVIEW_WRITABLE_ROOTFS`, `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT`, `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY`, `PREVIEW_OCI_RUNTIME` (worker; hardened previews and the shared egress proxy)
 - `PREVIEW_SERVICE_CATALOG`, `PREVIEW_SETUP_TIMEOUT` (worker; managed services and the setup command), `PREVIEW_OUTBOUND_PORTS` (server and worker; owner-approved outbound connections), see [docs/11-backend-previews.md](docs/11-backend-previews.md)
 - `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE`, `ACME_CA_SERVER` (router; Traefik's wildcard certificate over DNS-01, staging by default, the DNS token read from a protected file instead of the originally planned `DNS_PROVIDER_API_TOKEN` variable)
@@ -597,8 +599,9 @@ object storage through rclone, with a scripted, rehearsed restore.
 - Automatic builds become eligible after a five-minute trailing quiet period;
   manual requests bypass this delay but still wait for worker capacity.
 - Disk pruning job for old images and build cache (disk exhaustion is the most likely real-world failure)
-- Per-repo cap on concurrent active previews
+- Per-repo cap on concurrent active previews, optional per-account caps on builds, previews and daily build minutes, with turns between accounts
 - Build timeout and image size limit
+- Data retention: build logs 14 days (configurable to 90, deletable by the owner), webhook receipts and finished operations 30 days, closed pull requests 90 days; backups keep deleted data at most 30 more days
 
 ### 4.11 Upgrade paths (post-MVP)
 

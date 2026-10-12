@@ -263,7 +263,16 @@ PREVIEW_MEMORY_BUDGET=4GiB
 PREVIEW_CPU_BUDGET=4
 PREVIEW_MAX_PER_REPOSITORY=2
 ENV_TTL_HOURS=24
+# A server shared by several accounts:
+BUILDS_PER_ACCOUNT=1
+PREVIEW_MAX_PER_ACCOUNT=4
+BUILD_MINUTES_PER_ACCOUNT_DAY=120
+PREVIEW_IDLE_SLEEP=3h
 ```
+
+These are in `deploy/production/previa.env.example`. At start, the worker compares
+them with the host and logs `capacity settings exceed this host` with what does not
+fit (memory for builds, previews and about 1 GiB for Previa; CPUs; Docker's disk).
 
 - **Previews:** a replacement must fit beside the preview it replaces. 4 GiB holds
   one backend preview with PostgreSQL and Redis (about 1.75 GiB) and its
@@ -271,6 +280,15 @@ ENV_TTL_HOURS=24
   instead of failing, so a small host is slow, not broken.
 - **Builds:** one 2 GiB build at a time. Raise `BUILD_MEMORY` if large frontend
   builds run out of memory.
+- **Sharing:** one build at a time per account, four previews and two build hours
+  a day each, and waiting builds take turns by account, so one busy user cannot
+  hold the server ([17](17-build-scheduling.md#fair-sharing-between-accounts)). Set
+  them to `0` when the server is yours alone.
+- **Idle previews** sleep after 3 hours without a visit and wake on the next one
+  in seconds, which frees most of their memory
+  ([10](10-preview-runtime.md#idle-previews-sleep)).
+- **Docker logs:** each preview container keeps at most 2 × 5 MB of output; a
+  backend preview with services and processes keeps about 50 MB at most.
 - **Control plane:** PostgreSQL, the server, the worker and the router have 4 GiB
   of limits between them but use about 1 GiB while idle. Leave out the
   `observability` profile (Prometheus and Grafana, up to 1.5 GiB) on this host:
@@ -318,12 +336,14 @@ host acts on them: it forwards the report, expects an answer by a deadline, and
 can block the address or end the contract when abuse is unanswered or repeated.
 Keep that from happening:
 
-- Keep repositories that accept outside contributors on **Manual** builds.
-  **Automatic** builds every new commit, including pull requests from forks,
-  without anyone looking.
-- Build a pull request from someone you do not know only after reading its
-  changes. Forks never get secrets or outbound connections, but they still get a
-  public preview.
+- Pull requests from forks never build by themselves, even on **Automatic**: they
+  wait until you click **Build**
+  ([16](16-build-policy-and-intents.md#behaviour-rules)). Click it only after
+  reading the changes. Forks never get secrets or outbound connections, but once
+  built they get a public preview (or switch on **Private previews**).
+- Consider `BUILD_EGRESS=registries`: builds then reach only package and image
+  registries ([09](09-image-builds.md#build-traffic-and-the-registries-only-mode)).
+  `PreviaBuildHeavyUpload` alerts on a build that uploads a lot.
 - Keep `ENV_TTL_HOURS` short so a bad preview does not stay up for long, and tear
   down anything suspicious at once (PR page → **Tear down preview**).
 - Use an email address on the host account that you read every day, and answer
@@ -1760,6 +1780,15 @@ restore. This setup does not archive WAL and does not provide continuous PITR.
 For a smaller data-loss window, increase the tested backup frequency or design a
 managed/PITR database deployment and revise backup/restore accordingly.
 
+**How long deleted data lives.** Previa deletes history on schedule: finished
+build logs after `BUILD_LOG_RETENTION_DAYS` (14 days by default; owners can delete
+an attempt's logs at once), webhook delivery records and finished operations after
+30 days, and closed or merged pull requests with everything recorded about them 90
+days after closing ([15](15-housekeeping-and-capacity.md#retention-of-records)).
+Each backup still holds what existed when it was taken, so deleted data is fully
+gone once the backups that hold it expire (`BACKUP_RETENTION_DAYS`, 30 days by
+default). Say "within 30 days of deletion" when you describe it to users.
+
 The historical small local drill took about 1 second to back up and 21 seconds to
 restore. Those are test observations, not a production recovery-time guarantee.
 Production recovery also includes finding keys, provisioning a new host,
@@ -2352,6 +2381,16 @@ changed env values or a replaced credential mount.
   rotation. See [07 · Repository secrets](07-repository-secrets.md).
 
 ## OVHcloud capacity, billing and ongoing operations
+
+### When to upgrade the server
+
+Upgrade when the queue says so, not before. `PreviaCapacityOutgrown` fires when
+builds waited for a slot, preview memory or disk over a quarter of the last day;
+Grafana's queue panels and `previa_build_requests{waiting=…}` show the same. Try
+the cheap levers first: `PREVIEW_IDLE_SLEEP`, a shorter `ENV_TTL_HOURS`, and the
+per-account limits. Moving from a VPS-2 to a VPS-3 costs about €3 more a month for
+50% more CPU and memory (prices as of this guide); raise the budgets with it
+(Step 5).
 
 ### Upgrade the VPS when measured demand needs it
 

@@ -364,12 +364,13 @@ High. This is the security-critical feature.
 
 ### Design decisions and edge cases
 - **Docker socket is worker-only:** never mounted into a preview container.
-- **Fork PRs** run with no secrets and, if the owner enables approval, wait for a maintainer to approve before running.
+- **Fork PRs** run with no secrets and never build automatically: in an Automatic repository they wait until the owner clicks Build (implemented; [16-build-policy-and-intents.md](docs/16-build-policy-and-intents.md#behaviour-rules)).
 - **Crash loops:** a container that keeps restarting is stopped after a small number of restarts and marked failed.
 - **Noisy neighbours:** limits keep one preview from starving others; a per-repo cap on concurrent previews bounds total load.
 - **gVisor** raises the isolation bar substantially and is a low-cost upgrade path if kernel-level escape risk matters.
 - **Backend previews (Prompt 13):** a candidate may bring managed PostgreSQL/Redis (its own, per build revision, with generated credentials, on a per-PR internal services network with no egress or route, data on a size-capped tmpfs), a one-off setup container and up to three processes from the same image. Readiness runs services (protocol check), setup, processes, then the app; every container carries the candidate's key and is counted, inventoried and removed with the app's artifact through the existing cleanup contract. Owner-approved outbound connections reach external databases through the egress proxy, which identifies the repository by the preview's network; forks get none. See [11-backend-previews.md](docs/11-backend-previews.md).
-- **Current implementation:** `internal/runtime` implements `environments.Runtime`: it rechecks that the request is still current and accessible, builds through `internal/builds`, rechecks again, decides secrets (`secrets.Provider`; none for forks or unknown heads), and starts a candidate on the PR's own internal network `previa-pr-<id>`, shared only with the egress proxy and, once published, the router. Candidates run as UID 65532 when the image would run as root, with a read-only root and a bounded `/tmp` tmpfs (server-wide operator opt-outs only), no capabilities, `no-new-privileges`, IPv6 disabled, clamped tier CPU/memory, a PID limit, half CPU weight, a raised OOM score, capped logs and on-failure restarts (3, then a crash loop). Outbound traffic goes only through `previa-egress` (public addresses, ports 80/443). Readiness is probed from inside the egress container (HTTP 200-399 on `health_check_path`, else TCP), within `PREVIEW_STARTUP_TIMEOUT`. Admission keeps previews within 60% of Docker memory, 75% of CPUs and 10 per repository. Inventory and removal verify ownership labels, including the PR (`RemoveResource`, used by cleanup operations: graceful stop, then force; images never forced; idle networks); `Endpoint` re-checks a candidate right before it is routed. gVisor is optional via `PREVIEW_OCI_RUNTIME`. Maintainer approval for forks is not implemented (forks run without secrets). The worker does not dispatch it yet. See [10-preview-runtime.md](docs/10-preview-runtime.md).
+- **Current implementation:** `internal/runtime` implements `environments.Runtime`: it rechecks that the request is still current and accessible, builds through `internal/builds`, rechecks again, decides secrets (`secrets.Provider`; none for forks or unknown heads), and starts a candidate on the PR's own internal network `previa-pr-<id>`, shared only with the egress proxy and, once published, the router. Candidates run as UID 65532 when the image would run as root, with a read-only root and a bounded `/tmp` tmpfs (server-wide operator opt-outs only), no capabilities, `no-new-privileges`, IPv6 disabled, clamped tier CPU/memory, a PID limit, half CPU weight, a raised OOM score, capped logs and on-failure restarts (3, then a crash loop). Outbound traffic goes only through `previa-egress` (public addresses, ports 80/443). Readiness is probed from inside the egress container (HTTP 200-399 on `health_check_path`, else TCP), within `PREVIEW_STARTUP_TIMEOUT`. Admission keeps previews within 60% of Docker memory, 75% of CPUs and 10 per repository. Inventory and removal verify ownership labels, including the PR (`RemoveResource`, used by cleanup operations: graceful stop, then force; images never forced; idle networks); `Endpoint` re-checks a candidate right before it is routed. gVisor is optional via `PREVIEW_OCI_RUNTIME`. Docker keeps at most 2 × 5 MB of output per container. See [10-preview-runtime.md](docs/10-preview-runtime.md).
+- **After publication (an addition):** the worker follows Docker's `die` events and copies a live preview's last output into its build log when its app or a process stops (once per event, workers sharing a host included); reads the router's per-preview request counters every minute for "Last opened" (counts only, never request details); and, with `PREVIEW_IDLE_SLEEP`, stops an idle preview's app and processes while the router sends visitors to a public wake page, which starts it again (services keep running, so their data survives). Previews never sleep while visit counts cannot be read. Output read after startup is redacted from the container's `io.previa.redact-env` label (names of secret variables, never values). Per-account caps (`PREVIEW_MAX_PER_ACCOUNT`) join the per-repository one. Private previews (owner setting) put the router's forward authentication in front of a repository's previews: visitors sign in with GitHub and must be able to see the repository ([12-routing-and-https.md](docs/12-routing-and-https.md#private-previews)).
 
 ---
 
@@ -535,6 +536,8 @@ High. Reconciliation logic is subtle, and getting it wrong can delete live envir
 - **Recovery never authorizes:** re-dispatched work passes the usual policy, deadline, generation and mergeability checks; an expired preview is never rebuilt by recovery.
 - **Disk exhaustion is the most likely real outage;** a build short of disk waits and triggers an emergency prune. Metrics and alerts are Prompt 11.
 - **Current implementation:** `internal/housekeeping` (recovery, resources, PR reconciliation, expiry, prune, River jobs) with capacity in `internal/environments` (build slots, waiting), `internal/runtime` (admission lock, headroom) and `internal/builds` (disk check, caches), migration 0016. The worker registers housekeeping with builds and applies build slots and preview headroom at admission. See [15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md).
+- **Retention of records (an addition):** an hourly job deletes webhook delivery records and finished operations after 30 days (keeping route operations that protect a live preview and failed cleanups), daily build-minute ledgers after 90 days, and closed or merged pull requests with everything recorded about them 90 days after closing, once their teardown finished and nothing is pending. Backups keep deleted rows until they expire. See [15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md#retention-of-records).
+- **Fair sharing (an addition):** optional per-account limits on running builds, daily build minutes and previews; waiting builds take turns by account, and a finished build wakes the next in turn. See [17-build-scheduling.md](docs/17-build-scheduling.md#fair-sharing-between-accounts).
 
 ---
 
@@ -630,7 +633,8 @@ revision-checked request with its wake-up. There is no bulk build. See the
 - **Authorization at the query level:** every query is scoped by the user's installations, not just by an ID from the URL.
 - **Log volume:** large or runaway output is truncated with a marker to protect the database.
 - **Failures that need attention (an addition after Prompt 13):** the dashboard highlights a failed build request only for 7 days after it finished (`pullrequests.FailureAttentionWindow`); older ones stay listed on Builds without highlighting and are counted apart. An owner can dismiss one failed attempt (`build_failure_dismissals`, keyed by user and pull request, holding the request revision), which stops it counting until the pull request fails again; Undo deletes it. Builds filters failures the same way the Overview counts them. See [21-ui-architecture.md](docs/21-ui-architecture.md#overview).
-- **Current implementation:** `internal/buildlogs` keeps one attempt per environment in `build_log_streams`; build admission bumps its `epoch` and clears old lines in one transaction, and the runtime receives an `environments.Attempt`. Writers strip control sequences, redact, split and cap lines (5 MiB / 20,000 lines / 8 KiB), batch in the background and append only while their epoch is current; storage loss is counted and marked, never silent. `/repositories/{id}/pull-requests/{n}/logs` shows the newest lines with paging, Copy and a whole-attempt Download (`…/logs/download`), the PR page quotes a failed attempt's last lines (`Store.Tail`, fenced by generation and revision), and its SSE stream uses `<epoch>.<next>` ids with `reset` for a replacement attempt, per-user and global stream caps and per-frame write timeouts. A River job deletes logs 14 days after an attempt finishes. See [08-build-logs.md](docs/08-build-logs.md).
+- **Current implementation:** `internal/buildlogs` keeps one attempt per environment in `build_log_streams`; build admission bumps its `epoch` and clears old lines in one transaction, and the runtime receives an `environments.Attempt`. Writers strip control sequences, redact, split and cap lines (5 MiB / 20,000 lines / 8 KiB), batch in the background and append only while their epoch is current; storage loss is counted and marked, never silent. `/repositories/{id}/pull-requests/{n}/logs` shows the newest lines with paging, Copy and a whole-attempt Download (`…/logs/download`), the PR page quotes a failed attempt's last lines (`Store.Tail`, fenced by generation and revision), and its SSE stream uses `<epoch>.<next>` ids with `reset` for a replacement attempt, per-user and global stream caps and per-frame write timeouts. A River job deletes logs `BUILD_LOG_RETENTION_DAYS` (14 by default, at most 90) after an attempt finishes, and the owner can delete a finished attempt's logs from its page (confirmed in a modal). Every line keeps the time it was received (local time on the page, a UTC prefix in downloads). See [08-build-logs.md](docs/08-build-logs.md).
+- **Live app output (an addition):** a separate owner-only page follows a running preview's own output while someone watches it, redacted like the startup log and kept only while watched (at most 1,000 lines); no request is ever logged by Previa itself. See [08-build-logs.md](docs/08-build-logs.md#live-app-output).
 
 ---
 
@@ -903,12 +907,15 @@ preview/
 │   │   ├── capacity.go  health.go  # admission; wait-until-healthy, observed health
 │   │   ├── docker.go  inventory.go # preview network, output, inventory
 │   │   ├── endpoint.go  cleanup.go # pre-publication check; owner-verified cleanup executor
+│   │   ├── crashes.go              # stops of live previews -> build log; following app output
+│   │   ├── sleep.go                # stop and start an idle preview's app and processes
 │   │
 │   ├── routing/                    # FEATURE: hostnames, route controller, Traefik
 │   │   ├── hostname.go             # stable DNS-safe labels per lifetime environment
 │   │   ├── controller.go           # verify, accept behind the fence, publish, confirm
 │   │   ├── render.go  file.go      # Traefik dynamic config; forward-only route table file
 │   │   ├── traefik.go              # router network attachment, loopback API via Docker
+│   │   ├── visits.go               # preview request counts from the router's metrics
 │   │   ├── unavailable.go          # page for unknown and removed preview hosts
 │   │
 │   ├── reporting/                  # FEATURE: PR comments + check runs
@@ -934,14 +941,29 @@ preview/
 │   │   ├── queries.sql  dbgen/
 │   │
 │   ├── buildlogs/                  # FEATURE: store + stream logs
-│   │   ├── store.go                # fenced appends, owner-scoped reads, finish, prune
-│   │   ├── writer.go  lines.go     # redacting, bounded, batched writer per attempt
+│   │   ├── store.go                # fenced appends, owner-scoped reads, finish, delete, prune
+│   │   ├── writer.go               # redacting, bounded, batched, timed writer per attempt
 │   │   ├── handler.go  status.go   # log page and SSE endpoint
 │   │   ├── prune.go                # retention River job
 │   │   ├── queries.sql  dbgen/
 │   │
+│   ├── appoutput/                  # FEATURE: a running preview's output, live, kept only while watched
+│   │   ├── handler.go  store.go    # page and SSE stream; watches and transient lines
+│   │   ├── follow.go               # worker job that follows Docker's output, redacted
+│   │   ├── queries.sql  dbgen/
+│   │
+│   ├── idle/                       # FEATURE: idle previews sleep, the next visit wakes them
+│   │   ├── idle.go                 # sleep pass and wake job (worker)
+│   │   ├── handler.go              # public wake page the router sends visitors to
+│   │   ├── queries.sql  dbgen/
+│   │
+│   ├── previewaccess/              # FEATURE: private previews (GitHub sign-in, repo access)
+│   │   ├── handler.go  sign.go     # router check, sign-in step, owner setting; signed cookie
+│   │   ├── queries.sql  dbgen/
+│   │
 │   ├── housekeeping/               # FEATURE: expiry, reconcile, prune
 │   │   ├── expiry.go
+│   │   ├── records.go              # retention: deliveries, operations, closed PRs
 │   │   ├── recovery.go             # lost wake-ups, leases, sweeps, route drift
 │   │   ├── resources.go            # Docker objects vs DB (with environments.Reconciler)
 │   │   ├── pullrequests.go         # live PRs vs actual GitHub PR state
@@ -959,7 +981,8 @@ preview/
 │       ├── workers/                # capability heartbeat: what running workers can do
 │       ├── githubapp/              # App JWT, installation-token cache, API client
 │       ├── dockerx/                # Docker client construction, shared labels
-│       ├── egress/                 # egress proxy, readiness probe, its container
+│       ├── egress/                 # egress proxy, build metering, readiness probe, its container
+│       ├── textlines/              # control-sequence stripping and bounded line splitting
 │       ├── httpx/                  # router, ingress controls, security headers, internal listener
 │       ├── logging/                # slog setup, correlation, secret redaction
 │       ├── metrics/                # Prometheus registry + bounded shared metrics
@@ -980,6 +1003,9 @@ preview/
 │   │   ├── repositories/           # paginated, filtered repository page
 │   │   ├── pullrequests/           # repository/PR detail and shared current activity
 │   │   ├── builds/                 # Builds page, current-attempt build log page
+│   │   ├── appoutput/              # live app output page
+│   │   ├── idle/                   # "Waking the preview…" page (public)
+│   │   ├── previewaccess/          # "You can't open this preview" (private previews)
 │   │   ├── previews/               # Previews page (shares the activity view)
 │   │   ├── starterkits/            # Starter kits: choices beside a two-tab editor
 │   │   └── routing/                # "preview not found or expired" (public)
