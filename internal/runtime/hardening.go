@@ -36,6 +36,7 @@ type Policy struct {
 	MemoryBudget   int64         // 0: derived from the Docker host
 	CPUBudget      float64       // CPUs; 0: derived from the Docker host
 	MaxPerRepo     int
+	MaxPerAccount  int // running previews per account; 0: no limit
 }
 
 // candidate is everything needed to create one preview container.
@@ -137,7 +138,7 @@ func containerSpec(c candidate, p Policy) (*container.Config, *container.HostCon
 			PidsLimit: &pids, CPUShares: cpuWeight,
 		},
 		OomScoreAdj: oomPriority,
-		LogConfig:   container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "2"}},
+		LogConfig:   previewLogConfig,
 		Runtime:     p.OCIRuntime,
 		ExtraHosts:  c.ExtraHosts,
 	}
@@ -159,6 +160,10 @@ func previewLabels(instance string, t Target, request requestIdentity, imageRef 
 	if healthPath != "" {
 		labels[dockerx.LabelHealthPath] = healthPath
 	}
+	if t.AccountID > 0 {
+		labels[dockerx.LabelAccount] = strconv.FormatInt(t.AccountID, 10)
+	}
+
 	return labels
 }
 
@@ -167,3 +172,8 @@ type requestIdentity struct {
 	PullRequestID, Generation, Revision, EnvironmentID int64
 	HeadSHA                                            string
 }
+
+// previewLogConfig bounds what Docker keeps of each preview container's
+// output: two 5 MB files (10 MB), removed with the container. The app,
+// each managed service and each process is one container.
+var previewLogConfig = container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "5m", "max-file": "2"}}

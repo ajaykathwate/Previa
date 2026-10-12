@@ -22,8 +22,9 @@ import (
 // Targets rechecks that a request may still run; *TargetStore implements it.
 type Targets interface {
 	Current(ctx context.Context, request environments.Request) (Target, error)
-	// BaseRepository returns the GitHub ID of the PR's base repository.
-	BaseRepository(ctx context.Context, pullRequestID int64) (int64, error)
+	// AdmissionScope returns the PR's base repository (BaseRepoID) and account
+	// (AccountID), for the advisory capacity check.
+	AdmissionScope(ctx context.Context, pullRequestID int64) (Target, error)
 }
 
 // Sources prepares an exact commit; *source.Preparer implements it.
@@ -158,7 +159,7 @@ func PolicyFrom(c config.PreviewConfig) Policy {
 	return Policy{
 		AllowRoot: c.PreviewAllowRoot, WritableRootfs: c.PreviewWritableRootfs, TmpfsBytes: int64(c.PreviewTmpfsSize),
 		PIDs: c.PreviewPIDs, OCIRuntime: c.PreviewOCIRuntime, StartupTimeout: c.PreviewStartupTimeout, SetupTimeout: c.PreviewSetupTimeout,
-		MemoryBudget: int64(c.PreviewMemoryBudget), CPUBudget: c.PreviewCPUBudget, MaxPerRepo: c.PreviewMaxPerRepository,
+		MemoryBudget: int64(c.PreviewMemoryBudget), CPUBudget: c.PreviewCPUBudget, MaxPerRepo: c.PreviewMaxPerRepository, MaxPerAccount: c.PreviewMaxPerAccount,
 	}
 }
 
@@ -202,6 +203,7 @@ func (r *Runtime) Build(ctx context.Context, request environments.Request, attem
 	if err != nil {
 		return environments.Artifact{}, failure(CodeSecrets, "Repository secrets could not be prepared for log redaction.", false, err)
 	}
+	plan.redactEnv = append(env.SecretNames(), plan.credentialNames()...)
 	startLogs := r.openLogs(ctx, attempt, redactor)
 	defer r.closeLogs(ctx, startLogs)
 	for _, notice := range env.Notices {

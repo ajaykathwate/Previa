@@ -14,8 +14,13 @@ WHERE id = sqlc.arg(repo_id) AND installation_id = sqlc.arg(installation_id) AND
 FOR UPDATE;
 
 -- name: LockIntentPR :one
-SELECT id, repo_id, generation, head_sha, state,build_status,needs_refresh FROM pull_requests
-WHERE id = sqlc.arg(pr_id) AND repo_id = sqlc.arg(repo_id) FOR UPDATE;
+-- untrusted: the code comes from a fork, a deleted head repository or another
+-- repository than the base, the same rule that withholds secrets
+-- (runtime TargetForUpdate). Automatic mode never builds it without the owner.
+SELECT p.id, p.repo_id, p.generation, p.head_sha, p.state, p.build_status, p.needs_refresh,
+ (p.is_fork OR p.head_repo_id IS NULL OR p.head_repo_id IS DISTINCT FROM r.github_repo_id)::boolean AS untrusted
+FROM pull_requests p JOIN repos r ON r.id = p.repo_id
+WHERE p.id = sqlc.arg(pr_id) AND p.repo_id = sqlc.arg(repo_id) FOR UPDATE OF p;
 
 -- name: LockBuildIntent :one
 SELECT * FROM build_intents WHERE pull_request_id = $1 FOR UPDATE;

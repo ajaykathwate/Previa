@@ -88,7 +88,7 @@ func TestContainerSpecIsHardened(t *testing.T) {
 		t.Fatalf("platform protection: shares %d oom %d", host.CPUShares, host.OomScoreAdj)
 	case host.RestartPolicy.Name != container.RestartPolicyOnFailure || host.RestartPolicy.MaximumRetryCount != maxRestarts:
 		t.Fatalf("restart policy %+v", host.RestartPolicy)
-	case host.LogConfig.Config["max-size"] != "10m" || host.Runtime != "runsc":
+	case host.LogConfig.Config["max-size"] != "5m" || host.Runtime != "runsc":
 		t.Fatalf("logs %+v runtime %q", host.LogConfig, host.Runtime)
 	}
 	opted := policy
@@ -117,6 +117,18 @@ func TestAdmitEnforcesRepositoryCountAndHostBudget(t *testing.T) {
 	// A PR's swap never competes with its own active preview for the count.
 	if err := admit(usage{repoPRs: prs("5", "7")}, b, 7, 1000, 2<<30); err != nil {
 		t.Fatalf("a swap at the repository limit: %v", err)
+	}
+	// The account limit counts the account's PRs the same way; 0 is no limit.
+	if err := admit(usage{accountPRs: prs("5", "6", "8")}, b, 7, 1000, 2<<30); err != nil {
+		t.Fatalf("no account limit set: %v", err)
+	}
+	accounts := b
+	accounts.perAccount = 2
+	if err := admit(usage{accountPRs: prs("5", "7")}, accounts, 7, 1000, 2<<30); err != nil {
+		t.Fatalf("a swap at the account limit: %v", err)
+	}
+	if err := admit(usage{accountPRs: prs("5", "6")}, accounts, 7, 1000, 2<<30); CodeOf(err) != CodeCapacity || !strings.Contains(err.Error(), "Your account already has 2 previews") {
+		t.Fatalf("the account limit must refuse, retryably: %v", err)
 	}
 	for name, u := range map[string]usage{
 		"repository count": {repoPRs: prs("5", "6")},

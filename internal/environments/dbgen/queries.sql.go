@@ -112,7 +112,7 @@ WITH current_request AS MATERIALIZED (
         )))
     FOR UPDATE
 ), previous AS MATERIALIZED (
-    SELECT e.id, e.pull_request_id, e.container_id, e.image_tag, e.subdomain, e.status, e.created_at, e.last_active_at, e.expires_at, e.applied_generation, e.head_sha, e.pending_container_id, e.pending_image_tag, e.pending_generation, e.pending_head_sha, e.applied_revision, e.pending_revision, e.teardown_generation, e.last_error_code FROM environments e
+    SELECT e.id, e.pull_request_id, e.container_id, e.image_tag, e.subdomain, e.status, e.created_at, e.last_active_at, e.expires_at, e.applied_generation, e.head_sha, e.pending_container_id, e.pending_image_tag, e.pending_generation, e.pending_head_sha, e.applied_revision, e.pending_revision, e.teardown_generation, e.last_error_code, e.visits, e.last_visited_at, e.asleep_at, e.woke_at, e.wake_requested_at, e.wake_error FROM environments e
     JOIN current_request p ON p.id = e.pull_request_id
     FOR UPDATE OF e
 )

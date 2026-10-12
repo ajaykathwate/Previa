@@ -552,6 +552,9 @@ func (f *fixtureLogs) LinesFrom(_ context.Context, _, epoch, from int64, limit i
 	return append([]buildlogs.Line(nil), f.lines[from:min(int(from)+limit, len(f.lines))]...), nil
 }
 
+// Delete refuses: the fixture's attempt is always running.
+func (f *fixtureLogs) Delete(context.Context, int64, int64) error { return buildlogs.ErrNotDeletable }
+
 func (f *fixtureLogs) LinesBefore(_ context.Context, _, epoch, before int64, limit int) ([]buildlogs.Line, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

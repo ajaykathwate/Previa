@@ -50,7 +50,7 @@ UPDATE pr_syncs SET state='failed',message=$3 WHERE repo_id=$1 AND revision=$2 A
 -- name: MarkSyncing :exec
 UPDATE pr_syncs SET state='syncing',message='' WHERE repo_id=$1 AND revision=$2;
 -- name: OwnedRepository :one
-SELECT r.id,r.full_name,r.accessible,r.build_mode,i.status,i.github_installation_id
+SELECT r.id,r.full_name,r.accessible,r.build_mode,r.private_previews,i.status,i.github_installation_id
 FROM repos r JOIN installations i ON i.id=r.installation_id
 WHERE r.id=$1 AND i.owner_user_id=$2;
 -- name: CountPRs :one
@@ -84,6 +84,7 @@ SELECT p.*,(r.accessible AND i.status='active') AS available,coalesce(b.state,'N
  coalesce(e.status,'Not deployed') AS environment_status,
  coalesce(e.head_sha,'') AS deployed_sha, coalesce(e.subdomain,'')::text AS hostname,
  e.expires_at, e.last_active_at AS published_at, coalesce(e.last_error_code,'')::text AS failure_code,
+ e.last_visited_at, coalesce(e.visits,0)::bigint AS visits, e.asleep_at,
  coalesce(e.applied_generation = b.generation AND e.applied_revision = b.revision, false)::boolean AS failure_current,
  (p.teardown_requested_generation = p.generation)::boolean AS teardown_requested,
  pc.services AS backend_services, coalesce(pc.setup, false)::boolean AS backend_setup, pc.processes AS backend_processes,
@@ -118,7 +119,7 @@ SELECT p.repo_id,p.number,p.head_sha,p.title,r.full_name,r.accessible,i.status A
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
  coalesce(b.revision, 0)::bigint AS request_revision,
  (d.pull_request_id IS NOT NULL)::boolean AS failure_dismissed,
- e.last_active_at AS published_at,
+ e.last_active_at AS published_at, e.last_visited_at, e.asleep_at,
  coalesce(e.status,'Not deployed') AS environment_status,coalesce(e.head_sha,'') AS deployed_sha,
  coalesce(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END,'')::text AS waiting_reason,
  coalesce(e.subdomain,'')::text AS hostname, e.expires_at, coalesce(e.last_error_code,'')::text AS failure_code,

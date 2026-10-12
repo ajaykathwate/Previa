@@ -8,6 +8,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AccountBuildUsage struct {
+	UserID       int64
+	Day          pgtype.Date
+	BuildSeconds int64
+	Builds       int32
+}
+
+type AppOutputLine struct {
+	EnvironmentID int64
+	Epoch         int64
+	Sequence      int64
+	At            pgtype.Timestamptz
+	Line          string
+}
+
+type AppOutputWatch struct {
+	EnvironmentID int64
+	Epoch         int64
+	State         string
+	Note          string
+	NextSequence  int64
+	SeenAt        pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
 type BuildFailureDismissal struct {
 	UserID        int64
 	PullRequestID int64
@@ -16,23 +41,25 @@ type BuildFailureDismissal struct {
 }
 
 type BuildIntent struct {
-	PullRequestID   int64
-	Revision        int64
-	BaseRevision    int64
-	Generation      int64
-	HeadSha         string
-	Source          string
-	RequestAction   string
-	RequestedBy     pgtype.Int8
-	IdempotencyKey  string
-	State           string
-	AvailableAt     pgtype.Timestamptz
-	RequestedAt     pgtype.Timestamptz
-	StartedAt       pgtype.Timestamptz
-	CompletedAt     pgtype.Timestamptz
-	UpdatedAt       pgtype.Timestamptz
-	WaitingRevision pgtype.Int8
-	WaitingReason   pgtype.Text
+	PullRequestID    int64
+	Revision         int64
+	BaseRevision     int64
+	Generation       int64
+	HeadSha          string
+	Source           string
+	RequestAction    string
+	RequestedBy      pgtype.Int8
+	IdempotencyKey   string
+	State            string
+	AvailableAt      pgtype.Timestamptz
+	RequestedAt      pgtype.Timestamptz
+	StartedAt        pgtype.Timestamptz
+	CompletedAt      pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+	WaitingRevision  pgtype.Int8
+	WaitingReason    pgtype.Text
+	WaitingSince     pgtype.Timestamptz
+	WaitingCheckedAt pgtype.Timestamptz
 }
 
 type BuildLog struct {
@@ -61,6 +88,7 @@ type BuildLogStream struct {
 	FinishedAt    pgtype.Timestamptz
 	PrunedAt      pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
+	DeletedAt     pgtype.Timestamptz
 }
 
 type EnvSecret struct {
@@ -93,6 +121,12 @@ type Environment struct {
 	PendingRevision    pgtype.Int8
 	TeardownGeneration pgtype.Int8
 	LastErrorCode      pgtype.Text
+	Visits             int64
+	LastVisitedAt      pgtype.Timestamptz
+	AsleepAt           pgtype.Timestamptz
+	WokeAt             pgtype.Timestamptz
+	WakeRequestedAt    pgtype.Timestamptz
+	WakeError          string
 }
 
 type EnvironmentOperation struct {
@@ -192,6 +226,21 @@ type PreviewComponent struct {
 	RecordedAt       pgtype.Timestamptz
 }
 
+type PreviewCrash struct {
+	ContainerID   string
+	EventNanos    int64
+	EnvironmentID int64
+	ExitCode      int32
+	CrashedAt     pgtype.Timestamptz
+}
+
+type PreviewVisitCounter struct {
+	EnvironmentID int64
+	Service       string
+	Requests      float64
+	ReadAt        pgtype.Timestamptz
+}
+
 type PullRequest struct {
 	ID                          int64
 	RepoID                      int64
@@ -245,6 +294,7 @@ type Repo struct {
 	Accessible         bool
 	BuildMode          string
 	ObservationVersion int64
+	PrivatePreviews    bool
 }
 
 type RepositoryDestination struct {

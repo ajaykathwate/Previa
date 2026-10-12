@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/environments"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // Fence is the route controller's durable state; *environments.Repository
@@ -264,4 +266,32 @@ func compare(generation, revision, otherGeneration, otherRevision int64) int {
 	default:
 		return 1
 	}
+}
+
+// SyncArgs asks a worker to rewrite the router's file from the accepted
+// route table, after a change made outside a route operation (a
+// repository's previews made private or public).
+type SyncArgs struct{}
+
+func (SyncArgs) Kind() string { return "route_sync" }
+
+// SyncQueue runs route syncs one at a time.
+const SyncQueue = "route_sync"
+
+// InsertOpts keeps one waiting sync: it writes the latest table anyway.
+func (SyncArgs) InsertOpts() river.InsertOpts {
+	return river.InsertOpts{Queue: SyncQueue, MaxAttempts: 10, UniqueOpts: river.UniqueOpts{
+		ByArgs:  true,
+		ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateScheduled, rivertype.JobStateRetryable},
+	}}
+}
+
+// SyncWorker runs SyncArgs.
+type SyncWorker struct {
+	river.WorkerDefaults[SyncArgs]
+	Controller *Controller
+}
+
+func (w *SyncWorker) Work(ctx context.Context, _ *river.Job[SyncArgs]) error {
+	return w.Controller.Sync(ctx)
 }

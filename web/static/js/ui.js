@@ -521,6 +521,19 @@
     document.addEventListener('htmx:afterSettle', render);
   }
 
+  // Build log line times arrive in UTC; show them in the viewer's time zone,
+  // with the full date as the title.
+  const logClock = new Intl.DateTimeFormat(undefined, {hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'});
+  function localLogTime(element) {
+    const when = new Date(element.dateTime);
+    if (Number.isNaN(when.getTime())) return;
+    element.textContent = logClock.format(when);
+    element.title = when.toLocaleString();
+  }
+  function initLogTimes() {
+    document.querySelectorAll('time[data-log-time]').forEach(localLogTime);
+  }
+
   // Build logs: the server streams the current attempt's lines with ids
   // "<epoch>.<next>". A "reset" means a new attempt replaced the logs. Lines are
   // inserted as text, never markup. Hidden tabs release the connection.
@@ -562,10 +575,18 @@
         anchor.href = '#L' + number;
         anchor.tabIndex = -1;
         anchor.textContent = number;
+        let time = document.createElement('span');
+        if (line.at) {
+          time = document.createElement('time');
+          time.dateTime = line.at;
+          time.dataset.logTime = '';
+          localLogTime(time);
+        }
+        time.classList.add('log-time');
         const text = document.createElement('span');
         text.className = 'log-text';
         text.textContent = line.text;
-        item.append(anchor, text);
+        item.append(anchor, time, text);
         fragment.append(item);
       }
       const wasAtBottom = nearBottom();
@@ -1481,6 +1502,7 @@
   initCommandPalette();
   initRepositorySearch();
   initLiveUpdates();
+  initLogTimes();
   initBuildLogs();
   initBuildProgress();
   initElapsed();

@@ -26,6 +26,7 @@ sql:
       - internal/environments/teardown_queries.sql
       - internal/environments/report_queries.sql
       - internal/environments/stats_queries.sql
+      - internal/environments/activity_queries.sql
     gen:
       go:
         package: dbgen
@@ -94,4 +95,28 @@ sql:
       go:
         package: dbgen
         out: internal/housekeeping/dbgen
+        sql_package: pgx/v5
+  - engine: postgresql
+    schema: db/migrations
+    queries: internal/appoutput/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: internal/appoutput/dbgen
+        sql_package: pgx/v5
+  - engine: postgresql
+    schema: db/migrations
+    queries: internal/idle/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: internal/idle/dbgen
+        sql_package: pgx/v5
+  - engine: postgresql
+    schema: db/migrations
+    queries: internal/previewaccess/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: internal/previewaccess/dbgen
         sql_package: pgx/v5

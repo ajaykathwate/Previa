@@ -14,6 +14,7 @@ const (
 	LabelRevision    = "io.previa.revision"
 	LabelSHA         = "io.previa.head-sha"
 	LabelBaseRepo    = "io.previa.base-repository-id"
+	LabelAccount     = "io.previa.account-id" // the installation owner's Previa user, for per-account limits
 	LabelHeadRepo    = "io.previa.head-repository-id"
 	LabelEnvironment = "io.previa.environment-id"
 	LabelImage       = "io.previa.image"        // a preview's image reference
@@ -22,6 +23,11 @@ const (
 	LabelCPUMillis   = "io.previa.cpu-millis"   // a preview's CPU limit
 	LabelMemory      = "io.previa.memory-bytes" // a preview's memory limit
 	LabelStarted     = "io.previa.started-at"
+	// LabelRedactEnv names, comma-separated, the environment variables whose
+	// values a preview's output must never show (repository secrets and
+	// Previa's service credentials), so output read after startup is redacted
+	// like the startup log. Names only, never values.
+	LabelRedactEnv = "io.previa.redact-env"
 	// LabelCandidate groups one candidate's containers: its app (the preview)
 	// and its companions, the backend services, setup and processes. The value
 	// is the app container's name, chosen before anything is created.

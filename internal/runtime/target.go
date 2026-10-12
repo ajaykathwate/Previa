@@ -23,6 +23,7 @@ type Target struct {
 	// unknown or deleted.
 	BaseRepoID, HeadRepoID int64
 	Fork                   bool
+	AccountID              int64 // the installation owner's Previa user, for per-account limits; 0 if unknown
 }
 
 // secretSource is the source identity secrets are decided on. Anything GitHub
@@ -53,15 +54,15 @@ func (s *TargetStore) Current(ctx context.Context, request environments.Request)
 }
 
 // BaseRepository returns the GitHub ID of the PR's base repository.
-func (s *TargetStore) BaseRepository(ctx context.Context, pullRequestID int64) (int64, error) {
-	id, err := dbgen.New(s.pool).BaseRepository(ctx, pullRequestID)
-	if errors.Is(err, pgx.ErrNoRows) || err == nil && !id.Valid {
-		return 0, failure(CodeNotCurrent, "The pull request no longer exists.", false, err)
+func (s *TargetStore) AdmissionScope(ctx context.Context, pullRequestID int64) (Target, error) {
+	row, err := dbgen.New(s.pool).AdmissionScope(ctx, pullRequestID)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && !row.GithubRepoID.Valid {
+		return Target{}, failure(CodeNotCurrent, "The pull request no longer exists.", false, err)
 	}
 	if err != nil {
-		return 0, failure(CodeUnavailable, "The build target could not be read.", true, fmt.Errorf("read base repository: %w", err))
+		return Target{}, failure(CodeUnavailable, "The build target could not be read.", true, fmt.Errorf("read base repository: %w", err))
 	}
-	return id.Int64, nil
+	return Target{PullRequestID: pullRequestID, BaseRepoID: row.GithubRepoID.Int64, AccountID: row.OwnerUserID.Int64}, nil
 }
 
 func currentTarget(row dbgen.ExecutionTargetRow, request environments.Request) (Target, error) {
@@ -81,6 +82,7 @@ func currentTarget(row dbgen.ExecutionTargetRow, request environments.Request) (
 	return Target{
 		PullRequestID: row.PullRequestID, RepoID: row.RepoID, Number: row.Number, InstallationID: row.GithubInstallationID,
 		BaseRepoID: row.GithubRepoID.Int64, HeadRepoID: head, Fork: row.IsFork || head != row.GithubRepoID.Int64,
+		AccountID: row.OwnerUserID.Int64,
 	}, nil
 }
 

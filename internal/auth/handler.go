@@ -39,6 +39,9 @@ func NewHandler(cfg config.ServerConfig, sessions *scs.SessionManager, users use
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	state := randomToken()
 	h.sessions.Put(r.Context(), "oauth_state", state)
+	if next := r.URL.Query().Get("next"); LocalPath(next) {
+		h.sessions.Put(r.Context(), "after_login", next)
+	}
 	http.SetCookie(w, h.stateCookie(h.signState(state), int(stateLifetime.Seconds())))
 	http.Redirect(w, r, h.provider.AuthCodeURL(state), http.StatusSeeOther)
 }
@@ -81,7 +84,17 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	h.sessions.Put(r.Context(), "user_id", u.ID)
 	h.sessions.Put(r.Context(), "csrf_token", randomToken())
-	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+	next := h.sessions.PopString(r.Context(), "after_login")
+	if !LocalPath(next) {
+		next = "/dashboard"
+	}
+	http.Redirect(w, r, next, http.StatusSeeOther)
+}
+
+// LocalPath reports whether next is a path on this server to return to
+// after signing in: never another host, so sign-in is no open redirect.
+func LocalPath(next string) bool {
+	return strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") && !strings.ContainsAny(next, "\\\r\n") && len(next) <= 2048
 }
 
 // logoutConfirmation preserves old links without rendering a separate screen.

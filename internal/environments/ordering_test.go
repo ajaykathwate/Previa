@@ -67,7 +67,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, name := range []string{"0001_init.sql", "0003_pr_generation.sql", "0004_durable_operations.sql", "0005_installation_linking.sql", "0006_build_intents.sql", "0007_intent_dispatch.sql", "0008_pr_workspace.sql", "0009_environment_identity.sql", "0010_pr_mergeability.sql", "0013_build_log_streams.sql", "0014_routes_and_teardown.sql", "0015_pr_reports.sql", "0016_housekeeping.sql", "0017_worker_capabilities.sql", "0018_builds_paused.sql"} {
+	for _, name := range []string{"0001_init.sql", "0003_pr_generation.sql", "0004_durable_operations.sql", "0005_installation_linking.sql", "0006_build_intents.sql", "0007_intent_dispatch.sql", "0008_pr_workspace.sql", "0009_environment_identity.sql", "0010_pr_mergeability.sql", "0013_build_log_streams.sql", "0014_routes_and_teardown.sql", "0015_pr_reports.sql", "0016_housekeeping.sql", "0017_worker_capabilities.sql", "0018_builds_paused.sql", "0022_account_fairness.sql", "0023_build_log_deletion.sql", "0024_preview_activity.sql", "0025_app_output.sql", "0026_preview_sleep.sql", "0027_private_previews.sql"} {
 		data, err := os.ReadFile("../../db/migrations/" + name)
 		if err != nil {
 			t.Fatal(err)
@@ -91,7 +91,7 @@ func newFixture(t *testing.T) *fixture {
 	if err := pool.QueryRow(t.Context(), "INSERT INTO installations(github_installation_id,owner_user_id) VALUES(1,$1) RETURNING id", userID).Scan(&installID); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(t.Context(), "INSERT INTO repos(installation_id,full_name) VALUES($1,'test/repo') RETURNING id", installID).Scan(&repoID); err != nil {
+	if err := pool.QueryRow(t.Context(), "INSERT INTO repos(installation_id,full_name,github_repo_id) VALUES($1,'test/repo',4242) RETURNING id", installID).Scan(&repoID); err != nil {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

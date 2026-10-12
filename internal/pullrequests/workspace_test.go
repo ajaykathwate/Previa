@@ -111,8 +111,17 @@ func setup(t *testing.T) *fixture {
 	f.hook = webhooks.NewHandler("fixture-secret", webhooks.NewDeliveryService(pool, environments.NewBroker(pool, f.producer), nil), f.log)
 	return f
 }
+
+// payload is a same-repository pull request event (head repository 100, the
+// base): Automatic mode may build it. A fork's (another head repository) waits
+// for the owner.
 func payload(action, sha, state, at string) string {
-	return fmt.Sprintf(`{"action":%q,"installation":{"id":99},"repository":{"id":100},"pull_request":{"number":7,"title":"Improve preview","state":%q,"mergeable":true,"mergeable_state":"clean","updated_at":%q,"user":{"login":"contributor"},"html_url":"https://github.com/owner/repo/pull/7","head":{"sha":%q,"ref":"feature","repo":{"id":101}}}}`, action, state, at, sha)
+	return payloadFrom(action, sha, state, at, 100)
+}
+
+// payloadFrom is the same event with its code from headRepo.
+func payloadFrom(action, sha, state, at string, headRepo int) string {
+	return fmt.Sprintf(`{"action":%q,"installation":{"id":99},"repository":{"id":100},"pull_request":{"number":7,"title":"Improve preview","state":%q,"mergeable":true,"mergeable_state":"clean","updated_at":%q,"user":{"login":"contributor"},"html_url":"https://github.com/owner/repo/pull/7","head":{"sha":%q,"ref":"feature","repo":{"id":%d}}}}`, action, state, at, sha, headRepo)
 }
 func send(h http.Handler, id, kind, body string) int {
 	req := httptest.NewRequest("POST", "/webhooks/github", strings.NewReader(body))
@@ -169,7 +178,7 @@ func TestWebhookAtomicDedupSourceOrderingAndManual(t *testing.T) {
 		{"closed", "closed", "sha-b", "closed", "2026-10-03T10:03:00Z"},
 		{"late", "synchronize", "sha-a", "open", "2026-10-03T10:02:00Z"},
 	} {
-		if status := send(f.hook, e.id, "pull_request", payload(e.action, e.sha, e.state, e.at)); status != 204 {
+		if status := send(f.hook, e.id, "pull_request", payloadFrom(e.action, e.sha, e.state, e.at, 101)); status != 204 {
 			t.Fatal(status)
 		}
 	}

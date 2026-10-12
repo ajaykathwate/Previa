@@ -1,0 +1,42 @@
+package idle
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/button"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+// Waking is shown to a sleeping preview's visitor while it starts again;
+// the response's Refresh header reloads it until the preview runs, then the
+// visitor is sent to the address they opened.
+templ Waking(host string) {
+	@layouts.Base("Waking the preview") {
+		<section class="standalone-card panel" aria-labelledby="preview-waking-title">
+			<span class="standalone-icon" aria-hidden="true">
+				@components.RestartIcon()
+			</span>
+			<span class="eyebrow">Preview</span>
+			<h1 id="preview-waking-title">Waking the preview…</h1>
+			<p class="standalone-copy" role="status">{ host } had no visitors recently, so it was put to sleep to save resources. It is starting again now; this usually takes a few seconds. This page reloads by itself and takes you there when it is ready.</p>
+		</section>
+	}
+}
+
+// WakeFailed says why a sleeping preview could not start, with a retry.
+templ WakeFailed(host, reason string) {
+	@layouts.Base("Preview did not wake") {
+		<section class="standalone-card panel" aria-labelledby="preview-wake-failed-title">
+			<span class="standalone-icon" aria-hidden="true">
+				@components.AlertIcon()
+			</span>
+			<span class="eyebrow">Preview</span>
+			<h1 id="preview-wake-failed-title">The preview did not wake</h1>
+			<p class="standalone-copy">{ host } was asleep and could not start again: { reason }</p>
+			<form method="post" class="standalone-actions">
+				@button.Button(button.Props{Type: button.TypeSubmit}) {
+					Try again
+				}
+			</form>
+		</section>
+	}
+}

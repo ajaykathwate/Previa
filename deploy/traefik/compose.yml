@@ -36,6 +36,9 @@ services:
       - --api.dashboard=false
       - --ping=true
       - --ping.entrypoint=traefik
+      # Request counts per preview (no request details), read by the worker
+      # through docker exec for "Last opened"; served on the loopback API.
+      - --metrics.prometheus=true
       - --certificatesresolvers.preview.acme.email=${ACME_EMAIL:-}
       - --certificatesresolvers.preview.acme.storage=/acme/acme.json
       - --certificatesresolvers.preview.acme.caserver=${ACME_CA_SERVER:-https://acme-staging-v02.api.letsencrypt.org/directory}
@@ -50,6 +53,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    # Private previews: the router asks the server on the host (PREVIEW_ACCESS_URL).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${ROUTER_DYNAMIC_DIR:-/nonexistent}:/etc/traefik/dynamic:ro
       - acme:/acme

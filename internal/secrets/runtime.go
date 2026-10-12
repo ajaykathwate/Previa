@@ -62,12 +62,17 @@ func NewProvider(store SealedStore, keys *Keyring) (*Provider, error) {
 type ContainerEnv struct {
 	vars     []string
 	secrets  [][]byte
+	names    []string // of the decrypted secrets
 	Notices  []string // safe messages that mention names only
 	Withheld bool     // secrets existed or may exist but the source was untrusted
 }
 
 // Environ returns NAME=value entries sorted by name.
 func (e *ContainerEnv) Environ() []string { return append([]string(nil), e.vars...) }
+
+// SecretNames are the names of the variables that hold repository secrets.
+// Names are not secret; values are.
+func (e *ContainerEnv) SecretNames() []string { return append([]string(nil), e.names...) }
 
 // Redactor redacts this environment's secret values plus extra platform
 // credentials (for example the installation token used to fetch source).
@@ -128,6 +133,7 @@ func (p *Provider) ForContainer(ctx context.Context, repoID int64, source Source
 		}
 		merged[s.Name] = string(plain)
 		env.secrets = append(env.secrets, plain)
+		env.names = append(env.names, s.Name)
 	}
 	env.vars = sortedEnv(merged)
 	return env, nil

@@ -33,7 +33,7 @@ func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Val
 	if err != nil {
 		return pages.Page{}, panelError(err)
 	}
-	page := pages.Page{RepoID: repoID, Name: data.Repo.FullName, Mode: data.Repo.BuildMode,
+	page := pages.Page{RepoID: repoID, Name: data.Repo.FullName, Mode: data.Repo.BuildMode, PrivatePreviews: data.Repo.PrivatePreviews,
 		Available: data.Repo.Accessible && data.Repo.Status == "active", DiscoveryEnabled: h.enabled,
 		SyncState: data.Sync.State, SyncMessage: data.Sync.Message, LastRefresh: timestamp(data.Sync.LastSuccessAt),
 		Fetched: data.Sync.Fetched, Number: data.Page, Pages: data.Pages, Total: data.Total,

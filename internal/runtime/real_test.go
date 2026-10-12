@@ -156,8 +156,8 @@ func (f fixedTarget) Current(context.Context, environments.Request) (Target, err
 	return f.target, nil
 }
 
-func (f fixedTarget) BaseRepository(context.Context, int64) (int64, error) {
-	return f.target.BaseRepoID, nil
+func (f fixedTarget) AdmissionScope(context.Context, int64) (Target, error) {
+	return f.target, nil
 }
 
 // processLock serializes admissions within the test process, as

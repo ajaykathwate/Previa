@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/platform/textlines"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 )
 
@@ -70,11 +71,15 @@ func (e *LostLinesError) Error() string {
 
 func (e *LostLinesError) Unwrap() error { return e.Err }
 
-type line struct{ kind, text string }
+type line struct {
+	kind, text string
+	at         time.Time
+}
 
 // batch is one storage write: lines plus counters accumulated since the last.
 type batch struct {
 	kinds, texts  []string
+	times         []time.Time
 	bytes         int64
 	truncated     bool
 	omitted, lost int64
@@ -103,7 +108,7 @@ type Writer struct {
 	mu        sync.Mutex
 	input     io.Writer
 	redacting *secrets.RedactingWriter
-	splitter  *lineSplitter
+	splitter  *textlines.Splitter
 
 	pending       []line
 	pendingBytes  int
@@ -141,9 +146,9 @@ func newWriter(store appender, b Binding, start stored, redactor *secrets.Redact
 		wake: make(chan struct{}, 1), stop: make(chan struct{}), stopped: make(chan struct{}), done: make(chan struct{}),
 	}
 	w.notice = fmt.Sprintf("Log limit reached (%s or %d lines). Later output is not stored.", formatBytes(w.limits.Bytes), w.limits.Lines)
-	w.splitter = &lineSplitter{maxBytes: w.limits.LineBytes, emit: func(text string) { w.accept(kindOutput, text) }}
+	w.splitter = &textlines.Splitter{MaxBytes: w.limits.LineBytes, Emit: func(text string) { w.accept(kindOutput, text) }}
 	w.redacting = redactor.Writer(w.splitter)
-	w.input = &controlStripper{dst: w.redacting}
+	w.input = &textlines.Stripper{Dst: w.redacting}
 	go w.run()
 	return w
 }
@@ -175,9 +180,9 @@ func (w *Writer) System(message string) {
 	if w.closed || w.fenced {
 		return
 	}
-	w.splitter.flush()
+	w.splitter.Flush()
 	var clean strings.Builder
-	stripper := controlStripper{dst: &clean}
+	stripper := textlines.Stripper{Dst: &clean}
 	_, _ = stripper.Write([]byte(message))
 	text := strings.ToValidUTF8(string(w.redactor.Redact([]byte(clean.String()))), "�")
 	for _, part := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
@@ -205,7 +210,7 @@ func (w *Writer) Close(ctx context.Context) error {
 	w.closed = true
 	if !w.fenced {
 		_ = w.redacting.Close() // Releases a held-back tail, still redacted.
-		w.splitter.flush()
+		w.splitter.Flush()
 	}
 	w.mu.Unlock()
 	close(w.stop)
@@ -281,7 +286,7 @@ func (w *Writer) queue(kind, text string) {
 }
 
 func (w *Writer) push(kind, text string) {
-	w.pending = append(w.pending, line{kind: kind, text: text})
+	w.pending = append(w.pending, line{kind: kind, text: text, at: w.now()})
 	w.pendingBytes += len(text)
 	w.acceptedLines++
 	w.acceptedBytes += int64(len(text))
@@ -324,7 +329,7 @@ func (w *Writer) flush(ctx context.Context, final bool) bool {
 		return true
 	}
 	if !final && !w.closed && !w.lastWrite.IsZero() && now.Sub(w.lastWrite) >= idleFlush {
-		w.splitter.flush() // Output paused mid-line: show what arrived.
+		w.splitter.Flush() // Output paused mid-line: show what arrived.
 	}
 	n, size := 0, 0
 	for n < len(w.pending) && n < batchLines && (n == 0 || size+len(w.pending[n].text) <= batchBytes) {
@@ -336,9 +341,9 @@ func (w *Writer) flush(ctx context.Context, final bool) bool {
 		w.mu.Unlock()
 		return false
 	}
-	b.kinds, b.texts = make([]string, n), make([]string, n)
+	b.kinds, b.texts, b.times = make([]string, n), make([]string, n), make([]time.Time, n)
 	for i, l := range w.pending[:n] {
-		b.kinds[i], b.texts[i] = l.kind, l.text
+		b.kinds[i], b.texts[i], b.times[i] = l.kind, l.text, l.at
 	}
 	w.mu.Unlock()
 

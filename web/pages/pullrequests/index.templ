@@ -87,6 +87,7 @@ templ Panel(p Page, csrf string) {
 			@components.ConfirmationDialog("build-policy", "Enable automatic builds?", "Future PR updates will schedule work after five quiet minutes. Existing PRs are not bulk-built.") {
 				@PolicyForm(p, csrf, true)
 			}
+			@PreviewAccessDialog(p, csrf)
 			<noscript>
 				<section class="workspace-panel pr-policy-fallback">
 					<h3>Automatic builds</h3>
@@ -152,8 +153,43 @@ templ repositoryHero(p Page, csrf string) {
 				}
 			</form>
 			@AutomaticSwitch(p, csrf)
+			<button type="button" role="switch" aria-checked={ strconv.FormatBool(p.PrivatePreviews) } class="automatic-switch" disabled?={ !p.Available } data-open-dialog="preview-access" commandfor="preview-access" command="show-modal" aria-haspopup="dialog" title={ privateTitle(p.PrivatePreviews) }><span>Private previews</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
 		</div>
 	</header>
+}
+
+func privateTitle(private bool) string {
+	if private {
+		return "Previews are private: visitors sign in with GitHub and must be able to see this repository."
+	}
+	return "Previews are public: anyone with a preview's address can open it."
+}
+
+// PreviewAccessDialog confirms making the repository's previews private or
+// public again.
+templ PreviewAccessDialog(p Page, csrf string) {
+	if p.PrivatePreviews {
+		@components.ConfirmationDialog("preview-access", "Make previews public?", "Anyone with a preview's address will be able to open it again, without signing in.") {
+			@previewAccessForm(p, csrf, "Make public")
+		}
+	} else {
+		@components.ConfirmationDialog("preview-access", "Make previews private?", "Visitors will sign in with GitHub, and only people who can see this repository on GitHub get in. Each visitor's access lasts 12 hours on that preview. Reviewers without a GitHub account lose access.") {
+			@previewAccessForm(p, csrf, "Make private")
+		}
+	}
+}
+
+templ previewAccessForm(p Page, csrf, label string) {
+	<form method="post" action={ RepoURL(p.RepoID) + "/preview-access" } class="dialog-actions">
+		<input type="hidden" name="csrf_token" value={ csrf }/>
+		<input type="hidden" name="private" value={ strconv.FormatBool(!p.PrivatePreviews) }/>
+		@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "preview-access", "command": "close", "data-close-dialog": true}}) {
+			Cancel
+		}
+		@button.Button(button.Props{Type: button.TypeSubmit}) {
+			{ label }
+		}
+	</form>
 }
 
 // prHero heads a pull request page: where it lives, its title and who opened
@@ -186,7 +222,9 @@ templ prHero(p Page, pr PR) {
 							{ pr.Branch }
 						</code>
 					}
-					if pr.Fork {
+					if pr.Fork && p.Mode == "automatic" {
+						<span class="badge tone-warn" title="Automatic builds never start a fork's pull request, and forks never receive repository secrets. Choose Build latest commit to build this commit.">Fork · waits for your approval</span>
+					} else if pr.Fork {
 						<span class="badge tone-warn" title="Pull requests from forks never receive repository secrets.">Fork · no secrets</span>
 					}
 					<span class={ "pr-meta-item", "pr-mode", templ.KV("is-automatic", p.Mode == "automatic") }>
@@ -311,7 +349,9 @@ templ Results(p Page) {
 													@components.Time(pr.UpdatedAt, TimeLabel(pr.UpdatedAt))
 												</span>
 											}
-											if pr.Fork {
+											if pr.Fork && p.Mode == "automatic" {
+												<span class="meta-flag" title="Automatic builds never start a fork's pull request; build it from its page.">Fork · needs your approval</span>
+											} else if pr.Fork {
 												<span class="meta-flag">Fork</span>
 											}
 											if pr.NeedsRefresh {
@@ -488,6 +528,12 @@ templ PRDetail(p Page, pr PR, csrf string) {
 							Build logs
 						}
 					</a>
+					if pr.Running() {
+						<a class="text-link logs-link" href={ templ.SafeURL(OutputURL(p.RepoID, pr.Number)) }>
+							@components.ServerIcon()
+							App output
+						</a>
+					}
 				</div>
 				if pr.Actions.Unavailable!="" {
 					<div
@@ -606,6 +652,20 @@ templ PRDetail(p Page, pr PR, csrf string) {
 									<li>
 										Published { " " }
 										@components.Time(pr.PublishedAt, TimeLabel(pr.PublishedAt))
+									</li>
+								}
+								if pr.AsleepAt!="" {
+									<li>
+										Asleep since { " " }
+										@components.Time(pr.AsleepAt, TimeLabel(pr.AsleepAt))
+										{ " · the next visit wakes it in a few seconds" }
+									</li>
+								}
+								if pr.LastOpenedAt!="" {
+									<li>
+										Last opened { " " }
+										@components.Time(pr.LastOpenedAt, TimeLabel(pr.LastOpenedAt))
+										{ " · " + RequestCount(pr.Requests) }
 									</li>
 								}
 								if pr.ExpiresAt!="" {
@@ -1065,6 +1125,15 @@ templ ActivityIndex(username, csrf string, p Activity) {
 														<span class="cell-line">
 															@components.Time(row.PublishedAt, TimeLabel(row.PublishedAt))
 														</span>
+													}
+													if row.AsleepAt!="" {
+														<small>Asleep · wakes on the next visit</small>
+													}
+													if row.LastOpenedAt!="" {
+														<small>
+															Opened { " " }
+															@components.Time(row.LastOpenedAt, TimeLabel(row.LastOpenedAt))
+														</small>
 													}
 													if row.ExpiresAt!="" {
 														<small>

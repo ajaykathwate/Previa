@@ -45,6 +45,11 @@ type Route struct {
 	Revision      int64
 	Backend       string
 	Port          int
+	// Asleep: its app is stopped while idle; visitors go to the wake page.
+	Asleep bool
+	// Private: only signed-in GitHub users who can see the repository may
+	// open it.
+	Private bool
 }
 
 // RouteTable is every active route at one version. Versions follow commit
@@ -200,6 +205,9 @@ func saveActiveRoute(ctx context.Context, q *dbgen.Queries, op Operation, enviro
 	if affected != 1 {
 		return 0, errors.New("accepted route did not move forward")
 	}
+	if err := q.WakeForNewRoute(ctx, environmentID); err != nil {
+		return 0, fmt.Errorf("wake for the accepted route: %w", err)
+	}
 	return version, nil
 }
 
@@ -295,7 +303,7 @@ func (r *Repository) RouteTable(ctx context.Context) (RouteTable, error) {
 		table.Routes = append(table.Routes, Route{
 			EnvironmentID: row.EnvironmentID.Int64, Hostname: row.Subdomain.String,
 			Generation: row.Generation.Int64, Revision: row.Revision.Int64,
-			Backend: row.Backend.String, Port: int(row.Port.Int32),
+			Backend: row.Backend.String, Port: int(row.Port.Int32), Asleep: row.Asleep, Private: row.Private,
 		})
 	}
 	return table, nil

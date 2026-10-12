@@ -83,13 +83,16 @@ func (r *IntentRepository) ObserveIntentTx(ctx context.Context, tx pgx.Tx, userI
 	}
 	closed := scope.pr.State != StateOpen
 	stale := current != nil && !current.forHead(scope)
-	if closed || (stale && scope.mode == modeManual) {
+	// A fork's commit is never built without the owner: in Automatic mode it
+	// is observed like Manual, and waits for Build latest commit.
+	manual := scope.mode == modeManual || scope.pr.Untrusted
+	if closed || (stale && manual) {
 		if _, err := q.SupersedeBuildIntent(ctx, prID); err != nil {
 			return ObservationOutcome{}, fmt.Errorf("supersede observed intent: %w", err)
 		}
 		return ObservationOutcome{TeardownRequired: closed}, nil
 	}
-	if scope.mode == modeManual {
+	if manual {
 		return ObservationOutcome{Intent: current}, nil
 	}
 	if current != nil && !stale {

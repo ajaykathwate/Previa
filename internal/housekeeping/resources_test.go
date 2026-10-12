@@ -215,10 +215,10 @@ func TestHousekeeperPrunesWhenABuildWaitsForDiskAndRegistersItsJobs(t *testing.T
 		t.Fatalf("emergency prunes are not rate limited: %v", caches.removed)
 	}
 
-	h.Resources, h.Expiry = f.resources(t, false, time.Now()), &Expiry{}
+	h.Resources, h.Expiry, h.Records = f.resources(t, false, time.Now()), &Expiry{}, &Records{}
 	cfg := &river.Config{}
 	h.Register(cfg)
-	if cfg.Queues[Queue].MaxWorkers != 1 || len(cfg.PeriodicJobs) != 4 || cfg.Workers == nil {
+	if cfg.Queues[Queue].MaxWorkers != 1 || len(cfg.PeriodicJobs) != 5 || cfg.Workers == nil {
 		t.Fatalf("registration: %+v %d periodic jobs", cfg.Queues, len(cfg.PeriodicJobs))
 	}
 	if insertOpts().MaxAttempts != 1 || !insertOpts().UniqueOpts.ByArgs {

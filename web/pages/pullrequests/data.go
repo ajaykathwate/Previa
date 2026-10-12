@@ -44,9 +44,14 @@ type PR struct {
 	PreviewURL    string // only for a published preview on a configured domain
 	ExpiresAt     string // RFC 3339; empty when the preview does not expire
 	PublishedAt   string
-	RemovedNote   string // why the preview was removed (owner, expiry, access)
-	OlderPreview  bool   // the preview serves an earlier commit than the latest
-	Actions       Actions
+	// LastOpenedAt is when the router last passed the preview a request
+	// (RFC 3339, to the minute); Requests counts them. Empty when unknown.
+	LastOpenedAt string
+	Requests     int64
+	AsleepAt     string // RFC 3339 while the idle preview sleeps; a visit wakes it
+	RemovedNote  string // why the preview was removed (owner, expiry, access)
+	OlderPreview bool   // the preview serves an earlier commit than the latest
+	Actions      Actions
 	// Backend previews: what the live preview runs next to its app (one
 	// line), its docs address, and its approved outbound connections.
 	Backend          string
@@ -215,11 +220,14 @@ type Page struct {
 	Name, Mode, SyncState, SyncMessage, LastRefresh string
 	Fetched                                         int32
 	Available, DiscoveryEnabled                     bool
-	Rows                                            []PR
-	Number, Pages, Total                            int64
-	Search, State                                   string
-	WorkspaceQuery                                  string
-	SelectedPR                                      *PR
+	// PrivatePreviews: only GitHub users who can see the repository may
+	// open its previews.
+	PrivatePreviews      bool
+	Rows                 []PR
+	Number, Pages, Total int64
+	Search, State        string
+	WorkspaceQuery       string
+	SelectedPR           *PR
 	// LiveURL is the repository event stream, including the resume cursor read
 	// before this page's state. Empty disables live updates.
 	LiveURL string
@@ -250,6 +258,9 @@ func PRURL(id int64, number int32) string {
 
 // LogsURL is a PR's current-build log page.
 func LogsURL(id int64, number int32) string { return PRURL(id, number) + "/logs" }
+
+// OutputURL is a PR's live app output page.
+func OutputURL(id int64, number int32) string { return PRURL(id, number) + "/output" }
 func (p Page) PageURL(n int64) string {
 	v, _ := url.ParseQuery(p.WorkspaceQuery)
 	v.Set("pr_page", strconv.FormatInt(n, 10))
@@ -350,6 +361,8 @@ type ActivityRow struct {
 	RequestCurrent                               bool   // the request is for the latest commit
 	RequestSource                                string // "manual" or "automatic"
 	StartedAt, CompletedAt, PublishedAt          string // RFC 3339
+	LastOpenedAt                                 string // RFC 3339; empty when unknown
+	AsleepAt                                     string // RFC 3339 while the idle preview sleeps
 	Revision                                     int64  // the build request's revision, for dismissing its failure
 	// Attention is how a failed request is shown: "attention" (recent,
 	// highlighted), "older" or "dismissed" (quiet, with AttentionNote saying
@@ -566,3 +579,18 @@ func (p Page) DocumentTitle() string {
 	}
 	return p.RepositoryName() + " · Pull requests"
 }
+
+// RequestCount says how many requests the router passed to a preview.
+func RequestCount(n int64) string {
+	switch {
+	case n == 1:
+		return "1 request"
+	case n < 10000:
+		return strconv.FormatInt(n, 10) + " requests"
+	default:
+		return strconv.FormatFloat(float64(n)/1000, 'f', 1, 64) + "k requests"
+	}
+}
+
+// Running reports whether the PR's preview runs now, so it has live output.
+func (pr PR) Running() bool { return pr.DeployedSHA != "" && pr.Environment == "running" }

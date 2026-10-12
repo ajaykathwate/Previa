@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,6 +76,18 @@ func (f *fakeLogs) LinesBefore(_ context.Context, _, epoch, before int64, limit 
 	before = min(before, int64(len(f.lines)))
 	start := max(int(before)-limit, 0)
 	return append([]Line(nil), f.lines[start:before]...), nil
+}
+
+// Delete deletes a finished attempt's lines, as Store.Delete does.
+func (f *fakeLogs) Delete(_ context.Context, environmentID, epoch int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stream == nil || environmentID != f.stream.EnvironmentID || epoch != f.stream.Epoch || !f.stream.Finished || !f.stream.PrunedAt.IsZero() {
+		return ErrNotDeletable
+	}
+	f.lines = nil
+	f.stream.PrunedAt, f.stream.DeletedAt = time.Now(), time.Now()
+	return nil
 }
 
 func (f *fakeLogs) add(texts ...string) {
@@ -492,4 +505,80 @@ func TestLiveLogsDropClientsThatStopReading(t *testing.T) {
 	}
 	waitForStatus(http.StatusServiceUnavailable, 3*time.Second, "the stalled client never held a stream slot")
 	waitForStatus(http.StatusOK, 10*time.Second, "a stalled client kept its stream slot")
+}
+
+func post(t *testing.T, url string, user int64, form url.Values) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set(ownerHeader, strconv.FormatInt(user, 10))
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	body, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(body)
+}
+
+// The owner deletes a finished attempt's logs from its page; a running
+// attempt, a newer attempt or another user's logs cannot be deleted.
+func TestOwnerDeletesAFinishedAttemptsLogs(t *testing.T) {
+	logs := newFakeLogs(3)
+	server, _ := testServer(t, logs)
+	deleteURL := server.URL + testPRPath + "/delete"
+	if _, page := get(t, server.URL+testPRPath, testOwner); strings.Contains(page, "Delete logs") {
+		t.Fatal("a running attempt's logs must not offer deletion")
+	}
+	if status, _ := post(t, deleteURL, testOwner, url.Values{"epoch": {"4"}}); status != http.StatusConflict {
+		t.Fatalf("deleting a running attempt: %d", status)
+	}
+	logs.mu.Lock()
+	logs.stream.Finished, logs.target.Intent.State = true, "failed"
+	logs.mu.Unlock()
+	if _, page := get(t, server.URL+testPRPath, testOwner); !strings.Contains(page, "Delete logs") || !strings.Contains(page, `name="epoch" value="4"`) {
+		t.Fatal("a finished attempt offers Delete logs with its epoch")
+	}
+	if status, _ := post(t, deleteURL, 99, url.Values{"epoch": {"4"}}); status != http.StatusNotFound {
+		t.Fatalf("another user deleting: %d", status)
+	}
+	if status, _ := post(t, deleteURL, testOwner, url.Values{"epoch": {"3"}}); status != http.StatusConflict {
+		t.Fatalf("deleting an attempt the owner did not see: %d", status)
+	}
+	if status, _ := post(t, deleteURL, testOwner, url.Values{"epoch": {"x"}}); status != http.StatusBadRequest {
+		t.Fatalf("an invalid epoch: %d", status)
+	}
+	if status, _ := post(t, deleteURL, testOwner, url.Values{"epoch": {"4"}}); status != http.StatusSeeOther {
+		t.Fatalf("delete: %d", status)
+	}
+	_, page := get(t, server.URL+testPRPath, testOwner)
+	for _, want := range []string{"You deleted this attempt", "Logs deleted."} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("page after deletion lacks %q", want)
+		}
+	}
+	if strings.Contains(page, "Delete logs") || strings.Contains(page, "/logs/download") {
+		t.Fatal("deleted logs offer neither deletion nor a download")
+	}
+}
+
+// Every line carries the time it was received: on the page (for local
+// display), in the live stream and as a UTC prefix in the download.
+func TestLogLinesCarryTheirTime(t *testing.T) {
+	logs := newFakeLogs(0)
+	at := time.Date(2026, 10, 12, 14, 3, 7, 250e6, time.UTC)
+	logs.lines = []Line{{Sequence: 0, Text: "step one", At: at}, {Sequence: 1, Text: "untimed"}}
+	server, _ := testServer(t, logs)
+	_, page := get(t, server.URL+testPRPath, testOwner)
+	if !strings.Contains(page, `datetime="2026-10-12T14:03:07.25Z"`) || !strings.Contains(page, ">14:03:07</time>") {
+		t.Fatal("the page shows each line's time")
+	}
+	_, download := get(t, server.URL+testPRPath+"/download", testOwner)
+	if download != "2026-10-12T14:03:07.250Z step one\nuntimed\n" {
+		t.Fatalf("download: %q", download)
+	}
+	if got := newLiveLine(logs.lines[0]); got.At != "2026-10-12T14:03:07.25Z" {
+		t.Fatalf("live line time: %q", got.At)
+	}
 }

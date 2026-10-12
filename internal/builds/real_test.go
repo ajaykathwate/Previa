@@ -166,7 +166,8 @@ func TestRealBuilderBuildsCachesReusesAndLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, firstLogs)
 	}
-	if img.Ref != first.ImageRef() || img.ID == "" || img.Reused || !strings.Contains(firstLogs.String(), "STEP_HAS_PROXY") {
+	if img.Ref != first.ImageRef() || img.ID == "" || img.Reused || !strings.Contains(firstLogs.String(), "STEP_HAS_PROXY") ||
+		!strings.Contains(firstLogs.String(), "[previa] Network: downloaded ") {
 		t.Fatalf("first build: %+v\n%s", img, firstLogs)
 	}
 	inspected, err := f.docker.ImageInspect(t.Context(), img.Ref)
@@ -275,6 +276,26 @@ func TestRealBuilderIsolatesBuildSteps(t *testing.T) {
 	for _, line := range strings.Split(output, "\n") {
 		if _, probe, found := strings.Cut(line, "PROBE "); found && !strings.Contains(line, "echo") {
 			t.Log("probe:", probe)
+		}
+	}
+	f.assertNoSandboxes(t, job.PullRequestID)
+}
+
+// With BUILD_EGRESS=registries a build installs packages and pulls its base
+// image, but reaches no other host, and its log says which it refused.
+func TestRealBuilderReachesOnlyRegistriesWhenLimited(t *testing.T) {
+	f := newRealFixture(t, func(c *Config) { c.EgressHosts = egressHosts(config.BuildEgressRegistries, nil) })
+	script := "apk add --no-cache jq >/dev/null && echo 'PROBE registry REACHED'; " +
+		"(wget -T 15 -q -O- http://example.com >/dev/null 2>&1 && echo 'PROBE other-host REACHED') || echo 'PROBE other-host blocked'"
+	job, logs := f.job(t, 5, 1, f.base, map[string]string{"Dockerfile": "FROM alpine:3.22\nRUN " + script + "\n"})
+	if _, err := f.builder.Build(buildCtx(t, 8*time.Minute), job); err != nil {
+		t.Fatalf("%v\n%s", err, logs)
+	}
+	output := logs.String()
+	for _, want := range []string{"PROBE registry REACHED", "PROBE other-host blocked", "[previa] Network: downloaded ",
+		"It refused 1 request(s) to other hosts: example.com."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("missing %q:\n%s", want, output)
 		}
 	}
 	f.assertNoSandboxes(t, job.PullRequestID)

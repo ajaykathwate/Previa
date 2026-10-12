@@ -939,8 +939,15 @@ test('sync and automatic controls appear only on the PR list and breadcrumbs use
  await login();await page.goto(`${origin}/repositories/1?pr_q=preview&q=fixture&page=2`);
  await page.getByRole('switch',{name:'Automatic builds'}).click();await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
  await page.getByRole('button',{name:'Enable automatic',exact:true}).click();await readyPanel('1');
- assert.equal(await page.locator('.automatic-switch').getAttribute('aria-checked'),'true');
- assert.notEqual(await page.locator('.automatic-switch').evaluate(e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)');
+ const automatic=page.getByRole('switch',{name:'Automatic builds'});
+ assert.equal(await automatic.getAttribute('aria-checked'),'true');
+ assert.notEqual(await automatic.evaluate(e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)');
+ // Private previews confirm in their own modal; Escape changes nothing.
+ const privacy=page.getByRole('switch',{name:'Private previews'});
+ assert.equal(await privacy.getAttribute('aria-checked'),'false');
+ await privacy.click();await page.waitForFunction(()=>document.querySelector('#preview-access').matches(':modal'));
+ assert.equal(await page.locator('#preview-access-title').textContent(),'Make previews private?');
+ await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('#preview-access').open);
  await page.getByRole('button',{name:'Sync Pull Requests'}).click();await page.locator('.sync-state').filter({hasText:'Syncing'}).waitFor();
  await page.waitForFunction(()=>!document.querySelector('.pr-summary').textContent.includes('Syncing'));await readyPanel('1');
  await page.locator('.pr-table tbody .pr-cell-text a').first().click();await page.waitForURL(url=>url.pathname.includes('/pull-requests/'));
@@ -949,7 +956,7 @@ test('sync and automatic controls appear only on the PR list and breadcrumbs use
  const sizes=await page.locator('.app-breadcrumb').evaluate(e=>Array.from(e.children).map(child=>getComputedStyle(child).fontSize));
  assert(sizes.length>2 && sizes.every(size=>size===sizes[0]), 'breadcrumb text and separators share one size');
  await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
- assert.equal(await page.locator('.automatic-switch').getAttribute('aria-checked'),'true');
+ assert.equal(await page.getByRole('switch',{name:'Automatic builds'}).getAttribute('aria-checked'),'true');
  assert.equal(new URL(page.url()).searchParams.get('page'),'2');
  await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories');
  assert.equal(await page.getByRole('switch',{name:'Automatic builds'}).count(),0);assert.equal(await page.getByRole('button',{name:'Sync Pull Requests'}).count(),0);

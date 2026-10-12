@@ -11,20 +11,27 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const baseRepository = `-- name: BaseRepository :one
-SELECT r.github_repo_id FROM pull_requests p JOIN repos r ON r.id = p.repo_id WHERE p.id = $1
+const admissionScope = `-- name: AdmissionScope :one
+SELECT r.github_repo_id, i.owner_user_id FROM pull_requests p JOIN repos r ON r.id = p.repo_id
+JOIN installations i ON i.id = r.installation_id WHERE p.id = $1
 `
 
-func (q *Queries) BaseRepository(ctx context.Context, id int64) (pgtype.Int8, error) {
-	row := q.db.QueryRow(ctx, baseRepository, id)
-	var github_repo_id pgtype.Int8
-	err := row.Scan(&github_repo_id)
-	return github_repo_id, err
+type AdmissionScopeRow struct {
+	GithubRepoID pgtype.Int8
+	OwnerUserID  pgtype.Int8
+}
+
+// The PR's base repository and account, for the advisory capacity check.
+func (q *Queries) AdmissionScope(ctx context.Context, id int64) (AdmissionScopeRow, error) {
+	row := q.db.QueryRow(ctx, admissionScope, id)
+	var i AdmissionScopeRow
+	err := row.Scan(&i.GithubRepoID, &i.OwnerUserID)
+	return i, err
 }
 
 const executionTarget = `-- name: ExecutionTarget :one
 SELECT p.id AS pull_request_id, p.repo_id, p.number, p.head_sha, p.state, p.generation, p.is_fork, p.head_repo_id,
-       r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status,
+       r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status, i.owner_user_id,
        b.generation AS intent_generation, b.revision AS intent_revision, b.head_sha AS intent_head_sha, b.state AS intent_state
 FROM pull_requests p JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = p.id
@@ -44,6 +51,7 @@ type ExecutionTargetRow struct {
 	Accessible           bool
 	GithubInstallationID int64
 	InstallationStatus   string
+	OwnerUserID          pgtype.Int8
 	IntentGeneration     pgtype.Int8
 	IntentRevision       pgtype.Int8
 	IntentHeadSha        pgtype.Text
@@ -68,6 +76,7 @@ func (q *Queries) ExecutionTarget(ctx context.Context, id int64) (ExecutionTarge
 		&i.Accessible,
 		&i.GithubInstallationID,
 		&i.InstallationStatus,
+		&i.OwnerUserID,
 		&i.IntentGeneration,
 		&i.IntentRevision,
 		&i.IntentHeadSha,
@@ -164,4 +173,41 @@ func (q *Queries) RecordComponents(ctx context.Context, arg RecordComponentsPara
 		arg.OutboundWithheld,
 	)
 	return err
+}
+
+const recordPreviewCrash = `-- name: RecordPreviewCrash :one
+INSERT INTO preview_crashes (container_id, event_nanos, environment_id, exit_code)
+SELECT $1::text, $2::bigint, e.id, $3::integer
+FROM environments e JOIN pull_requests p ON p.id = e.pull_request_id
+WHERE e.id = $4 AND e.status = 'running' AND e.asleep_at IS NULL
+  AND e.applied_generation = $5 AND e.applied_revision = $6
+  AND p.state = 'open' AND p.teardown_requested_generation <> p.generation
+ON CONFLICT DO NOTHING
+RETURNING environment_id
+`
+
+type RecordPreviewCrashParams struct {
+	ContainerID   string
+	EventNanos    int64
+	ExitCode      int32
+	EnvironmentID int64
+	Generation    int64
+	Revision      int64
+}
+
+// A container of the live preview the environment serves stopped. Nothing is
+// recorded for an older candidate, a preview being torn down or a crash
+// another worker already recorded.
+func (q *Queries) RecordPreviewCrash(ctx context.Context, arg RecordPreviewCrashParams) (int64, error) {
+	row := q.db.QueryRow(ctx, recordPreviewCrash,
+		arg.ContainerID,
+		arg.EventNanos,
+		arg.ExitCode,
+		arg.EnvironmentID,
+		arg.Generation,
+		arg.Revision,
+	)
+	var environment_id int64
+	err := row.Scan(&environment_id)
+	return environment_id, err
 }

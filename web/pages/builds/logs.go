@@ -4,16 +4,36 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ajaykathwatee/previa/web/components"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 )
 
-// LogLine is one stored line of the current build attempt.
+// LogLine is one stored line of the current build attempt; At is when it
+// was received.
 type LogLine struct {
 	Sequence int64
 	System   bool
 	Text     string
+	At       time.Time
+}
+
+// Time is the line's clock time in UTC; ui.js shows it in the viewer's time
+// zone.
+func (l LogLine) Time() string {
+	if l.At.IsZero() {
+		return ""
+	}
+	return l.At.UTC().Format("15:04:05")
+}
+
+// ISOTime is the exact time, for the time element and its title.
+func (l LogLine) ISOTime() string {
+	if l.At.IsZero() {
+		return ""
+	}
+	return l.At.UTC().Format(time.RFC3339Nano)
 }
 
 // Number is the 1-based line number shown beside the text.
@@ -51,9 +71,14 @@ type LogPage struct {
 	// Live updates resume from Epoch/After. Empty EventsURL disables them.
 	EventsURL string
 	Epoch     int64
-	// HasOutput: the attempt has a stored stream, so it can be downloaded.
+	// HasOutput: the attempt has stored lines, so they can be downloaded.
 	HasOutput bool
+	// CanDelete: the owner may delete the attempt's logs (it is not writing).
+	CanDelete bool
 }
+
+// DeleteURL deletes the attempt's logs (POST, with Epoch).
+func (p LogPage) DeleteURL() string { return pages.LogsURL(p.RepoID, p.Number) + "/delete" }
 
 // DownloadURL is the whole current output as a text file.
 func (p LogPage) DownloadURL() string { return pages.LogsURL(p.RepoID, p.Number) + "/download" }

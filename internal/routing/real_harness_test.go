@@ -465,7 +465,7 @@ func (h *harness) backends() routing.Backends {
 
 func (h *harness) newController(router routing.Router) (*routing.Controller, error) {
 	controller, err := routing.NewController(h.repo, h.backends(), router, h.file,
-		routing.Settings{BaseDomain: baseDomain, EntryPoint: "websecure", UnavailableURL: unavailableURL}, h.logger)
+		routing.Settings{BaseDomain: baseDomain, EntryPoint: "websecure", UnavailableURL: unavailableURL, WakeURL: strings.TrimSuffix(unavailableURL, routing.UnavailablePath) + routing.WakePath}, h.logger)
 	if err != nil {
 		return nil, err
 	}

@@ -21,7 +21,7 @@ WHERE b.pull_request_id = pr.id AND pr.id = $2
     AND b.generation = pr.generation AND b.head_sha = pr.head_sha
     AND b.revision = $4 AND b.state = $5
     AND ($1::text <> 'running' OR b.available_at <= clock_timestamp())
-RETURNING b.pull_request_id, b.revision, b.base_revision, b.generation, b.head_sha, b.source, b.request_action, b.requested_by, b.idempotency_key, b.state, b.available_at, b.requested_at, b.started_at, b.completed_at, b.updated_at, b.waiting_revision, b.waiting_reason
+RETURNING b.pull_request_id, b.revision, b.base_revision, b.generation, b.head_sha, b.source, b.request_action, b.requested_by, b.idempotency_key, b.state, b.available_at, b.requested_at, b.started_at, b.completed_at, b.updated_at, b.waiting_revision, b.waiting_reason, b.waiting_since, b.waiting_checked_at
 `
 
 type AdvanceBuildIntentParams struct {
@@ -59,6 +59,8 @@ func (q *Queries) AdvanceBuildIntent(ctx context.Context, arg AdvanceBuildIntent
 		&i.UpdatedAt,
 		&i.WaitingRevision,
 		&i.WaitingReason,
+		&i.WaitingSince,
+		&i.WaitingCheckedAt,
 	)
 	return i, err
 }
@@ -81,7 +83,7 @@ func (q *Queries) FindIntentScope(ctx context.Context, id int64) (FindIntentScop
 }
 
 const lockBuildIntent = `-- name: LockBuildIntent :one
-SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason FROM build_intents WHERE pull_request_id = $1 FOR UPDATE
+SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at FROM build_intents WHERE pull_request_id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockBuildIntent(ctx context.Context, pullRequestID int64) (BuildIntent, error) {
@@ -105,6 +107,8 @@ func (q *Queries) LockBuildIntent(ctx context.Context, pullRequestID int64) (Bui
 		&i.UpdatedAt,
 		&i.WaitingRevision,
 		&i.WaitingReason,
+		&i.WaitingSince,
+		&i.WaitingCheckedAt,
 	)
 	return i, err
 }
@@ -129,8 +133,10 @@ func (q *Queries) LockIntentInstallation(ctx context.Context, arg LockIntentInst
 }
 
 const lockIntentPR = `-- name: LockIntentPR :one
-SELECT id, repo_id, generation, head_sha, state,build_status,needs_refresh FROM pull_requests
-WHERE id = $1 AND repo_id = $2 FOR UPDATE
+SELECT p.id, p.repo_id, p.generation, p.head_sha, p.state, p.build_status, p.needs_refresh,
+ (p.is_fork OR p.head_repo_id IS NULL OR p.head_repo_id IS DISTINCT FROM r.github_repo_id)::boolean AS untrusted
+FROM pull_requests p JOIN repos r ON r.id = p.repo_id
+WHERE p.id = $1 AND p.repo_id = $2 FOR UPDATE OF p
 `
 
 type LockIntentPRParams struct {
@@ -146,8 +152,12 @@ type LockIntentPRRow struct {
 	State        string
 	BuildStatus  string
 	NeedsRefresh bool
+	Untrusted    bool
 }
 
+// untrusted: the code comes from a fork, a deleted head repository or another
+// repository than the base, the same rule that withholds secrets
+// (runtime TargetForUpdate). Automatic mode never builds it without the owner.
 func (q *Queries) LockIntentPR(ctx context.Context, arg LockIntentPRParams) (LockIntentPRRow, error) {
 	row := q.db.QueryRow(ctx, lockIntentPR, arg.PrID, arg.RepoID)
 	var i LockIntentPRRow
@@ -159,6 +169,7 @@ func (q *Queries) LockIntentPR(ctx context.Context, arg LockIntentPRParams) (Loc
 		&i.State,
 		&i.BuildStatus,
 		&i.NeedsRefresh,
+		&i.Untrusted,
 	)
 	return i, err
 }
@@ -187,7 +198,7 @@ func (q *Queries) LockIntentRepository(ctx context.Context, arg LockIntentReposi
 }
 
 const readBuildIntent = `-- name: ReadBuildIntent :one
-SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason FROM build_intents WHERE pull_request_id = $1
+SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at FROM build_intents WHERE pull_request_id = $1
 `
 
 func (q *Queries) ReadBuildIntent(ctx context.Context, pullRequestID int64) (BuildIntent, error) {
@@ -211,6 +222,8 @@ func (q *Queries) ReadBuildIntent(ctx context.Context, pullRequestID int64) (Bui
 		&i.UpdatedAt,
 		&i.WaitingRevision,
 		&i.WaitingReason,
+		&i.WaitingSince,
+		&i.WaitingCheckedAt,
 	)
 	return i, err
 }
@@ -299,7 +312,7 @@ SET revision = build_intents.revision + 1, base_revision = EXCLUDED.base_revisio
     requested_at = clock_timestamp(), updated_at = clock_timestamp(),
     started_at = NULL, completed_at = NULL
 WHERE build_intents.revision = $1::bigint
-RETURNING pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason
+RETURNING pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at
 `
 
 type ReplaceBuildIntentParams struct {
@@ -345,6 +358,8 @@ func (q *Queries) ReplaceBuildIntent(ctx context.Context, arg ReplaceBuildIntent
 		&i.UpdatedAt,
 		&i.WaitingRevision,
 		&i.WaitingReason,
+		&i.WaitingSince,
+		&i.WaitingCheckedAt,
 	)
 	return i, err
 }

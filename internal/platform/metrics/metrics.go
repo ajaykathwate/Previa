@@ -22,6 +22,9 @@ const other = "other"
 
 var identifier = regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}$`)
 
+// waitReasons bound the waiting label (environments.Wait*).
+var waitReasons = []string{"capacity", "disk", "paused", "account", "quota"}
+
 // bounded returns v when it is in allowed (or, with no allowed set, a short
 // code-defined identifier), and "other" otherwise.
 func bounded(v string, allowed ...string) string {
@@ -90,6 +93,10 @@ var (
 		Name: "previa_request_to_preview_seconds", Help: "From a build request becoming eligible (after Automatic's quiet period) to its preview serving.",
 		Buckets: []float64{15, 30, 60, 90, 120, 180, 300, 450, 600, 900, 1200, 1800, 3600},
 	})
+	buildTraffic = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "previa_build_egress_bytes", Help: "A finished build's traffic through the egress proxy, sent (up) and received (down).",
+		Buckets: []float64{1 << 20, 10 << 20, 100 << 20, 256 << 20, 512 << 20, 1 << 30, 2 << 30, 4 << 30, 8 << 30},
+	}, []string{"direction"})
 	buildDiskFree = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "previa_build_disk_free_bytes", Help: "Free bytes on the Docker host storage at the last build's disk check.",
 	})
@@ -118,7 +125,7 @@ func init() {
 	Registry.MustRegister(
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		httpRequests, httpDuration, ingressRejections, sseStreams, webhookDeliveries,
-		jobs, jobDuration, jobQueueWait, builds, buildDuration, buildWaits, buildDiskFree, previewLatency,
+		jobs, jobDuration, jobQueueWait, builds, buildDuration, buildWaits, buildTraffic, buildDiskFree, previewLatency,
 		housekeeping, githubRequests, githubRateRemaining, githubRateLimited,
 	)
 }
@@ -188,14 +195,22 @@ func BuildFinished(outcome, code string, d time.Duration) {
 	buildDuration.WithLabelValues(outcome).Observe(d.Seconds())
 }
 
-// BuildWaited counts an admission deferred for capacity, disk or a pause.
+// BuildWaited counts an admission deferred for capacity, disk, a pause, the
+// account's other build or its daily build minutes.
 func BuildWaited(reason string) {
-	buildWaits.WithLabelValues(bounded(reason, "capacity", "disk", "paused")).Inc()
+	buildWaits.WithLabelValues(bounded(reason, waitReasons...)).Inc()
 }
 
 // PreviewPublished records the headline latency: from a request becoming
 // eligible to its preview serving.
 func PreviewPublished(d time.Duration) { previewLatency.Observe(max(0, d.Seconds())) }
+
+// BuildTraffic records one build's bytes sent and received through the
+// egress proxy.
+func BuildTraffic(up, down int64) {
+	buildTraffic.WithLabelValues("up").Observe(float64(max(up, 0)))
+	buildTraffic.WithLabelValues("down").Observe(float64(max(down, 0)))
+}
 
 // BuildDiskFree records the free bytes measured before a build.
 func BuildDiskFree(bytes int64) { buildDiskFree.Set(float64(bytes)) }

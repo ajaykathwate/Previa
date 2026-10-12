@@ -355,6 +355,40 @@ func (g *Gateway) Stats(ctx context.Context) (Stats, error) {
 	return s, nil
 }
 
+// StartMetering counts a build network's traffic from now on, where the
+// egress container has address network; hosts, when given, are the only
+// destinations the network may reach.
+func (g *Gateway) StartMetering(ctx context.Context, network netip.Addr, hosts []string) error {
+	cmd := []string{binary, "meter", "-network", network.String(), "-start"}
+	if len(hosts) > 0 {
+		cmd = append(cmd, "-hosts", strings.Join(hosts, ","))
+	}
+	result, err := dockerx.Run(ctx, g.docker, ContainerName, cmd...)
+	if err != nil {
+		return fmt.Errorf("start metering build traffic: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("start metering build traffic: exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	return nil
+}
+
+// EndMetering returns a build network's traffic and stops counting it.
+func (g *Gateway) EndMetering(ctx context.Context, network netip.Addr) (Usage, error) {
+	result, err := dockerx.Run(ctx, g.docker, ContainerName, binary, "meter", "-network", network.String(), "-end")
+	if err != nil {
+		return Usage{}, fmt.Errorf("read build traffic: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return Usage{}, fmt.Errorf("read build traffic: exit code %d", result.ExitCode)
+	}
+	var u Usage
+	if err := json.Unmarshal([]byte(result.Stdout), &u); err != nil {
+		return Usage{}, fmt.Errorf("read build traffic: %w", err)
+	}
+	return u, nil
+}
+
 func (g *Gateway) address(ctx context.Context, networkID, containerID string) (netip.Addr, bool, error) {
 	inspected, err := g.docker.NetworkInspect(ctx, networkID, client.NetworkInspectOptions{})
 	if err != nil {

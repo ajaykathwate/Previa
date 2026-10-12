@@ -51,8 +51,8 @@ type scriptedTargets struct {
 	calls   int
 }
 
-func (s *scriptedTargets) BaseRepository(context.Context, int64) (int64, error) {
-	return sameRepo.BaseRepoID, nil
+func (s *scriptedTargets) AdmissionScope(context.Context, int64) (Target, error) {
+	return sameRepo, nil
 }
 
 func (s *scriptedTargets) Current(context.Context, environments.Request) (Target, error) {

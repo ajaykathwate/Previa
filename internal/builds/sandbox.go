@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -34,7 +35,11 @@ type sandbox struct {
 	attached    bool
 	containerID string
 	proxyURL    string
-	cached      bool
+	// proxyAddr is the egress proxy's address on the network; metered: its
+	// traffic is being counted.
+	proxyAddr netip.Addr
+	metered   bool
+	cached    bool
 }
 
 // openSandbox creates the private network, connects the egress proxy to it and
@@ -56,10 +61,13 @@ func (b *Builder) openSandbox(ctx context.Context, job Job) (s *sandbox, err err
 		return s, fmt.Errorf("create build network: %w", err)
 	}
 	s.networkID = created.ID
-	if s.proxyURL, err = s.egress.Attach(ctx, s.networkID); err != nil {
+	if s.proxyAddr, err = s.egress.Join(ctx, s.networkID); err != nil {
 		return s, fmt.Errorf("attach egress proxy: %w", err)
 	}
-	s.attached = true
+	s.attached, s.proxyURL = true, egress.ProxyURL(s.proxyAddr)
+	if err := b.startMetering(ctx, s, job); err != nil {
+		return s, err
+	}
 	if s.containerID, s.cached, err = b.createBuilder(ctx, job, s); err != nil {
 		return s, err
 	}
@@ -280,6 +288,12 @@ func (s *sandbox) close(ctx context.Context) error {
 	if s.containerID != "" {
 		if _, err := s.docker.ContainerRemove(ctx, s.containerID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !cerrdefs.IsNotFound(err) {
 			errs = append(errs, fmt.Errorf("remove builder: %w", err))
+		}
+	}
+	if s.metered {
+		// The build ended early; its counts are not needed.
+		if _, err := s.egress.EndMetering(ctx, s.proxyAddr); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if s.networkID != "" {

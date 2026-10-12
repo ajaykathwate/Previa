@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/appoutput"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/builds"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/housekeeping"
+	"github.com/ajaykathwatee/previa/internal/idle"
 	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
@@ -18,6 +20,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/runtime"
+	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/source"
 	"github.com/google/go-github/v91/github"
 	"github.com/jackc/pgx/v5"
@@ -72,8 +75,10 @@ type pipeline struct {
 	capabilities workers.Capabilities
 	register     []func(*river.Config)
 	startup      []func(context.Context) error
-	unavailable  []string      // why capabilities are off, for the startup log
-	checks       []httpx.Check // readiness of the dependencies it uses
+	// background loops run beside River until the worker stops.
+	background  []func(context.Context)
+	unavailable []string      // why capabilities are off, for the startup log
+	checks      []httpx.Check // readiness of the dependencies it uses
 }
 
 // buildPipeline composes discovery, execution (source → config → image →
@@ -86,7 +91,7 @@ func buildPipeline(ctx context.Context, in pipelineInput) (*pipeline, error) {
 	cfg, log := in.cfg, in.logger
 	// Log retention needs only the database.
 	p.register = append(p.register, func(rc *river.Config) {
-		river.AddWorker(rc.Workers, &buildlogs.PruneWorker{Store: buildlogs.NewStore(in.pool), Logger: log})
+		river.AddWorker(rc.Workers, &buildlogs.PruneWorker{Store: buildlogs.NewStore(in.pool).WithRetention(cfg.BuildLogRetention()), Logger: log})
 		rc.Queues[buildlogs.PruneQueue] = river.QueueConfig{MaxWorkers: 1}
 		rc.PeriodicJobs = append(rc.PeriodicJobs, buildlogs.PeriodicPrune())
 	})
@@ -147,6 +152,11 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		p.unavailable = append(p.unavailable, "BUILDS_PAUSED is set: new builds wait; teardown, cleanup, routing, reports and housekeeping continue")
 	}
 	docker := in.docker
+	visits := &routing.VisitHealth{}
+	sleeper, err := idle.New(in.pool, x.runtime, x.controller, visits, cfg.PreviewIdleSleep, in.logger)
+	if err != nil {
+		return err
+	}
 	p.checks = append(p.checks, httpx.Check{Name: "docker", Run: func(ctx context.Context) error {
 		_, err := docker.Ping(ctx, client.PingOptions{})
 		return err
@@ -164,6 +174,11 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		rc.Queues[environments.TeardownSweepQueue] = river.QueueConfig{MaxWorkers: 1}
 		x.keeper.Register(rc)
 		outbound.Register(rc, x.runtime)
+		river.AddWorker(rc.Workers, &appoutput.FollowWorker{Store: appoutput.NewStore(in.pool), Source: x.runtime, Logger: in.logger})
+		rc.Queues[appoutput.Queue] = river.QueueConfig{MaxWorkers: appoutput.MaxFollowers}
+		sleeper.Register(rc)
+		river.AddWorker(rc.Workers, &routing.SyncWorker{Controller: x.controller})
+		rc.Queues[routing.SyncQueue] = river.QueueConfig{MaxWorkers: 1}
 	})
 	p.startup = append(p.startup,
 		func(ctx context.Context) error {
@@ -174,7 +189,24 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		},
 		// The router's file always reflects the accepted table before work starts.
 		x.controller.Sync,
+		func(ctx context.Context) error {
+			warnCapacity(ctx, docker, cfg, in.logger)
+			return nil
+		},
 	)
+	crashLog := runtime.CrashLogFunc(func(ctx context.Context, environmentID, generation, revision int64, redactor *secrets.Redactor) (runtime.LogSink, error) {
+		return x.logs.OpenFinished(ctx, environmentID, generation, revision, redactor)
+	})
+	p.background = append(p.background, func(ctx context.Context) {
+		x.runtime.WatchCrashes(ctx, runtime.NewTargetStore(in.pool), crashLog)
+	})
+	router, err := routing.NewTraefik(docker, cfg.RouterContainer, cfg.RouterAPIAddress)
+	if err != nil {
+		return err
+	}
+	p.background = append(p.background, func(ctx context.Context) {
+		routing.WatchVisits(ctx, router, cfg.MetricsAddress(), x.repo, visits, in.logger)
+	})
 	return nil
 }
 
@@ -196,6 +228,9 @@ func newHousekeeper(cfg config.WorkerConfig, pool *pgxpool.Pool, log *slog.Logge
 		return nil, err
 	}
 	if keeper.Expiry, err = housekeeping.NewExpiry(pool, repo, log, settings); err != nil {
+		return nil, err
+	}
+	if keeper.Records, err = housekeeping.NewRecords(pool, log, settings); err != nil {
 		return nil, err
 	}
 	if keeper.Prune, err = housekeeping.NewPrune(builder, workspaces, pool, log, settings); err != nil {

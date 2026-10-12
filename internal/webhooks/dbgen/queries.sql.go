@@ -126,13 +126,15 @@ func (q *Queries) RecordDelivery(ctx context.Context, arg RecordDeliveryParams) 
 }
 
 const recordPREvent = `-- name: RecordPREvent :one
-INSERT INTO pull_requests (repo_id, number, head_sha, state, generation,mergeable,mergeable_state,build_status)
-SELECT $1::bigint, $2::integer, $3::text, $4::text, 1,$5::boolean,$6::text,$7::text
+INSERT INTO pull_requests (repo_id, number, head_sha, state, generation,mergeable,mergeable_state,build_status,head_repo_id)
+SELECT $1::bigint, $2::integer, $3::text, $4::text, 1,$5::boolean,$6::text,$7::text,
+    (SELECT github_repo_id FROM repos WHERE id = $1)
 WHERE $4::text='open' OR EXISTS(SELECT 1 FROM pull_requests WHERE repo_id=$1 AND number=$2)
 ON CONFLICT (repo_id, number) DO UPDATE
 SET head_sha = EXCLUDED.head_sha,
     state = EXCLUDED.state,
-    generation = pull_requests.generation + 1,mergeable=EXCLUDED.mergeable,mergeable_state=EXCLUDED.mergeable_state,build_status=EXCLUDED.build_status
+    generation = pull_requests.generation + 1,mergeable=EXCLUDED.mergeable,mergeable_state=EXCLUDED.mergeable_state,build_status=EXCLUDED.build_status,
+    head_repo_id = EXCLUDED.head_repo_id
 RETURNING id, head_sha, state, generation
 `
 
@@ -153,6 +155,7 @@ type RecordPREventRow struct {
 	Generation int64
 }
 
+// A same-repository pull request event: its head is the base repository.
 func (q *Queries) RecordPREvent(ctx context.Context, arg RecordPREventParams) (RecordPREventRow, error) {
 	row := q.db.QueryRow(ctx, recordPREvent,
 		arg.RepoID,

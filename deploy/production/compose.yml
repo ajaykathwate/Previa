@@ -106,6 +106,10 @@ services:
       SOURCE_WORKSPACE_ROOT: /var/lib/previa/sources
       ROUTER_DYNAMIC_DIR: /var/lib/previa/router
       ROUTER_CONTAINER: previa-router
+      # Preview request counts ("Last opened"), read inside the router.
+      ROUTER_METRICS_ADDRESS: 172.31.250.10:8082
+      # Private previews: the router asks the server before each request.
+      PREVIEW_ACCESS_URL: http://172.31.250.20:8080/previews/auth
       EGRESS_IMAGE: ${PREVIA_EGRESS_IMAGE:-previa-egress}:${PREVIA_VERSION}
       # The kill switch; restore.sh starts the worker paused.
       BUILDS_PAUSED: ${BUILDS_PAUSED:-false}

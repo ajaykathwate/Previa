@@ -2,6 +2,7 @@ package builds
 
 import (
 	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/button"
 	"github.com/ajaykathwatee/previa/web/layouts"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	"strconv"
@@ -105,6 +106,12 @@ templ Logs(username, csrf string, p LogPage) {
 								Download
 							</a>
 						}
+						if p.CanDelete {
+							<button type="button" class="log-tool log-tool-danger" data-open-dialog="delete-logs" commandfor="delete-logs" command="show-modal" aria-haspopup="dialog">
+								@components.TrashIcon()
+								Delete logs
+							</button>
+						}
 						if p.EventsURL != "" {
 							<label class="log-follow" hidden data-log-follow-control>
 								<input type="checkbox" checked data-log-follow/>
@@ -118,6 +125,11 @@ templ Logs(username, csrf string, p LogPage) {
 					for _, line := range p.Lines {
 						<li id={ line.Anchor() } class={ "log-line", templ.KV("log-system", line.System), templ.KV("log-error", line.IsError()) }>
 							<a class="log-number" href={ templ.SafeURL("#" + line.Anchor()) } tabindex="-1">{ line.Number() }</a>
+							if line.Time() != "" {
+								<time class="log-time" datetime={ line.ISOTime() } title={ line.ISOTime() } data-log-time>{ line.Time() }</time>
+							} else {
+								<span class="log-time"></span>
+							}
 							<span class="log-text">{ line.Text }</span>
 						</li>
 					}
@@ -131,6 +143,20 @@ templ Logs(username, csrf string, p LogPage) {
 					</footer>
 				}
 			</section>
+			if p.CanDelete {
+				@components.ConfirmationDialog("delete-logs", "Delete these build logs?", "This attempt's output is removed from Previa now and can't be recovered. Database backups keep it until they expire, at most 30 days. Building again records new logs.") {
+					<form method="post" action={ templ.SafeURL(p.DeleteURL()) } class="dialog-actions">
+						<input type="hidden" name="csrf_token" value={ csrf }/>
+						<input type="hidden" name="epoch" value={ strconv.FormatInt(p.Epoch, 10) }/>
+						@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "delete-logs", "command": "close", "data-close-dialog": true}}) {
+							Cancel
+						}
+						@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantDestructive}) {
+							Delete logs
+						}
+					</form>
+				}
+			}
 		</div>
 	}
 }

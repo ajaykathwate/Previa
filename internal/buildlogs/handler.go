@@ -25,6 +25,7 @@ type Reader interface {
 	Stream(ctx context.Context, environmentID int64) (Stream, error)
 	LinesFrom(ctx context.Context, environmentID, epoch, from int64, limit int) ([]Line, error)
 	LinesBefore(ctx context.Context, environmentID, epoch, before int64, limit int) ([]Line, error)
+	Delete(ctx context.Context, environmentID, epoch int64) error
 }
 
 type UserSession interface {
@@ -63,11 +64,20 @@ type Handler struct {
 	limiter      *realtime.Limiter
 	opts         realtime.StreamOptions
 	frameTimeout time.Duration
+	retention    time.Duration
 	logger       *slog.Logger
 }
 
 func NewHandler(logs Reader, users UserSession, logger *slog.Logger) *Handler {
-	return &Handler{logs: logs, users: users, logger: logger, limiter: realtime.NewLimiter(MaxStreams, MaxStreamsPerUser), opts: realtime.DefaultStreamOptions, frameTimeout: frameTimeout}
+	return &Handler{logs: logs, users: users, logger: logger, limiter: realtime.NewLimiter(MaxStreams, MaxStreamsPerUser), opts: realtime.DefaultStreamOptions, frameTimeout: frameTimeout, retention: DefaultRetention}
+}
+
+// WithRetention states how long finished logs are kept (BUILD_LOG_RETENTION_DAYS).
+func (h *Handler) WithRetention(d time.Duration) *Handler {
+	if d > 0 {
+		h.retention = d
+	}
+	return h
 }
 
 // WithLiveUpdates enables streaming. Without it the page still works through
@@ -83,6 +93,7 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 		r.Get("/repositories/{repoID}/pull-requests/{number}/logs", h.page)
 		r.Get("/repositories/{repoID}/pull-requests/{number}/logs/events", h.events)
 		r.Get("/repositories/{repoID}/pull-requests/{number}/logs/download", h.download)
+		r.Post("/repositories/{repoID}/pull-requests/{number}/logs/delete", h.delete)
 	})
 }
 
@@ -125,11 +136,12 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 		h.unavailable(w, r, err)
 		return
 	}
-	st := describe(target, stream, hasStream)
+	st := describe(target, stream, hasStream, h.retention)
 	view := buildpages.LogPage{
 		RepoID: target.RepoID, Repository: target.Repository, Number: target.Number, Title: target.Title,
 		StatusLabel: st.Label, StatusTone: st.Tone, Summary: st.Summary, StreamSHA: st.SHA, Notices: st.Notices,
-		Empty: st.Empty, Epoch: st.Epoch, HasOutput: hasStream && stream.Lines > 0,
+		Empty: st.Empty, Epoch: st.Epoch, HasOutput: hasStream && stream.Lines > 0 && stream.PrunedAt.IsZero(),
+		CanDelete: deletable(target, stream, hasStream),
 	}
 	view.Tail = !hasStream
 	if hasStream {
@@ -160,7 +172,7 @@ func (h *Handler) fillLines(r *http.Request, view *buildpages.LogPage, stream St
 	}
 	view.Tail, view.More = tail, more
 	for _, l := range lines {
-		view.Lines = append(view.Lines, buildpages.LogLine{Sequence: l.Sequence, System: l.System, Text: l.Text})
+		view.Lines = append(view.Lines, buildpages.LogLine{Sequence: l.Sequence, System: l.System, Text: l.Text, At: l.At})
 	}
 	switch {
 	case len(lines) > 0:
@@ -210,6 +222,10 @@ func (h *Handler) download(w http.ResponseWriter, r *http.Request) {
 		}
 		var b strings.Builder
 		for _, l := range lines {
+			if !l.At.IsZero() {
+				b.WriteString(l.At.UTC().Format(downloadTime))
+				b.WriteByte(' ')
+			}
 			b.WriteString(l.Text)
 			b.WriteByte('\n')
 		}
@@ -220,8 +236,47 @@ func (h *Handler) download(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// downloadBatch lines are read per query; downloadName keeps a file name safe.
-const downloadBatch = 1000
+// delete removes a finished attempt's logs for the PR's owner, then returns
+// to the log page, which says they were deleted. The form names the attempt
+// (epoch) the owner saw, so a newer attempt's logs are never deleted.
+func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
+	user, repoID, number, ok := h.identity(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	epoch, err := strconv.ParseInt(r.PostFormValue("epoch"), 10, 64)
+	if err != nil || epoch <= 0 {
+		http.Error(w, "Invalid build attempt.", http.StatusBadRequest)
+		return
+	}
+	target, err := h.logs.Target(r.Context(), user, repoID, number)
+	if err != nil {
+		h.unavailable(w, r, err)
+		return
+	}
+	if target.EnvironmentID <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	switch err := h.logs.Delete(r.Context(), target.EnvironmentID, epoch); {
+	case errors.Is(err, ErrNotDeletable):
+		http.Error(w, "These logs can't be deleted now: the build is still running, a newer attempt replaced them, or they are already gone. Reload the page.", http.StatusConflict)
+		return
+	case err != nil:
+		h.unavailable(w, r, err)
+		return
+	}
+	h.logger.InfoContext(r.Context(), "build logs deleted by owner", "pr_id", target.PullRequestID, "epoch", epoch)
+	http.Redirect(w, r, pages.LogsURL(target.RepoID, target.Number), http.StatusSeeOther)
+}
+
+// downloadBatch lines are read per query; downloadName keeps a file name
+// safe; downloadTime prefixes each line with when it was received (UTC).
+const (
+	downloadBatch = 1000
+	downloadTime  = "2006-01-02T15:04:05.000Z"
+)
 
 var downloadName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
@@ -426,7 +481,7 @@ func (h *Handler) sync(ctx context.Context, sse *realtime.SSE, s *liveState, rec
 			Lines []liveLine `json:"lines"`
 		}{Epoch: stream.Epoch, Lines: make([]liveLine, len(lines))}
 		for i, l := range lines {
-			frame.Lines[i] = liveLine(l)
+			frame.Lines[i] = newLiveLine(l)
 		}
 		s.cursor.next = lines[len(lines)-1].Sequence + 1
 		if err := send(sse, "lines", s.cursor.String(), frame); err != nil {
@@ -436,7 +491,7 @@ func (h *Handler) sync(ctx context.Context, sse *realtime.SSE, s *liveState, rec
 			break
 		}
 	}
-	st := describe(s.target, stream, hasStream)
+	st := describe(s.target, stream, hasStream, h.retention)
 	encoded, err := json.Marshal(st)
 	if err != nil {
 		return fmt.Errorf("encode log status: %w", err)
@@ -452,6 +507,15 @@ type liveLine struct {
 	Sequence int64  `json:"n"`
 	System   bool   `json:"system,omitempty"`
 	Text     string `json:"text"`
+	At       string `json:"at,omitempty"` // RFC 3339, UTC
+}
+
+func newLiveLine(l Line) liveLine {
+	ll := liveLine{Sequence: l.Sequence, System: l.System, Text: l.Text}
+	if !l.At.IsZero() {
+		ll.At = l.At.UTC().Format(time.RFC3339Nano)
+	}
+	return ll
 }
 
 func send(sse *realtime.SSE, event, id string, payload any) error {

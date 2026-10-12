@@ -1,0 +1,27 @@
+package previewaccess
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/button"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+// Denied tells a signed-in visitor that a private preview is not theirs to
+// open, without saying anything about the repository.
+templ Denied(username string) {
+	@layouts.Base("No access to this preview") {
+		<section class="standalone-card panel" aria-labelledby="preview-denied-title">
+			<span class="standalone-icon" aria-hidden="true">
+				@components.AlertIcon()
+			</span>
+			<span class="eyebrow">Private preview</span>
+			<h1 id="preview-denied-title">You can't open this preview</h1>
+			<p class="standalone-copy">Its owner made it private: only people who can see its repository on GitHub may open it. You are signed in as { username }. If you should have access, ask the repository's owner to add you on GitHub, then open the preview again.</p>
+			<div class="standalone-actions">
+				@button.Button(button.Props{Href: "/"}) {
+					Go to Previa
+				}
+			</div>
+		</section>
+	}
+}

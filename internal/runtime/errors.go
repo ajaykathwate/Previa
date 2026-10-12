@@ -79,6 +79,10 @@ func AsOperationFailure(err error) error {
 // show for a failed attempt; the message stays in the build log.
 func (e *Error) FailureCode() string { return e.Code }
 
+// SafeMessage is the failure in words safe to show anyone, such as a
+// sleeping preview's visitors.
+func (e *Error) SafeMessage() string { return e.Message }
+
 // Permanent reports whether retrying the same request cannot help (an invalid
 // configuration, a failing Dockerfile, an app that never becomes ready).
 func (e *Error) Permanent() bool { return !e.Retryable }

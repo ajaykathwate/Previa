@@ -526,6 +526,8 @@
 .log-empty { color: var(--term-muted, #8b949e); }
 .log-lines { background: var(--term-bg, #0d1117); color: var(--term-ink, #e6edf3); font-size: 12.5px; }
 .log-number { color: #4b5562; }
+.log-time { color: #6e7681; }
+.log-tool-danger:hover { border-color: rgb(248 81 73 / .6); background: rgb(248 81 73 / .12); color: #ff8a80; }
 .log-number:hover { color: #8b949e; }
 .log-line:hover { background: rgb(255 255 255 / .03); }
 .log-line:target { background: rgb(159 224 43 / .14); }

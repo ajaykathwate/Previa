@@ -2,14 +2,16 @@
 -- Everything the runtime rechecks immediately before work that needs access or
 -- secrets: lifecycle, freshness, the authorized intent and repository access.
 SELECT p.id AS pull_request_id, p.repo_id, p.number, p.head_sha, p.state, p.generation, p.is_fork, p.head_repo_id,
-       r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status,
+       r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status, i.owner_user_id,
        b.generation AS intent_generation, b.revision AS intent_revision, b.head_sha AS intent_head_sha, b.state AS intent_state
 FROM pull_requests p JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = p.id
 WHERE p.id = $1;
 
--- name: BaseRepository :one
-SELECT r.github_repo_id FROM pull_requests p JOIN repos r ON r.id = p.repo_id WHERE p.id = $1;
+-- name: AdmissionScope :one
+-- The PR's base repository and account, for the advisory capacity check.
+SELECT r.github_repo_id, i.owner_user_id FROM pull_requests p JOIN repos r ON r.id = p.repo_id
+JOIN installations i ON i.id = r.installation_id WHERE p.id = $1;
 
 -- name: RecordComponents :exec
 -- What a ready candidate runs next to its app. Rows of earlier requests that
@@ -45,3 +47,16 @@ LEFT JOIN build_intents b ON b.pull_request_id = p.id
 WHERE p.state = 'open' AND r.accessible AND i.status = 'active'
   AND (e.container_id IS NOT NULL OR e.pending_container_id IS NOT NULL OR b.state = 'running')
 ORDER BY p.id;
+
+-- name: RecordPreviewCrash :one
+-- A container of the live preview the environment serves stopped. Nothing is
+-- recorded for an older candidate, a preview being torn down or a crash
+-- another worker already recorded.
+INSERT INTO preview_crashes (container_id, event_nanos, environment_id, exit_code)
+SELECT sqlc.arg(container_id)::text, sqlc.arg(event_nanos)::bigint, e.id, sqlc.arg(exit_code)::integer
+FROM environments e JOIN pull_requests p ON p.id = e.pull_request_id
+WHERE e.id = sqlc.arg(environment_id) AND e.status = 'running' AND e.asleep_at IS NULL
+  AND e.applied_generation = sqlc.arg(generation) AND e.applied_revision = sqlc.arg(revision)
+  AND p.state = 'open' AND p.teardown_requested_generation <> p.generation
+ON CONFLICT DO NOTHING
+RETURNING environment_id;

@@ -11,12 +11,17 @@ WHERE pull_request_id = $1 AND revision = $2 AND state = 'pending';
 
 -- name: ClaimBuildIntent :execrows
 -- Admission ends a wait for a build slot; a running request that waits for
--- preview capacity or disk keeps its note until a result is applied.
+-- preview capacity or disk keeps its note until a result is applied. An
+-- automatic request never starts for a fork's code (see LockIntentPR).
 UPDATE build_intents b SET state = 'running', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp(),
     waiting_revision = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_revision END,
-    waiting_reason = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_reason END
-FROM pull_requests pr
+    waiting_reason = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_reason END,
+    waiting_since = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_since END,
+    waiting_checked_at = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_checked_at END
+FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
 WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
+    AND (b.source = 'manual' OR b.state = 'running'
+         OR NOT (pr.is_fork OR pr.head_repo_id IS NULL OR pr.head_repo_id IS DISTINCT FROM r.github_repo_id))
     AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation) AND pr.head_sha = sqlc.arg(head_sha)
     AND b.generation = pr.generation AND b.head_sha = pr.head_sha AND b.revision = sqlc.arg(revision)
     AND b.state IN ('pending','queued','running') AND b.available_at <= sqlc.arg(now_at)
@@ -33,7 +38,7 @@ FROM environments e WHERE e.pull_request_id = sqlc.arg(pr_id)
 ON CONFLICT (environment_id) DO UPDATE SET epoch = build_log_streams.epoch + 1,
     generation = EXCLUDED.generation, revision = EXCLUDED.revision, head_sha = EXCLUDED.head_sha,
     state = 'open', next_sequence = 0, stored_bytes = 0, truncated = false, omitted_lines = 0,
-    lost_lines = 0, opened_at = clock_timestamp(), finished_at = NULL, pruned_at = NULL,
+    lost_lines = 0, opened_at = clock_timestamp(), finished_at = NULL, pruned_at = NULL, deleted_at = NULL,
     updated_at = clock_timestamp()
 RETURNING environment_id, epoch;
 
@@ -43,7 +48,7 @@ WHERE l.environment_id = e.id AND e.pull_request_id = $1;
 
 -- name: FinishBuildIntent :execrows
 UPDATE build_intents b SET state = sqlc.arg(next_state), completed_at = clock_timestamp(), updated_at = clock_timestamp(),
-    waiting_revision = NULL, waiting_reason = NULL
+    waiting_revision = NULL, waiting_reason = NULL, waiting_since = NULL, waiting_checked_at = NULL
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
     AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation)
@@ -74,12 +79,79 @@ SELECT count(*) FROM build_intents WHERE state = 'running' AND pull_request_id <
 
 -- name: MarkIntentWaiting :execrows
 -- Notes that the current request waits for capacity or disk space. Reports
--- follow only when the note changes.
-UPDATE build_intents SET waiting_revision = sqlc.arg(revision)::bigint, waiting_reason = sqlc.arg(reason)::text, updated_at = clock_timestamp()
+-- follow only when the note changes. waiting_since keeps the start of the
+-- wait while the same revision keeps waiting, whatever the reason.
+UPDATE build_intents SET waiting_revision = sqlc.arg(revision)::bigint, waiting_reason = sqlc.arg(reason)::text, updated_at = clock_timestamp(),
+    waiting_since = CASE WHEN waiting_revision = sqlc.arg(revision)::bigint AND waiting_since IS NOT NULL THEN waiting_since ELSE clock_timestamp() END,
+    waiting_checked_at = clock_timestamp()
 WHERE pull_request_id = sqlc.arg(pr_id) AND generation = sqlc.arg(generation)::bigint AND revision = sqlc.arg(revision)::bigint
   AND state IN ('pending', 'queued', 'running')
   AND (waiting_revision IS DISTINCT FROM sqlc.arg(revision)::bigint OR waiting_reason IS DISTINCT FROM sqlc.arg(reason)::text);
 
 -- name: ClearIntentWaiting :execrows
-UPDATE build_intents SET waiting_revision = NULL, waiting_reason = NULL, updated_at = clock_timestamp()
+UPDATE build_intents SET waiting_revision = NULL, waiting_reason = NULL, waiting_since = NULL, waiting_checked_at = NULL, updated_at = clock_timestamp()
 WHERE pull_request_id = $1 AND revision = $2 AND waiting_revision IS NOT NULL;
+
+-- name: TouchIntentWaiting :exec
+-- A waiting request looked again: it still holds its turn.
+UPDATE build_intents SET waiting_checked_at = clock_timestamp()
+WHERE pull_request_id = sqlc.arg(pr_id) AND waiting_revision = sqlc.arg(revision)::bigint;
+
+-- name: ReadIntentWait :one
+SELECT state, waiting_since FROM build_intents WHERE pull_request_id = $1;
+
+-- name: CountAccountRunningBuilds :one
+-- Running builds of other PRs of one account (installation owner).
+SELECT count(*) FROM build_intents b
+JOIN pull_requests p ON p.id = b.pull_request_id
+JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+WHERE b.state = 'running' AND b.pull_request_id <> sqlc.arg(pr_id) AND i.owner_user_id = sqlc.arg(owner_user_id)::bigint;
+
+-- name: AccountBuildSeconds :one
+SELECT coalesce((SELECT build_seconds FROM account_build_usage WHERE user_id = sqlc.arg(user_id) AND day = sqlc.arg(day)), 0)::bigint;
+
+-- name: OlderWaiterFromIdleAccount :one
+-- Whether another account with nothing building has waited longer for a
+-- build slot: then the last free slot is its turn. Only waits that looked
+-- again since live_after count, so an abandoned wait never holds a turn.
+SELECT EXISTS (
+    SELECT 1 FROM build_intents b
+    JOIN pull_requests p ON p.id = b.pull_request_id
+    JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+    WHERE b.state IN ('pending', 'queued') AND b.waiting_reason = 'capacity' AND b.waiting_revision = b.revision
+      AND b.waiting_since < sqlc.arg(since) AND b.waiting_checked_at > sqlc.arg(live_after)
+      AND i.owner_user_id IS DISTINCT FROM sqlc.arg(owner_user_id)::bigint
+      AND NOT EXISTS (
+          SELECT 1 FROM build_intents rb
+          JOIN pull_requests rp ON rp.id = rb.pull_request_id
+          JOIN repos rr ON rr.id = rp.repo_id JOIN installations ri ON ri.id = rr.installation_id
+          WHERE rb.state = 'running' AND ri.owner_user_id = i.owner_user_id)
+)::boolean;
+
+-- name: NextWaitingBuild :one
+-- The waiting request whose turn is next when a slot frees: accounts with
+-- nothing building first, then the longest wait.
+SELECT b.pull_request_id FROM build_intents b
+JOIN pull_requests p ON p.id = b.pull_request_id
+JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+WHERE b.state IN ('pending', 'queued') AND b.waiting_reason IN ('capacity', 'account') AND b.waiting_revision = b.revision
+  AND b.waiting_checked_at > sqlc.arg(live_after)
+ORDER BY EXISTS (
+    SELECT 1 FROM build_intents rb
+    JOIN pull_requests rp ON rp.id = rb.pull_request_id
+    JOIN repos rr ON rr.id = rp.repo_id JOIN installations ri ON ri.id = rr.installation_id
+    WHERE rb.state = 'running' AND ri.owner_user_id = i.owner_user_id), b.waiting_since, b.pull_request_id
+LIMIT 1;
+
+-- name: RecordFinishedBuildTime :exec
+-- Adds a finished build's time to its account's day (UTC).
+INSERT INTO account_build_usage (user_id, day, build_seconds, builds)
+SELECT i.owner_user_id, (b.completed_at AT TIME ZONE 'UTC')::date,
+       GREATEST(0, floor(extract(epoch FROM b.completed_at - b.started_at)))::bigint, 1
+FROM build_intents b
+JOIN pull_requests p ON p.id = b.pull_request_id
+JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+WHERE b.pull_request_id = sqlc.arg(pr_id) AND b.revision = sqlc.arg(revision)
+  AND b.completed_at IS NOT NULL AND b.started_at IS NOT NULL AND i.owner_user_id IS NOT NULL
+ON CONFLICT (user_id, day) DO UPDATE SET build_seconds = account_build_usage.build_seconds + EXCLUDED.build_seconds,
+    builds = account_build_usage.builds + 1;

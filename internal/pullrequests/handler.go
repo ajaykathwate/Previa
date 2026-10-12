@@ -379,6 +379,7 @@ func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool, since tim
 	if live {
 		out.OlderPreview = row.DeployedSha != row.HeadSha
 		out.PreviewURL = h.previewURL(row.Hostname)
+		out.LastOpenedAt, out.AsleepAt = timestamp(row.LastVisitedAt), timestamp(row.AsleepAt)
 		if row.ExpiresAt.Valid {
 			out.ExpiresAt = row.ExpiresAt.Time.UTC().Format(time.RFC3339)
 		}

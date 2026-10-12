@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func TestLoadWorkerWithoutServerOrFutureSettings(t *testing.T) {
 	// APP_BASE_URL matters to the worker only once PREVIEW_BASE_DOMAIN configures routing.
 	unrelated := []string{"APP_BASE_URL", "HTTP_ADDR", "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "SESSION_SECRET", "GITHUB_WEBHOOK_SECRET", "SECRETS_ENCRYPTION_KEY", "DNS_PROVIDER_API_TOKEN"}
 	unsetEnvironment(t, unrelated...)
-	unsetEnvironment(t, "BUILD_TIMEOUT", "ENV_TTL_HOURS", "HOUSEKEEPING_DRY_RUN", "HOUSEKEEPING_GRACE", "BUILD_CACHE_BUDGET")
+	unsetEnvironment(t, "BUILD_TIMEOUT", "ENV_TTL_HOURS", "HOUSEKEEPING_DRY_RUN", "HOUSEKEEPING_GRACE", "BUILD_CACHE_BUDGET", "BUILD_LOG_RETENTION_DAYS")
 	cfg, err := LoadWorker()
 	if err != nil {
 		t.Fatal(err)
@@ -70,6 +71,9 @@ func TestLoadWorkerWithoutServerOrFutureSettings(t *testing.T) {
 	}
 	if cfg.PreviewLifetime() != 48*time.Hour || cfg.HousekeepingDryRun || cfg.HousekeepingGrace != 15*time.Minute || cfg.BuildCacheBudget != 40<<30 {
 		t.Fatalf("housekeeping defaults: %+v", cfg.HousekeepingConfig)
+	}
+	if cfg.BuildLogRetention() != 14*24*time.Hour {
+		t.Fatalf("build log retention default: %v", cfg.BuildLogRetention())
 	}
 	for _, key := range unrelated {
 		t.Setenv(key, "invalid")
@@ -136,6 +140,10 @@ func TestLoadWorkerRejectsInvalidEnvironment(t *testing.T) {
 		{"ENV_TTL_HOURS", "1.5"},
 		{"HOUSEKEEPING_GRACE", "10s"},
 		{"BUILD_CACHE_BUDGET", "100MiB"},
+		{"BUILD_EGRESS", "closed"},
+		{"BUILD_LOG_RETENTION_DAYS", "0"},
+		{"BUILD_LOG_RETENTION_DAYS", "91"},
+		{"BUILD_EGRESS_HOSTS", "registry.example.com"}, // only with BUILD_EGRESS=registries
 	} {
 		t.Run(tt.key+"/"+tt.value, func(t *testing.T) {
 			validEnvironment(t)
@@ -144,7 +152,7 @@ func TestLoadWorkerRejectsInvalidEnvironment(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.key) {
 				t.Fatalf("expected %s error, got %v", tt.key, err)
 			}
-			if cfg != (WorkerConfig{}) {
+			if !reflect.DeepEqual(cfg, WorkerConfig{}) {
 				t.Fatal("failed load returned partial configuration")
 			}
 		})
@@ -270,7 +278,8 @@ func TestSecretsKeyringConfigurationByProcess(t *testing.T) {
 func TestExecutionSettingsDefaultsAndOverrides(t *testing.T) {
 	validEnvironment(t)
 	executionKeys := []string{"EGRESS_IMAGE", "BUILDKIT_IMAGE", "BUILD_CPUS", "BUILD_MEMORY", "BUILD_PIDS", "BUILD_DISK_BUDGET", "BUILD_MAX_IMAGE_SIZE", "BUILD_MIN_FREE_DISK",
-		"PREVIEW_ALLOW_ROOT", "PREVIEW_WRITABLE_ROOTFS", "PREVIEW_TMPFS_SIZE", "PREVIEW_PIDS", "PREVIEW_STARTUP_TIMEOUT", "PREVIEW_MEMORY_BUDGET", "PREVIEW_CPU_BUDGET", "PREVIEW_MAX_PER_REPOSITORY", "PREVIEW_OCI_RUNTIME"}
+		"PREVIEW_ALLOW_ROOT", "PREVIEW_WRITABLE_ROOTFS", "PREVIEW_TMPFS_SIZE", "PREVIEW_PIDS", "PREVIEW_STARTUP_TIMEOUT", "PREVIEW_MEMORY_BUDGET", "PREVIEW_CPU_BUDGET", "PREVIEW_MAX_PER_REPOSITORY", "PREVIEW_OCI_RUNTIME",
+		"BUILD_EGRESS", "BUILD_EGRESS_HOSTS"}
 	unsetEnvironment(t, executionKeys...)
 	cfg, err := LoadWorker()
 	if err != nil {
@@ -278,7 +287,8 @@ func TestExecutionSettingsDefaultsAndOverrides(t *testing.T) {
 	}
 	b, p := cfg.BuilderConfig, cfg.PreviewConfig
 	if cfg.EgressImage != "previa-egress:dev" || b.BuildKitImage != DefaultBuildKitImage || b.BuildCPUs != 2 ||
-		b.BuildMemory != 4<<30 || b.BuildPIDs != 2048 || b.BuildDiskBudget != 20<<30 || b.BuildMaxImageSize != 4<<30 || b.BuildMinFreeDisk != 15<<30 {
+		b.BuildMemory != 4<<30 || b.BuildPIDs != 2048 || b.BuildDiskBudget != 20<<30 || b.BuildMaxImageSize != 4<<30 || b.BuildMinFreeDisk != 15<<30 ||
+		b.BuildEgress != BuildEgressOpen || len(b.BuildEgressHosts) != 0 {
 		t.Fatalf("builder defaults: %+v", b)
 	}
 	if p.PreviewAllowRoot || p.PreviewWritableRootfs || p.PreviewTmpfsSize != 256<<20 || p.PreviewPIDs != 512 || p.PreviewStartupTimeout != 2*time.Minute ||
@@ -294,6 +304,16 @@ func TestExecutionSettingsDefaultsAndOverrides(t *testing.T) {
 	e, err := LoadExecution()
 	if err != nil || e.BuildMemory != 512<<20 || e.BuildCPUs != 0.5 || e.BuildMaxImageSize != 1<<30 || !e.PreviewAllowRoot || e.PreviewMemoryBudget != 6<<30 || e.PreviewOCIRuntime != "runsc" {
 		t.Fatalf("overrides: %+v %v", e, err)
+	}
+	t.Setenv("BUILD_EGRESS", "registries")
+	t.Setenv("BUILD_EGRESS_HOSTS", "Npm.Example.com, .mirror.example.com")
+	if e, err := LoadExecution(); err != nil || e.BuildEgress != BuildEgressRegistries ||
+		strings.Join(e.BuildEgressHosts, " ") != "npm.example.com .mirror.example.com" {
+		t.Fatalf("registries only: %q %q %v", e.BuildEgress, e.BuildEgressHosts, err)
+	}
+	t.Setenv("BUILD_EGRESS_HOSTS", "*.example.com")
+	if _, err := LoadExecution(); err == nil || !strings.Contains(err.Error(), "BUILD_EGRESS_HOSTS") {
+		t.Fatalf("a wildcard host must be refused: %v", err)
 	}
 	if got := ByteSize(512 << 20).String(); got != "512MiB" {
 		t.Fatalf("String: %q", got)

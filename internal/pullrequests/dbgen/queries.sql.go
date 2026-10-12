@@ -18,7 +18,7 @@ SELECT p.repo_id,p.number,p.head_sha,p.title,r.full_name,r.accessible,i.status A
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
  coalesce(b.revision, 0)::bigint AS request_revision,
  (d.pull_request_id IS NOT NULL)::boolean AS failure_dismissed,
- e.last_active_at AS published_at,
+ e.last_active_at AS published_at, e.last_visited_at, e.asleep_at,
  coalesce(e.status,'Not deployed') AS environment_status,coalesce(e.head_sha,'') AS deployed_sha,
  coalesce(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END,'')::text AS waiting_reason,
  coalesce(e.subdomain,'')::text AS hostname, e.expires_at, coalesce(e.last_error_code,'')::text AS failure_code,
@@ -65,6 +65,8 @@ type ActivityRow struct {
 	RequestRevision    int64
 	FailureDismissed   bool
 	PublishedAt        pgtype.Timestamptz
+	LastVisitedAt      pgtype.Timestamptz
+	AsleepAt           pgtype.Timestamptz
 	EnvironmentStatus  string
 	DeployedSha        string
 	WaitingReason      string
@@ -114,6 +116,8 @@ func (q *Queries) Activity(ctx context.Context, arg ActivityParams) ([]ActivityR
 			&i.RequestRevision,
 			&i.FailureDismissed,
 			&i.PublishedAt,
+			&i.LastVisitedAt,
+			&i.AsleepAt,
 			&i.EnvironmentStatus,
 			&i.DeployedSha,
 			&i.WaitingReason,
@@ -706,6 +710,7 @@ SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.cr
  coalesce(e.status,'Not deployed') AS environment_status,
  coalesce(e.head_sha,'') AS deployed_sha, coalesce(e.subdomain,'')::text AS hostname,
  e.expires_at, e.last_active_at AS published_at, coalesce(e.last_error_code,'')::text AS failure_code,
+ e.last_visited_at, coalesce(e.visits,0)::bigint AS visits, e.asleep_at,
  coalesce(e.applied_generation = b.generation AND e.applied_revision = b.revision, false)::boolean AS failure_current,
  (p.teardown_requested_generation = p.generation)::boolean AS teardown_requested,
  pc.services AS backend_services, coalesce(pc.setup, false)::boolean AS backend_setup, pc.processes AS backend_processes,
@@ -768,6 +773,9 @@ type OwnedPRRow struct {
 	ExpiresAt                   pgtype.Timestamptz
 	PublishedAt                 pgtype.Timestamptz
 	FailureCode                 string
+	LastVisitedAt               pgtype.Timestamptz
+	Visits                      int64
+	AsleepAt                    pgtype.Timestamptz
 	FailureCurrent              bool
 	TeardownRequested           bool
 	BackendServices             []byte
@@ -826,6 +834,9 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 		&i.ExpiresAt,
 		&i.PublishedAt,
 		&i.FailureCode,
+		&i.LastVisitedAt,
+		&i.Visits,
+		&i.AsleepAt,
 		&i.FailureCurrent,
 		&i.TeardownRequested,
 		&i.BackendServices,
@@ -839,7 +850,7 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 }
 
 const ownedRepository = `-- name: OwnedRepository :one
-SELECT r.id,r.full_name,r.accessible,r.build_mode,i.status,i.github_installation_id
+SELECT r.id,r.full_name,r.accessible,r.build_mode,r.private_previews,i.status,i.github_installation_id
 FROM repos r JOIN installations i ON i.id=r.installation_id
 WHERE r.id=$1 AND i.owner_user_id=$2
 `
@@ -854,6 +865,7 @@ type OwnedRepositoryRow struct {
 	FullName             string
 	Accessible           bool
 	BuildMode            string
+	PrivatePreviews      bool
 	Status               string
 	GithubInstallationID int64
 }
@@ -866,6 +878,7 @@ func (q *Queries) OwnedRepository(ctx context.Context, arg OwnedRepositoryParams
 		&i.FullName,
 		&i.Accessible,
 		&i.BuildMode,
+		&i.PrivatePreviews,
 		&i.Status,
 		&i.GithubInstallationID,
 	)

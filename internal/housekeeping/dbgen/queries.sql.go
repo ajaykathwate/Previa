@@ -50,6 +50,148 @@ func (q *Queries) CountWaitingForDisk(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const deleteOldDeliveries = `-- name: DeleteOldDeliveries :execrows
+DELETE FROM webhook_deliveries d WHERE d.delivery_id IN (
+    SELECT w.delivery_id FROM webhook_deliveries w WHERE w.received_at < $1 LIMIT $2)
+`
+
+type DeleteOldDeliveriesParams struct {
+	Cutoff    pgtype.Timestamptz
+	BatchSize int32
+}
+
+// Webhook delivery records only catch duplicates, which GitHub sends within
+// hours.
+func (q *Queries) DeleteOldDeliveries(ctx context.Context, arg DeleteOldDeliveriesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldDeliveries, arg.Cutoff, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteOldOperations = `-- name: DeleteOldOperations :execrows
+DELETE FROM environment_operations d WHERE d.id IN (
+    SELECT o.id FROM environment_operations o JOIN pull_requests pr ON pr.id = o.pull_request_id
+    WHERE o.state IN ('succeeded', 'superseded', 'failed')
+      AND coalesce(o.completed_at, o.updated_at) < $1
+      AND NOT (o.state = 'failed' AND o.kind IN ('remove_route', 'cleanup_artifact'))
+      AND (o.kind NOT IN ('activate_route', 'remove_route') OR o.generation < pr.generation
+           OR (pr.state <> 'open' AND pr.teardown_completed_generation >= pr.generation))
+    LIMIT $2)
+`
+
+type DeleteOldOperationsParams struct {
+	Cutoff    pgtype.Timestamptz
+	BatchSize int32
+}
+
+// Finished operations. A route operation of a PR's current generation may
+// protect what its preview serves (ListProtectingOperationPayloads), so it
+// stays while the PR's preview can be live; a failed cleanup stays as the
+// sign of something left behind, until its PR's records go.
+func (q *Queries) DeleteOldOperations(ctx context.Context, arg DeleteOldOperationsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldOperations, arg.Cutoff, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteOldUsage = `-- name: DeleteOldUsage :execrows
+DELETE FROM account_build_usage WHERE day < $1::date
+`
+
+func (q *Queries) DeleteOldUsage(ctx context.Context, before pgtype.Date) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldUsage, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteRetiredBuildLogs = `-- name: DeleteRetiredBuildLogs :exec
+DELETE FROM build_logs l USING environments e WHERE l.environment_id = e.id AND e.pull_request_id = $1
+`
+
+func (q *Queries) DeleteRetiredBuildLogs(ctx context.Context, pullRequestID int64) error {
+	_, err := q.db.Exec(ctx, deleteRetiredBuildLogs, pullRequestID)
+	return err
+}
+
+const deleteRetiredEnvironments = `-- name: DeleteRetiredEnvironments :exec
+DELETE FROM environments WHERE pull_request_id = $1
+`
+
+// Log streams go with their environment.
+func (q *Queries) DeleteRetiredEnvironments(ctx context.Context, pullRequestID int64) error {
+	_, err := q.db.Exec(ctx, deleteRetiredEnvironments, pullRequestID)
+	return err
+}
+
+const deleteRetiredOperations = `-- name: DeleteRetiredOperations :exec
+DELETE FROM environment_operations WHERE pull_request_id = $1
+`
+
+func (q *Queries) DeleteRetiredOperations(ctx context.Context, pullRequestID int64) error {
+	_, err := q.db.Exec(ctx, deleteRetiredOperations, pullRequestID)
+	return err
+}
+
+const deleteRetiredPullRequest = `-- name: DeleteRetiredPullRequest :execrows
+DELETE FROM pull_requests WHERE id = $1
+`
+
+// Build requests, preview records and dismissals go with their PR.
+func (q *Queries) DeleteRetiredPullRequest(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRetiredPullRequest, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteRetiredReconciliations = `-- name: DeleteRetiredReconciliations :exec
+DELETE FROM pr_reconciliations WHERE pull_request_id = $1
+`
+
+func (q *Queries) DeleteRetiredReconciliations(ctx context.Context, pullRequestID int64) error {
+	_, err := q.db.Exec(ctx, deleteRetiredReconciliations, pullRequestID)
+	return err
+}
+
+const deleteRetiredReports = `-- name: DeleteRetiredReports :exec
+DELETE FROM pull_request_reports WHERE pull_request_id = $1
+`
+
+func (q *Queries) DeleteRetiredReports(ctx context.Context, pullRequestID int64) error {
+	_, err := q.db.Exec(ctx, deleteRetiredReports, pullRequestID)
+	return err
+}
+
+const deleteRetiredRoutes = `-- name: DeleteRetiredRoutes :exec
+DELETE FROM environment_routes WHERE pull_request_id = $1
+`
+
+func (q *Queries) DeleteRetiredRoutes(ctx context.Context, pullRequestID int64) error {
+	_, err := q.db.Exec(ctx, deleteRetiredRoutes, pullRequestID)
+	return err
+}
+
+const deleteStaleOutputWatches = `-- name: DeleteStaleOutputWatches :execrows
+DELETE FROM app_output_watches WHERE seen_at < $1 AND state <> 'following'
+`
+
+// App output nobody watched for an hour, with its lines. A running follower
+// removes its own when its viewer leaves; this catches the rest.
+func (q *Queries) DeleteStaleOutputWatches(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStaleOutputWatches, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const knownPullRequests = `-- name: KnownPullRequests :many
 SELECT id FROM pull_requests WHERE id = ANY($1::bigint[])
 `
@@ -100,7 +242,8 @@ type ListExpiredPreviewsRow struct {
 
 // Housekeeping reads lifecycle state to decide what to recover, expire,
 // confirm with GitHub or prune. Lifecycle changes always go through the
-// environments package; housekeeping only records its own bookkeeping.
+// environments package; housekeeping only records its own bookkeeping and
+// deletes history whose retention ended (records.go).
 // Live previews past their expiry. A PR whose current build request is still
 // pending, queued or running is left for now: its publication sets a new
 // expiry, or the next pass finds it again.
@@ -167,6 +310,61 @@ func (q *Queries) ListPullRequestsToConfirm(ctx context.Context, arg ListPullReq
 		return nil, err
 	}
 	return items, nil
+}
+
+const listRetiredPullRequests = `-- name: ListRetiredPullRequests :many
+SELECT p.id FROM pull_requests p
+WHERE p.state IN ('closed', 'merged') AND coalesce(p.source_updated_at, p.created_at) < $1
+  AND p.teardown_completed_generation >= p.generation
+  AND NOT EXISTS (SELECT 1 FROM environment_operations o WHERE o.pull_request_id = p.id AND o.state IN ('pending', 'running', 'retryable'))
+  AND NOT EXISTS (SELECT 1 FROM environment_routes rt WHERE rt.pull_request_id = p.id AND rt.state = 'active')
+  AND NOT EXISTS (SELECT 1 FROM build_intents b WHERE b.pull_request_id = p.id AND b.state IN ('pending', 'queued', 'running'))
+  AND NOT EXISTS (SELECT 1 FROM pull_request_reports rp WHERE rp.pull_request_id = p.id
+      AND (rp.lease_owner IS NOT NULL OR rp.reported_version < rp.wanted_version))
+  AND ($2::bigint IS NULL OR p.id = $2)
+ORDER BY p.id LIMIT $3
+`
+
+type ListRetiredPullRequestsParams struct {
+	Cutoff    pgtype.Timestamptz
+	PrID      pgtype.Int8
+	BatchSize int32
+}
+
+// Closed and merged PRs that GitHub last updated before cutoff, whose
+// teardown finished and which have no work left: nothing running, pending or
+// leased, and no report waiting to be written.
+func (q *Queries) ListRetiredPullRequests(ctx context.Context, arg ListRetiredPullRequestsParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listRetiredPullRequests, arg.Cutoff, arg.PrID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockPullRequest = `-- name: LockPullRequest :one
+SELECT id FROM pull_requests WHERE id = $1 FOR UPDATE
+`
+
+// A webhook that reopens the PR takes this lock first, or waits for the
+// deletion and recreates the PR.
+func (q *Queries) LockPullRequest(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lockPullRequest, id)
+	var id_2 int64
+	err := row.Scan(&id_2)
+	return id_2, err
 }
 
 const recordReconciliation = `-- name: RecordReconciliation :exec

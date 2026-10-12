@@ -183,6 +183,7 @@ func (h *Handler) previewURL(hostname string) string {
 func (h *Handler) describePreview(pr *pages.PR, row dbgen.OwnedPRRow) {
 	pr.OlderPreview = row.DeployedSha != row.HeadSha
 	pr.PreviewURL = h.previewURL(row.Hostname)
+	pr.LastOpenedAt, pr.Requests, pr.AsleepAt = timestamp(row.LastVisitedAt), row.Visits, timestamp(row.AsleepAt)
 	if row.ExpiresAt.Valid {
 		pr.ExpiresAt = row.ExpiresAt.Time.UTC().Format(time.RFC3339)
 	}

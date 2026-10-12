@@ -10,15 +10,22 @@ import (
 	"github.com/ajaykathwatee/previa/internal/environments/dbgen"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river/rivertype"
 )
 
 // Reasons a build request waits.
 const (
-	WaitCapacity = "capacity" // every build slot, or the preview budget, is in use
+	WaitCapacity = "capacity" // every build slot, or the preview budget, is in use; or another account's turn
 	WaitDisk     = "disk"     // the build host is short of disk space
 	WaitPaused   = "paused"   // the operator paused new builds (BUILDS_PAUSED)
+	WaitAccount  = "account"  // the account already runs BUILDS_PER_ACCOUNT builds
+	WaitQuota    = "quota"    // the account used its daily build minutes
 )
+
+// liveWait is how recently a waiting request must have looked again to hold
+// its turn; waiting jobs look at least every five minutes (waitDelay).
+const liveWait = 10 * time.Minute
 
 // WaitingError is a build request that cannot proceed for lack of capacity.
 // It is not a failure: the request keeps its place (queued, or running when it
@@ -27,6 +34,7 @@ const (
 type WaitingError struct {
 	Reason string
 	Err    error
+	Until  time.Time // when to look again, if not the usual backoff (a daily budget's reset)
 }
 
 func (e *WaitingError) Error() string {
@@ -55,21 +63,90 @@ func (r *Repository) WithBuildSlots(slots int) *Repository {
 	return r
 }
 
-// buildSlotsFullTx reports whether every build slot is taken by other PRs.
-// The caller holds the PR's scope locks; the advisory lock serializes
-// admissions until the caller's transaction ends.
-func (r *Repository) buildSlotsFullTx(ctx context.Context, q *dbgen.Queries, pullRequestID int64) (bool, error) {
-	if r.buildSlots <= 0 {
-		return false, nil
+// AccountLimits share one server fairly between accounts (installation
+// owners). Zero turns a limit off.
+type AccountLimits struct {
+	BuildsPerAccount int // running builds at once (BUILDS_PER_ACCOUNT)
+	MinutesPerDay    int // build minutes per UTC day (BUILD_MINUTES_PER_ACCOUNT_DAY)
+}
+
+// WithAccountLimits bounds each account's builds; see AccountLimits.
+func (r *Repository) WithAccountLimits(limits AccountLimits) *Repository {
+	r.accounts = AccountLimits{BuildsPerAccount: max(limits.BuildsPerAccount, 0), MinutesPerDay: max(limits.MinutesPerDay, 0)}
+	return r
+}
+
+// admissionWaitTx decides whether the request must wait before it may take a
+// build slot, and why. The caller holds the PR's scope locks; the advisory
+// lock serializes admissions until the caller's transaction ends, so the
+// counts are exact. In order: every slot taken; the account's own builds;
+// its daily minutes; and, for the last free slot, another account's turn
+// (one with nothing building that has waited longer). A request that already
+// runs keeps its slot and never waits here.
+func (r *Repository) admissionWaitTx(ctx context.Context, q *dbgen.Queries, pullRequestID int64, now time.Time) (*WaitingError, error) {
+	if r.buildSlots <= 0 && r.accounts == (AccountLimits{}) {
+		return nil, nil
 	}
 	if err := q.LockBuildSlots(ctx); err != nil {
-		return false, fmt.Errorf("lock build slots: %w", err)
+		return nil, fmt.Errorf("lock build slots: %w", err)
+	}
+	current, err := q.ReadIntentWait(ctx, pullRequestID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil // nothing to admit; the claim finds no row
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read build request wait: %w", err)
+	}
+	if current.State == string(IntentRunning) {
+		return nil, nil
 	}
 	running, err := q.CountRunningBuilds(ctx, pullRequestID)
 	if err != nil {
-		return false, fmt.Errorf("count running builds: %w", err)
+		return nil, fmt.Errorf("count running builds: %w", err)
 	}
-	return running >= int64(r.buildSlots), nil
+	if r.buildSlots > 0 && running >= int64(r.buildSlots) {
+		return &WaitingError{Reason: WaitCapacity}, nil
+	}
+	owner, err := q.FindPROwner(ctx, pullRequestID)
+	if err != nil {
+		return nil, fmt.Errorf("find the build's account: %w", err)
+	}
+	if r.accounts.BuildsPerAccount > 0 {
+		mine, err := q.CountAccountRunningBuilds(ctx, dbgen.CountAccountRunningBuildsParams{PrID: pullRequestID, OwnerUserID: owner.Int64})
+		if err != nil {
+			return nil, fmt.Errorf("count the account's running builds: %w", err)
+		}
+		if mine >= int64(r.accounts.BuildsPerAccount) {
+			return &WaitingError{Reason: WaitAccount}, nil
+		}
+	}
+	if r.accounts.MinutesPerDay > 0 {
+		day := now.UTC()
+		used, err := q.AccountBuildSeconds(ctx, dbgen.AccountBuildSecondsParams{UserID: owner.Int64, Day: pgtype.Date{Time: day, Valid: true}})
+		if err != nil {
+			return nil, fmt.Errorf("read the account's build minutes: %w", err)
+		}
+		if used >= int64(r.accounts.MinutesPerDay)*60 {
+			midnight := time.Date(day.Year(), day.Month(), day.Day()+1, 0, 0, 0, 0, time.UTC)
+			return &WaitingError{Reason: WaitQuota, Until: midnight}, nil
+		}
+	}
+	if r.buildSlots > 0 && running == int64(r.buildSlots)-1 {
+		since := now
+		if current.WaitingSince.Valid {
+			since = current.WaitingSince.Time
+		}
+		turn, err := q.OlderWaiterFromIdleAccount(ctx, dbgen.OlderWaiterFromIdleAccountParams{
+			Since: pgtype.Timestamptz{Time: since, Valid: true}, LiveAfter: pgtype.Timestamptz{Time: now.Add(-liveWait), Valid: true}, OwnerUserID: owner.Int64,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("check other accounts' turns: %w", err)
+		}
+		if turn {
+			return &WaitingError{Reason: WaitCapacity}, nil
+		}
+	}
+	return nil, nil
 }
 
 // markWaitingTx notes that the request waits, and reports the PR when the
@@ -80,6 +157,9 @@ func (r *Repository) markWaitingTx(ctx context.Context, tx pgx.Tx, request Reque
 	})
 	if err != nil {
 		return fmt.Errorf("note waiting build request: %w", err)
+	}
+	if err := dbgen.New(tx).TouchIntentWaiting(ctx, dbgen.TouchIntentWaitingParams{PrID: request.PullRequestID, Revision: request.Revision}); err != nil {
+		return fmt.Errorf("note a waiting build request looked again: %w", err)
 	}
 	if changed == 0 {
 		return nil

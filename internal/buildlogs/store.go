@@ -14,10 +14,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Retention is how long an attempt's logs are kept after it finishes (or, if it
-// never finished, after it started). Admission of the next attempt clears them
-// sooner.
-const Retention = 14 * 24 * time.Hour
+// DefaultRetention is how long an attempt's logs are kept after it finishes
+// (or, if it never finished, after it started) unless configured otherwise
+// (BUILD_LOG_RETENTION_DAYS). Admission of the next attempt clears them
+// sooner, and an owner can delete them at any time.
+const DefaultRetention = 14 * 24 * time.Hour
 
 var (
 	// ErrNoStream means the attempt has no log stream, for example because the
@@ -27,20 +28,27 @@ var (
 	ErrSuperseded = errors.New("build log stream belongs to a newer attempt")
 	// ErrUnavailable hides whether a PR exists from users who do not own it.
 	ErrUnavailable = errors.New("build logs are unavailable")
+	// ErrNotDeletable means the attempt is still writing, or its logs are
+	// already gone.
+	ErrNotDeletable = errors.New("build logs cannot be deleted now")
 )
 
 // Binding identifies the attempt a writer may append to: environments.Attempt's
-// EnvironmentID and LogEpoch.
+// EnvironmentID and LogEpoch. Finished binds a section added after the
+// attempt ended (OpenFinished).
 type Binding struct {
 	EnvironmentID int64
 	Epoch         int64
+	Finished      bool
 }
 
-// Line is one stored line. Sequence numbers start at 0 for every attempt.
+// Line is one stored line. Sequence numbers start at 0 for every attempt;
+// At is when the line was received.
 type Line struct {
 	Sequence int64
 	System   bool
 	Text     string
+	At       time.Time
 }
 
 // Stream describes the attempt whose output is stored now.
@@ -52,6 +60,8 @@ type Stream struct {
 	Truncated                                  bool
 	OmittedLines, LostLines                    int64
 	OpenedAt, FinishedAt, PrunedAt             time.Time
+	// DeletedAt: the owner deleted the logs (PrunedAt is set too).
+	DeletedAt time.Time
 }
 
 // Intent is the PR's current build request.
@@ -74,11 +84,25 @@ type Target struct {
 
 // Store persists and reads current-build logs.
 type Store struct {
-	pool *pgxpool.Pool
-	now  func() time.Time
+	pool      *pgxpool.Pool
+	now       func() time.Time
+	retention time.Duration
 }
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool, now: time.Now} }
+func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool, now: time.Now, retention: DefaultRetention}
+}
+
+// WithRetention keeps finished attempts' logs for d (BUILD_LOG_RETENTION_DAYS).
+func (s *Store) WithRetention(d time.Duration) *Store {
+	if d > 0 {
+		s.retention = d
+	}
+	return s
+}
+
+// Retention is how long finished attempts' logs are kept.
+func (s *Store) Retention() time.Duration { return s.retention }
 
 // Open binds a writer to an admitted attempt. redactor must hold every injected
 // value and platform credential the attempt can print; an empty redactor is
@@ -101,10 +125,36 @@ func (s *Store) Open(ctx context.Context, b Binding, redactor *secrets.Redactor,
 	return newWriter(s, b, stored{lines: row.NextSequence, bytes: row.StoredBytes, truncated: row.Truncated}, redactor, limits, s.now), nil
 }
 
+// OpenFinished binds a writer to the finished stream of the attempt that
+// built generation/revision, to add a section after it ended: a live
+// preview's output when it crashed. The stream's caps still apply. It fails
+// with ErrNoStream when that attempt's logs are gone, expired or deleted, or
+// a newer attempt owns the stream.
+func (s *Store) OpenFinished(ctx context.Context, environmentID, generation, revision int64, redactor *secrets.Redactor) (*Writer, error) {
+	if redactor == nil {
+		return nil, errors.New("build log writer requires a redactor")
+	}
+	row, err := dbgen.New(s.pool).ReadFinishedStream(ctx, dbgen.ReadFinishedStreamParams{EnvironmentID: environmentID, Generation: generation, Revision: revision})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNoStream
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open finished build log stream: %w", err)
+	}
+	b := Binding{EnvironmentID: environmentID, Epoch: row.Epoch, Finished: true}
+	return newWriter(s, b, stored{lines: row.NextSequence, bytes: row.StoredBytes, truncated: row.Truncated}, redactor, DefaultLimits(), s.now), nil
+}
+
 func (s *Store) append(ctx context.Context, b Binding, batch batch) error {
 	return database.InTransaction(ctx, s.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
-		first, err := q.AllocateLines(ctx, dbgen.AllocateLinesParams{
+		allocate := q.AllocateLines
+		if b.Finished {
+			allocate = func(ctx context.Context, arg dbgen.AllocateLinesParams) (int64, error) {
+				return q.AllocateFinishedLines(ctx, dbgen.AllocateFinishedLinesParams(arg))
+			}
+		}
+		first, err := allocate(ctx, dbgen.AllocateLinesParams{
 			Lines: int64(len(batch.texts)), Bytes: batch.bytes, Truncated: batch.truncated,
 			Omitted: batch.omitted, Lost: batch.lost, EnvironmentID: b.EnvironmentID, Epoch: b.Epoch,
 		})
@@ -117,7 +167,11 @@ func (s *Store) append(ctx context.Context, b Binding, batch batch) error {
 		if len(batch.texts) == 0 {
 			return nil
 		}
-		if err := q.InsertLines(ctx, dbgen.InsertLinesParams{EnvironmentID: b.EnvironmentID, Epoch: b.Epoch, FirstSequence: first, Kinds: batch.kinds, Texts: batch.texts}); err != nil {
+		times := make([]pgtype.Timestamptz, len(batch.times))
+		for i, t := range batch.times {
+			times[i] = pgtype.Timestamptz{Time: t, Valid: true}
+		}
+		if err := q.InsertLines(ctx, dbgen.InsertLinesParams{EnvironmentID: b.EnvironmentID, Epoch: b.Epoch, FirstSequence: first, Kinds: batch.kinds, Texts: batch.texts, Times: times}); err != nil {
 			return fmt.Errorf("store build log lines: %w", err)
 		}
 		return nil
@@ -172,7 +226,7 @@ func (s *Store) Stream(ctx context.Context, environmentID int64) (Stream, error)
 		EnvironmentID: row.EnvironmentID, Epoch: row.Epoch, Generation: row.Generation, Revision: row.Revision,
 		HeadSHA: row.HeadSha, Finished: row.State == "finished", Lines: row.NextSequence, StoredBytes: row.StoredBytes,
 		Truncated: row.Truncated, OmittedLines: row.OmittedLines, LostLines: row.LostLines,
-		OpenedAt: row.OpenedAt.Time, FinishedAt: row.FinishedAt.Time, PrunedAt: row.PrunedAt.Time,
+		OpenedAt: row.OpenedAt.Time, FinishedAt: row.FinishedAt.Time, PrunedAt: row.PrunedAt.Time, DeletedAt: row.DeletedAt.Time,
 	}, nil
 }
 
@@ -184,7 +238,7 @@ func (s *Store) LinesFrom(ctx context.Context, environmentID, epoch, from int64,
 	}
 	lines := make([]Line, len(rows))
 	for i, r := range rows {
-		lines[i] = Line{Sequence: r.Sequence, System: r.Kind == kindSystem, Text: r.Line}
+		lines[i] = Line{Sequence: r.Sequence, System: r.Kind == kindSystem, Text: r.Line, At: r.CreatedAt.Time}
 	}
 	return lines, nil
 }
@@ -197,7 +251,7 @@ func (s *Store) LinesBefore(ctx context.Context, environmentID, epoch, before in
 	}
 	lines := make([]Line, len(rows))
 	for i, r := range rows {
-		lines[len(rows)-1-i] = Line{Sequence: r.Sequence, System: r.Kind == kindSystem, Text: r.Line}
+		lines[len(rows)-1-i] = Line{Sequence: r.Sequence, System: r.Kind == kindSystem, Text: r.Line, At: r.CreatedAt.Time}
 	}
 	return lines, nil
 }
@@ -230,6 +284,28 @@ func (s *Store) Tail(ctx context.Context, environmentID, generation, revision in
 
 // maxReadLines bounds one read.
 const maxReadLines = 1000
+
+// Delete removes the lines of an attempt that can no longer write and marks
+// its stream deleted, so its page says the owner deleted them. The caller
+// checked ownership. It returns ErrNotDeletable for a running attempt, a
+// newer attempt's stream or logs already gone.
+func (s *Store) Delete(ctx context.Context, environmentID, epoch int64) error {
+	return database.InTransaction(ctx, s.pool, func(tx pgx.Tx) error {
+		q := dbgen.New(tx)
+		if _, err := q.LockDeletableStream(ctx, dbgen.LockDeletableStreamParams{EnvironmentID: environmentID, Epoch: epoch}); errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotDeletable
+		} else if err != nil {
+			return fmt.Errorf("lock build log stream: %w", err)
+		}
+		if _, err := q.DeleteAttemptLines(ctx, dbgen.DeleteAttemptLinesParams{EnvironmentID: environmentID, Epoch: epoch}); err != nil {
+			return fmt.Errorf("delete build log lines: %w", err)
+		}
+		if err := q.MarkStreamDeleted(ctx, dbgen.MarkStreamDeletedParams{EnvironmentID: environmentID, Epoch: epoch}); err != nil {
+			return fmt.Errorf("mark build logs deleted: %w", err)
+		}
+		return nil
+	})
+}
 
 // PruneReport counts what one Prune removed.
 type PruneReport struct{ Streams, Lines int64 }

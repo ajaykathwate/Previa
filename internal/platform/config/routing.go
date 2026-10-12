@@ -34,6 +34,21 @@ type RoutingConfig struct {
 	// RouterAPIAddress is Traefik's API inside the router container, bound to
 	// loopback so nothing on any network can reach it.
 	RouterAPIAddress string `envconfig:"ROUTER_API_ADDRESS" default:"127.0.0.1:8080"`
+	// RouterMetricsAddress is where Traefik serves Prometheus metrics, read
+	// inside the router container for preview request counts; empty means
+	// the API address (the development router serves both there).
+	RouterMetricsAddress string `envconfig:"ROUTER_METRICS_ADDRESS"`
+	// PreviewAccessURL is the server's /previews/auth as the router reaches
+	// it, for private previews; empty means private previews serve nobody.
+	PreviewAccessURL string `envconfig:"PREVIEW_ACCESS_URL"`
+}
+
+// MetricsAddress is where the worker reads the router's request counters.
+func (c RoutingConfig) MetricsAddress() string {
+	if c.RouterMetricsAddress != "" {
+		return c.RouterMetricsAddress
+	}
+	return c.RouterAPIAddress
 }
 
 // RouteSyncConfig is what the route-sync maintenance command needs.
@@ -92,6 +107,18 @@ func (c *RoutingConfig) check() error {
 	host, port, err := net.SplitHostPort(c.RouterAPIAddress)
 	if ip := net.ParseIP(host); err != nil || port == "" || ip == nil || !ip.IsLoopback() {
 		return errors.New("ROUTER_API_ADDRESS must be a loopback host:port inside the router container")
+	}
+	if c.PreviewAccessURL != "" {
+		u, err := url.Parse(c.PreviewAccessURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Path != "/previews/auth" || u.RawQuery != "" {
+			return errors.New("PREVIEW_ACCESS_URL must be the server's /previews/auth as the router reaches it, such as http://172.31.250.20:8080/previews/auth")
+		}
+	}
+	if c.RouterMetricsAddress != "" {
+		host, port, err := net.SplitHostPort(c.RouterMetricsAddress)
+		if err != nil || port == "" || net.ParseIP(host) == nil {
+			return errors.New("ROUTER_METRICS_ADDRESS must be an IP host:port inside the router container, such as 172.31.250.10:8082")
+		}
 	}
 	return nil
 }

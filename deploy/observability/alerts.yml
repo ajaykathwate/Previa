@@ -151,6 +151,31 @@ groups:
           summary: Builds have waited for capacity for thirty minutes.
           runbook: docs/24-incident-runbook.md#queue-backlog
 
+      - alert: PreviaCapacityOutgrown
+        expr: avg_over_time((sum(previa_build_requests{waiting=~"capacity|disk"}) > bool 0)[1d:5m]) > 0.25
+        labels: {severity: info}
+        annotations:
+          summary: Builds waited for a build slot, preview memory or disk over a quarter of the last day; the server may be too small.
+          runbook: docs/24-incident-runbook.md#capacity-outgrown
+
+      - alert: PreviaBuildHeavyUpload
+        expr: |
+          sum(increase(previa_build_egress_bytes_count{direction="up"}[1h]))
+            - sum(increase(previa_build_egress_bytes_bucket{direction="up",le="2.68435456e+08"}[1h])) > 0.5
+        labels: {severity: warning}
+        annotations:
+          summary: A build uploaded more than 256 MiB in the last hour, which package installs never need.
+          runbook: docs/24-incident-runbook.md#unusual-build-traffic
+
+      - alert: PreviaBuildHeavyDownload
+        expr: |
+          sum(increase(previa_build_egress_bytes_count{direction="down"}[1h]))
+            - sum(increase(previa_build_egress_bytes_bucket{direction="down",le="4.294967296e+09"}[1h])) > 0.5
+        labels: {severity: info}
+        annotations:
+          summary: A build downloaded more than 4 GiB in the last hour.
+          runbook: docs/24-incident-runbook.md#unusual-build-traffic
+
       - alert: PreviaGitHubRateLimitLow
         expr: min(previa_github_rate_limit_remaining{resource="core"}) < 500
         for: 5m

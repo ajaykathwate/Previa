@@ -55,6 +55,20 @@ type backend struct {
 	processes []repoconfig.Process
 	env       map[string]string // the connection settings Previa sets
 	secrets   []string          // generated credentials, for the log redactor
+	// redactEnv names the variables whose values output must never show:
+	// the repository's secrets and the credentials in env (LabelRedactEnv).
+	redactEnv []string
+}
+
+// credentialNames are the variables of env that carry a generated password.
+func (b backend) credentialNames() []string {
+	var names []string
+	for _, name := range []string{"DATABASE_URL", "PGPASSWORD", "REDIS_URL"} {
+		if _, ok := b.env[name]; ok {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 type serviceRun struct {
@@ -219,7 +233,7 @@ func serviceSpec(run serviceRun, volumes []string, networkID string, labels map[
 			PidsLimit: &pids, CPUShares: cpuWeight,
 		},
 		OomScoreAdj: oomPriority,
-		LogConfig:   container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "2"}},
+		LogConfig:   previewLogConfig,
 		Runtime:     p.OCIRuntime,
 	}
 	networking := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{networkID: {Aliases: []string{run.alias}}}}

@@ -35,6 +35,9 @@ type Config struct {
 	// MaxDuration is the longest a build may run (BUILD_TIMEOUT). A builder
 	// holding a cache longer than this belongs to a crashed worker.
 	MaxDuration time.Duration
+	// EgressHosts are the only hosts a build may reach; empty allows any
+	// public host (BUILD_EGRESS).
+	EgressHosts []string
 }
 
 // ConfigFrom adapts the worker's builder settings.
@@ -43,6 +46,7 @@ func ConfigFrom(c config.BuilderConfig, instance string, maxDuration time.Durati
 		Instance: instance, BuildKitImage: c.BuildKitImage, CPUs: c.BuildCPUs,
 		Memory: int64(c.BuildMemory), PIDs: c.BuildPIDs, DiskBudget: int64(c.BuildDiskBudget),
 		MaxImageSize: int64(c.BuildMaxImageSize), MinFreeDisk: int64(c.BuildMinFreeDisk), MaxDuration: maxDuration,
+		EgressHosts: egressHosts(c.BuildEgress, c.BuildEgressHosts),
 	}
 }
 
@@ -181,7 +185,12 @@ func (b *Builder) Build(ctx context.Context, job Job) (Image, error) {
 		return Image{}, failure(CodeBuilderUnavailable, "The builder could not be reached.", true, err)
 	}
 	defer func() { _ = bk.Close() }()
-	return b.solve(ctx, cancel, bk, sb, job)
+	image, err := b.solve(ctx, cancel, bk, sb, job)
+	if held := b.endMetering(ctx, sb, job); !held && err == nil {
+		b.removePartialImage(ctx, job)
+		return Image{}, failure(CodeBuilderUnavailable, "Previa could not confirm that the build reached only package registries, so its image was discarded.", true, nil)
+	}
+	return image, err
 }
 
 // otherBuilders counts this instance's running builders other than self.

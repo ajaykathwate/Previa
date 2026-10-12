@@ -13,9 +13,9 @@ import (
 )
 
 func (r *Repository) claimBuild(ctx context.Context, request Request, now time.Time) (attempt Attempt, allowed bool, err error) {
-	waiting := false
+	var waiting *WaitingError
 	err = database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
-		attempt, allowed, waiting = Attempt{}, false, false
+		attempt, allowed, waiting = Attempt{}, false, nil
 		q := dbgen.New(tx)
 		scope, e := lockOwnerIntentScope(ctx, q, request.PullRequestID, "admission")
 		if errors.Is(e, ErrIntentUnavailable) {
@@ -29,14 +29,15 @@ func (r *Repository) claimBuild(ctx context.Context, request Request, now time.T
 				return e
 			}
 		}
-		full, e := r.buildSlotsFullTx(ctx, q, request.PullRequestID)
+		wait, e := r.admissionWaitTx(ctx, q, request.PullRequestID, now)
 		if e != nil {
 			return e
 		}
-		if full {
-			// Every slot is taken: the request stays queued and says so.
-			waiting = true
-			return r.markWaitingTx(ctx, tx, request, WaitCapacity)
+		if wait != nil {
+			// No slot, or not this account's turn: the request stays queued
+			// and says why.
+			waiting = wait
+			return r.markWaitingTx(ctx, tx, request, wait.Reason)
 		}
 		affected, e := q.ClaimBuildIntent(ctx, dbgen.ClaimBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, HeadSha: request.HeadSHA, BuildMode: scope.mode, NowAt: pgtype.Timestamptz{Time: now, Valid: true}})
 		if e != nil {
@@ -51,8 +52,8 @@ func (r *Repository) claimBuild(ctx context.Context, request Request, now time.T
 	if err != nil {
 		return Attempt{}, false, err
 	}
-	if waiting {
-		return Attempt{}, false, &WaitingError{Reason: WaitCapacity}
+	if waiting != nil {
+		return Attempt{}, false, waiting
 	}
 	return attempt, allowed, nil
 }

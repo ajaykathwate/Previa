@@ -82,7 +82,7 @@ func (s *State) Operations(kind, state string, n int64) {
 // Requests records n build requests in state, waiting for reason (or "").
 func (s *State) Requests(state, waiting string, n int64) {
 	if waiting != "" {
-		waiting = bounded(waiting, "capacity", "disk", "paused")
+		waiting = bounded(waiting, waitReasons...)
 	}
 	s.requests.WithLabelValues(bounded(state), waiting).Set(float64(n))
 }
