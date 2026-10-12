@@ -115,7 +115,8 @@ func (b *Builder) reusable(ctx context.Context, job Job) (Image, bool) {
 	}
 	labels := inspected.Config.Labels
 	if !dockerx.OwnedBy(labels, job.Instance, dockerx.KindImage) || labels[dockerx.LabelPR] != itoa(job.PullRequestID) || labels[dockerx.LabelGeneration] != itoa(job.Generation) ||
-		labels[dockerx.LabelRevision] != itoa(job.Revision) || labels[dockerx.LabelSHA] != job.HeadSHA || inspected.Size > b.cfg.MaxImageSize {
+		labels[dockerx.LabelRevision] != itoa(job.Revision) || labels[dockerx.LabelSHA] != job.HeadSHA ||
+		labels[dockerx.LabelBaseRepo] != itoa(job.BaseRepoID) || labels[dockerx.LabelHeadRepo] != itoa(job.HeadRepoID) || inspected.Size > b.cfg.MaxImageSize {
 		return Image{}, false
 	}
 	return Image{Ref: job.ImageRef(), ID: inspected.ID, Size: inspected.Size, Reused: true}, true

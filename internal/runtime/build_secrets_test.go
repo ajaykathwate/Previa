@@ -51,12 +51,16 @@ func TestBuildCredentialsFollowCurrentTrustAndAreRedacted(t *testing.T) {
 		{"trusted", sameRepo, sameRepo, true},
 		{"fork", fork, fork, false},
 		{"unverified", unverified, unverified, false},
+		{"conflicting-fork-identity", flaggedFork, flaggedFork, false},
 		{"became-fork-during-preparation", sameRepo, flaggedFork, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mounted []byte
 			builder := &fakeBuilder{err: &builds.Error{Code: builds.CodeBuildFailed, Message: "Rejected npm-test-credential", Err: errors.New("registry-test-credential")}}
 			builder.observe = func(job builds.Job) {
+				if !tc.allowed && job.HeadRepoID == job.BaseRepoID {
+					t.Fatal("an untrusted build was given the trusted cache identity")
+				}
 				if got := len(job.Secrets) == 1 && string(job.Secrets["NPM_TOKEN"]) == "npm-test-credential" && len(job.Registries) == 1 && job.Registries[0].Secret == "registry-test-credential"; got != tc.allowed {
 					t.Fatalf("build credentials allowed=%v, want %v", got, tc.allowed)
 				}

@@ -198,6 +198,16 @@ func TestRealBuilderBuildsCachesReusesAndLabels(t *testing.T) {
 	// A River retry of the same revision finds the finished image.
 	retry, retryLogs := f.job(t, 1, 2, f.base, files)
 	retry.HeadSHA = first.HeadSHA
+	// An identical revision/SHA must not adopt an image from another source.
+	otherSource := retry
+	otherSource.HeadRepoID = 0
+	if _, ok := f.builder.reusable(t.Context(), otherSource); ok {
+		t.Fatal("an unverified source reused a trusted image")
+	}
+	otherSource.HeadRepoID, otherSource.BaseRepoID = retry.HeadRepoID, retry.BaseRepoID+1
+	if _, ok := f.builder.reusable(t.Context(), otherSource); ok {
+		t.Fatal("a different base repository reused a trusted image")
+	}
 	reused, err := f.builder.Build(buildCtx(t, time.Minute), retry)
 	if err != nil || !reused.Reused || reused.ID != img2.ID || !strings.Contains(retryLogs.String(), "Reusing the image") {
 		t.Fatalf("retry: %+v %v\n%s", reused, err, retryLogs)

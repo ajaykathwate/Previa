@@ -287,6 +287,11 @@ func (r *Runtime) buildImage(ctx context.Context, request environments.Request, 
 	if err != nil {
 		return builds.Image{}, repoconfig.Config{}, err
 	}
+	// A fork flag contradicting matching IDs must not select the cache of
+	// trusted branches. Treat that source as unverified throughout the build.
+	if t.Fork && t.HeadRepoID == t.BaseRepoID {
+		t.HeadRepoID = 0
+	}
 	values, logins := buildSecrets.Values(), buildSecrets.Registries()
 	if !t.secretSource().Trusted() {
 		values, logins = nil, nil

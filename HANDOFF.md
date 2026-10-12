@@ -3,10 +3,8 @@ Last updated: 2026-10-12
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
-- docs/README.md indexes 25 docs; 03 and 18 are retired, numbers never reused.
-  Edit technical-docs/inside-previa.md only when the owner asks (last updated 2026-10-12).
-- docs/27-roadmap.md: Prompts 1-13 done. Prompt 14 (reconcile missed GitHub access
-  webhooks) is planned, not started; an attempt was reverted at the owner's request.
+- Edit technical-docs/inside-previa.md only when the owner asks (last updated 2026-10-12).
+- docs/27-roadmap.md: Prompts 1-13 done; Prompt 14 (GitHub access reconciliation) not started.
 - Backend packages are flat internal/<feature>; construction in internal/app;
   presentation in web/ with no backend imports. Preserve the signal theme,
   modal confirmations, server-rendered navigation and GET/POST fallbacks.
@@ -15,7 +13,7 @@ Last updated: 2026-10-12
 - Go 1.26.9+; make build/test/lint/vuln, river-ui (jobs, :8090), observability-check.
   Lint at 0 (gocognit 30, nestif, gocritic, revive): split functions, don't raise limits.
 - PostgreSQL 17 via Compose; make migrate-up applies Goose 28 and River 007.
-  Dev DB remains at 21: run migrations before restarting server and worker.
+  Dev DB was last checked at 21: run migrations before restarting server and worker.
   Processes refuse an older schema. make egress-image and make router-up prepare Docker.
 - APP_ENV, LOG_LEVEL, INTERNAL_ADDR (127.0.0.1:9090), WORKER_INTERNAL_ADDR (:9091),
   TRUSTED_PROXIES, BACKUP_STATUS_FILE, BUILDS_PAUSED; /livez, /readyz and /metrics
@@ -30,12 +28,15 @@ Last updated: 2026-10-12
   helper sometimes fails pulls; retry or use an empty DOCKER_CONFIG. .env holds an
   empty ENV_FILE=: unset it after sourcing .env before invoking Make.
 
-## Repository compatibility (2026-10-12, UNCOMMITTED; migration 0028)
+## Repository compatibility (2026-10-12, committed 2f7fdb7; migration 0028)
 - Finished Claude's partial build-secret changes and the owner's compatibility list.
   Secrets default runtime-only; Allow opens an owner-only CSRF-protected modal.
   Provider.ForBuild + runtime recheck + BuildKit session gates withhold all credentials
   from forks/unknown heads. REGISTRY_AUTH supplies pull logins only; no app injection.
   Mounted values and registry tokens redact build logs and returned errors (docs/07,09).
+- Follow-up fix: conflicting fork flags/matching IDs use an unverified
+  cache scope. Retry image reuse checks both repository IDs. Unit regression failed
+  before the fix, then passed; real BuildKit rejected other identities and kept retry reuse.
 - context selects a contained subfolder; root config remains required. Source detects
   relevant .gitmodules and LFS pointers before building; no automatic fetching.
   build_timeout bounds the image stage within BUILD_TIMEOUT's overall deadline.
@@ -47,13 +48,16 @@ Last updated: 2026-10-12
 - UI explains private packages, nginx 8080/nginx-unprivileged, limits, Compose,
   platforms/GPU/Windows and build-time settings. Runtime already permits low ports
   inside containers; stock nginx can still fail on read-only caches/PID paths.
-- Verified: make build/generate, go build ./..., full Go tests with DB (1402 passed),
-  go vet, lint 0; real BuildKit secret mount/fork refusal; real MySQL readiness/data/
-  isolation/cleanup; four browser secret/kit cases including no-JS permission modal.
-  Broader real runtime checks passed except one Docker socket timeout; that failing
-  unhealthy subtest passed alone on rerun. Live private-registry credentials untested.
+- Verified: make build/generate; full Go tests with DB (1406 passed), go build/vet,
+  lint 0; all 49 browser cases; full real BuildKit suite plus identity-reuse check;
+  real MySQL readiness/data/isolation/cleanup. Full runtime had one Docker socket
+  timeout; the unhealthy subtest passed alone on rerun. Backend and basic E2E passed,
+  including 50 HTTPS requests + failed-rebuild preservation. Live private-registry pull untested.
+- Regression harness: queue tests use isolated River schemas (a live dev worker
+  claimed shared test jobs). Basic E2E uses httpd instead of prematurely closing
+  netcat, on pinned BusyBox (Alpine omits httpd); 50 routed requests + failure diagnostics.
 - README/DESIGN and docs/02,06,07,09,11,21 reflect the requested extensions.
-  All changes are uncommitted; retain the staged/unstaged split inherited from Claude.
+  Follow-up regression fixes and verification docs are included on ui-improvements.
 
 ## Earlier improvements (committed 973907f / 93191aa; migrations 0022-0027)
 - Forks never auto-build (LockIntentPR + ClaimBuildIntent fence; docs/16).
@@ -67,10 +71,7 @@ Last updated: 2026-10-12
 - Activity: crash watch -> finished build logs, visits from Traefik metrics,
   live App output, PREVIEW_IDLE_SLEEP and wake, private previews with forwardAuth
   (internal/appoutput, idle, previewaccess; docs/08,10).
-- Previous checks: all Go/DB tests, lint 0, real builder/runtime, observability and
-  49 browser cases. Private previews/wake remain untested against real Traefik.
-- Dashboard/Starter kits/failure attention/Previews naming committed earlier
-  (6a42a66, 5e4d30a; docs/21). main is ahead of origin/main by two commits.
+- Private previews/wake remain untested against real Traefik; observability checks passed.
 
 ## Backend previews and outbound (docs/11)
 - services {postgres|redis|mysql: version} resolves through PREVIEW_SERVICE_CATALOG
@@ -83,13 +84,15 @@ Last updated: 2026-10-12
   /etc/hosts maps names to the proxy; forks get none.
 
 ## Branches, release and pending work
-- Work on main; master changes only through main -> master PRs. CI runs for PRs
+- Current branch: ui-improvements (tracks origin/ui-improvements).
+  master changes only through main -> master PRs. CI runs for PRs
   into master and pushes to master; last observed green on c94d35f.
 - docs/25 is the deployment guide: OVHcloud VPS-2 + Cloudflare DNS + R2 backups
   (~€7/mo), the owner's choice. NEXT-FEATURES.md lists ten candidates, none built.
 - docs/26: ready for staging; production needs a real host, backups/restore/upgrade,
   domains + Let's Encrypt staging/production, hosted GitHub OAuth/App/webhooks,
   authorized disposable-PR source/reporting tests, protected release environment,
-  Alertmanager and optional gVisor. This task did not run real routing/e2e suites.
+  Alertmanager and optional gVisor. E2E exercises real routing with test certificates;
+  this task did not rerun the dedicated ACME routing suite.
 - Regression tracker: 242 cases in 16 test-docs files; only tick recorded proof.
   Open owner decision: install-tailwind.sh curl has no retry/time limit.

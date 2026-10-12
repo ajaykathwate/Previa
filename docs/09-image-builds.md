@@ -17,7 +17,7 @@ the worker runs every admitted build through it ([22](22-mvp-operations.md)), up
 | Network for build steps | **Public internet through Previa's egress proxy**, ports 80/443 only, every private, local and metadata range refused | Most Dockerfiles need package registries; nothing internal is reachable. Tools that ignore proxy settings fail closed. |
 | Cache scope | **Per base repository and source repository**: same-repository PRs share a cache, each fork gets its own | A fork's build cannot plant layers or cache-mount files that a trusted build (which later receives secrets) would reuse. This refines DESIGN §9's "per repo". |
 | Limits (Balanced, env-overridable) | 2 CPUs, 4 GiB memory, 2,048 processes, 20 GiB disk, 4 GiB image, refuse to start below 15 GiB free | Owner decision; tune per host. |
-| BuildKit versions | Daemon image `moby/buildkit:v0.33.1-rootless` pinned by digest; Go client v0.33.0 | Client v0.33.1 requires Go 1.26.8, but the toolchain is pinned to 1.26.5. Patch versions of client and daemon are compatible. |
+| BuildKit versions | Daemon image `moby/buildkit:v0.33.1-rootless` pinned by digest; Go client v0.33.0 | Pinned versions verified together by the real-builder suite. |
 | Egress proxy | Written in Go (`internal/platform/egress`, run as `previa-egress` by `cmd/egress`) rather than Squid; shared with previews ([10](10-preview-runtime.md)) | One language, exact address rules, unit-testable rebinding protection, no new third-party service. |
 | Secrets | Explicit owner opt-in: BuildKit secret mounts and pull-only registry authentication for trusted heads; never build arguments or context files | Forks and unverified heads receive no providers. Known values and returned errors are redacted; code given a credential can still copy or exfiltrate it ([07](07-repository-secrets.md)). |
 
@@ -37,7 +37,10 @@ image ──docker-format tar, size-capped──► Docker image store ──►
 ```
 
 1. **Reuse.** If `previa/pr-<id>:g<gen>-r<rev>-<sha12>` already exists with this
-   job's labels (an earlier attempt of the same revision finished it), it is returned.
+   job's labels, including both repository IDs (an earlier attempt of the same
+   revision finished it), it is returned. A changed or unverified source cannot
+   adopt a trusted source's finished image. A fork flag that contradicts matching
+   repository IDs selects an unverified cache scope.
 2. **Sandbox.** Pull the pinned BuildKit image if Docker lacks it. Start the egress
    proxy if needed, create the build's internal network, connect the proxy to it,
    and start the builder. The builder takes the scope's cache volume if no other
@@ -64,7 +67,7 @@ image ──docker-format tar, size-capped──► Docker image store ──►
 | Privileges | Not privileged; every capability dropped except `SETUID`/`SETGID` (needed by `newuidmap`); read-only root filesystem with owned tmpfs for runtime directories | A compromised step lands as an unprivileged user in a minimal container. |
 | Profiles | Docker's seccomp and AppArmor profiles are disabled and `/proc` paths unmasked (the CLI's `systempaths=unconfined`) | Rootless BuildKit must create a user, mount and PID namespace per step; steps then run under BuildKit's own seccomp profile. This is the documented rootless trade-off and far narrower than a privileged builder. |
 | Resources | cgroup limits on CPU, memory (no swap) and processes cover the daemon and every step; disk budget polled and enforced by stopping the build | A timeout alone is not resource isolation. |
-| Host access | No Docker socket, no host paths, no published ports, no Previa credentials or repository secrets | Nothing in the builder can act on the host or on GitHub. |
+| Host access | No Docker socket, no host paths, no published ports or Previa credentials; repository credentials require explicit owner opt-in for trusted builds | The builder has no host or GitHub App credentials. |
 
 **Verified** on Docker Desktop 29.8 (WSL2) by `make test-builder`, from inside a build step:
 

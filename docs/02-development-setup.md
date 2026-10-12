@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 27**, **River 007**. After pulling changes, run
+Current schema: **Goose 28**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker. When the egress proxy or the
 router changed (this version changed both), also run `make egress-image` (builds
 are metered and may be limited to package registries) and `make router-up` (the
@@ -252,9 +252,10 @@ TEST_DATABASE_URL="$DATABASE_URL" go test -count=1 ./...
 
 **Expected:** all packages pass, including pool, migration-constraint, webhook,
 discovery, scheduling, publication, secrets and realtime integration tests. Most
-tests create isolated schemas and drop them afterwards. The migration-constraint,
-auth repository and queue tests instead run in rolled-back transactions on your
-migrated schema, so they fail if it is behind the code (for example, a
+tests create isolated schemas and drop them afterwards. Queue tests migrate River
+in their own temporary schemas, so a running development worker cannot claim their
+jobs. The migration-constraint and auth repository tests run in rolled-back
+transactions on your migrated schema, so they fail if it is behind the code (for example, a
 `key_version` or `epoch` NOT NULL error before migrations 12 or 13). No test resets
 your data. External systems (GitHub, Docker) are fakes; real Docker builds run only
 with `make test-builder`. Useful focused runs:
@@ -354,8 +355,8 @@ make test-builder         # about 4 minutes
 **Expected:** every `TestRealBuilder…` test passes: real and cached builds,
 isolation probes (logged as `probe: … blocked`, with only `proxied-public REACHED`),
 memory, disk, image-size, timeout and cancellation limits, opt-in secret mounts,
-missing/fork-secret refusal, fork cache separation and
-cleanup. Afterwards only the long-lived `previa-egress` container and network
+missing/fork-secret refusal, fork cache separation, image reuse bound to both
+repository IDs, and cleanup. Afterwards only the long-lived `previa-egress` container and network
 remain. To remove them and any build caches:
 
 ```sh
@@ -395,7 +396,7 @@ the tests; only `previa-egress` stays running.
 
 ### Real end-to-end check (optional)
 
-Needs Docker, internet access the first time (alpine and Traefik images), the egress
+Needs Docker, internet access the first time (Alpine, BusyBox and Traefik images), the egress
 image and PostgreSQL; no GitHub account, domain or DNS token. It runs the worker's own
 pipeline against a fake GitHub over TLS and a Traefik router with its default
 certificate, on a throwaway schema.
@@ -421,8 +422,11 @@ neither the internet, the egress proxy, the host nor other previews, and no othe
 preview reaches them`, `outbound: approved destination reached; refused the rest`,
 `rebuild: fresh database … replaced …`, `failed migration: setup_failed, the
 earlier preview and its data keep serving` and `teardown: no container, image,
-network or volume of either preview remains`. Set `TEST_E2E_LOG=1` for the worker's logs. Anything the run could
-not remove fails the test. Afterwards only the `previa-egress` container and network
+network or volume of either preview remains`. The basic preview also serves 50
+consecutive HTTPS requests before the failed-rebuild check. Set `TEST_E2E_LOG=1`
+for worker logs and Traefik debug diagnostics; a failing test captures the router's
+last 80 log lines before removing it. Anything the run could not remove fails the
+test. Afterwards only the `previa-egress` container and network
 remain (`docker network ls --filter label=io.previa.managed`).
 
 ### Release images and production smoke test (optional)
@@ -573,7 +577,7 @@ make run-server
 ```
 
 **Expected:** `internal listener serving /livez, /readyz and /metrics`,
-`database health check passed` (with `version`, `schema=27` and `environment`), then
+`database health check passed` (with `version`, `schema=28` and `environment`), then
 `HTTP server listening`. Open <http://localhost:8080/> and sign in with GitHub.
 `curl -s localhost:9090/readyz` answers `{"checks":{"database":"ok","schema":"ok"},"status":"ready",...}`.
 The server refuses to start if migrations are behind (`run migrations first`).

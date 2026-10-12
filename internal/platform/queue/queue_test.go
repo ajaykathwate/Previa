@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -21,13 +22,43 @@ func queuePool(t *testing.T) (*pgxpool.Pool, *slog.Logger) {
 	t.Helper()
 	connection := os.Getenv("TEST_DATABASE_URL")
 	if connection == "" {
-		t.Skip("set TEST_DATABASE_URL after make migrate-up to test River")
+		t.Skip("set TEST_DATABASE_URL to test River in a temporary schema")
 	}
-	pool, err := pgxpool.New(t.Context(), connection)
+	admin, err := pgxpool.New(t.Context(), connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := fmt.Sprintf("queue_test_%d", time.Now().UnixNano())
+	quoted := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(t.Context(), "CREATE SCHEMA "+quoted); err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := admin.Exec(ctx, "DROP SCHEMA "+quoted+" CASCADE"); err != nil {
+			t.Errorf("drop queue test schema: %v", err)
+		}
+		admin.Close()
+	})
+	cfg, err := pgxpool.ParseConfig(connection)
+	if err != nil {
+		t.Fatal("invalid test database URL")
+	}
+	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := migrator.Migrate(t.Context(), rivermigrate.DirectionUp, nil); err != nil {
+		t.Fatal(err)
+	}
 	return pool, slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
