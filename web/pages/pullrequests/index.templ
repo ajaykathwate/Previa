@@ -509,6 +509,11 @@ templ PRDetail(p Page, pr PR, csrf string) {
 								}
 							}
 						</form>
+					} else if pr.Actions.InProgress != "" {
+						@button.Button(button.Props{Disabled: true, Variant: secondaryWhen(pr.Live())}) {
+							@components.BuildIcon()
+							{ pr.Actions.InProgress }
+						}
 					} else if pr.Actions.Blocked!="" {
 						@button.Button(button.Props{Disabled: true, Variant: secondaryWhen(pr.Live()), Attributes: templ.Attributes{"aria-describedby": "build-unavailable"}}) {
 							@components.BuildIcon()

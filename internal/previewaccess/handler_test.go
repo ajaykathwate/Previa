@@ -2,6 +2,7 @@ package previewaccess
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,11 +17,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/platform/queue"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -120,7 +124,97 @@ func (g github) RepositoryPermission(_ context.Context, _ int64, fullName, login
 
 type jobs struct{ syncs int }
 
-func (j *jobs) Insert(_ context.Context, args river.JobArgs, _ *river.InsertOpts) (*rivertype.JobInsertResult, error) {
+func TestAccessSettingUsesRealQueue(t *testing.T) {
+	pool := isolatedPool(t)
+	ctx := t.Context()
+	m, err := rivermigrate.New(riverpgxv5.New(pool), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, sql := range []string{
+		"INSERT INTO users(github_id,username) VALUES(1,'owner')",
+		"INSERT INTO installations(github_installation_id,owner_user_id) VALUES(99,1)",
+		"INSERT INTO repos(installation_id,github_repo_id,full_name) VALUES(1,100,'owner/app')",
+	} {
+		if _, err := pool.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	producer, err := queue.NewProducer(pool, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(pool, session{}, nil, producer, "secret", "preview.test", "https://previa.test", logger)
+	r := chi.NewRouter()
+	h.Mount(r, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			next.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), userKey{}, int64(1))))
+		})
+	})
+	set := func(private bool, status int) {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/repositories/1/preview-access", strings.NewReader(url.Values{"private": {strconv.FormatBool(private)}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != status {
+			t.Fatalf("toggle: %d: %s", w.Code, w.Body)
+		}
+	}
+	check := func(private bool, wantJobs int) int64 {
+		t.Helper()
+		var got bool
+		var version int64
+		var n int
+		if err := pool.QueryRow(ctx, "SELECT private_previews FROM repos WHERE id=1").Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != private {
+			t.Fatalf("private = %v, want %v", got, private)
+		}
+		if err := pool.QueryRow(ctx, "SELECT version FROM route_table WHERE singleton").Scan(&version); err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM river_job").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != wantJobs {
+			t.Fatalf("jobs = %d, want %d", n, wantJobs)
+		}
+		return version
+	}
+	initial := check(false, 0)
+	set(true, http.StatusSeeOther)
+	if version := check(true, 1); version != initial+1 {
+		t.Fatal("route version did not advance")
+	}
+	if _, err := pool.Exec(ctx, "UPDATE river_job SET state='running', attempted_at=now()"); err != nil {
+		t.Fatal(err)
+	}
+	set(false, http.StatusSeeOther)
+	version := check(false, 2)
+	set(false, http.StatusSeeOther)
+	if check(false, 2) != version {
+		t.Fatal("unchanged setting advanced route version")
+	}
+	h.jobs = rejectedJobs{}
+	set(true, http.StatusServiceUnavailable)
+	if check(false, 2) != version {
+		t.Fatal("failed enqueue did not roll back route version")
+	}
+}
+
+type rejectedJobs struct{}
+
+func (rejectedJobs) InsertTx(_ context.Context, _ pgx.Tx, _ river.JobArgs, _ *river.InsertOpts) (*rivertype.JobInsertResult, error) {
+	return nil, errors.New("queue unavailable")
+}
+
+func (j *jobs) InsertTx(_ context.Context, _ pgx.Tx, args river.JobArgs, _ *river.InsertOpts) (*rivertype.JobInsertResult, error) {
 	if _, ok := args.(routing.SyncArgs); ok {
 		j.syncs++
 	}

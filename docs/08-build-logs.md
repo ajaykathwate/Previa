@@ -12,6 +12,15 @@ last output to the same log. A running preview's output can also be watched live
 (**App output**); that output is never stored beyond the watch. Nothing writes
 sample output.
 
+**App output** shows the running app's stdout/stderr, such as request logs and
+runtime errors; **Build logs** show image construction and startup. App output
+requires the worker's `app_output` queue. Followers deduplicate per watch epoch,
+so a stale running follower can be replaced without accepting its late writes.
+The App output page reports unavailable storage/queue errors explicitly.
+
+PR comment links to Build logs preserve their full local URL through GitHub
+sign-in, including query parameters. Signing in directly still opens Overview.
+
 ## Decisions
 
 | Decision | Choice | Why |

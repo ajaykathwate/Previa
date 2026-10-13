@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/a-h/templ"
@@ -39,6 +40,7 @@ func NewHandler(cfg config.ServerConfig, sessions *scs.SessionManager, users use
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	state := randomToken()
 	h.sessions.Put(r.Context(), "oauth_state", state)
+	h.sessions.Remove(r.Context(), "after_login")
 	if next := r.URL.Query().Get("next"); LocalPath(next) {
 		h.sessions.Put(r.Context(), "after_login", next)
 	}
@@ -94,7 +96,16 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 // LocalPath reports whether next is a path on this server to return to
 // after signing in: never another host, so sign-in is no open redirect.
 func LocalPath(next string) bool {
-	return strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") && !strings.ContainsAny(next, "\\\r\n") && len(next) <= 2048
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.Contains(next, "\\") || len(next) > 2048 {
+		return false
+	}
+	for _, ch := range next {
+		if ch < 0x20 || ch == 0x7f {
+			return false
+		}
+	}
+	u, err := url.ParseRequestURI(next)
+	return err == nil && u.Host == "" && u.Scheme == ""
 }
 
 // logoutConfirmation preserves old links without rendering a separate screen.

@@ -88,7 +88,8 @@ Medium. The standard flow is well understood, but the security details (state pa
 4. The server exchanges the `code` plus client secret for an access token by calling GitHub server to server.
 5. It calls GitHub's user endpoint with that token to fetch the numeric GitHub user ID, username and avatar.
 6. It upserts the user row keyed by the numeric GitHub ID (never by username or email, which can change).
-7. It creates a session (feature 3) and redirects to the dashboard.
+7. It creates a session (feature 3) and returns to the requested local page
+   (including a PR's build logs); direct sign-in defaults to the dashboard.
 8. The OAuth access token is either discarded or stored encrypted; the MVP needs it only for the identity call, so discarding is preferred.
 
 ### Design decisions and edge cases

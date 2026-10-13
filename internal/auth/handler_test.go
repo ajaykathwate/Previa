@@ -134,10 +134,10 @@ func TestLoginRotationProtectedRouteAndLogout(t *testing.T) {
 		t.Fatal("anonymous page has no login link")
 	}
 	oldCookie := b.cookies["previa_session"].Value
-	if w := b.request(http.MethodGet, "/dashboard", ""); w.Code != 303 || w.Header().Get("Location") != "/auth/github/login" {
+	if w := b.request(http.MethodGet, "/dashboard", ""); w.Code != 303 || w.Header().Get("Location") != "/auth/github/login?next=%2Fdashboard" {
 		t.Fatal("anonymous dashboard request was not redirected")
 	}
-	if w := b.request(http.MethodGet, "/protected", ""); w.Code != 303 || w.Header().Get("Location") != "/auth/github/login" {
+	if w := b.request(http.MethodGet, "/protected", ""); w.Code != 303 || w.Header().Get("Location") != "/auth/github/login?next=%2Fprotected" {
 		t.Fatal("anonymous protected request was not redirected")
 	}
 	state := b.loginState()
@@ -364,8 +364,54 @@ func TestSessionStorageFailureDoesNotAuthenticate(t *testing.T) {
 func TestExpiredSessionHTMXRedirectsWholeDocument(t *testing.T) {
 	browser, _, _ := newTestBrowser(t, memstore.NewWithCleanupInterval(0), &fakeUsers{}, &fakeProvider{})
 	response := browser.request(http.MethodGet, "/dashboard", "", map[string]string{"HX-Request": "true"})
-	if response.Code != http.StatusUnauthorized || response.Header().Get("HX-Redirect") != "/auth/github/login" || response.Header().Get("Location") != "" {
+	if response.Code != http.StatusUnauthorized || response.Header().Get("HX-Redirect") != "/auth/github/login?next=%2Fdashboard" || response.Header().Get("Location") != "" {
 		t.Fatal("expired HTMX session must navigate the full document", response.Code, response.Header())
+	}
+}
+
+func TestLoginReturnsToRequestedBuildLogs(t *testing.T) {
+	b, _, _ := newTestBrowser(t, memstore.NewWithCleanupInterval(0), &fakeUsers{}, &fakeProvider{identity: Identity{ID: 42, Username: "owner"}})
+	const path = "/repositories/1/pull-requests/7/logs?build=12"
+	b.router.(*chi.Mux).With(RequireUser).Get("/repositories/{repoID}/pull-requests/{number}/logs", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("PR build logs"))
+	})
+	w := b.request(http.MethodGet, path, "")
+	w = b.request(http.MethodGet, w.Header().Get("Location"), "")
+	u, err := url.Parse(w.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = b.request(http.MethodGet, "/auth/github/callback?code=valid&state="+u.Query().Get("state"), "")
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != path {
+		t.Fatalf("callback: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	if w := b.request(http.MethodGet, path, ""); w.Code != http.StatusOK || w.Body.String() != "PR build logs" {
+		t.Fatal("requested logs were not reached")
+	}
+}
+
+func TestLoginDestinationOnlyPreservesSafeNavigation(t *testing.T) {
+	for _, c := range []struct{ method, current, want string }{
+		{"GET", "http://localhost:8080/repositories/1/pull-requests/7/logs?build=12", "/repositories/1/pull-requests/7/logs?build=12"},
+		{"GET", "https://evil.test/stolen", "/fragment"},
+		{"GET", "http://localhost:8080//evil.test", "/fragment"},
+		{"POST", "http://localhost:8080/logs", ""},
+	} {
+		r := httptest.NewRequest(c.method, "http://localhost:8080/fragment", nil)
+		r.Header.Set("HX-Request", "true")
+		r.Header.Set("HX-Current-URL", c.current)
+		login, err := url.Parse(loginDestination(r))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := login.Query().Get("next"); got != c.want {
+			t.Errorf("%s %s: next=%q, want %q", c.method, c.current, got, c.want)
+		}
+	}
+	for _, unsafe := range []string{"//evil.test", "/\\evil.test", "/\t/evil.test", "/\n/evil.test", "https://evil.test", "/%zz"} {
+		if LocalPath(unsafe) {
+			t.Errorf("unsafe return path accepted: %q", unsafe)
+		}
 	}
 }
 

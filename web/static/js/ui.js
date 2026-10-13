@@ -372,7 +372,9 @@
       if (lastID) url.searchParams.set('since', lastID);
       source = new EventSource(url);
       const remember = (event) => { if (event.lastEventId) lastID = event.lastEventId; };
-      source.addEventListener('ready', (event) => { remember(event); failures = 0; setState('live'); });
+      // Refetch on connection too: a build may change between the page GET
+      // and subscribing, or while this tab releases its hidden connection.
+      source.addEventListener('ready', (event) => { remember(event); failures = 0; setState('live'); request(); });
       for (const name of ['change', 'resync']) {
         source.addEventListener(name, (event) => { remember(event); failures = 0; setState('live'); request(); });
       }
@@ -394,7 +396,7 @@
     window.addEventListener('pageshow', (event) => { if (event.persisted && !source && !document.hidden) connect(); });
     // Deferred refreshes run once the user finishes filtering or confirming.
     document.addEventListener('close', (event) => {
-      if (event.target.id === 'build-policy' && livePending) setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
+      if (event.target.matches?.('dialog[data-confirmation-dialog]') && livePending) setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
     }, true);
     document.addEventListener('focusout', (event) => {
       const form = event.target.closest?.('#pull-request-filters');

@@ -1,5 +1,5 @@
 # Project handoff
-Last updated: 2026-10-12
+Last updated: 2026-10-13
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
@@ -15,18 +15,28 @@ Last updated: 2026-10-12
 - PostgreSQL 17 via Compose; make migrate-up applies Goose 28 and River 007.
   Dev DB was last checked at 21: run migrations before restarting server and worker.
   Processes refuse an older schema. make egress-image and make router-up prepare Docker.
-- APP_ENV, LOG_LEVEL, INTERNAL_ADDR (127.0.0.1:9090), WORKER_INTERNAL_ADDR (:9091),
-  TRUSTED_PROXIES, BACKUP_STATUS_FILE, BUILDS_PAUSED; /livez, /readyz and /metrics
-  live only on internal listeners; healthcheck/check-config subcommands.
+- /livez, /readyz, /metrics: internal listeners :9090/:9091; healthcheck/check-config.
 - Real suites: make test-builder, test-runtime, test-routing, test-housekeeping,
   test-e2e. Browser: UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-browser;
   UI_TEST_PATTERN narrows cases. Make loads .env; direct Go commands need exports.
-- Release: make release-images PREVIA_VERSION=x; make prod-smoke PREVIA_VERSION=x
-  (needs age; SMOKE_OLD_DUMP rehearses restore; SMOKE_KEEP=1 keeps failure).
-  Smoke uses 127.0.0.1:18080/18443/13000.
+- Release: make release-images / prod-smoke PREVIA_VERSION=x (smoke needs age).
 - WSL: cwd on /mnt/c can go stale; use absolute paths. Docker Desktop's credential
   helper sometimes fails pulls; retry or use an empty DOCKER_CONFIG. .env holds an
   empty ENV_FILE=: unset it after sourcing .env before invoking Make.
+
+## Preview and login fixes (2026-10-13)
+- App output + Private Preview failed real River inserts: custom unique states
+  omitted required Running. Followers now deduplicate per watch epoch; route syncs
+  per route version. Privacy setting/version/job save atomically via InsertTx.
+- Build now applies only to pending Automatic quiet periods; queued/running
+  current commits show disabled progress controls. SSE ready refetches current
+  state; closing any confirmation resumes deferred refreshes.
+- RequireUser preserves safe GET/HEAD URLs through OAuth (HTMX uses same-host
+  document); invalid/direct login clears stale next; mutation URLs aren't replayed.
+- Regressions reproduced queue failures/enabled queued action before fixes.
+  Real River + disposable schema tests cover dedup/replacement/privacy rollback.
+  All 51 browser cases and real Docker follow/redaction/sleep/wake test passed.
+  Full Go: 1411 passed across 81 packages; build/vet/lint passed. docs/02,08 updated.
 
 ## Repository compatibility (2026-10-12, committed 2f7fdb7; migration 0028)
 - Finished Claude's partial build-secret changes and the owner's compatibility list.
@@ -48,29 +58,22 @@ Last updated: 2026-10-12
 - UI explains private packages, nginx 8080/nginx-unprivileged, limits, Compose,
   platforms/GPU/Windows and build-time settings. Runtime already permits low ports
   inside containers; stock nginx can still fail on read-only caches/PID paths.
-- Verified: make build/generate; full Go tests with DB (1406 passed), go build/vet,
-  lint 0; all 49 browser cases; full real BuildKit suite plus identity-reuse check;
-  real MySQL readiness/data/isolation/cleanup. Full runtime had one Docker socket
-  timeout; the unhealthy subtest passed alone on rerun. Backend and basic E2E passed,
-  including 50 HTTPS requests + failed-rebuild preservation. Live private-registry pull untested.
-- Regression harness: queue tests use isolated River schemas (a live dev worker
-  claimed shared test jobs). Basic E2E uses httpd instead of prematurely closing
-  netcat, on pinned BusyBox (Alpine omits httpd); 50 routed requests + failure diagnostics.
+- Prior verification: 1406 Go tests, 49 browser cases, build/vet/lint, real BuildKit
+  identity-reuse, MySQL and backend/basic E2E (50 HTTPS requests + failed rebuild).
+  One runtime socket timeout passed alone on rerun; live private-registry pull untested.
+- Queue tests isolate River schemas from dev workers. Basic E2E uses BusyBox httpd.
 - README/DESIGN and docs/02,06,07,09,11,21 reflect the requested extensions.
-  Follow-up regression fixes and verification docs are included on ui-improvements.
+  Follow-up regression fixes committed in 2cb0ae1 on ui-improvements.
 
 ## Earlier improvements (committed 973907f / 93191aa; migrations 0022-0027)
 - Forks never auto-build (LockIntentPR + ClaimBuildIntent fence; docs/16).
 - Fairness: BUILDS_PER_ACCOUNT, BUILD_MINUTES_PER_ACCOUNT_DAY, account/quota waits,
   waiting_since, wakeNextWaitingTx; PREVIEW_MAX_PER_ACCOUNT and startup capacity
   warning (docs/17). Production example sized for VPS-2.
-- Build traffic: loopback egress meter, build log totals and metrics/alerts;
-  BUILD_EGRESS=registries fails closed (docs/09). 27 alert rules.
+- Build traffic: egress meter, totals/metrics; BUILD_EGRESS=registries fails closed.
 - Retention: BUILD_LOG_RETENTION_DAYS, log deletion, housekeeping_records retention;
   line timestamps local on page, UTC download (docs/08,15).
-- Activity: crash watch -> finished build logs, visits from Traefik metrics,
-  live App output, PREVIEW_IDLE_SLEEP and wake, private previews with forwardAuth
-  (internal/appoutput, idle, previewaccess; docs/08,10).
+- Activity: crash/visits/App output, PREVIEW_IDLE_SLEEP/wake, private forwardAuth.
 - Private previews/wake remain untested against real Traefik; observability checks passed.
 
 ## Backend previews and outbound (docs/11)
@@ -89,10 +92,7 @@ Last updated: 2026-10-12
   into master and pushes to master; last observed green on c94d35f.
 - docs/25 is the deployment guide: OVHcloud VPS-2 + Cloudflare DNS + R2 backups
   (~€7/mo), the owner's choice. NEXT-FEATURES.md lists ten candidates, none built.
-- docs/26: ready for staging; production needs a real host, backups/restore/upgrade,
-  domains + Let's Encrypt staging/production, hosted GitHub OAuth/App/webhooks,
-  authorized disposable-PR source/reporting tests, protected release environment,
-  Alertmanager and optional gVisor. E2E exercises real routing with test certificates;
-  this task did not rerun the dedicated ACME routing suite.
+- docs/26: staging ready; production needs host/backups/domains/ACME, hosted GitHub
+  OAuth/App/webhooks, disposable-PR proof and protected releases. ACME not rerun.
 - Regression tracker: 242 cases in 16 test-docs files; only tick recorded proof.
   Open owner decision: install-tailwind.sh curl has no retry/time limit.

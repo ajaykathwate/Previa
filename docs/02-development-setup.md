@@ -545,6 +545,28 @@ its sign-in check. Run the server on all interfaces and point the worker at it:
 private serves its previews to nobody (the router sends visitors to the unavailable
 page). Production sets it in the Compose file.
 
+Private Preview changes save the setting, route version and River sync job in
+one transaction. A failed enqueue leaves the setting unchanged. Jobs deduplicate
+per route version, allowing a newer change while an older sync is running.
+App output follows the running app's stdout/stderr via the worker's `app_output`
+queue; Build logs cover building and startup instead. After code updates, restart
+both server and worker so they use the corrected queue options; no new migration
+is needed for these fixes.
+
+To verify these flows against local PostgreSQL, export `.env` explicitly for
+direct Go commands (Make's run targets load it automatically):
+
+```sh
+set -a; . ./.env; set +a
+export TEST_DATABASE_URL="${TEST_DATABASE_URL:-$DATABASE_URL}"
+go test ./internal/appoutput ./internal/previewaccess ./internal/auth ./internal/pullrequests
+```
+
+**Expected:** tests pass, including real River enqueue/deduplication, stale
+follower replacement, privacy rollback, and OAuth return to the requested PR
+logs. Tests use disposable schemas. Automatic builds offer **Build now** only
+during the quiet period; queued/running requests show a disabled progress button.
+
 ### Browser regression checks (optional)
 
 ```sh

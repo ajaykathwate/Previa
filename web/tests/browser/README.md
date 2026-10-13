@@ -30,6 +30,9 @@ uses a test-only authenticated presentation path, never a production route.
 Repository/PR cases also verify dedicated-page navigation, filter-preserving
 breadcrumbs/history, aligned desktop controls, legacy bookmarks, failed searches,
 Automatic confirmation/cancel/retry and in-place sync on list/detail pages.
+Signed-out PR Build logs links return to that PR after OAuth. External automatic
+build changes disable queued/running controls through SSE, with deferred updates
+resuming after a confirmation closes.
 Command palette keyboard access, filtering, navigation and logout hand-off, and
 the persisted light/dark theme toggle are also covered, as are live updates without
 polling, the repository Secrets tab (write-only saving, replacing and modal

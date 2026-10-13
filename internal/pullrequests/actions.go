@@ -346,8 +346,15 @@ func (h *Handler) actionsFor(ctx context.Context, row dbgen.OwnedPRRow, noWorker
 		return a, nil
 	}
 	switch row.BuildState {
-	case "pending", "queued":
-		a.BuildNow = row.RequestSource == "automatic" // a manual request is already queued
+	case "pending":
+		a.BuildNow = row.RequestSource == "automatic"
+		if !a.BuildNow {
+			a.InProgress = "Build queued"
+		}
+	case "queued":
+		a.InProgress = "Build queued"
+	case "running":
+		a.InProgress = "Building preview"
 	case "failed":
 		a.Retry = true
 	case "succeeded":
@@ -365,12 +372,12 @@ func buildLabel(row dbgen.OwnedPRRow) string {
 		return "Build latest commit"
 	}
 	switch row.BuildState {
-	case "pending", "queued":
+	case "pending":
 		if row.RequestSource == "automatic" {
 			return "Build now"
 		}
 		return ""
-	case "running":
+	case "queued", "running":
 		return ""
 	case "failed":
 		return "Retry build"

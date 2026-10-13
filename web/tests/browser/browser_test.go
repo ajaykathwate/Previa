@@ -67,6 +67,15 @@ func TestBrowserRegression(t *testing.T) {
 	hub := realtime.NewHub()
 	var syncMu sync.Mutex
 	syncing := map[int64]int{}
+	buildState := ""
+	// External state changes model automatic builds without submitting a UI form.
+	router.Post("/__fixture/build-state", func(w http.ResponseWriter, r *http.Request) {
+		syncMu.Lock()
+		buildState = r.FormValue("state")
+		syncMu.Unlock()
+		hub.Publish(pr.RepositoryTopic(1), "build_intents")
+		w.WriteHeader(http.StatusNoContent)
+	})
 	startSync := func(id int64) {
 		syncMu.Lock()
 		syncing[id] = 2
@@ -222,6 +231,26 @@ func TestBrowserRegression(t *testing.T) {
 			p.Rows = p.Rows[offset:min(offset+10, p.Total)]
 			if n, err := strconv.ParseInt(r.URL.Query().Get("pr"), 10, 32); err == nil && n > 0 {
 				p.SelectedPR = fixturePR(r, sessions, int32(n), p.Available)
+				if n == 7 {
+					syncMu.Lock()
+					state := buildState
+					syncMu.Unlock()
+					if state != "" {
+						selected := p.SelectedPR
+						selected.Build, selected.RequestSource, selected.RequestCurrent = state, "automatic", true
+						selected.Actions = prpages.Actions{Teardown: true, CancelOnly: true}
+						switch state {
+						case "pending":
+							selected.Actions.BuildNow = true
+						case "queued":
+							selected.Actions.InProgress = "Build queued"
+						case "running":
+							selected.Actions.InProgress = "Building preview"
+						case "succeeded":
+							selected.Actions.Rebuild = true
+						}
+					}
+				}
 			}
 			return p
 		}

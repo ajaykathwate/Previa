@@ -60,7 +60,7 @@ type Permissions interface {
 
 // Enqueuer asks a worker to rewrite the router's file.
 type Enqueuer interface {
-	Insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error)
+	InsertTx(ctx context.Context, tx pgx.Tx, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error)
 }
 
 type Handler struct {
@@ -229,8 +229,16 @@ func (h *Handler) set(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		changed = true
-		_, err = q.AdvanceRouteTable(r.Context())
-		return err
+		version, err := q.AdvanceRouteTable(r.Context())
+		if err != nil {
+			return fmt.Errorf("advance preview route table: %w", err)
+		}
+		args := routing.SyncArgs{Version: version}
+		opts := args.InsertOpts()
+		if _, err := h.jobs.InsertTx(r.Context(), tx, args, &opts); err != nil {
+			return fmt.Errorf("queue preview access routes: %w", err)
+		}
+		return nil
 	})
 	if errors.Is(err, errNotOwned) {
 		http.NotFound(w, r)
@@ -241,12 +249,6 @@ func (h *Handler) set(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if changed {
-		args := routing.SyncArgs{}
-		opts := args.InsertOpts()
-		if _, err := h.jobs.Insert(r.Context(), args, &opts); err != nil {
-			h.fail(w, r, err)
-			return
-		}
 		h.logger.InfoContext(r.Context(), "preview access changed", "repo_id", repoID, "private", private)
 	}
 	http.Redirect(w, r, "/repositories/"+strconv.FormatInt(repoID, 10), http.StatusSeeOther)

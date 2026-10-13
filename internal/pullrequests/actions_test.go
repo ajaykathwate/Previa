@@ -89,6 +89,30 @@ func (h *actionsHarness) request(t *testing.T, method, path, body string) *httpt
 
 const detailPath = "/repositories/1/pull-requests/7"
 
+func TestAutomaticBuildActionStopsOnceQueued(t *testing.T) {
+	h := newActionsHarness(t)
+	h.exec(t, `INSERT INTO build_intents(pull_request_id, revision, base_revision, generation, head_sha, source, request_action, idempotency_key, state, available_at)
+		SELECT id,1,0,generation,head_sha,'automatic','automatic','automatic-test','pending',now()+interval '5 minutes' FROM pull_requests WHERE id=$1`, h.prID)
+	form, body := h.form(t)
+	if form == nil || !strings.Contains(body, "Build now") {
+		t.Fatal("automatic quiet period must allow Build now")
+	}
+	for _, state := range []string{"queued", "running"} {
+		h.exec(t, "UPDATE build_intents SET state=$1, started_at=CASE WHEN $1='running' THEN now() ELSE NULL END WHERE pull_request_id=$2", state, h.prID)
+		form, body := h.form(t)
+		if form != nil {
+			t.Fatalf("%s still offers a build form", state)
+		}
+		label := "Build queued"
+		if state == "running" {
+			label = "Building preview"
+		}
+		if !strings.Contains(body, label) {
+			t.Fatalf("%s missing progress label", state)
+		}
+	}
+}
+
 // form reads the detail page and returns its build form's values (or nil)
 // and the page body.
 func (h *actionsHarness) form(t *testing.T) (url.Values, string) {

@@ -11,9 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/platform/queue"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	"github.com/go-chi/chi/v5"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -29,6 +32,61 @@ func (session) Username(context.Context) (string, bool) { return "owner", true }
 func (session) CSRFToken(context.Context) string        { return "csrf" }
 
 type jobs struct{ inserted []FollowArgs }
+
+func TestFollowerUsesRealQueueAndReplacesStaleRunningJob(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	m, err := rivermigrate.New(riverpgxv5.New(f.pool), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	producer, err := queue.NewProducer(f.pool, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(f.store, session{}, producer, nil, realtime.DefaultStreamOptions, logger)
+	for range 2 {
+		if err := h.watch(ctx, f.envID, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func(want int) {
+		t.Helper()
+		var got int
+		if err := f.pool.QueryRow(ctx, "SELECT count(*) FROM river_job").Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("jobs = %d, want %d", got, want)
+		}
+	}
+	count(1)
+	f.exec(t, "UPDATE river_job SET state='running', attempted_at=now()")
+	epoch, began, err := f.store.Begin(ctx, f.envID)
+	if err != nil || !began {
+		t.Fatalf("begin: %v, %v", began, err)
+	}
+	if err := h.watch(ctx, f.envID, true); err != nil {
+		t.Fatal(err)
+	}
+	count(1)
+	f.exec(t, "UPDATE app_output_watches SET updated_at=now()-interval '1 minute'")
+	if err := h.watch(ctx, f.envID, true); err != nil {
+		t.Fatal(err)
+	}
+	count(2)
+	next, began, err := f.store.Begin(ctx, f.envID)
+	if err != nil || !began || next <= epoch {
+		t.Fatalf("replacement: %d, %v, %v", next, began, err)
+	}
+	if err := f.store.Append(ctx, f.envID, epoch, []Line{{At: time.Now(), Text: "stale"}}); err == nil {
+		t.Fatal("stale follower was not fenced")
+	}
+}
 
 func (j *jobs) Insert(_ context.Context, args river.JobArgs, _ *river.InsertOpts) (*rivertype.JobInsertResult, error) {
 	j.inserted = append(j.inserted, args.(FollowArgs))

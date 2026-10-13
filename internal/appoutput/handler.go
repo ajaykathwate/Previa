@@ -113,7 +113,11 @@ func (h *Handler) watch(ctx context.Context, environmentID int64, touch bool) er
 	if err != nil || !needed {
 		return err
 	}
-	args := FollowArgs{EnvironmentID: environmentID}
+	watch, err := h.store.Watch(ctx, environmentID)
+	if err != nil {
+		return fmt.Errorf("read app output watch: %w", err)
+	}
+	args := FollowArgs{EnvironmentID: environmentID, Epoch: watch.Epoch}
 	opts := args.InsertOpts()
 	if _, err := h.jobs.Insert(ctx, args, &opts); err != nil {
 		return fmt.Errorf("start app output follower: %w", err)

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -66,16 +67,37 @@ func (h *Handler) LoadUser(next http.Handler) http.Handler {
 func RequireUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := CurrentUser(r.Context()); !ok {
+			login := loginDestination(r)
 			if r.Header.Get("HX-Request") == "true" {
-				w.Header().Set("HX-Redirect", "/auth/github/login")
+				w.Header().Set("HX-Redirect", login)
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
-			http.Redirect(w, r, "/auth/github/login", http.StatusSeeOther)
+			http.Redirect(w, r, login, http.StatusSeeOther)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// loginDestination preserves safe navigation, never a mutation. HTMX's
+// current document is preferable to returning to a fragment endpoint.
+func loginDestination(r *http.Request) string {
+	const login = "/auth/github/login"
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return login
+	}
+	next := r.URL.RequestURI()
+	if r.Header.Get("HX-Request") == "true" {
+		current, err := url.Parse(r.Header.Get("HX-Current-URL"))
+		if err == nil && current.Host == r.Host && (current.Scheme == "http" || current.Scheme == "https") && LocalPath(current.RequestURI()) {
+			next = current.RequestURI()
+		}
+	}
+	if !LocalPath(next) {
+		return login
+	}
+	return login + "?" + url.Values{"next": {next}}.Encode()
 }
 
 // CSRF protects unsafe methods using a random token stored in the server session.

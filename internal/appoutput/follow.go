@@ -52,18 +52,19 @@ type Source interface {
 // FollowArgs starts a follower for one preview.
 type FollowArgs struct {
 	EnvironmentID int64 `json:"environment_id"`
+	Epoch         int64 `json:"epoch"`
 }
 
 func (FollowArgs) Kind() string { return "app_output_follow" }
 
-// InsertOpts keeps one waiting follower per preview. A running one does not
-// block another: Begin lets only one follow, and a follower whose worker
-// stopped is replaced without waiting for River to rescue its job.
+// InsertOpts deduplicates requests for the same watch generation. Begin
+// advances the epoch, allowing a stale running follower to be replaced
+// without waiting for River to rescue its job; writes remain epoch-fenced.
 func (FollowArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{Queue: Queue, MaxAttempts: 1, UniqueOpts: river.UniqueOpts{
 		ByArgs: true,
 		ByState: []rivertype.JobState{
-			rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable, rivertype.JobStateScheduled,
+			rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled,
 		},
 	}}
 }

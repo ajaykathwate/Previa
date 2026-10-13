@@ -41,6 +41,42 @@ async function login() {
   await page.waitForURL(`${origin}/dashboard`);
   assert.match(await page.locator('.dashboard-heading').innerText(), /design-review/);
 }
+
+test('signed-out PR build logs return to the same logs after GitHub login', async () => {
+  await context.request.post(`${origin}/__fixture/logs/seed`);
+  const path = '/repositories/1/pull-requests/3/logs';
+  await page.goto(`${origin}${path}`);
+  await page.waitForURL(`${origin}${path}`);
+  assert.match(await page.locator('.app-breadcrumb').innerText(), /#3[\s\S]*Build logs/);
+  assert.equal(new URL(page.url()).pathname, path);
+});
+
+test('automatic build disables its action live and refreshes after a confirmation closes', async () => {
+  const change = state => context.request.post(`${origin}/__fixture/build-state`, {form: {state}});
+  await change('pending');
+  try {
+    await login();
+    await page.goto(`${origin}/repositories/1/pull-requests/7`);
+    assert(await page.getByRole('button', {name: 'Build now', exact: true}).isEnabled());
+    await page.waitForFunction(() => document.documentElement.dataset.liveState === 'live');
+    await change('queued');
+    const queued = page.getByRole('button', {name: 'Build queued', exact: true});
+    await queued.waitFor();
+    assert(await queued.isDisabled());
+    await change('running');
+    const running = page.getByRole('button', {name: 'Building preview', exact: true});
+    await running.waitFor();
+    assert(await running.isDisabled());
+    await page.getByRole('button', {name: 'Cancel build', exact: true}).click();
+    await page.waitForFunction(() => document.querySelector('#teardown-preview').matches(':modal'));
+    await change('succeeded');
+    // The live signal is deferred while this dialog is open.
+    await page.waitForTimeout(200);
+    assert(await running.isDisabled());
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', {name: 'Rebuild preview', exact: true}).waitFor();
+  } finally { await change(''); }
+});
 async function readyPanel(id) {
   await page.locator(`[data-selected-repo="${id}"]`).waitFor();
   await page.waitForFunction(()=>!document.getElementById('repository-detail').hasAttribute('aria-busy'));
@@ -859,12 +895,12 @@ test('unavailable repositories and empty PR states remain clear and cannot reque
  assert.equal(await page.locator('#repository-filters').count(),0);
 });
 
-test('expired sessions during panel selection navigate the whole document to sign-in',async()=>{
+test('expired sessions navigate through sign-in and return to the requested page',async()=>{
  await login();await page.goto(`${origin}/repositories/1`);
  const token=await page.locator('#logout-confirmation input[name=csrf_token]').inputValue();
  assert.equal((await context.request.post(`${origin}/auth/logout`,{form:{csrf_token:token},maxRedirects:0})).status(),303);
- await page.getByRole('link',{name:'Repositories',exact:true}).last().click();await page.waitForURL(`${origin}/dashboard`);
- assert.equal(await page.locator('#repository-detail').count(),0);assert.match(await page.locator('.dashboard-heading').innerText(),/design-review/);
+ await page.getByRole('link',{name:'Repositories',exact:true}).last().click();await page.waitForURL(`${origin}/repositories`);
+ assert.equal(await page.locator('#repository-detail').count(),0);await page.locator('#repository-filters').waitFor();
 });
 
 

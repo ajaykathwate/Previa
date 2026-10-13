@@ -271,18 +271,21 @@ func compare(generation, revision, otherGeneration, otherRevision int64) int {
 // SyncArgs asks a worker to rewrite the router's file from the accepted
 // route table, after a change made outside a route operation (a
 // repository's previews made private or public).
-type SyncArgs struct{}
+type SyncArgs struct {
+	Version int64 `json:"version"`
+}
 
 func (SyncArgs) Kind() string { return "route_sync" }
 
 // SyncQueue runs route syncs one at a time.
 const SyncQueue = "route_sync"
 
-// InsertOpts keeps one waiting sync: it writes the latest table anyway.
+// InsertOpts deduplicates a route version while allowing a newer version
+// to queue during a running sync. Each sync writes the latest table.
 func (SyncArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{Queue: SyncQueue, MaxAttempts: 10, UniqueOpts: river.UniqueOpts{
 		ByArgs:  true,
-		ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateScheduled, rivertype.JobStateRetryable},
+		ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateScheduled, rivertype.JobStateRetryable},
 	}}
 }
 
