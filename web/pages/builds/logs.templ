@@ -2,6 +2,7 @@ package builds
 
 import (
 	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/logviewer"
 	"github.com/ajaykathwatee/previa/web/components/button"
 	"github.com/ajaykathwatee/previa/web/layouts"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
@@ -45,9 +46,7 @@ templ Logs(username, csrf string, p LogPage) {
 					if p.StreamSHA != "" {
 						<code class="sha" title={ p.StreamSHA } data-log-sha>{ pages.Short(p.StreamSHA) }</code>
 					}
-					if p.EventsURL != "" {
-						<span class="log-live" data-log-connection aria-live="polite">Live updates off</span>
-					}
+
 				</div>
 				if progress, ok := p.Progress(); ok {
 					@pages.Tracker(progress, "")
@@ -67,82 +66,7 @@ templ Logs(username, csrf string, p LogPage) {
 					</li>
 				</template>
 			</section>
-			<section
-				class="workspace-panel log-panel"
-				aria-labelledby="log-output-title"
-				if p.EventsURL != "" {
-					data-log-events={ p.EventsURL }
-					data-log-cursor={ p.Cursor() }
-				}
-			>
-				<header class="log-panel-header">
-					<div class="log-panel-title">
-						<span class="log-window-dots" aria-hidden="true"><i></i><i></i><i></i></span>
-						<h2 id="log-output-title">Output</h2>
-						<span class="log-panel-note">Secrets are masked</span>
-					</div>
-					<nav class="log-pager" aria-label="Log pages">
-						if p.Before > 0 {
-							<a class="log-tool" href={ templ.SafeURL(p.EarlierURL()) } rel="prev">
-								@components.ArrowLeft()
-								Earlier lines
-							</a>
-						}
-						if p.Tail {
-							<a class="log-tool" href={ templ.SafeURL(p.LatestURL()) }>
-								@components.RestartIcon()
-								Refresh
-							</a>
-						} else {
-							<a class="log-tool" href={ templ.SafeURL(p.LatestURL()) }>Latest lines</a>
-						}
-						if p.HasOutput {
-							<button type="button" class="copy-button log-tool" data-copy-lines="[data-log-lines]" aria-label="Copy the lines shown">
-								@components.CopyIcon()
-								<span data-copy-status aria-live="polite">Copy</span>
-							</button>
-							<a class="log-tool" href={ templ.SafeURL(p.DownloadURL()) } download>
-								@components.DownloadIcon()
-								Download
-							</a>
-						}
-						if p.CanDelete {
-							<button type="button" class="log-tool log-tool-danger" data-open-dialog="delete-logs" commandfor="delete-logs" command="show-modal" aria-haspopup="dialog">
-								@components.TrashIcon()
-								Delete logs
-							</button>
-						}
-						if p.EventsURL != "" {
-							<label class="log-follow" hidden data-log-follow-control>
-								<input type="checkbox" checked data-log-follow/>
-								Follow output
-							</label>
-						}
-					</nav>
-				</header>
-				<p class="log-empty" data-log-empty hidden?={ len(p.Lines) > 0 }>{ p.Empty }</p>
-				<ol class="log-lines" aria-label="Build output" data-log-lines>
-					for _, line := range p.Lines {
-						<li id={ line.Anchor() } class={ "log-line", templ.KV("log-system", line.System), templ.KV("log-error", line.IsError()) }>
-							<a class="log-number" href={ templ.SafeURL("#" + line.Anchor()) } tabindex="-1">{ line.Number() }</a>
-							if line.Time() != "" {
-								<time class="log-time" datetime={ line.ISOTime() } title={ line.ISOTime() } data-log-time>{ line.Time() }</time>
-							} else {
-								<span class="log-time"></span>
-							}
-							<span class="log-text">{ line.Text }</span>
-						</li>
-					}
-				</ol>
-				if p.More {
-					<footer class="log-panel-footer">
-						<a class="text-link" href={ templ.SafeURL(p.LaterURL()) } rel="next">
-							Later lines
-							@components.Arrow()
-						</a>
-					</footer>
-				}
-			</section>
+			@logviewer.Viewer(p.Viewer())
 			if p.CanDelete {
 				@components.ConfirmationDialog("delete-logs", "Delete these build logs?", "This attempt's output is removed from Previa now and can't be recovered. Database backups keep it until they expire, at most 30 days. Building again records new logs.") {
 					<form method="post" action={ templ.SafeURL(p.DeleteURL()) } class="dialog-actions">

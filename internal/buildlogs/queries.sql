@@ -52,6 +52,22 @@ SELECT sequence, kind, line, created_at FROM build_logs
 WHERE environment_id = $1 AND epoch = $2 AND sequence < $3
 ORDER BY sequence DESC LIMIT $4;
 
+-- name: SearchFrom :many
+SELECT sequence, kind, line, created_at FROM build_logs
+WHERE environment_id = sqlc.arg(environment_id) AND epoch = sqlc.arg(epoch)
+  AND sequence >= sqlc.arg(position)::bigint
+  AND (sqlc.arg(kind)::text = '' OR kind = sqlc.arg(kind)::text)
+  AND strpos(lower(line), lower(sqlc.arg(query)::text)) > 0
+ORDER BY sequence LIMIT sqlc.arg(max_lines)::int;
+
+-- name: SearchBefore :many
+SELECT sequence, kind, line, created_at FROM build_logs
+WHERE environment_id = sqlc.arg(environment_id) AND epoch = sqlc.arg(epoch)
+  AND sequence < sqlc.arg(position)::bigint
+  AND (sqlc.arg(kind)::text = '' OR kind = sqlc.arg(kind)::text)
+  AND strpos(lower(line), lower(sqlc.arg(query)::text)) > 0
+ORDER BY sequence DESC LIMIT sqlc.arg(max_lines)::int;
+
 -- name: ExpiredStreams :many
 SELECT environment_id, epoch FROM build_log_streams
 WHERE pruned_at IS NULL AND coalesce(finished_at, opened_at) < sqlc.arg(cutoff)

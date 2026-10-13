@@ -34,6 +34,8 @@ import (
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/starterkits"
 	"github.com/ajaykathwatee/previa/web"
+	outputpages "github.com/ajaykathwatee/previa/web/pages/appoutput"
+	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
 	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
@@ -122,6 +124,25 @@ func TestBrowserRegression(t *testing.T) {
 		buildlogs.NewHandler(logs, handler, logger).
 			WithLiveUpdates(hub, realtime.StreamOptions{Retry: 500 * time.Millisecond, Heartbeat: 10 * time.Second, MaxDuration: time.Minute}).
 			Mount(r, auth.RequireUser)
+		// App output uses the same SSE event protocol. This presentation fixture
+		// exercises its actual template and renderer; backend tests cover followers.
+		r.With(auth.RequireUser).Get("/repositories/1/pull-requests/3/output", func(w http.ResponseWriter, r *http.Request) {
+			stream, err := logs.Stream(r.Context(), fixtureLogEnvironment)
+			if err != nil {
+				http.Error(w, "fixture stream unavailable", 500)
+				return
+			}
+			lines, err := logs.LinesBefore(r.Context(), fixtureLogEnvironment, stream.Epoch, stream.Lines, 500)
+			if err != nil {
+				http.Error(w, "fixture lines unavailable", 500)
+				return
+			}
+			view := outputpages.OutputPage{RepoID: 1, Repository: "fixture-owner/repository-1", Number: 3, Title: "App output", StatusLabel: "Live", StatusTone: "tone-ok", Summary: "The app is running.", Epoch: stream.Epoch, After: stream.Lines, EventsURL: prpages.LogsURL(1, 3) + "/events"}
+			for _, line := range lines {
+				view.Lines = append(view.Lines, buildpages.LogLine{Sequence: line.Sequence, System: line.System, Text: line.Text, At: line.At})
+			}
+			templ.Handler(outputpages.Output("design-review", handler.CSRFToken(r.Context()), view)).ServeHTTP(w, r)
+		})
 		// The Overview shows an empty workspace until a test asks for a busy one
 		// (GET /__fixture/overview?state=busy), kept in the session.
 		// Starter kits with Previa's default service versions and no worker.
@@ -556,7 +577,7 @@ func (f *fixtureLogs) add(texts ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, text := range texts {
-		f.lines = append(f.lines, buildlogs.Line{Sequence: int64(len(f.lines)), Text: text})
+		f.lines = append(f.lines, buildlogs.Line{Sequence: int64(len(f.lines)), Text: text, At: time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)})
 	}
 }
 
@@ -564,7 +585,7 @@ func (f *fixtureLogs) add(texts ...string) {
 func (f *fixtureLogs) addSystem(text string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.lines = append(f.lines, buildlogs.Line{Sequence: int64(len(f.lines)), System: true, Text: text})
+	f.lines = append(f.lines, buildlogs.Line{Sequence: int64(len(f.lines)), System: true, Text: text, At: time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)})
 }
 
 func (f *fixtureLogs) restart(text string) {
@@ -595,6 +616,40 @@ func (f *fixtureLogs) Stream(_ context.Context, environmentID int64) (buildlogs.
 	return buildlogs.Stream{EnvironmentID: environmentID, Epoch: f.epoch, Generation: 1, Revision: f.epoch, HeadSHA: "1234567890abcdef", Lines: int64(len(f.lines))}, nil
 }
 
+func (f *fixtureLogs) SearchFrom(_ context.Context, _, epoch, from int64, limit int, filter buildlogs.Filter) ([]buildlogs.Line, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := []buildlogs.Line{}
+	if epoch != f.epoch {
+		return result, nil
+	}
+	for _, line := range f.lines {
+		if line.Sequence >= from && filter.Matches(line) {
+			result = append(result, line)
+			if len(result) == limit {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+func (f *fixtureLogs) SearchBefore(_ context.Context, _, epoch, before int64, limit int, filter buildlogs.Filter) ([]buildlogs.Line, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := []buildlogs.Line{}
+	if epoch != f.epoch {
+		return result, nil
+	}
+	for _, line := range f.lines {
+		if line.Sequence < before && filter.Matches(line) {
+			result = append(result, line)
+		}
+	}
+	if len(result) > limit {
+		result = result[len(result)-limit:]
+	}
+	return result, nil
+}
 func (f *fixtureLogs) LinesFrom(_ context.Context, _, epoch, from int64, limit int) ([]buildlogs.Line, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -632,6 +687,8 @@ func fixturePR(r *http.Request, sessions *scs.SessionManager, number int32, avai
 	}
 	switch number {
 	case 3:
+		pr.ExecutionWorker = true
+		pr.ServicesOffered = []string{"mysql 8.4", "postgres 17, 16", "redis 8, 7"}
 		pr.Build, pr.RequestedSHA, pr.Environment, pr.DeployedSHA = "succeeded", "older-commit", "running", "older-commit"
 		pr.PreviewURL, pr.ExpiresAt, pr.OlderPreview = "https://pr-3-1-fixture.preview.example.com", "2026-10-07T10:00:00Z", true
 		pr.Actions = prpages.Actions{Build: true, Teardown: true, ExpectedRevision: 1, RequestKey: "fixture-request-key-0003"}

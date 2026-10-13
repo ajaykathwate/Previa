@@ -671,6 +671,21 @@ needed. To use an existing Chromium, set
 scenarios whose titles match (for example `UI_TEST_PATTERN='slow|offline'`); the
 whole suite takes about two minutes. Details: [web/tests/browser/README.md](../web/tests/browser/README.md).
 
+To verify the build-log viewer specifically:
+
+```sh
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium UI_TEST_PATTERN='build logs|PR logs|recent log' make test-browser
+set -a; . ./.env; set +a
+TEST_DATABASE_URL="$DATABASE_URL" go test -count=1 -race ./internal/buildlogs ./internal/appoutput ./web/components/logviewer
+```
+
+**Expected:** the PR log link opens the last 300 events beneath its main card;
+source/search filters, copyable inline dates, full-page navigation, live tail,
+stream cleanup, pagination and the JavaScript-free fallback pass. Database
+search tests use temporary schemas. No new configuration or migration is needed;
+`make build` regenerates templates, SQL bindings and CSS. Restart/rebuild the
+server (or let Air rebuild it) and refresh the browser to load the updated assets.
+
 ### Full regression
 
 [test-docs/](../test-docs/README.md) lists every regression test case by module,

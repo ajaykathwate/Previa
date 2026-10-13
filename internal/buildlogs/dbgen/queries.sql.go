@@ -509,3 +509,117 @@ func (q *Queries) ReadStream(ctx context.Context, environmentID int64) (BuildLog
 	)
 	return i, err
 }
+
+const searchBefore = `-- name: SearchBefore :many
+SELECT sequence, kind, line, created_at FROM build_logs
+WHERE environment_id = $1 AND epoch = $2
+  AND sequence < $3::bigint
+  AND ($4::text = '' OR kind = $4::text)
+  AND strpos(lower(line), lower($5::text)) > 0
+ORDER BY sequence DESC LIMIT $6::int
+`
+
+type SearchBeforeParams struct {
+	EnvironmentID int64
+	Epoch         int64
+	Position      int64
+	Kind          string
+	Query         string
+	MaxLines      int32
+}
+
+type SearchBeforeRow struct {
+	Sequence  int64
+	Kind      string
+	Line      string
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) SearchBefore(ctx context.Context, arg SearchBeforeParams) ([]SearchBeforeRow, error) {
+	rows, err := q.db.Query(ctx, searchBefore,
+		arg.EnvironmentID,
+		arg.Epoch,
+		arg.Position,
+		arg.Kind,
+		arg.Query,
+		arg.MaxLines,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchBeforeRow
+	for rows.Next() {
+		var i SearchBeforeRow
+		if err := rows.Scan(
+			&i.Sequence,
+			&i.Kind,
+			&i.Line,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchFrom = `-- name: SearchFrom :many
+SELECT sequence, kind, line, created_at FROM build_logs
+WHERE environment_id = $1 AND epoch = $2
+  AND sequence >= $3::bigint
+  AND ($4::text = '' OR kind = $4::text)
+  AND strpos(lower(line), lower($5::text)) > 0
+ORDER BY sequence LIMIT $6::int
+`
+
+type SearchFromParams struct {
+	EnvironmentID int64
+	Epoch         int64
+	Position      int64
+	Kind          string
+	Query         string
+	MaxLines      int32
+}
+
+type SearchFromRow struct {
+	Sequence  int64
+	Kind      string
+	Line      string
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) SearchFrom(ctx context.Context, arg SearchFromParams) ([]SearchFromRow, error) {
+	rows, err := q.db.Query(ctx, searchFrom,
+		arg.EnvironmentID,
+		arg.Epoch,
+		arg.Position,
+		arg.Kind,
+		arg.Query,
+		arg.MaxLines,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchFromRow
+	for rows.Next() {
+		var i SearchFromRow
+		if err := rows.Scan(
+			&i.Sequence,
+			&i.Kind,
+			&i.Line,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

@@ -523,152 +523,220 @@
     document.addEventListener('htmx:afterSettle', render);
   }
 
-  // Build log line times arrive in UTC; show them in the viewer's time zone,
-  // with the full date as the title.
-  const logClock = new Intl.DateTimeFormat(undefined, {hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'});
-  function localLogTime(element) {
-    const when = new Date(element.dateTime);
-    if (Number.isNaN(when.getTime())) return;
-    element.textContent = logClock.format(when);
-    element.title = when.toLocaleString();
-  }
-  function initLogTimes() {
-    document.querySelectorAll('time[data-log-time]').forEach(localLogTime);
+  // Preserve native full timestamps; otherwise use the received UTC timestamp.
+  const logTimestampPrefix = /^\[?\d{4}[-/]\d{2}[-/]\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\]?/;
+  function logTimestamp(line) {
+    const prefix = line.text.match(logTimestampPrefix)?.[0];
+    const when = new Date(line.at || '');
+    return prefix || (Number.isNaN(when.getTime()) ? '[timestamp unavailable]' : when.toISOString());
   }
 
   // Build logs: the server streams the current attempt's lines with ids
   // "<epoch>.<next>". A "reset" means a new attempt replaced the logs. Lines are
   // inserted as text, never markup. Hidden tabs release the connection.
   function initBuildLogs() {
-    const panel = document.querySelector('[data-log-events]');
-    const list = panel?.querySelector('[data-log-lines]');
-    if (!panel || !list || !('EventSource' in window)) return;
-    const base = new URL(panel.dataset.logEvents, window.location.href);
-    const empty = panel.querySelector('[data-log-empty]');
-    const follow = panel.querySelector('[data-log-follow]');
-    const connection = document.querySelector('[data-log-connection]');
-    const status = document.querySelector('.log-status');
-    const trackerElement = status?.querySelector('[data-build-progress]');
-    const tracker = trackerElement ? trackBuild(trackerElement) : null;
-    let cursor = panel.dataset.logCursor || '';
-    let source = null;
-    let failures = 0;
-    let retry = 0;
-    panel.querySelector('[data-log-follow-control]')?.removeAttribute('hidden');
-    const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 24;
-    const stick = () => { if (follow?.checked) list.scrollTop = list.scrollHeight; };
-    list.addEventListener('scroll', () => { if (follow) follow.checked = nearBottom(); }, { passive: true });
-    follow?.addEventListener('change', stick);
-    const setState = (state, text) => {
-      if (!connection) return;
-      connection.dataset.state = state;
-      connection.textContent = text;
+    const viewers = new Map();
+    const active = panel => panel.isConnected && !document.hidden && (!panel.closest('[data-pr-logs]') || panel.closest('[data-pr-logs]').open);
+    const scan = () => {
+      for (const [panel, viewer] of viewers) {
+        if (!panel.isConnected || (panel.closest('[data-pr-logs]') && !panel.closest('[data-pr-logs]').open)) { viewer.close(); viewers.delete(panel); }
+      }
+      document.querySelectorAll('[data-log-events]').forEach(panel => {
+        if (!viewers.has(panel) && active(panel)) { const viewer = start(panel); if (viewer) viewers.set(panel, viewer); }
+      });
     };
-    const append = (lines) => {
-      const fragment = document.createDocumentFragment();
-      for (const line of lines) {
-        const number = String(line.n + 1);
-        const item = document.createElement('li');
-        item.id = 'L' + number;
-        item.className = line.system ? 'log-line log-system' : 'log-line';
-        if (!line.system && /\b(error|failed|fatal|panic)\b/i.test(line.text)) item.classList.add('log-error');
-        const anchor = document.createElement('a');
-        anchor.className = 'log-number';
-        anchor.href = '#L' + number;
-        anchor.tabIndex = -1;
-        anchor.textContent = number;
-        let time = document.createElement('span');
-        if (line.at) {
-          time = document.createElement('time');
-          time.dateTime = line.at;
-          time.dataset.logTime = '';
-          localLogTime(time);
+    function start(panel) {
+      const list = panel?.querySelector('[data-log-lines]');
+      if (!panel || !list || !('EventSource' in window)) return;
+      const base = new URL(panel.dataset.logEvents, window.location.href);
+      const empty = panel.querySelector('[data-log-empty]');
+      const follow = panel.querySelector('[data-log-follow]');
+      const status = panel.closest('.build-logs-page')?.querySelector('.log-status');
+      const connection = panel.querySelector('[data-log-connection]') || status?.querySelector('[data-log-connection]');
+      const trackerElement = status?.querySelector('[data-build-progress]');
+      const tracker = trackerElement ? trackBuild(trackerElement) : null;
+      let cursor = panel.dataset.logCursor || '';
+      let source = null;
+      let failures = 0;
+      let retry = 0;
+      panel.querySelector('[data-log-follow-control]')?.removeAttribute('hidden');
+      const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 24;
+      const stick = () => { if (follow?.checked) list.scrollTop = list.scrollHeight; };
+      list.addEventListener('scroll', () => { if (follow) follow.checked = nearBottom(); }, { passive: true });
+      follow?.addEventListener('change', stick);
+      const setState = (state, text) => {
+        if (!connection) return;
+        connection.dataset.state = state;
+        connection.textContent = text;
+      };
+      const append = (lines) => {
+        const fragment = document.createDocumentFragment();
+        for (const line of lines) {
+          const category = line.system ? 'previa' : 'application';
+          const filter = panel.dataset.logSource || 'all';
+          if ((filter !== 'all' && filter !== '' && filter !== category) || !line.text.toLowerCase().includes((panel.dataset.logQuery || '').toLowerCase())) continue;
+          const number = String(line.n + 1);
+          const item = document.createElement('li');
+          item.id = 'L' + number;
+          item.dataset.logSource = category;
+          item.className = line.system ? 'log-line log-system' : 'log-line';
+          if (!line.system && /\b(error|failed|fatal|panic)\b/i.test(line.text)) item.classList.add('log-error');
+          const anchor = document.createElement('a');
+          anchor.className = 'log-number';
+          anchor.href = '#L' + number;
+          anchor.tabIndex = -1;
+          anchor.textContent = number;
+          const text = document.createElement('span');
+          text.className = 'log-text';
+          const timestamp = document.createElement('span');
+          timestamp.className = 'log-timestamp';
+          timestamp.textContent = logTimestamp(line);
+          timestamp.title = line.at ? 'Received at ' + line.at : 'Received timestamp unavailable';
+          const prefix = line.text.match(logTimestampPrefix)?.[0];
+          const message = prefix ? line.text.slice(prefix.length).replace(/^ /, '') : line.text;
+          text.append(timestamp, document.createTextNode(' ' + message));
+          item.append(anchor, text);
+          fragment.append(item);
         }
-        time.classList.add('log-time');
-        const text = document.createElement('span');
-        text.className = 'log-text';
-        text.textContent = line.text;
-        item.append(anchor, time, text);
-        fragment.append(item);
-      }
-      const wasAtBottom = nearBottom();
-      list.append(fragment);
-      if (empty) empty.hidden = list.childElementCount > 0;
-      if (follow?.checked || wasAtBottom) stick();
-    };
-    const showState = (state) => {
-      const badge = status?.querySelector('[data-log-badge]');
-      if (badge) {
-        badge.className = 'badge ' + state.tone;
-        badge.querySelector('[data-log-label]').textContent = state.label;
-      }
-      const summary = status?.querySelector('[data-log-summary]');
-      if (summary && summary.textContent !== state.summary) summary.textContent = state.summary;
-      let sha = status?.querySelector('[data-log-sha]');
-      if (state.sha && !sha && summary) {
-        sha = document.createElement('code');
-        sha.className = 'sha';
-        sha.dataset.logSha = '';
-        summary.after(sha);
-      }
-      if (sha) { sha.textContent = state.sha.slice(0, 12); sha.title = state.sha; sha.hidden = !state.sha; }
-      const notices = status?.querySelector('[data-log-notices]');
-      const template = status?.querySelector('[data-log-notice-template]');
-      if (notices && template) {
-        notices.replaceChildren(...state.notices.map((notice) => {
-          const item = template.content.firstElementChild.cloneNode(true);
-          item.classList.add(notice.tone);
-          item.querySelector('span').textContent = notice.text;
-          return item;
-        }));
-      }
-      if (empty && state.empty) empty.textContent = state.empty;
-    };
-    const remember = (event) => { if (event.lastEventId) cursor = event.lastEventId; };
-    const connect = () => {
-      clearTimeout(retry);
-      const url = new URL(base);
-      if (cursor) url.searchParams.set('since', cursor);
-      source = new EventSource(url);
-      source.addEventListener('reset', (event) => {
-        remember(event);
-        list.replaceChildren();
-        if (empty) empty.hidden = false;
-        tracker?.reset();
-      });
-      source.addEventListener('lines', (event) => {
-        remember(event);
-        failures = 0;
-        setState('live', 'Live');
-        const lines = JSON.parse(event.data).lines;
-        append(lines);
-        tracker?.lines(lines);
-      });
-      source.addEventListener('state', (event) => {
-        remember(event);
-        failures = 0;
-        setState('live', 'Live');
-        const state = JSON.parse(event.data);
-        showState(state);
-        tracker?.state(state.label);
-      });
-      source.addEventListener('error', () => {
-        if (source?.readyState !== EventSource.CLOSED) { setState('reconnecting', 'Reconnecting…'); return; }
-        source = null;
-        failures++;
-        if (failures > 5) { setState('offline', 'Live updates unavailable — reload to retry'); return; }
-        setState('reconnecting', 'Reconnecting…');
-        retry = setTimeout(connect, Math.min(30000, 1000 * 2 ** failures));
-      });
-    };
-    const disconnect = () => { clearTimeout(retry); source?.close(); source = null; };
+        const wasAtBottom = nearBottom();
+        list.append(fragment);
+        const limit = Number(panel.dataset.logLimit || 0);
+        const oldHeight = list.scrollHeight;
+        while (limit && list.childElementCount > limit) list.firstElementChild.remove();
+        if (!follow?.checked) list.scrollTop = Math.max(0, list.scrollTop - (oldHeight - list.scrollHeight));
+        const count = panel.querySelector('[data-log-count]');
+        if (count) count.textContent = list.childElementCount + ' events shown';
+        if (empty) empty.hidden = list.childElementCount > 0;
+        if (follow?.checked || wasAtBottom) stick();
+      };
+      const showState = (state) => {
+        const badge = status?.querySelector('[data-log-badge]');
+        if (badge) {
+          badge.className = 'badge ' + state.tone;
+          badge.querySelector('[data-log-label]').textContent = state.label;
+        }
+        const summary = status?.querySelector('[data-log-summary]');
+        if (summary && summary.textContent !== state.summary) summary.textContent = state.summary;
+        let sha = status?.querySelector('[data-log-sha]');
+        if (state.sha && !sha && summary) {
+          sha = document.createElement('code');
+          sha.className = 'sha';
+          sha.dataset.logSha = '';
+          summary.after(sha);
+        }
+        if (sha) { sha.textContent = state.sha.slice(0, 12); sha.title = state.sha; sha.hidden = !state.sha; }
+        const notices = status?.querySelector('[data-log-notices]');
+        const template = status?.querySelector('[data-log-notice-template]');
+        if (notices && template) {
+          notices.replaceChildren(...state.notices.map((notice) => {
+            const item = template.content.firstElementChild.cloneNode(true);
+            item.classList.add(notice.tone);
+            item.querySelector('span').textContent = notice.text;
+            return item;
+          }));
+        }
+        if (empty && state.empty) empty.textContent = (panel.dataset.logSource && panel.dataset.logSource !== "all") || panel.dataset.logQuery ? "No log events match these filters." : state.empty;
+      };
+      const remember = (event) => { if (event.lastEventId) cursor = event.lastEventId; };
+      const connect = () => {
+        clearTimeout(retry);
+        if (source || !active(panel)) return;
+        const url = new URL(base);
+        if (cursor) url.searchParams.set('since', cursor);
+        source = new EventSource(url);
+        source.addEventListener('reset', (event) => {
+          remember(event);
+          list.replaceChildren();
+          if (empty) empty.hidden = false;
+          const count = panel.querySelector('[data-log-count]');
+          if (count) count.textContent = '0 events shown';
+          tracker?.reset();
+        });
+        source.addEventListener('lines', (event) => {
+          remember(event);
+          failures = 0;
+          setState('live', 'Live');
+          const lines = JSON.parse(event.data).lines;
+          append(lines);
+          tracker?.lines(lines);
+        });
+        source.addEventListener('state', (event) => {
+          remember(event);
+          failures = 0;
+          setState('live', 'Live');
+          const state = JSON.parse(event.data);
+          showState(state);
+          tracker?.state(state.label);
+        });
+        source.addEventListener('error', () => {
+          if (source?.readyState !== EventSource.CLOSED) { setState('reconnecting', 'Reconnecting…'); return; }
+          source = null;
+          failures++;
+          if (failures > 5) { setState('offline', 'Live updates unavailable — reload to retry'); return; }
+          setState('reconnecting', 'Reconnecting…');
+          retry = setTimeout(connect, Math.min(30000, 1000 * 2 ** failures));
+        });
+      };
+      const disconnect = () => { clearTimeout(retry); source?.close(); source = null; };
+      if (!window.location.hash) stick();
+      connect();
+      return {close: disconnect, resume: () => { failures = 0; connect(); }, pause: () => { disconnect(); setState('paused', 'Paused while hidden'); }};
+    }
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) { disconnect(); setState('paused', 'Paused while hidden'); } else if (!source) { failures = 0; connect(); }
+      for (const [panel, viewer] of viewers) { if (active(panel)) viewer.resume(); else viewer.pause(); }
+      scan();
     });
-    window.addEventListener('pagehide', disconnect);
-    window.addEventListener('pageshow', (event) => { if (event.persisted && !source && !document.hidden) connect(); });
-    if (!window.location.hash) stick();
-    if (!document.hidden) connect(); else setState('paused', 'Paused while hidden');
+    window.addEventListener('pagehide', () => viewers.forEach(viewer => viewer.close()));
+    window.addEventListener('pageshow', () => { viewers.forEach(viewer => viewer.resume()); scan(); });
+    document.addEventListener('htmx:afterSwap', scan);
+    document.addEventListener('logs:panelchanged', scan);
+    scan();
+  }
+
+  // Inline log state survives PR live refreshes; closed panels release SSE.
+  function initPRLogs() {
+    const states = new Map();
+    const load = details => {
+      if (!window.htmx || !details.open || !details.isConnected) return;
+      const state = states.get(details.dataset.prLogsUrl) || {};
+      const url = new URL(details.dataset.prLogsUrl, location.href);
+      if (state.source) url.searchParams.set('source', state.source);
+      if (state.query) url.searchParams.set('q', state.query);
+      htmx.ajax('GET', url.pathname + url.search, {target: details.querySelector('#pr-recent-log-content'), swap: 'innerHTML'}).catch(() => {});
+    };
+    const setup = () => document.querySelectorAll('[data-pr-logs]').forEach(details => {
+      const key = details.dataset.prLogsUrl;
+      const panel = details.querySelector('[data-log-panel]');
+      if (panel) { const state = states.get(key) || {}; state.source = panel.dataset.logSource; state.query = panel.dataset.logQuery; states.set(key, state); }
+      if (details.hasAttribute("data-logs-initialized")) return;
+      details.dataset.logsInitialized = '';
+      details.addEventListener('toggle', () => {
+        const state = states.get(key) || {}; state.open = details.open; states.set(key, state);
+        document.dispatchEvent(new Event('logs:panelchanged'));
+        if (details.open) load(details);
+      });
+      if (states.get(key)?.open) details.open = true;
+    });
+    document.addEventListener('click', event => {
+      const opener = event.target.closest('[data-open-pr-logs]');
+      const refresh = event.target.closest('[data-refresh-pr-logs]');
+      if (!opener && !refresh) return;
+      const details = (opener?.closest('.pr-detail-content') || refresh?.closest('[data-pr-logs]'))?.querySelector('[data-pr-logs]') || refresh?.closest('[data-pr-logs]');
+      if (!details || !window.htmx || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+      event.preventDefault();
+      if (refresh) load(details);
+      else { details.open = true; details.scrollIntoView({block: 'nearest', behavior: 'smooth'}); details.querySelector('summary')?.focus(); }
+    });
+    document.addEventListener('htmx:afterSwap', setup);
+    document.addEventListener('htmx:responseError', event => {
+      const target = event.detail.target;
+      if (target?.id !== 'pr-recent-log-content') return;
+      const text = document.createElement('p'); text.className = 'log-empty';
+      text.textContent = 'Recent logs are temporarily unavailable. Close and reopen this panel to retry.';
+      target.replaceChildren(text);
+      document.dispatchEvent(new Event("logs:panelchanged"));
+    });
+    setup();
   }
 
   // Times are rendered as exact UTC; show them relative ("3 minutes ago") and
@@ -696,11 +764,14 @@
   function initCopyButtons() {
     const timers = new WeakMap();
     document.addEventListener('click', async (event) => {
-      const button = event.target.closest('[data-copy], [data-copy-lines], [data-copy-from]');
+      const button = event.target.closest('[data-copy], [data-copy-lines], [data-copy-from], [data-copy-log-panel]');
       if (!button) return;
       const status = button.querySelector('[data-copy-status]');
       const label = status?.textContent;
       let text = button.dataset.copy ?? '';
+      if (button.hasAttribute('data-copy-log-panel')) {
+        text = [...button.closest('[data-log-panel]').querySelectorAll('.log-text')].map(line => line.textContent).join('\n');
+      }
       if (button.dataset.copyLines) {
         const list = document.querySelector(button.dataset.copyLines);
         text = [...(list?.querySelectorAll('.log-text') || [])].map(line => line.textContent).join('\n');
@@ -1504,8 +1575,8 @@
   initCommandPalette();
   initRepositorySearch();
   initLiveUpdates();
-  initLogTimes();
   initBuildLogs();
+  initPRLogs();
   initBuildProgress();
   initElapsed();
   initRelativeTimes();

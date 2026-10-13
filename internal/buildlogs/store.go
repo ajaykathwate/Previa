@@ -256,6 +256,32 @@ func (s *Store) LinesBefore(ctx context.Context, environmentID, epoch, before in
 	return lines, nil
 }
 
+// SearchFrom reads matching events in ascending sequence order.
+func (s *Store) SearchFrom(ctx context.Context, environmentID, epoch, from int64, limit int, filter Filter) ([]Line, error) {
+	rows, err := dbgen.New(s.pool).SearchFrom(ctx, dbgen.SearchFromParams{EnvironmentID: environmentID, Epoch: epoch, Position: max(from, 0), MaxLines: int32(min(max(limit, 1), maxReadLines)), Kind: filter.kind(), Query: filter.Query})
+	if err != nil {
+		return nil, fmt.Errorf("search build log lines: %w", err)
+	}
+	lines := make([]Line, len(rows))
+	for i, r := range rows {
+		lines[i] = Line{Sequence: r.Sequence, System: r.Kind == kindSystem, Text: r.Line, At: r.CreatedAt.Time}
+	}
+	return lines, nil
+}
+
+// SearchBefore reads the most recent matching events before a sequence, in order.
+func (s *Store) SearchBefore(ctx context.Context, environmentID, epoch, before int64, limit int, filter Filter) ([]Line, error) {
+	rows, err := dbgen.New(s.pool).SearchBefore(ctx, dbgen.SearchBeforeParams{EnvironmentID: environmentID, Epoch: epoch, Position: before, MaxLines: int32(min(max(limit, 1), maxReadLines)), Kind: filter.kind(), Query: filter.Query})
+	if err != nil {
+		return nil, fmt.Errorf("search earlier build log lines: %w", err)
+	}
+	lines := make([]Line, len(rows))
+	for i, r := range rows {
+		lines[len(rows)-1-i] = Line{Sequence: r.Sequence, System: r.Kind == kindSystem, Text: r.Line, At: r.CreatedAt.Time}
+	}
+	return lines, nil
+}
+
 // Tail returns the last limit lines of an environment's current attempt when
 // that attempt belongs to the given request generation and revision. It
 // returns nothing when there is no stream, a different attempt owns it or its

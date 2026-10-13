@@ -18,7 +18,7 @@ Last updated: 2026-10-13
   test-e2e. Browser: UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-browser;
   UI_TEST_PATTERN narrows cases. Make loads .env; direct Go commands need exports.
 - Release: make release-images / prod-smoke PREVIA_VERSION=x (smoke needs age).
-- WSL: use absolute paths; pulls may need empty DOCKER_CONFIG; unset empty ENV_FILE after sourcing .env before Make.
+- WSL: absolute paths; pulls may need empty DOCKER_CONFIG; unset empty ENV_FILE after sourcing .env before Make.
 
 ## Preview and login fixes (2026-10-13)
 - App output + Private Preview failed real River inserts: custom unique states
@@ -29,7 +29,6 @@ Last updated: 2026-10-13
   state; closing any confirmation resumes deferred refreshes.
 - RequireUser preserves safe GET/HEAD URLs through OAuth (HTMX uses same-host
   document); invalid/direct login clears stale next; mutation URLs aren't replayed.
-- Committed ea08ddf; queue failures reproduced before fixes; current verification is below.
 
 ## Repository compatibility (2026-10-12, committed 2f7fdb7; migration 0028)
 - Finished Claude's partial build-secret changes and the owner's compatibility list.
@@ -52,6 +51,12 @@ Last updated: 2026-10-13
   inside containers; stock nginx can still fail on read-only caches/PID paths.
 - Queue tests isolate River schemas from dev workers; basic E2E uses BusyBox httpd. Follow-up fixes committed 2cb0ae1.
 
+## Build-log UI and managed services (2026-10-13; commit/push pending)
+- Shared web/components/logviewer: inline full timestamps (native leading dates preserved, otherwise received UTC), copy/download include dates; source colors and literal search. All/Previa/Application filters apply before paging/export; SSE protocol and build writer unchanged.
+- PR links open recent logs under the main card (latest 300 matching events, bounded live tail); full-page link preserves filters. Close releases SSE; PR refresh retains open/filter state; no-JS links and source/search forms work. Full logs retain 500-event pagination.
+- Managed services display one theme-aware capsule per catalog entry, with versions grouped inside; capsules wrap on narrow screens and unavailable-catalog messages remain explicit.
+- App output reuses event rendering; live status/copy/reset remain supported. No config/schema change; make build or Air + browser refresh loads assets. docs/02,08 and DESIGN section 17 updated.
+- Verification: full go test -race ./... passed with TEST_DATABASE_URL; focused real database + affected-feature race checks passed; build/vet/lint passed. Browser final 55/55 passed (including App output and no-JS filtering). Report: test-docs/2026-10-13-build-log-ui-report.md.
 ## Earlier improvements (committed 973907f / 93191aa; migrations 0022-0027)
 - Forks never auto-build (LockIntentPR + ClaimBuildIntent fence; docs/16).
 - Fairness: BUILDS_PER_ACCOUNT, BUILD_MINUTES_PER_ACCOUNT_DAY, account/quota waits,
@@ -59,7 +64,7 @@ Last updated: 2026-10-13
   warning (docs/17). Production example sized for VPS-2.
 - Build traffic: egress meter, totals/metrics; BUILD_EGRESS=registries fails closed.
 - Retention: BUILD_LOG_RETENTION_DAYS, log deletion, housekeeping_records retention;
-  line timestamps local on page, UTC download (docs/08,15).
+  log retention and deletion are covered in docs/08,15.
 - Activity: crash/visits/App output, PREVIEW_IDLE_SLEEP/wake, private forwardAuth.
 
 ## Routing, merge recovery and TLS (2026-10-13; committed 8764e0c)
@@ -73,26 +78,21 @@ Last updated: 2026-10-13
 - Staging certificate replaced by trusted production CA + /acme/acme-production.json; same previously working hostname, historical TLS/browser state unknown.
 - ACME_STORAGE_FILE (local Compose) preserves staging state; router-up restores preview networks after recreation.
 - docs/02,12,13,15 cover recovery/setup; test-routing includes private auth. Code fixes require migration 0029 + server/worker restart. Owner explicitly approved replacement public tunnel + App webhook URL update after expiry. New URL: https://stores-sandy-pendant-smile.trycloudflare.com/webhooks/github; signed ping 204, App URL read-back verified, tunnel ready (session 11386). Keep that session running; a new quick tunnel needs a webhook URL update. Worker ready; preview URLs healthy.
-
 ## Backend previews and outbound (docs/11)
 - services {postgres|redis|mysql: version} resolves through PREVIEW_SERVICE_CATALOG
   (empty = pinned defaults; none = off), setup argv, <=3 processes, docs_path.
 - Per-candidate services use internal services network, fresh tmpfs, generated
-  redacted credentials; readiness -> setup -> processes -> app. All companions
-  carry io.previa.candidate and are removed with the app; preview_components (0020).
+  redacted credentials; readiness -> setup -> processes -> app. Companions carry io.previa.candidate and are removed with the app (0020).
 - Outbound: <=10 owner-approved host:port destinations, one per port;
   PREVIEW_OUTBOUND_PORTS (none = off), gateway allow files refreshed every minute;
   /etc/hosts maps names to the proxy; forks get none.
 
 ## Branches, release and pending work
 - Current branch: ui-improvements (tracks origin/ui-improvements).
-  master changes only through main -> master PRs. CI runs for PRs
-  into master and pushes to master; last observed green on c94d35f.
-- docs/25: deployment guide (OVHcloud VPS-2 + Cloudflare DNS + R2); NEXT-FEATURES.md has ten unbuilt candidates.
-- docs/26: staging ready; production still needs host acceptance and a complete hosted PR lifecycle.
+  master changes only through main -> master PRs; CI runs on master PRs/pushes (last observed green c94d35f).
 - Regression 2026-10-13: 240/242 cases verified; test-docs/2026-10-13-regression-report.md has proof and limits.
 - Final Go: 1428 passes, no races; 39 baseline opt-ins exercised separately. Browser 52/52; real Docker 39 passes across five packages including both E2E journeys; build/vet/lint passed.
-- Repeated checks: 200 concurrency/recovery passes; 50 migration/capability passes; capacity x10 passed.
+- Repeated checks: 200 concurrency/recovery; 50 migration/capability; capacity x10 passed.
 - All 3 release images built/scanned (no fixable HIGH/CRITICAL); production smoke 40/40 with encrypted backup/restore. Govulncheck: no reachable/imported-package vulnerabilities; observability/actionlint passed.
 - E2E gets named gateways, so independent test workers cannot overwrite dev forwarding. Default production gateway unchanged. Capacity fixture accounts for live reservations; smoke derives schema/alert counts and checks its own bindings.
 - Live App access/source/reporting passed on owner-authorized previa.live PR #4. Unique proof comment scope preserves existing feedback; temporary comments cleaned; 3 completed live-proof checks remain.

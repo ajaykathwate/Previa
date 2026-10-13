@@ -266,7 +266,10 @@ Build now, Retry, Rebuild and Tear down controls are implemented. Builds and
 Previews show actual saved state (queued and running work, failure reasons,
 preview URL, health and expiry) and link to each PR's **Build logs** page, which
 shows the current attempt's output live over Server-Sent Events (bounded, redacted,
-readable without JavaScript, with Copy and Download). When no worker that can build
+readable without JavaScript, with Copy and Download). On PR details, log links
+open the latest 300 events below the main card, with a link to the full page.
+Log viewers include copyable inline dates and Previa/application source filters
+(both shown by default), plus literal text search. When no worker that can build
 is running, the build action is shown disabled with the reason and the fix (for
 example a worker without a preview domain), and the endpoints refuse with 503
 instead of recording work.

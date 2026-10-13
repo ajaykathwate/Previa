@@ -4,43 +4,14 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/logviewer"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 )
 
-// LogLine is one stored line of the current build attempt; At is when it
-// was received.
-type LogLine struct {
-	Sequence int64
-	System   bool
-	Text     string
-	At       time.Time
-}
-
-// Time is the line's clock time in UTC; ui.js shows it in the viewer's time
-// zone.
-func (l LogLine) Time() string {
-	if l.At.IsZero() {
-		return ""
-	}
-	return l.At.UTC().Format("15:04:05")
-}
-
-// ISOTime is the exact time, for the time element and its title.
-func (l LogLine) ISOTime() string {
-	if l.At.IsZero() {
-		return ""
-	}
-	return l.At.UTC().Format(time.RFC3339Nano)
-}
-
-// Number is the 1-based line number shown beside the text.
-func (l LogLine) Number() string { return strconv.FormatInt(l.Sequence+1, 10) }
-
-// Anchor is the fragment that links to this line.
-func (l LogLine) Anchor() string { return "L" + l.Number() }
+// LogLine is a presentation event shared with the PR log panel.
+type LogLine = logviewer.Line
 
 // LogNotice is a status message; Tone is one of the shared tone classes.
 type LogNotice struct {
@@ -61,12 +32,15 @@ type LogPage struct {
 	StreamSHA               string
 	Notices                 []LogNotice
 
-	Lines  []LogLine
-	Empty  string // shown when Lines is empty
-	Before int64  // first shown sequence; earlier lines exist when > 0
-	After  int64  // sequence after the last shown line
-	More   bool   // later lines exist beyond this page
-	Tail   bool   // the newest lines are shown; live updates continue from here
+	Source, Query string
+	ProgressLines []LogLine
+	Earlier       bool
+	Lines         []LogLine
+	Empty         string // shown when Lines is empty
+	Before        int64  // first shown sequence; earlier lines exist when > 0
+	After         int64  // sequence after the last shown line
+	More          bool   // later lines exist beyond this page
+	Tail          bool   // the newest lines are shown; live updates continue from here
 
 	// Live updates resume from Epoch/After. Empty EventsURL disables them.
 	EventsURL string
@@ -81,23 +55,22 @@ type LogPage struct {
 func (p LogPage) DeleteURL() string { return pages.LogsURL(p.RepoID, p.Number) + "/delete" }
 
 // DownloadURL is the whole current output as a text file.
-func (p LogPage) DownloadURL() string { return pages.LogsURL(p.RepoID, p.Number) + "/download" }
-
-// IsError marks a line worth the reader's eye; only its colour changes.
-func (l LogLine) IsError() bool { return !l.System && pages.LooksLikeError(l.Text) }
+func (p LogPage) DownloadURL() string {
+	return logviewer.FilterURL(pages.LogsURL(p.RepoID, p.Number)+"/download", p.Source, p.Query)
+}
 
 func (p LogPage) PRURL() string   { return pages.PRURL(p.RepoID, p.Number) }
 func (p LogPage) RepoURL() string { return pages.RepoURL(p.RepoID) }
 func (p LogPage) LatestURL() string {
-	return pages.LogsURL(p.RepoID, p.Number)
+	return logviewer.FilterURL(pages.LogsURL(p.RepoID, p.Number), p.Source, p.Query)
 }
 
 func (p LogPage) EarlierURL() string {
-	return pages.LogsURL(p.RepoID, p.Number) + "?" + url.Values{"before": {strconv.FormatInt(p.Before, 10)}}.Encode()
+	return pages.LogsURL(p.RepoID, p.Number) + "?" + p.position("before", p.Before)
 }
 
 func (p LogPage) LaterURL() string {
-	return pages.LogsURL(p.RepoID, p.Number) + "?" + url.Values{"after": {strconv.FormatInt(p.After, 10)}}.Encode()
+	return pages.LogsURL(p.RepoID, p.Number) + "?" + p.position("after", p.After)
 }
 
 // Cursor is where live updates resume: the attempt epoch and next sequence.
@@ -123,8 +96,12 @@ func (p LogPage) Name() string {
 // output shown: the step the output has reached, failed or in progress.
 // ok is false when no attempt applies (none requested, cancelled, replaced).
 func (p LogPage) Progress() (pages.Progress, bool) {
-	entries := make([]pages.LogEntry, len(p.Lines))
-	for i, l := range p.Lines {
+	lines := p.Lines
+	if p.ProgressLines != nil {
+		lines = p.ProgressLines
+	}
+	entries := make([]pages.LogEntry, len(lines))
+	for i, l := range lines {
 		entries[i] = pages.LogEntry{System: l.System, Text: l.Text}
 	}
 	reached := pages.DetectStage(entries)
@@ -152,4 +129,27 @@ func (p LogPage) Progress() (pages.Progress, bool) {
 // TrailParent is the pull request this log belongs to, one level up.
 func (p LogPage) TrailParent() components.Crumb {
 	return components.Crumb{Label: "#" + strconv.Itoa(int(p.Number)) + " " + p.Title, Href: p.PRURL()}
+}
+
+func (p LogPage) position(key string, value int64) string {
+	v := url.Values{key: {strconv.FormatInt(value, 10)}}
+	if p.Source != "" && p.Source != "all" {
+		v.Set("source", p.Source)
+	}
+	if p.Query != "" {
+		v.Set("q", p.Query)
+	}
+	return v.Encode()
+}
+func (p LogPage) Viewer() logviewer.Panel {
+	v := logviewer.Panel{Lines: p.Lines, Empty: p.Empty, Source: p.Source, Query: p.Query,
+		BaseURL: pages.LogsURL(p.RepoID, p.Number), EventsURL: p.EventsURL, Cursor: p.Cursor(),
+		LatestURL: p.LatestURL(), DownloadURL: p.DownloadURL(), HasOutput: p.HasOutput, CanDelete: p.CanDelete}
+	if p.Earlier {
+		v.EarlierURL = p.EarlierURL()
+	}
+	if p.More {
+		v.LaterURL = p.LaterURL()
+	}
+	return v
 }

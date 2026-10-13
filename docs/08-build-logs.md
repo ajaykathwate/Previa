@@ -100,17 +100,41 @@ the build process (and its error), not to the page.
 
 ## Reading and live updates
 
-The page is `/repositories/{id}/pull-requests/{number}/logs`, owner-only (the same
-installation-owner scope as PR pages; retained PRs stay readable after access is
-revoked, with a notice). It shows the newest 500 lines; without JavaScript, **Earlier
-lines** / **Later lines** links page by sequence (`?before=`, `?after=`) and
-**Refresh** reloads. Lines are rendered as text nodes: build output can never become
-markup. Lines that look like errors are tinted; **Copy** copies the lines shown and
-`…/logs/download` sends the attempt's whole output as `text/plain` (an attachment
-named `<repository>-pr-<number>-build.log`, read in batches of 1,000 lines, owner-only,
-`no-store`), each line prefixed with its UTC time (`2026-10-12T09:30:01.500Z`).
-Every line shows its time (`HH:MM:SS`) in the reader's time zone; the full date is
-its tooltip. Copy copies the text only. The PR page quotes the last twelve lines of a failed attempt through
+The full page is `/repositories/{id}/pull-requests/{number}/logs`, owner-only
+(the same installation-owner scope as PR pages; retained PRs stay readable after
+access is revoked, with a notice). It shows the newest 500 matching events.
+**Earlier lines** / **Later lines** page by stored sequence (`?before=`, `?after=`);
+**Refresh** returns to the latest matching events. These controls and filters work
+without JavaScript. Output is rendered as text nodes, so it cannot become markup.
+
+**All logs** is the default source filter. **Previa logs** are lifecycle notices
+stored as `kind=system`; **Application logs** are Docker build output and the
+application's startup/crash output, stored as `kind=output`. Previa notices are
+blue, application messages neutral, and application errors red. **Find text in
+logs** performs a literal, case-insensitive substring search (up to 200 characters).
+Source/search filters apply before pagination and remain in navigation/download
+URLs. Live frames retain their original protocol and cursor; the viewer filters
+incoming events while advancing past every received sequence. Filtering does not
+change the build tracker or stored output.
+
+Every event has a full inline timestamp. A leading full application date/time
+(such as nginx's `2026/10/12 15:22:34`) is preserved; otherwise the received time
+is shown in UTC (`2026-10-13T12:00:00.000Z`). There is no separate clock column.
+Application messages without their own dates previously showed only the separate
+received clock, which explained the inconsistent dates. The timestamp tooltip
+always retains the received time. **Copy** includes the displayed timestamps and
+messages, preserving indentation. `…/logs/download` exports the complete matching
+output as `text/plain` (attachment `<repository>-pr-<number>-build.log`, bounded
+1,000-event reads, owner-only, `no-store`) with the same timestamp treatment.
+
+On a PR detail, **Build logs**, **Follow the build log**, and diagnosis log links
+open an accessible **Recent build logs** panel below the main PR card. The
+owner-protected `…/logs/recent` fragment loads the latest 300 matching events;
+live updates keep that panel bounded to 300. **View full build logs** opens the
+full page with the same source/search filters. Closing the panel releases its
+stream; reopening loads fresh output. PR live refreshes preserve the open panel
+and applied filters. Without JavaScript, links still open the full log page.
+The existing failed-attempt diagnosis quotes the last twelve lines through
 `Store.Tail`, which returns nothing unless the stored stream belongs to that
 request's generation and revision.
 

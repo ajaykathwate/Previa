@@ -2,6 +2,7 @@ package appoutput
 
 import (
 	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/logviewer"
 	"github.com/ajaykathwatee/previa/web/layouts"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	"strconv"
@@ -69,6 +70,7 @@ templ Output(username, csrf string, p OutputPage) {
 			</section>
 			<section
 				class="workspace-panel log-panel"
+				data-log-panel
 				aria-labelledby="output-title"
 				if p.EventsURL != "" {
 					data-log-events={ p.EventsURL }
@@ -77,7 +79,6 @@ templ Output(username, csrf string, p OutputPage) {
 			>
 				<header class="log-panel-header">
 					<div class="log-panel-title">
-						<span class="log-window-dots" aria-hidden="true"><i></i><i></i><i></i></span>
 						<h2 id="output-title">Output</h2>
 						<span class="log-panel-note">Live · secrets are masked · not stored</span>
 					</div>
@@ -101,15 +102,7 @@ templ Output(username, csrf string, p OutputPage) {
 				<p class="log-empty" data-log-empty hidden?={ len(p.Lines) > 0 }>{ p.Empty }</p>
 				<ol class="log-lines" aria-label="App output" data-log-lines>
 					for _, line := range p.Lines {
-						<li id={ line.Anchor() } class={ "log-line", templ.KV("log-error", line.IsError()) }>
-							<a class="log-number" href={ templ.SafeURL("#" + line.Anchor()) } tabindex="-1">{ line.Number() }</a>
-							if line.Time() != "" {
-								<time class="log-time" datetime={ line.ISOTime() } title={ line.ISOTime() } data-log-time>{ line.Time() }</time>
-							} else {
-								<span class="log-time"></span>
-							}
-							<span class="log-text">{ line.Text }</span>
-						</li>
+						@logviewer.Event(line)
 					}
 				</ol>
 			</section>

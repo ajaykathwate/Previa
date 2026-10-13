@@ -496,3 +496,46 @@ func TestOpenFinishedAddsASectionToTheBuiltAttemptsLog(t *testing.T) {
 		t.Fatalf("deleted logs take no section: %v", err)
 	}
 }
+
+func TestStoreSearchFiltersLiteralTextSourceEpochAndSparseSequences(t *testing.T) {
+	f := setup(t)
+	epoch := f.admit(t, 1, 1)
+	w := f.open(t, epoch, buildlogs.Limits{})
+	for i := range 1100 {
+		if i%2 == 0 {
+			w.System(fmt.Sprintf("Previa %d 50%%_done", i))
+		} else {
+			if _, err := fmt.Fprintf(w, "Application %d\n", i); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := w.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	filter := buildlogs.Filter{Source: "previa", Query: "50%_DONE"}
+	lines, err := f.store.SearchBefore(t.Context(), f.environmentID, epoch, 1100, 300, filter)
+	if err != nil || len(lines) != 300 || lines[0].Sequence != 500 || lines[299].Sequence != 1098 {
+		t.Fatalf("matching tail: %d %v", len(lines), err)
+	}
+	next, err := f.store.SearchFrom(t.Context(), f.environmentID, epoch, 500, 300, filter)
+	if err != nil || len(next) != 300 || next[0].Sequence != 500 || next[299].Sequence != 1098 {
+		t.Fatalf("matching forward page: %d %v", len(next), err)
+	}
+	app, err := f.store.SearchFrom(t.Context(), f.environmentID, epoch, 0, 1000, buildlogs.Filter{Source: "application", Query: "aPpLiCaTiOn"})
+	if err != nil || len(app) != 550 || app[0].System {
+		t.Fatalf("application source: %d %v", len(app), err)
+	}
+	missing, err := f.store.SearchBefore(t.Context(), f.environmentID, epoch+1, 1100, 300, filter)
+	if err != nil || len(missing) != 0 {
+		t.Fatal("search leaked another epoch")
+	}
+	missing, err = f.store.SearchFrom(t.Context(), f.environmentID+1, epoch, 0, 300, filter)
+	if err != nil || len(missing) != 0 {
+		t.Fatal("search leaked another environment")
+	}
+	missing, err = f.store.SearchFrom(t.Context(), f.environmentID, epoch, 0, 300, buildlogs.Filter{Query: "%_wildcard"})
+	if err != nil || len(missing) != 0 {
+		t.Fatal("search interpreted SQL wildcards")
+	}
+}

@@ -591,6 +591,15 @@ Medium.
 4. The workspace has separate Overview, Repositories, Builds and Previews pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 records), search and Available/Unavailable/All access tabs (Available by default). Environments shows each preview's status, URL, deployed commit SHA (marked when earlier than the latest), expiry and a **Tear down** action confirmed in a modal; it shows the expiry rather than the age, because expiry is what an owner acts on. Builds shows queued and running work with latest and requested SHAs, wait and failure reasons and log links. Overview places the owner's open pull requests along the delivery pipeline (waiting, building, live, failed) with their shares and preview coverage, lists the newest build requests and previews (rows expand to their details) and shows which pipeline stages a running worker provides. Developer tools has its own local diagnostic page. An FAQ page, and the home page's How it works and FAQ sections, explain Previa as a conversation with it: static copy kept true to the current release, with examples labelled as examples.
 5. Dashboard actions check both authentication and ownership: a user can only see and act on environments in installations they own.
 6. Log retention has a size and age cap; old logs are pruned.
+7. Build log viewers share a presentation component (`web/components/logviewer`):
+   full inline copyable timestamps, source colors and owner-scoped source/literal
+   text filters. The full page shows 500 matching events with sequence pagination;
+   PR detail links open a recent panel under the main card, bounded to 300 matching
+   events, with a full-page link. Closing releases SSE; PR invalidation refreshes
+   preserve the open panel and filters. No-JavaScript links retain full-page access.
+   Existing `kind=system/output` identifies Previa/application output. Filters do
+   not alter storage, build progress or the SSE replay protocol.
+
 
 The accepted manual build policy requires owner-controlled per-repository mode and
 an explicit per-PR build action. Repositories lists sources at `/repositories`;

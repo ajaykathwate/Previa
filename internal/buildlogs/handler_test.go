@@ -57,6 +57,40 @@ func (f *fakeLogs) Stream(_ context.Context, environmentID int64) (Stream, error
 	return s, nil
 }
 
+func (f *fakeLogs) SearchFrom(_ context.Context, _, epoch, from int64, limit int, filter Filter) ([]Line, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := []Line{}
+	if epoch != f.stream.Epoch {
+		return result, nil
+	}
+	for _, line := range f.lines {
+		if line.Sequence >= from && filter.Matches(line) {
+			result = append(result, line)
+			if len(result) == limit {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+func (f *fakeLogs) SearchBefore(_ context.Context, _, epoch, before int64, limit int, filter Filter) ([]Line, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := []Line{}
+	if epoch != f.stream.Epoch {
+		return result, nil
+	}
+	for _, line := range f.lines {
+		if line.Sequence < before && filter.Matches(line) {
+			result = append(result, line)
+		}
+	}
+	if len(result) > limit {
+		result = result[len(result)-limit:]
+	}
+	return result, nil
+}
 func (f *fakeLogs) LinesFrom(_ context.Context, _, epoch, from int64, limit int) ([]Line, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -563,15 +597,14 @@ func TestOwnerDeletesAFinishedAttemptsLogs(t *testing.T) {
 	}
 }
 
-// Every line carries the time it was received: on the page (for local
-// display), in the live stream and as a UTC prefix in the download.
+// Received timestamps are inline and copyable; live events keep their protocol.
 func TestLogLinesCarryTheirTime(t *testing.T) {
 	logs := newFakeLogs(0)
 	at := time.Date(2026, 10, 12, 14, 3, 7, 250e6, time.UTC)
 	logs.lines = []Line{{Sequence: 0, Text: "step one", At: at}, {Sequence: 1, Text: "untimed"}}
 	server, _ := testServer(t, logs)
 	_, page := get(t, server.URL+testPRPath, testOwner)
-	if !strings.Contains(page, `datetime="2026-10-12T14:03:07.25Z"`) || !strings.Contains(page, ">14:03:07</time>") {
+	if !strings.Contains(page, `>2026-10-12T14:03:07.250Z</span> step one`) || strings.Contains(page, `class="log-time"`) {
 		t.Fatal("the page shows each line's time")
 	}
 	_, download := get(t, server.URL+testPRPath+"/download", testOwner)
@@ -580,5 +613,67 @@ func TestLogLinesCarryTheirTime(t *testing.T) {
 	}
 	if got := newLiveLine(logs.lines[0]); got.At != "2026-10-12T14:03:07.25Z" {
 		t.Fatalf("live line time: %q", got.At)
+	}
+}
+
+func TestRecentLogsAreBoundedFilteredAndOwnerScoped(t *testing.T) {
+	logs := newFakeLogs(1200)
+	for i := range logs.lines {
+		logs.lines[i].System = i%2 == 0
+		logs.lines[i].At = time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	}
+	server, _ := testServer(t, logs)
+	status, body := get(t, server.URL+testPRPath+"/recent?after=0", testOwner)
+	if status != 200 || strings.Count(body, `class="log-number"`) != 300 || !strings.Contains(body, `id="L901"`) || !strings.Contains(body, `id="L1200"`) || strings.Contains(body, "<html") {
+		t.Fatalf("recent view: status %d", status)
+	}
+	status, body = get(t, server.URL+testPRPath+"/recent?source=previa", testOwner)
+	if status != 200 || strings.Count(body, `class="log-number"`) != 300 || strings.Contains(body, `data-log-source="application"`) || !strings.Contains(body, `id="L601"`) || !strings.Contains(body, `data-log-cursor="4.1200"`) {
+		t.Fatal("source filtering or live cursor lost matching tail")
+	}
+	if !strings.Contains(body, `href="/repositories/10/pull-requests/7/logs?source=previa"`) {
+		t.Fatal("full page link loses source filter")
+	}
+	if status, _ := get(t, server.URL+testPRPath+"/recent", 99); status != 404 {
+		t.Fatalf("other owner: %d", status)
+	}
+	for _, query := range []string{"source=other", "q=" + strings.Repeat("x", 201), "q=%00"} {
+		if status, _ := get(t, server.URL+testPRPath+"/recent?"+query, testOwner); status != 400 {
+			t.Fatalf("invalid %s: %d", query, status)
+		}
+	}
+}
+
+func TestFilteredPaginationAndDownloadKeepSparseSequences(t *testing.T) {
+	logs := newFakeLogs(2500)
+	for i := range logs.lines {
+		logs.lines[i].System = i%2 == 0
+	}
+	logs.lines[2498].Text = "2026/10/12 15:22:34 [notice] native date"
+	server, _ := testServer(t, logs)
+	_, body := get(t, server.URL+testPRPath+"?source=previa", testOwner)
+	if !strings.Contains(body, `id="L1501"`) || !strings.Contains(body, `id="L2499"`) || !strings.Contains(body, `before=1500&amp;source=previa`) || !strings.Contains(body, `data-log-cursor="4.2500"`) {
+		t.Fatal("sparse matching tail or cursor incorrect")
+	}
+	_, body = get(t, server.URL+testPRPath+"?before=1500&source=previa", testOwner)
+	if !strings.Contains(body, `id="L501"`) || !strings.Contains(body, `after=1499&amp;source=previa`) || strings.Contains(body, "data-log-events") {
+		t.Fatal("filtered historical page incorrect")
+	}
+	_, body = get(t, server.URL+testPRPath+"?after=1499&source=previa", testOwner)
+	if !strings.Contains(body, `id="L1501"`) || !strings.Contains(body, `data-log-cursor="4.2500"`) {
+		t.Fatal("filtered forward page lost tail")
+	}
+	_, download := get(t, server.URL+testPRPath+"/download?source=previa", testOwner)
+	events := strings.Split(strings.TrimSuffix(download, "\n"), "\n")
+	if len(events) != 1250 || events[0] != "line 0" || events[1249] != "2026/10/12 15:22:34 [notice] native date" {
+		t.Fatalf("filtered download omitted sparse events or duplicated timestamps (%d)", len(events))
+	}
+	_, body = get(t, server.URL+testPRPath+"?source=application&q=LINE%202499", testOwner)
+	if strings.Count(body, `class="log-number"`) != 1 || !strings.Contains(body, `id="L2500"`) {
+		t.Fatal("case-insensitive literal search failed")
+	}
+	_, body = get(t, server.URL+testPRPath+"?q=%25", testOwner)
+	if strings.Count(body, `class="log-number"`) != 0 || !strings.Contains(body, "No log events match") {
+		t.Fatal("search treated percent as a wildcard")
 	}
 }

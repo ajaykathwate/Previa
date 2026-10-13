@@ -14,6 +14,7 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
+	"github.com/ajaykathwatee/previa/web/components/logviewer"
 	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	"github.com/go-chi/chi/v5"
@@ -25,6 +26,8 @@ type Reader interface {
 	Stream(ctx context.Context, environmentID int64) (Stream, error)
 	LinesFrom(ctx context.Context, environmentID, epoch, from int64, limit int) ([]Line, error)
 	LinesBefore(ctx context.Context, environmentID, epoch, before int64, limit int) ([]Line, error)
+	SearchFrom(ctx context.Context, environmentID, epoch, from int64, limit int, filter Filter) ([]Line, error)
+	SearchBefore(ctx context.Context, environmentID, epoch, before int64, limit int, filter Filter) ([]Line, error)
 	Delete(ctx context.Context, environmentID, epoch int64) error
 }
 
@@ -40,8 +43,9 @@ type LiveEvents interface {
 }
 
 const (
-	pageLines  = 500 // lines per page without JavaScript
-	frameLines = 200 // lines per live frame
+	recentLines = 300
+	pageLines   = 500 // lines per page without JavaScript
+	frameLines  = 200 // lines per live frame
 	// MaxStreams and MaxStreamsPerUser cap open live log connections.
 	MaxStreams        = 256
 	MaxStreamsPerUser = 8
@@ -91,6 +95,7 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 	r.Group(func(r chi.Router) {
 		r.Use(requireUser)
 		r.Get("/repositories/{repoID}/pull-requests/{number}/logs", h.page)
+		r.Get("/repositories/{repoID}/pull-requests/{number}/logs/recent", h.recent)
 		r.Get("/repositories/{repoID}/pull-requests/{number}/logs/events", h.events)
 		r.Get("/repositories/{repoID}/pull-requests/{number}/logs/download", h.download)
 		r.Post("/repositories/{repoID}/pull-requests/{number}/logs/delete", h.delete)
@@ -119,7 +124,25 @@ func (h *Handler) unavailable(w http.ResponseWriter, r *http.Request, err error)
 	http.Error(w, "Build logs are temporarily unavailable. Please retry.", http.StatusServiceUnavailable)
 }
 
-func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) page(w http.ResponseWriter, r *http.Request)   { h.render(w, r, false) }
+func (h *Handler) recent(w http.ResponseWriter, r *http.Request) { h.render(w, r, true) }
+func (h *Handler) render(w http.ResponseWriter, r *http.Request, inline bool) {
+	filter, err := parseFilter(r.URL.Query())
+	if err != nil {
+		http.Error(w, "Invalid log filter.", http.StatusBadRequest)
+		return
+	}
+	limit := pageLines
+	if inline {
+		limit = recentLines
+		r = r.Clone(r.Context())
+		copiedURL := *r.URL
+		r.URL = &copiedURL
+		q := r.URL.Query()
+		q.Del("before")
+		q.Del("after")
+		r.URL.RawQuery = q.Encode()
+	}
 	user, repoID, number, ok := h.identity(r)
 	if !ok {
 		http.NotFound(w, r)
@@ -140,12 +163,12 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 	view := buildpages.LogPage{
 		RepoID: target.RepoID, Repository: target.Repository, Number: target.Number, Title: target.Title,
 		StatusLabel: st.Label, StatusTone: st.Tone, Summary: st.Summary, StreamSHA: st.SHA, Notices: st.Notices,
-		Empty: st.Empty, Epoch: st.Epoch, HasOutput: hasStream && stream.Lines > 0 && stream.PrunedAt.IsZero(),
+		Source: filter.Source, Query: filter.Query, Empty: st.Empty, Epoch: st.Epoch, HasOutput: hasStream && stream.Lines > 0 && stream.PrunedAt.IsZero(),
 		CanDelete: deletable(target, stream, hasStream),
 	}
 	view.Tail = !hasStream
 	if hasStream {
-		if err := h.fillLines(r, &view, stream); errors.Is(err, errBadPage) {
+		if err := h.fillLines(r, &view, stream, limit, filter); errors.Is(err, errBadPage) {
 			http.Error(w, "Invalid log position.", http.StatusBadRequest)
 			return
 		} else if err != nil {
@@ -156,8 +179,18 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 	if view.Tail && h.live != nil {
 		view.EventsURL = pages.LogsURL(target.RepoID, target.Number) + "/events"
 	}
-	username, _ := h.users.Username(r.Context())
 	w.Header().Set("Cache-Control", "no-store")
+	if inline {
+		panel := view.Viewer()
+		panel.Inline = true
+		panel.CanDelete = false
+		panel.EarlierURL = ""
+		panel.LaterURL = ""
+		panel.FullURL = view.LatestURL()
+		templ.Handler(logviewer.Viewer(panel)).ServeHTTP(w, r)
+		return
+	}
+	username, _ := h.users.Username(r.Context())
 	templ.Handler(buildpages.Logs(username, h.users.CSRFToken(r.Context()), view)).ServeHTTP(w, r)
 }
 
@@ -165,27 +198,52 @@ var errBadPage = errors.New("invalid log page")
 
 // fillLines adds the requested window of lines and where it sits in the
 // stream, for paging and for resuming the live tail.
-func (h *Handler) fillLines(r *http.Request, view *buildpages.LogPage, stream Stream) error {
-	lines, tail, more, err := h.window(r, stream)
+func (h *Handler) fillLines(r *http.Request, view *buildpages.LogPage, stream Stream, limit int, filter Filter) error {
+	lines, tail, more, err := h.window(r, stream, limit, filter)
 	if err != nil {
 		return err
 	}
 	view.Tail, view.More = tail, more
-	for _, l := range lines {
-		view.Lines = append(view.Lines, buildpages.LogLine{Sequence: l.Sequence, System: l.System, Text: l.Text, At: l.At})
-	}
-	switch {
-	case len(lines) > 0:
+	view.Lines = displayLines(lines)
+	if len(lines) > 0 {
 		view.Before, view.After = lines[0].Sequence, lines[len(lines)-1].Sequence+1
-	case tail:
+		earlier, err := h.logs.SearchBefore(r.Context(), stream.EnvironmentID, stream.Epoch, view.Before, 1, filter)
+		if err != nil {
+			return err
+		}
+		view.Earlier = len(earlier) > 0
+	}
+	if tail {
 		view.After = stream.Lines
 	}
+	if len(lines) == 0 && stream.Lines > 0 && (filter.kind() != "" || filter.Query != "") {
+		view.Empty = "No log events match these filters."
+	}
+	if filter.kind() != "" || filter.Query != "" {
+		progress, err := h.logs.LinesBefore(r.Context(), stream.EnvironmentID, stream.Epoch, stream.Lines, pageLines)
+		if err != nil {
+			return err
+		}
+		view.ProgressLines = displayLines(progress)
+	}
 	return nil
+}
+func displayLines(lines []Line) []buildpages.LogLine {
+	result := make([]buildpages.LogLine, len(lines))
+	for i, l := range lines {
+		result[i] = buildpages.LogLine{Sequence: l.Sequence, System: l.System, Text: l.Text, At: l.At}
+	}
+	return result
 }
 
 // download sends the current attempt's whole output as a text file, in
 // bounded reads. Lines were redacted before they were stored.
 func (h *Handler) download(w http.ResponseWriter, r *http.Request) {
+	filter, err := parseFilter(r.URL.Query())
+	if err != nil {
+		http.Error(w, "Invalid log filter.", http.StatusBadRequest)
+		return
+	}
 	user, repoID, number, ok := h.identity(r)
 	if !ok {
 		http.NotFound(w, r)
@@ -212,7 +270,7 @@ func (h *Handler) download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	for next := int64(0); next < stream.Lines; {
-		lines, err := h.logs.LinesFrom(r.Context(), stream.EnvironmentID, stream.Epoch, next, downloadBatch)
+		lines, err := h.logs.SearchFrom(r.Context(), stream.EnvironmentID, stream.Epoch, next, downloadBatch, filter)
 		if err != nil {
 			h.logger.WarnContext(r.Context(), "build log download ended early", "error", err)
 			return
@@ -222,11 +280,12 @@ func (h *Handler) download(w http.ResponseWriter, r *http.Request) {
 		}
 		var b strings.Builder
 		for _, l := range lines {
-			if !l.At.IsZero() {
-				b.WriteString(l.At.UTC().Format(downloadTime))
+			display := logviewer.Line{Text: l.Text, At: l.At}
+			if !l.At.IsZero() || display.Timestamp() != "[timestamp unavailable]" {
+				b.WriteString(display.Timestamp())
 				b.WriteByte(' ')
 			}
-			b.WriteString(l.Text)
+			b.WriteString(display.Message())
 			b.WriteByte('\n')
 		}
 		if _, err := w.Write([]byte(b.String())); err != nil {
@@ -271,18 +330,14 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, pages.LogsURL(target.RepoID, target.Number), http.StatusSeeOther)
 }
 
-// downloadBatch lines are read per query; downloadName keeps a file name
-// safe; downloadTime prefixes each line with when it was received (UTC).
-const (
-	downloadBatch = 1000
-	downloadTime  = "2006-01-02T15:04:05.000Z"
-)
+// downloadBatch bounds reads; downloadName keeps attachment names safe.
+const downloadBatch = 1000
 
 var downloadName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // window selects the lines for one page: the newest by default, or the page
 // before/after a sequence number.
-func (h *Handler) window(r *http.Request, s Stream) (lines []Line, tail, more bool, err error) {
+func (h *Handler) window(r *http.Request, s Stream, limit int, filter Filter) (lines []Line, tail, more bool, err error) {
 	q := r.URL.Query()
 	position := func(key string) (int64, error) {
 		n, err := strconv.ParseInt(q.Get(key), 10, 64)
@@ -291,31 +346,41 @@ func (h *Handler) window(r *http.Request, s Stream) (lines []Line, tail, more bo
 		}
 		return n, nil
 	}
-	switch {
-	case q.Has("after"):
+	if q.Has("after") {
 		after, err := position("after")
 		if err != nil {
 			return nil, false, false, err
 		}
-		lines, err = h.logs.LinesFrom(r.Context(), s.EnvironmentID, s.Epoch, after, pageLines+1)
+		lines, err = h.logs.SearchFrom(r.Context(), s.EnvironmentID, s.Epoch, after, limit+1, filter)
 		if err != nil {
 			return nil, false, false, err
 		}
-		if len(lines) > pageLines {
-			return lines[:pageLines], false, true, nil
+		if len(lines) > limit {
+			return lines[:limit], false, true, nil
 		}
-		return lines, after+int64(len(lines)) >= s.Lines, false, nil
-	case q.Has("before"):
-		before, err := position("before")
-		if err != nil {
-			return nil, false, false, err
-		}
-		lines, err = h.logs.LinesBefore(r.Context(), s.EnvironmentID, s.Epoch, before, pageLines)
-		return lines, false, before < s.Lines, err
-	default:
-		lines, err = h.logs.LinesBefore(r.Context(), s.EnvironmentID, s.Epoch, s.Lines, pageLines)
-		return lines, true, false, err
+		return lines, true, false, nil
 	}
+	before := s.Lines
+	if q.Has("before") {
+		before, err = position("before")
+		if err != nil {
+			return nil, false, false, err
+		}
+	}
+	lines, err = h.logs.SearchBefore(r.Context(), s.EnvironmentID, s.Epoch, before, limit, filter)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if !q.Has("before") {
+		return lines, true, false, nil
+	}
+	// Sparse source/search matches require a matching-event lookahead.
+	next := before
+	if len(lines) > 0 {
+		next = lines[len(lines)-1].Sequence + 1
+	}
+	later, err := h.logs.SearchFrom(r.Context(), s.EnvironmentID, s.Epoch, next, 1, filter)
+	return lines, false, len(later) > 0, err
 }
 
 // liveCursor is the browser's position: attempt epoch and next sequence.

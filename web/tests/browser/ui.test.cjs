@@ -612,7 +612,7 @@ test('a failed build says what went wrong and what to do, with the technical det
   await details.locator('summary').click();
   assert.match(await details.locator('.diagnosis-reason').innerText(), /GitHub denied access to this commit's files/);
   assert.match(await details.innerText(), /source_failed/);
-  assert.equal(await details.getByRole('link', {name: 'Open the full log'}).getAttribute('href'), '/repositories/1/pull-requests/4/logs');
+  assert.equal(await details.getByRole('link', {name: 'Show recent logs'}).getAttribute('href'), '/repositories/1/pull-requests/4/logs');
   assert.match(await page.locator('[data-failure]').innerText(), /GitHub didn't let Previa download your code/);
   for (const width of [320, 390, 768, 1440]) {
     await page.setViewportSize({width, height: 844});
@@ -962,6 +962,8 @@ test('failed PR searches preserve records and query bookmarks redirect to dedica
  await page.waitForURL(url=>url.pathname==='/repositories/1/pull-requests/7');
  assert.match(await page.locator('.pr-detail-grid').innerText(),/No build requested yet/);
  await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+ // Intercept the owner's search after the initial live refetch settles.
+ await page.waitForFunction(()=>document.documentElement.dataset.liveState==='live' && !document.getElementById('repository-detail').hasAttribute('aria-busy'));
  await page.route('**/repositories/1?*',route=>route.fulfill({status:503,body:'fixture unavailable'}));
  await page.locator('#pull-request-search').fill('preview 25');
  await page.locator('#pull-request-filters [data-repository-feedback][data-error]').waitFor();
@@ -1200,6 +1202,10 @@ test('build logs stream live, reset for a new attempt and render output as text'
  await context.request.post(`${origin}/__fixture/logs/seed`);
  await login();await page.goto(`${origin}/repositories/1/pull-requests/3`);
  await page.getByRole('link',{name:'Build logs',exact:true}).click();
+ await page.locator('.log-panel-inline .log-line').first().waitFor();
+ assert.equal(new URL(page.url()).pathname, '/repositories/1/pull-requests/3');
+ assert.equal(await page.locator('.log-panel-inline .log-line').count(),300);
+ await page.getByRole('link',{name:'View full build logs',exact:true}).click();
  await page.waitForURL(`${origin}/repositories/1/pull-requests/3/logs`);
  assert.match(await page.locator('.app-breadcrumb').innerText(),/#3[\s\S]*Build logs/);
  assert.match(await page.locator('.page-hero-kicker').innerText(),/repository-1[\s\S]*#3/);
@@ -1207,12 +1213,12 @@ test('build logs stream live, reset for a new attempt and render output as text'
  assert.equal(await page.locator('.log-line').count(),500,'the newest 500 lines render first');
  assert.equal(await page.evaluate(()=>window.__pwned),undefined,'script-looking output must stay inert');
  assert.equal(await page.locator('.log-lines script, .log-lines img').count(),0);
- assert.equal(await page.locator('#L519 .log-text').innerText(),'<img src=x onerror="window.__pwned = true">');
+ assert.equal(await page.locator('#L519 .log-text').innerText(),'2026-10-13T12:00:00.000Z <img src=x onerror="window.__pwned = true">');
  assert(await page.locator('.log-lines').evaluate(e=>e.scrollHeight-e.scrollTop-e.clientHeight<24),'the newest output is in view');
  let documents=0;page.on('request',request=>{if(request.resourceType()==='document') documents++;});
  await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'Step 3/3 : RUN <b>npm test</b>'}});
  await page.locator('#L521').waitFor();
- assert.equal(await page.locator('#L521 .log-text').innerText(),'Step 3/3 : RUN <b>npm test</b>');
+ assert.equal(await page.locator('#L521 .log-text').innerText(),'2026-10-13T12:00:00.000Z Step 3/3 : RUN <b>npm test</b>');
  assert(await page.locator('.log-lines').evaluate(e=>e.scrollHeight-e.scrollTop-e.clientHeight<24),'following keeps new output in view');
  // Scrolling up pauses following; new output must not pull the reader down.
  await page.locator('.log-lines').evaluate(e=>{e.scrollTop=0;e.dispatchEvent(new Event('scroll'));});
@@ -1224,7 +1230,7 @@ test('build logs stream live, reset for a new attempt and render output as text'
  await context.request.post(`${origin}/__fixture/logs/restart`,{form:{text:'Retry attempt output'}});
  await page.locator('.log-line').filter({hasText:'Retry attempt output'}).waitFor();
  assert.equal(await page.locator('.log-line').count(),1);
- assert.equal(await page.locator('#L1 .log-text').innerText(),'Retry attempt output');
+ assert.equal(await page.locator('#L1 .log-text').innerText(),'2026-10-13T12:00:00.000Z Retry attempt output');
  // The step tracker follows the runtime's own progress lines as they arrive.
  assert.equal(await page.locator('.build-tracker .is-current').getAttribute('data-stage'),'image');
  await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'The preview is healthy. It is not routed yet.',system:'1'}});
@@ -1234,13 +1240,109 @@ test('build logs stream live, reset for a new attempt and render output as text'
  for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
 });
 
+test('PR logs stay inline, filter both sources, copy dates and release closed streams',async()=>{
+ await context.request.post(`${origin}/__fixture/logs/seed`);
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'Previa downloaded source',system:'1'}});
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'Previa waiting for health',system:'1'}});
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'2026/10/12 15:22:34 [notice] native application date'}});
+ await context.addInitScript(()=>{
+  const Original=window.EventSource;window.__logStreams=0;
+  window.EventSource=class extends Original {
+   constructor(url,...args){super(url,...args);this.counted=String(url).includes('/logs/events');if(this.counted) window.__logStreams++;}
+   close(){if(this.counted){window.__logStreams--;this.counted=false;}super.close();}
+  };
+ });
+ await context.grantPermissions(['clipboard-read','clipboard-write'],{origin});
+ await login();await page.goto(`${origin}/repositories/1/pull-requests/3`);
+ await page.getByRole('link',{name:'Build logs',exact:true}).click();
+ const panel=page.locator('.log-panel-inline');
+ await panel.locator('.log-line').first().waitFor();
+ assert.equal(new URL(page.url()).pathname,'/repositories/1/pull-requests/3');
+ assert.equal(await panel.locator('.log-line').count(),300);
+ assert.equal(await panel.locator('.log-time, time[data-log-time]').count(),0);
+ assert.equal(await panel.locator('.log-timestamp').count(),300);
+ assert.equal(await panel.getByLabel('Log source',{exact:true}).inputValue(),'all');
+ assert.equal(await panel.locator('.log-line').last().locator('.log-text').innerText(),'2026/10/12 15:22:34 [notice] native application date');
+ const previaColour=await panel.locator('.log-system .log-text').first().evaluate(e=>getComputedStyle(e).color);
+ const appColour=await panel.locator('[data-log-source="application"] .log-text').first().evaluate(e=>getComputedStyle(e).color);
+ assert.notEqual(previaColour,appColour);
+ await panel.getByLabel('Log source',{exact:true}).selectOption('previa');
+ await panel.getByRole('button',{name:'Apply filters'}).click();
+ await page.waitForFunction(()=>document.querySelector('.log-panel-inline')?.dataset.logSource==='previa');
+ assert.equal(await panel.locator('.log-line').count(),2);
+ await panel.getByRole('button',{name:'Copy the lines shown'}).click();
+ await panel.locator('[data-copy-status]').filter({hasText:'Copied'}).waitFor();
+ assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'2026-10-13T12:00:00.000Z Previa downloaded source\n2026-10-13T12:00:00.000Z Previa waiting for health');
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'excluded application output'}});
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'Previa matched live notice',system:'1'}});
+ await panel.locator('.log-line').filter({hasText:'Previa matched live notice'}).waitFor();
+ assert.equal(await panel.locator('.log-line').count(),3);
+ // A repository refresh replaces the detail DOM, preserving this open viewer and filter.
+ await page.evaluate(()=>htmx.ajax('GET',location.pathname,{target:'#repository-detail',swap:'innerHTML'}));
+ await page.waitForFunction(()=>document.querySelector('.log-panel-inline')?.dataset.logSource==='previa' && document.querySelectorAll('.log-panel-inline .log-line').length===3);
+ assert(await page.locator('[data-pr-logs]').evaluate(e=>e.open));
+ await page.locator('[data-pr-logs] > summary').click();
+ await page.waitForFunction(()=>window.__logStreams===0);
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'Previa while closed',system:'1'}});
+ await page.getByRole('link',{name:'Build logs',exact:true}).click();
+ await panel.locator('.log-line').filter({hasText:'Previa while closed'}).waitFor();
+ assert.equal(await panel.locator('.log-line').count(),4);
+ await panel.getByLabel('Log source',{exact:true}).selectOption('application');
+ await panel.getByLabel('Find in logs').fill('native application');
+ await panel.getByRole('button',{name:'Apply filters'}).click();
+ await page.waitForFunction(()=>document.querySelector('.log-panel-inline')?.dataset.logSource==='application' && document.querySelectorAll('.log-panel-inline .log-line').length===1);
+ const full=panel.getByRole('link',{name:'View full build logs',exact:true});
+ assert.match(await full.getAttribute('href'),/source=application/);
+ await full.click();await page.waitForURL(url=>url.pathname.endsWith('/logs') && url.searchParams.get('q')==='native application');
+ assert.equal(await page.locator('.log-line').count(),1);
+ for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
+});
+
+test('recent log live tail keeps only 300 matching events and reports failed loads',async()=>{
+ await context.request.post(`${origin}/__fixture/logs/seed`);
+ await login();await page.goto(`${origin}/repositories/1/pull-requests/3`);
+ await page.getByRole('link',{name:'Build logs',exact:true}).click();
+ const panel=page.locator('.log-panel-inline');await panel.locator('.log-line').first().waitFor();
+ for(let i=0;i<12;i++) await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'bounded tail '+i}});
+ await panel.locator('.log-line').filter({hasText:'bounded tail 11'}).waitFor();
+ assert.equal(await panel.locator('.log-line').count(),300);
+ assert.equal(await panel.locator('.log-line').first().getAttribute('id'),'L233');
+ assert.equal(await panel.locator('[data-log-count]').innerText(),'300 events shown');
+ for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
+ if(process.env.UI_BROWSER_SCREENSHOTS==='1') await page.screenshot({path:path.join(__dirname,'artifacts','pr-recent-build-logs.png'),fullPage:true});
+ await page.route('**/logs/recent*',route=>route.fulfill({status:503,body:'Unavailable'}));
+ await panel.getByRole('link',{name:'Refresh',exact:true}).click();
+ await page.locator('#pr-recent-log-content').filter({hasText:'Recent logs are temporarily unavailable'}).waitFor();
+});
+
+test('App output retains live status, inline dates, copying and attempt resets',async()=>{
+ await context.request.post(`${origin}/__fixture/logs/restart`,{form:{text:'Application initial output'}});
+ await context.grantPermissions(['clipboard-read','clipboard-write'],{origin});
+ await login();await page.goto(`${origin}/repositories/1/pull-requests/3/output`);
+ await page.waitForFunction(()=>document.querySelector('[data-log-connection]')?.dataset.state==='live');
+ assert.equal(await page.locator('.log-time').count(),0);
+ assert.equal(await page.locator('#L1 .log-text').innerText(),'2026-10-13T12:00:00.000Z Application initial output');
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'2026/10/12 15:22:34 [notice] application native date'}});
+ await page.locator('#L2').waitFor();
+ assert.equal(await page.locator('#L2 .log-text').innerText(),'2026/10/12 15:22:34 [notice] application native date');
+ await page.getByRole('button',{name:'Copy the lines shown'}).click();
+ await page.locator('[data-copy-status]').filter({hasText:'Copied'}).waitFor();
+ assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'2026-10-13T12:00:00.000Z Application initial output\n2026/10/12 15:22:34 [notice] application native date');
+ await context.request.post(`${origin}/__fixture/logs/restart`,{form:{text:'New app output'}});
+ await page.locator('.log-line').filter({hasText:'New app output'}).waitFor();
+ assert.equal(await page.locator('.log-line').count(),1);
+ for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
+});
+
 test('build logs paginate and stay readable without JavaScript',async()=>{
  await context.request.post(`${origin}/__fixture/logs/seed`);
  const noJS=await browser.newContext({javaScriptEnabled:false});
  try {
   const plain=await noJS.newPage();
   await plain.goto(`${origin}/auth/github/login`);await plain.waitForURL(`${origin}/dashboard`);
-  await plain.goto(`${origin}/repositories/1/pull-requests/3/logs`);
+  await plain.goto(`${origin}/repositories/1/pull-requests/3`);
+  await plain.getByRole('link',{name:'Build logs',exact:true}).click();
+  await plain.waitForURL(`${origin}/repositories/1/pull-requests/3/logs`);
   assert.equal(await plain.locator('.log-line').count(),500);
   assert.equal(await plain.locator('.log-line').first().getAttribute('id'),'L21');
   assert.equal(await plain.locator('[data-log-connection]').innerText(),'Live updates off');
@@ -1252,6 +1354,12 @@ test('build logs paginate and stay readable without JavaScript',async()=>{
   await plain.waitForURL(url=>url.searchParams.get('after')==='20');
   assert.equal(await plain.locator('.log-line').first().getAttribute('id'),'L21');
   await plain.getByRole('link',{name:'Refresh',exact:true}).waitFor();
+  await plain.getByLabel('Log source',{exact:true}).selectOption('application');
+  await plain.getByLabel('Find in logs').fill('step output line 50');
+  await plain.getByRole('button',{name:'Apply filters'}).click();
+  await plain.waitForURL(url=>url.searchParams.get('source')==='application');
+  assert.equal(await plain.locator('.log-line').count(),11);
+  assert.match(await plain.getByRole('link',{name:'Download',exact:true}).getAttribute('href'),/source=application/);
  } finally {await noJS.close();}
 });
 
