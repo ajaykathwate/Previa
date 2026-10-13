@@ -732,6 +732,9 @@ curl --fail http://127.0.0.1:20241/ready
 ```
 
 **Expected:** cloudflared registers a connection and `/ready` returns HTTP 200.
+An expired quick tunnel can keep retrying with `Unauthorized: Tunnel not found`
+while `/ready` returns 503. Stop that expired process and start a replacement;
+the old hostname cannot be recovered by its connection retries.
 After restarting the tunnel, set the existing GitHub App's **Webhook URL** to the
 new printed HTTPS address followed by `/webhooks/github`, keeping its webhook
 secret unchanged. Verify the external path as well:

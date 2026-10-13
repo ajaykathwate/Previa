@@ -72,7 +72,7 @@ Last updated: 2026-10-13
 - Live previa.live PR #3 is merged, environment torn_down, route removed (HTTPS 302 unavailable); PR #4 remains running and HTTPS 200. Worker heartbeat + /readyz verified after regression; all capabilities ready.
 - Staging certificate replaced by trusted production CA + /acme/acme-production.json; same previously working hostname, historical TLS/browser state unknown.
 - ACME_STORAGE_FILE (local Compose) preserves staging state; router-up restores preview networks after recreation.
-- docs/02,12,13,15 cover recovery/setup; test-routing includes private auth. Code fixes require migration 0029 + server/worker restart. Quick tunnel outside-covered-soundtrack-royalty.trycloudflare.com expired during interruption; session 10708 stopped. Earlier signed ping 204; restart was rejected by auto-review pending explicit public-exposure approval, then update existing App webhook URL. Worker ready; preview URLs healthy.
+- docs/02,12,13,15 cover recovery/setup; test-routing includes private auth. Code fixes require migration 0029 + server/worker restart. Owner explicitly approved replacement public tunnel + App webhook URL update after expiry. New URL: https://stores-sandy-pendant-smile.trycloudflare.com/webhooks/github; signed ping 204, App URL read-back verified, tunnel ready (session 11386). Keep that session running; a new quick tunnel needs a webhook URL update. Worker ready; preview URLs healthy.
 
 ## Backend previews and outbound (docs/11)
 - services {postgres|redis|mysql: version} resolves through PREVIEW_SERVICE_CATALOG

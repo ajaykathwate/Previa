@@ -104,12 +104,17 @@ HTTPS 200. The merged PR #3's URL returned HTTP 302 to the unavailable page.
 
 At the final check after the session interruption, Cloudflare had expired the
 temporary webhook tunnel (`Unauthorized: Tunnel not found`, no ready connections).
-The expired process was stopped. Automatic approval review rejected creating a
-replacement public tunnel because explicit authorization for that exposure is
-required. The existing development App webhook is currently unreachable until
-the owner approves a replacement tunnel and its webhook URL update. Worker
-readiness and both preview URL checks still passed. Earlier signed webhook and
-GitHub reporting proofs remain valid evidence for their executed runs.
+The expired process was stopped. Automatic approval review initially rejected
+creating a replacement public tunnel pending explicit authorization. The owner
+then approved restarting it and updating the existing development App webhook.
+The replacement `https://stores-sandy-pendant-smile.trycloudflare.com` tunnel
+reported a ready connection, its signed ping returned HTTP 204, and the updated
+App webhook URL was verified by reading it back. Only the URL was patched;
+the webhook secret was preserved. Worker readiness and both preview URL checks
+still passed. Quick tunnels remain temporary and need a webhook URL update when
+replaced. Earlier GitHub reporting proofs remain valid evidence for their runs.
+The recovery follow-up also passed `go build ./...` and the webhook package's
+tests with the race detector.
 
 Two documented acceptance cases remain incomplete: the complete disposable-PR
 journey on a deployed production host (`TC-E2E-LIVE-001`) and real host setup,
