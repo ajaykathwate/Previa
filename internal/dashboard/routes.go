@@ -24,6 +24,7 @@ func Mount(r chi.Router, users UserSession, requireUser func(http.Handler) http.
 func MountWithSummary(r chi.Router, users UserSession, requireUser func(http.Handler) http.Handler, o Options) {
 	h := &handler{users: users, summary: o.Summary, userID: o.Identity, devTools: o.DeveloperTools}
 	r.Get("/", h.home)
+	r.Get("/open-source-tests", h.openSourceTests)
 	r.With(requireUser).Get("/dashboard", h.dashboard)
 	r.With(requireUser).Get("/protected", h.protected)
 	r.With(requireUser).Get("/developer-tools", h.tools)

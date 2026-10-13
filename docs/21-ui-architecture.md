@@ -41,7 +41,7 @@ user's point of view is in the
 
 Dependencies point one way: feature handler → page package → layouts/components.
 Use import aliases (`authpages`, `dashboardpages`, `prpages`) where names collide.
-Ownership of routes: `internal/dashboard` (home, overview, session, tools, FAQ),
+Ownership of routes: `internal/dashboard` (home, overview, session, tools, FAQ, Open Source Tests),
 `internal/installations` (`/repositories`), `internal/pullrequests` (repository and
 PR pages, Builds, Previews, the event stream), `internal/secrets` (a
 repository's Secrets tab).
@@ -260,6 +260,27 @@ controls), **Why Previa** (reviewing before and with Previa, and who it helps), 
 `.tile-icon` tiles that read in both themes. Copy stays user-level: what Previa
 does for a pull request, never how it is built or hosted; Previa is presented as a
 hosted service, free during early access.
+
+## Open Source Tests
+
+`/open-source-tests` (public; `web/pages/opensource`, linked from the site navigation,
+the footer and a home page section) presents the well-known open-source apps Previa
+is tested against: 19 repositories, ten of them the **core ten** that between them
+exercise nearly every capability. Each app is Go data (`Repos`, `Capabilities`) so the
+index, the coverage rows, the counts and the anchors (`#repo-<id>`) cannot drift. A
+card shows the stack, size, configuration effort, architecture and what the app
+proves; **How we test it** (a native `<details>`) holds the `.previewrc.yaml` used
+(with a copy button), the secrets set, any changes made to the project, the steps,
+**What must hold** and **Known limits**. Coverage is one row per capability in two
+balanced columns.
+
+- **Keeping it true:** an app shows **In testing** until `Status.Verified` is set to the
+  date every expected result held on a live preview; the hero's verified count appears
+  only once at least one app is verified. Never mark an app verified without running it.
+- `internal/dashboard` tests serve the page signed in and out and parse every published
+  `.previewrc.yaml` with `repoconfig.ParseFor` and the default service catalog, so the
+  page can't show a configuration Previa would reject.
+- The shared public footer is `components.SiteFooter`.
 
 ## Conversations: How it works and the FAQ
 

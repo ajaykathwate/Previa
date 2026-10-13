@@ -51,21 +51,21 @@ Last updated: 2026-10-13
   inside containers; stock nginx can still fail on read-only caches/PID paths.
 - Queue tests isolate River schemas from dev workers; basic E2E uses BusyBox httpd. Follow-up fixes committed 2cb0ae1.
 
-## Build-log UI and managed services (2026-10-13; commit/push pending)
+## Build-log UI and managed services (2026-10-13; committed 8a76185)
 - Shared web/components/logviewer: inline full timestamps (native leading dates preserved, otherwise received UTC), copy/download include dates; source colors and literal search. All/Previa/Application filters apply before paging/export; SSE protocol and build writer unchanged.
 - PR links open recent logs under the main card (latest 300 matching events, bounded live tail); full-page link preserves filters. Close releases SSE; PR refresh retains open/filter state; no-JS links and source/search forms work. Full logs retain 500-event pagination.
 - Managed services display one theme-aware capsule per catalog entry, with versions grouped inside; capsules wrap on narrow screens and unavailable-catalog messages remain explicit.
 - App output reuses event rendering; live status/copy/reset remain supported. No config/schema change; make build or Air + browser refresh loads assets. docs/02,08 and DESIGN section 17 updated.
 - Verification: full go test -race ./... passed with TEST_DATABASE_URL; focused real database + affected-feature race checks passed; build/vet/lint passed. Browser final 55/55 passed (including App output and no-JS filtering). Report: test-docs/2026-10-13-build-log-ui-report.md.
 ## Earlier improvements (committed 973907f / 93191aa; migrations 0022-0027)
-- Forks never auto-build (LockIntentPR + ClaimBuildIntent fence; docs/16).
-- Fairness: BUILDS_PER_ACCOUNT, BUILD_MINUTES_PER_ACCOUNT_DAY, account/quota waits,
-  waiting_since, wakeNextWaitingTx; PREVIEW_MAX_PER_ACCOUNT and startup capacity
-  warning (docs/17). Production example sized for VPS-2.
-- Build traffic: egress meter, totals/metrics; BUILD_EGRESS=registries fails closed.
-- Retention: BUILD_LOG_RETENTION_DAYS, log deletion, housekeeping_records retention;
-  log retention and deletion are covered in docs/08,15.
-- Activity: crash/visits/App output, PREVIEW_IDLE_SLEEP/wake, private forwardAuth.
+- Forks never auto-build (docs/16); account fairness/quotas and capacity warning (docs/17);
+  build egress meter; log/housekeeping retention (docs/08,15); crash/visits/App output, idle wake.
+
+## Open Source Tests page (2026-10-13; committed on ui-improvements, not pushed)
+- Public /open-source-tests (web/pages/opensource; route in internal/dashboard): 19 apps, core ten,
+  each with config/secrets/changes/steps/expected/limits; nav, footer, home section, closing CTA.
+- No app run yet (all "In testing"); after a passing live preview set Status.Verified (YYYY-MM-DD).
+- Tests parse every published config with repoconfig + default catalog; make test and lint pass.
 
 ## Routing, merge recovery and TLS (2026-10-13; committed 8764e0c)
 - Missing PREVIEW_ACCESS_URL caused activation 112/120 failures; 0029/UI/POST require configured routing workers.

@@ -1012,6 +1012,7 @@ preview/
 │   │   ├── auth/                   # error pages; logout uses a shared modal
 │   │   ├── home/                   # public landing page, How it works conversation
 │   │   ├── faq/                    # FAQ conversation (home page and workspace page)
+│   │   ├── opensource/             # Open Source Tests: apps Previa is tested against (public)
 │   │   ├── dashboard/              # overview, session, developer tools
 │   │   ├── repositories/           # paginated, filtered repository page
 │   │   ├── pullrequests/           # repository/PR detail and shared current activity

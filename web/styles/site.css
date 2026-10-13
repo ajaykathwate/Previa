@@ -1,6 +1,7 @@
 /* One compiled browser stylesheet, organized by presentation responsibility. */
 @import "./base.css";
 @import "./home.css";
+@import "./lab.css";
 @import "./conversation.css";
 @import "./workspace.css";
 @import "./overview.css";
