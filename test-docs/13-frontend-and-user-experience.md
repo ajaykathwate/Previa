@@ -114,7 +114,7 @@ Content-Security-Policy, and any JavaScript error or CSP violation fails it.
   Type: Resilience · Priority: P2 · Level: Browser  
   Steps: Expire the session, then select a repository panel.  
   Expected: The whole document navigates to sign-in instead of a broken panel.  
-  Evidence: browser › *expired sessions during panel selection navigate the whole document to sign-in*
+  Evidence: browser › *expired sessions navigate through sign-in and return to the requested page*
 
 ## 4. Accessibility (TC-UI-A11Y)
 

@@ -433,7 +433,7 @@ Medium. Simple API calls, but rate limits, race conditions and idempotency matte
 - **Debouncing (changed from the original design):** no timer; collapsing queued reports and skipping unchanged content give the same effect, and the final state is always written.
 - **First report (owner decision):** once a PR has preview work, not on every observed PR.
 - **Rate limiting and permissions:** primary and secondary limits are retried after GitHub's own delay; 403/404 on the repository records `inaccessible` and writes nothing; a refused comment or check write is recorded and does not block the other.
-- **Current implementation:** `internal/reporting` (state, render, GitHub adapter, reporter) and `internal/environments/reports.go`, migration 0015, tested against PostgreSQL and a fake GitHub, with an opt-in live proof (`make test-reporting`, still to run on a real PR). The worker registers the reporter with builds; `make test-e2e` proves the comment and check runs through the whole pipeline. See [14-pr-feedback.md](docs/14-pr-feedback.md).
+- **Current implementation:** `internal/reporting` (state, render, GitHub adapter, reporter) and `internal/environments/reports.go`, migration 0015, tested against PostgreSQL and a fake GitHub, with an opt-in live proof (`make test-reporting`, verified on an authorized real PR on 2026-10-13). The proof uses a separate comment marker to preserve active preview feedback. The worker registers the reporter with builds; `make test-e2e` proves the comment and check runs through the whole pipeline. See [14-pr-feedback.md](docs/14-pr-feedback.md).
 
 ---
 

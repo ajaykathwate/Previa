@@ -15,6 +15,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/idle"
 	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
@@ -63,8 +64,9 @@ type pipelineInput struct {
 	cfg            config.WorkerConfig
 	pool           *pgxpool.Pool
 	producer       *river.Client[pgx.Tx]
-	docker         *client.Client // nil: no Docker client was created
-	github         GitHubApp      // nil: the GitHub App is not configured
+	docker         *client.Client  // nil: no Docker client was created
+	gateway        *egress.Gateway // nil: use the shared production gateway
+	github         GitHubApp       // nil: the GitHub App is not configured
 	archiveOptions []source.ArchiveOption
 	logger         *slog.Logger
 }

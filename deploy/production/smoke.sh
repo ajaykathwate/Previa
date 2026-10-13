@@ -18,6 +18,10 @@ HERE=$(dirname "$(readlink -f "$0")")
 # The toolchain the release images are built with, from the Dockerfile's pin.
 GO_VERSION=$(sed -n 's/^ARG GO_IMAGE=golang:\([0-9.]*\)-.*/go\1/p' "$HERE/../../Dockerfile")
 [[ -n $GO_VERSION ]] || { echo "no Go version in the Dockerfile's GO_IMAGE" >&2; exit 1; }
+SCHEMA_VERSION=$(sed -n 's/^const SchemaVersion = \([0-9]*\)$/\1/p' "$HERE/../../internal/platform/database/schema.go")
+[[ $SCHEMA_VERSION =~ ^[0-9]+$ ]] || { echo "no schema version in the application" >&2; exit 1; }
+ALERT_RULE_COUNT=$(grep -Ec '^[[:space:]]+- alert:' "$HERE/../observability/alerts.yml")
+[[ $ALERT_RULE_COUNT -gt 0 ]] || { echo "no alert rules configured" >&2; exit 1; }
 PROJECT=previa-smoke
 CURL_IMAGE=curlimages/curl:8.15.0@sha256:4026b29997dc7c823b51c164b71e2b51e0fd95cce4601f78202c513d97da2922
 HOST=previa.localtest.me
@@ -51,6 +55,14 @@ check() { # check NAME COMMAND...: run, count, and stop at the first failure
 inside() { docker run --rm --network "${PROJECT}_control" "$CURL_IMAGE" -fsS --max-time 10 "$@"; }
 outside() { curl -ksS --max-time 10 --resolve "$HOST:18443:127.0.0.1" --resolve "pr-1-x-y.preview.localtest.me:18443:127.0.0.1" "$@"; }
 psql() { "${compose[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U previa -d previa -tAc "$1"; }
+internal_ports_unpublished() {
+	local service id bindings
+	for service in server worker; do
+		id=$("${compose[@]}" ps -q "$service") || return 1
+		bindings=$(docker inspect --format '{{json .HostConfig.PortBindings}}' "$id") || return 1
+		[[ $bindings == null || $bindings == '{}' ]] || return 1
+	done
+}
 # Checks that run in a child bash use these helpers too.
 export HOST PROJECT CURL_IMAGE VERSION GO_VERSION
 export -f inside outside
@@ -97,7 +109,7 @@ started=$(date +%s)
 check "stack starts and every health check passes" "${compose[@]}" up -d --wait --wait-timeout 180
 echo "     started in $(($(date +%s) - started))s"
 check "migrations ran once and exited cleanly" test "$(docker inspect --format '{{.State.ExitCode}}' "${PROJECT}-migrate-1")" = 0
-check "schema is at the release's migration" test "$(psql "SELECT max(version_id) FROM goose_db_version WHERE is_applied")" = 20
+check "schema is at the release's migration" test "$(psql "SELECT max(version_id) FROM goose_db_version WHERE is_applied")" = "$SCHEMA_VERSION"
 check "the route file is written from the accepted table" \
 	"${compose[@]}" run --rm --no-deps --entrypoint /usr/local/bin/previa-route-sync worker
 
@@ -119,7 +131,7 @@ check "an unknown preview host goes to the unavailable page" bash -c '
 	exit 1'
 check "sign-in is rate limited per client" bash -c '
 	for _ in $(seq 25); do outside -o /dev/null -w "%{http_code}\n" "https://'"$HOST"':18443/auth/github/login"; done | grep -qx 429'
-check "internal listeners are not published" bash -c '! curl -s --max-time 3 http://127.0.0.1:9090/livez && ! curl -s --max-time 3 http://127.0.0.1:9091/livez'
+check "internal listeners are not published" internal_ports_unpublished
 
 echo "== inside the control network"
 ready=$(inside http://server:9090/readyz)
@@ -143,7 +155,7 @@ check "Prometheus scrapes server, worker and router" bash -c '
 		sleep 3
 	done
 	exit 1'
-check "all 24 alert rules loaded" bash -c "inside http://prometheus:9090/api/v1/rules | grep -o '\"type\":\"alerting\"' | wc -l | grep -qx 24"
+check "all $ALERT_RULE_COUNT alert rules loaded" bash -c "inside http://prometheus:9090/api/v1/rules | grep -o '\"type\":\"alerting\"' | wc -l | grep -qx $ALERT_RULE_COUNT"
 grafana_password=$(grep '^GRAFANA_ADMIN_PASSWORD=' "$work/previa.env" | cut -d= -f2-)
 # Grafana provisions its dashboards in the background as it starts.
 check "Grafana provisioned the Previa dashboard" bash -c '
@@ -180,7 +192,7 @@ for image in server worker egress; do docker tag "previa-$image:$VERSION" "previ
 image_of() { docker inspect --format '{{.Config.Image}}' "$("${compose[@]}" ps -q "$1")"; }
 check "upgrade: the stack rolls to the new tag" env PREVIA_VERSION="$VERSION-next" "${compose[@]}" up -d --wait --wait-timeout 180
 check "upgrade: server and worker run the new images" test "$(image_of server) $(image_of worker)" = "previa-server:$VERSION-next previa-worker:$VERSION-next"
-check "upgrade: migrations ran again and changed nothing" test "$(psql "SELECT max(version_id) FROM goose_db_version WHERE is_applied")" = 20
+check "upgrade: migrations ran again and changed nothing" test "$(psql "SELECT max(version_id) FROM goose_db_version WHERE is_applied")" = "$SCHEMA_VERSION"
 check "rollback: the stack returns to the previous tag" "${compose[@]}" up -d --wait --wait-timeout 180
 check "rollback: server and worker run the previous images" test "$(image_of server) $(image_of worker)" = "previa-server:$VERSION previa-worker:$VERSION"
 for image in server worker egress; do docker rmi -f "previa-$image:$VERSION-next" >/dev/null; done
@@ -220,7 +232,7 @@ if command -v age >/dev/null && command -v age-keygen >/dev/null; then
 		old_started=$(date +%s)
 		check "an older-schema backup restores and migrates to this release" \
 			env "${drill_env[@]}" "$HERE/restore.sh" --identity "$work/age-key.txt" --yes "$work/old.dump.age"
-		check "the restored schema is current" test "$(psql "SELECT max(version_id) FROM goose_db_version WHERE is_applied")" = 20
+		check "the restored schema is current" test "$(psql "SELECT max(version_id) FROM goose_db_version WHERE is_applied")" = "$SCHEMA_VERSION"
 		check "the server is ready on the upgraded data" bash -c "docker run --rm --network ${PROJECT}_control $CURL_IMAGE -fsS http://server:9090/readyz | grep -q '\"status\":\"ready\"'"
 		echo "     older-schema restore and upgrade took $(($(date +%s) - old_started))s"
 	fi

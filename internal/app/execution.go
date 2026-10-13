@@ -121,9 +121,13 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 // newEgressGateway prepares the egress proxy. The worker owns its
 // owner-approved outbound forwarding and exports its connection metrics.
 func newEgressGateway(in pipelineInput) (*egress.Gateway, error) {
-	gateway, err := egress.NewGateway(in.docker, in.cfg.EgressImage)
-	if err != nil {
-		return nil, err
+	gateway := in.gateway
+	if gateway == nil {
+		var err error
+		gateway, err = egress.NewGateway(in.docker, in.cfg.EgressImage)
+		if err != nil {
+			return nil, err
+		}
 	}
 	outboundPorts, err := in.cfg.OutboundPorts()
 	if err != nil {

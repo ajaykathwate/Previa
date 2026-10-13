@@ -302,13 +302,15 @@ make test-reporting
 **Expected:** `PASS` for `TestRealReportingOnADisposablePR` in about half a minute,
 with log lines such as `created living comment …`, `created check run … (revision
 1)`, `recreated living comment … after deletion of …` and finally `cleanup: deleted
-comment …`. Only comment and check run IDs are logged. The PR must be open and must
-not already have a Previa comment (the test stops if it does). Afterwards the PR has
-no Previa comment; its head commit keeps three completed check runs named
+comment …`. Only comment and check run IDs are logged. The PR must be open. Each
+run uses a unique live-proof comment marker, so an existing preview comment is
+preserved. Afterwards only the test's comments are removed; its head commit keeps
+three completed check runs named
 "Previa preview (live proof)" because GitHub cannot delete check runs. If the test
-is interrupted before its cleanup, delete the Previa comment on the PR by hand; an
-unfinished run can be completed by running the proof again on the same commit after
-deleting the comment. The database part uses a throwaway schema and leaves nothing
+is interrupted before its cleanup, remove only comments whose HTML marker starts
+with `<!-- previa:live-proof `, and complete any unfinished live-proof check runs
+through GitHub's API. A rerun creates a new proof scope and does not clean up a
+previous interrupted run. The database part uses a throwaway schema and leaves nothing
 behind. Without the three variables the target stops with a message; with
 `TEST_REPORTING` unset the test skips.
 
@@ -400,7 +402,10 @@ the tests; only `previa-egress` stays running.
 Needs Docker, internet access the first time (Alpine, BusyBox and Traefik images), the egress
 image and PostgreSQL; no GitHub account, domain or DNS token. It runs the worker's own
 pipeline against a fake GitHub over TLS and a Traefik router with its default
-certificate, on a throwaway schema.
+certificate, on a throwaway schema. Each test worker gets a separate
+`previa-egress-test-…` container and outward network, so its forwarding policy
+cannot overwrite a running development worker's approvals. Production continues
+to use the shared `previa-egress` gateway.
 
 ```sh
 make test-e2e             # about 15 minutes; the first run also pulls PostgreSQL and Redis
@@ -427,8 +432,8 @@ network or volume of either preview remains`. The basic preview also serves 50
 consecutive HTTPS requests before the failed-rebuild check. Set `TEST_E2E_LOG=1`
 for worker logs and Traefik debug diagnostics; a failing test captures the router's
 last 80 log lines before removing it. Anything the run could not remove fails the
-test. Afterwards only the `previa-egress` container and network
-remain (`docker network ls --filter label=io.previa.managed`).
+test. The test's gateway and network are also removed. Existing development
+previews, their networks, and the shared `previa-egress` gateway remain intact.
 
 ### Release images and production smoke test (optional)
 
@@ -454,6 +459,10 @@ make prod-smoke PREVIA_VERSION=v0.1.0-rc.1        # about 3 minutes
 `smoke test passed: 40 checks` (43 with `SMOKE_OLD_DUMP`, 33 without `age`). Ports used: 127.0.0.1:18080,
 18443 and 13000. What it covers and its options are in
 [25](25-production-deployment.md#local-staging-smoke-test).
+The script reads the required schema version and alert count from the checkout;
+build matching images before running it. Internal-listener exposure is checked
+on the smoke containers' port bindings, so development listeners on 9090/9091
+can stay running while this isolated stack is tested.
 
 ### Real housekeeping check (optional)
 

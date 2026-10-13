@@ -6,9 +6,12 @@ torn down. Each case says what is tested, how, what must happen, and which
 automated test or command proves it. A box is ticked only when that evidence
 passed in the recorded test cycle.
 
-**Latest cycle: 2026-10-09 — 239 of 239 executed cases passed; 3 cases were not
-run (they need real GitHub credentials or a real host).** Four defects were found
-and fixed during the cycle; see [Defects found in this cycle](#defects-found-in-this-cycle).
+**Latest cycle: 2026-10-13 — 240 of 240 executed cases passed; two complete
+production acceptance cases remain.** The full Go suite, all 52 browser scenarios,
+all real Docker suites, authorized GitHub reporting and all 40 production smoke
+checks passed. See the [current regression report](2026-10-13-regression-report.md)
+for evidence, corrections and remaining limits. The 2026-10-09 record below is
+historical.
 
 ## Modules
 
@@ -23,14 +26,14 @@ and fixed during the cycle; see [Defects found in this cycle](#defects-found-in-
 | 07 | [Preview runtime and backend services](07-preview-runtime-and-backend-services.md) | RUN | 16 | 16 | 0 |
 | 08 | [Routing, HTTPS and publication](08-routing-https-and-publication.md) | RTE | 14 | 14 | 0 |
 | 09 | [Teardown, cleanup and housekeeping](09-teardown-cleanup-and-housekeeping.md) | TDN | 14 | 14 | 0 |
-| 10 | [PR feedback and reporting](10-pr-feedback-and-reporting.md) | RPT | 11 | 10 | 1 |
+| 10 | [PR feedback and reporting](10-pr-feedback-and-reporting.md) | RPT | 11 | 11 | 0 |
 | 11 | [Secrets and outbound connections](11-secrets-and-outbound-connections.md) | SEC | 12 | 12 | 0 |
 | 12 | [Build logs and live updates](12-build-logs-and-live-updates.md) | LOG | 11 | 11 | 0 |
 | 13 | [Frontend and user experience](13-frontend-and-user-experience.md) | UI | 28 | 28 | 0 |
 | 14 | [Security and ingress](14-security-and-ingress.md) | SECU | 15 | 15 | 0 |
 | 15 | [Operations and release](15-operations-and-release.md) | OPS | 16 | 15 | 1 |
 | 16 | [End to end: pull request to preview URL](16-end-to-end-pipeline.md) | E2E | 14 | 13 | 1 |
-| | **Total** | | **242** | **239** | **3** |
+| | **Total** | | **242** | **240** | **2** |
 
 Modules 01–12 follow the product's features in pipeline order. Module 13 looks at
 everything from a person's point of view, module 14 at the edges every request
@@ -67,7 +70,9 @@ Each module document has the same shape:
 The commands below are the whole regression. Set up the machine with
 [02 · Development setup](../docs/02-development-setup.md) first. Database tests use
 `TEST_DATABASE_URL`, which should point at a disposable database migrated with
-`make migrate-up` (Goose 20).
+`make migrate-up` (Goose 29). The tests create isolated schemas; they do not erase
+the development database. Direct Go commands require exported test settings;
+Make's integration targets load `.env` as documented in development setup.
 
 | Level | Command | What it needs |
 | --- | --- | --- |
@@ -83,7 +88,7 @@ To record a new cycle: run everything above, keep the logs, tick only the cases
 whose evidence passed, update the module table and the cycle section below, and
 list any defect with the case that now guards it.
 
-## Latest cycle: 2026-10-09
+## Historical cycle: 2026-10-09
 
 ### Environment
 

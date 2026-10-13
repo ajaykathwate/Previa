@@ -2,6 +2,7 @@ package reporting
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -59,7 +60,9 @@ func TestRealReportingOnADisposablePR(t *testing.T) {
 
 	f := &reportFixture{pool: migratedPool(t), headSHA: pr.GetHead().GetSHA()}
 	f.seed(t, installationID, repoID, int32(number))
-	liveProof(t, &live{f: f, client: client, api: api, installationID: installationID, repo: repo, number: number, appID: identity.GetID()})
+	marker := fmt.Sprintf("<!-- previa:live-proof %d -->", time.Now().UnixNano())
+	liveProof(t, &live{f: f, client: client, api: liveProofAPI{GitHub: api, marker: marker}, marker: marker,
+		installationID: installationID, repo: repo, number: number, appID: identity.GetID()})
 }
 
 // TestLiveProofRehearsal runs the live proof's script against the fake
@@ -72,10 +75,21 @@ func TestLiveProofRehearsal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	api := fake.api(t)
+	originalBody := Marker + "\nExisting live preview"
+	original, err := api.CreateComment(t.Context(), 900, Repo{Owner: "octo", Name: "app"}, 7, originalBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := "<!-- previa:live-proof rehearsal -->"
+	isolated := liveProofAPI{GitHub: api, marker: marker}
+	if err := isolated.UpdateComment(t.Context(), 900, Repo{Owner: "octo", Name: "app"}, original, originalBody); err == nil {
+		t.Fatal("live proof could update the real preview comment")
+	}
 	// Registered first, so it runs after the proof's own cleanup.
 	t.Cleanup(func() {
-		if comments := fake.appComments(7); len(comments) != 0 {
-			t.Errorf("cleanup left %d comments", len(comments))
+		if comments := fake.appComments(7); len(comments) != 1 || comments[0].ID != original || comments[0].Body != originalBody {
+			t.Errorf("proof cleanup changed the real preview comment or left temporary comments: %+v", comments)
 		}
 		for _, c := range fake.checksFor(headB) {
 			if c.Status != "completed" {
@@ -83,14 +97,15 @@ func TestLiveProofRehearsal(t *testing.T) {
 			}
 		}
 	})
-	liveProof(t, &live{f: f, client: client, api: fake.api(t), installationID: 900, repo: Repo{Owner: "octo", Name: "app"}, number: 7, appID: testAppID})
+	liveProof(t, &live{f: f, client: client, api: isolated, marker: marker,
+		installationID: 900, repo: Repo{Owner: "octo", Name: "app"}, number: 7, appID: testAppID})
 }
 
 func liveProof(t *testing.T, l *live) {
 	t.Helper()
 	f := l.f
-	if _, found, err := l.api.FindComment(t.Context(), l.installationID, l.repo, int32(l.number), Marker, commentPages); err != nil || found {
-		t.Fatalf("the PR must not already have a Previa comment (found %v, %v); delete it first", found, err)
+	if _, found, err := l.api.FindComment(t.Context(), l.installationID, l.repo, int32(l.number), l.commentMarker(), commentPages); err != nil || found {
+		t.Fatalf("the proof marker must be unused (found %v, %v)", found, err)
 	}
 	var err error
 	f.reporter, err = NewReporter(f.pool, l.api, Settings{CheckName: liveCheckName}, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -172,11 +187,19 @@ func liveProof(t *testing.T, l *live) {
 type live struct {
 	f              *reportFixture
 	client         *github.Client
-	api            *GitHubAPI
+	api            GitHub
+	marker         string
 	installationID int64
 	repo           Repo
 	number         int64
 	appID          int64
+}
+
+func (l *live) commentMarker() string {
+	if l.marker != "" {
+		return l.marker
+	}
+	return Marker
 }
 
 func (l *live) report(t *testing.T, stage string) {
@@ -203,7 +226,7 @@ func (l *live) body(t *testing.T, want string) {
 	if err != nil {
 		t.Fatalf("read the comment: %v", classify(response, err))
 	}
-	if !strings.Contains(comment.GetBody(), want) || !strings.HasPrefix(comment.GetBody(), Marker) {
+	if !strings.Contains(comment.GetBody(), want) || !strings.HasPrefix(comment.GetBody(), l.commentMarker()) {
 		t.Fatalf("the comment lacks %q", want)
 	}
 }
@@ -239,7 +262,7 @@ func (l *live) checkByID(t *testing.T, id int64, status, conclusion string) *git
 
 func (l *live) markerComments(t *testing.T) []int64 {
 	t.Helper()
-	ids, err := liveMarkerComments(t.Context(), l.client, l.repo, l.number, l.appID)
+	ids, err := liveMarkerComments(t.Context(), l.client, l.repo, l.number, l.appID, l.commentMarker())
 	if err != nil {
 		t.Fatalf("list comments: %v", err)
 	}
@@ -247,7 +270,7 @@ func (l *live) markerComments(t *testing.T) []int64 {
 }
 
 // liveMarkerComments lists this App's Previa comments on the PR.
-func liveMarkerComments(ctx context.Context, client *github.Client, repo Repo, number int64, appID int64) ([]int64, error) {
+func liveMarkerComments(ctx context.Context, client *github.Client, repo Repo, number int64, appID int64, marker string) ([]int64, error) {
 	var ids []int64
 	options := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100, Page: 1}}
 	for range commentPages {
@@ -256,7 +279,7 @@ func liveMarkerComments(ctx context.Context, client *github.Client, repo Repo, n
 			return nil, classify(response, err)
 		}
 		for _, c := range comments {
-			if c.GetPerformedViaGithubApp().GetID() == appID && strings.Contains(c.GetBody(), Marker) {
+			if c.GetPerformedViaGithubApp().GetID() == appID && strings.HasPrefix(c.GetBody(), marker+"\n") {
 				ids = append(ids, c.GetID())
 			}
 		}
@@ -273,7 +296,7 @@ func liveMarkerComments(ctx context.Context, client *github.Client, repo Repo, n
 func liveCleanup(t *testing.T, l *live) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	ids, err := liveMarkerComments(ctx, l.client, l.repo, l.number, l.appID)
+	ids, err := liveMarkerComments(ctx, l.client, l.repo, l.number, l.appID, l.commentMarker())
 	if err != nil {
 		t.Errorf("cleanup: list comments: %v; delete the Previa comment on the PR by hand", err)
 	}

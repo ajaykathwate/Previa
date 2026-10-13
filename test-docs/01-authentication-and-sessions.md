@@ -75,7 +75,7 @@ CSRF rules every page and action depends on.
   Type: Usability · Priority: P2 · Level: Integration + Browser  
   Steps: Let the session expire, then select a repository panel (an in-page request).  
   Expected: The server answers 401 with `HX-Redirect`; the browser navigates the whole document to sign-in instead of showing a broken panel.  
-  Evidence: `internal/auth` › `TestExpiredSessionHTMXRedirectsWholeDocument`; browser › *expired sessions during panel selection navigate the whole document to sign-in*
+  Evidence: `internal/auth` › `TestExpiredSessionHTMXRedirectsWholeDocument`; browser › *expired sessions navigate through sign-in and return to the requested page*
 
 ## 3. Sign-out (TC-AUTH-OUT)
 

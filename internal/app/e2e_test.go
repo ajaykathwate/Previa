@@ -91,6 +91,7 @@ func TestRealEndToEnd(t *testing.T) {
 	// The fixture's images are tiny; the production free-disk floor (15 GiB)
 	// would refuse every build on a CI runner.
 	execution.BuildMinFreeDisk = 1 << 30
+	gateway := newE2EGateway(t, docker, execution.EgressImage)
 	router := startE2ERouter(t, docker)
 	github := newFakeGitHub(t)
 	github.push(e2eCommit1, e2eApp(e2eMarker))
@@ -106,7 +107,7 @@ func TestRealEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := buildPipeline(ctx, pipelineInput{cfg: cfg, pool: pool, producer: producer, docker: docker, github: github, logger: logger,
+	p, err := buildPipeline(ctx, pipelineInput{cfg: cfg, pool: pool, producer: producer, docker: docker, gateway: gateway, github: github, logger: logger,
 		archiveOptions: []source.ArchiveOption{source.WithDownloadClient(github.server.Client()), source.WithArchiveHosts(github.Host())}})
 	if err != nil {
 		t.Fatal(err)

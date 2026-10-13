@@ -18,8 +18,7 @@ Last updated: 2026-10-13
   test-e2e. Browser: UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-browser;
   UI_TEST_PATTERN narrows cases. Make loads .env; direct Go commands need exports.
 - Release: make release-images / prod-smoke PREVIA_VERSION=x (smoke needs age).
-- WSL: use absolute paths; Docker pulls may need empty DOCKER_CONFIG. .env holds
-  empty ENV_FILE=: unset it after sourcing .env before invoking Make.
+- WSL: use absolute paths; pulls may need empty DOCKER_CONFIG; unset empty ENV_FILE after sourcing .env before Make.
 
 ## Preview and login fixes (2026-10-13)
 - App output + Private Preview failed real River inserts: custom unique states
@@ -30,8 +29,7 @@ Last updated: 2026-10-13
   state; closing any confirmation resumes deferred refreshes.
 - RequireUser preserves safe GET/HEAD URLs through OAuth (HTMX uses same-host
   document); invalid/direct login clears stale next; mutation URLs aren't replayed.
-- Committed ea08ddf: 1411 Go tests, 51 browser cases, build/vet/lint and real Docker
-  follow/redaction/sleep/wake passed; queue failures reproduced before the fixes.
+- Committed ea08ddf; queue failures reproduced before fixes; current verification is below.
 
 ## Repository compatibility (2026-10-12, committed 2f7fdb7; migration 0028)
 - Finished Claude's partial build-secret changes and the owner's compatibility list.
@@ -52,7 +50,6 @@ Last updated: 2026-10-13
 - UI explains private packages, nginx 8080/nginx-unprivileged, limits, Compose,
   platforms/GPU/Windows and build-time settings. Runtime already permits low ports
   inside containers; stock nginx can still fail on read-only caches/PID paths.
-- Prior: 1406 Go tests, 49 browser, lint, real BuildKit/MySQL/E2E passed; registry pull untested.
 - Queue tests isolate River schemas from dev workers; basic E2E uses BusyBox httpd. Follow-up fixes committed 2cb0ae1.
 
 ## Earlier improvements (committed 973907f / 93191aa; migrations 0022-0027)
@@ -65,18 +62,17 @@ Last updated: 2026-10-13
   line timestamps local on page, UTC download (docs/08,15).
 - Activity: crash/visits/App output, PREVIEW_IDLE_SLEEP/wake, private forwardAuth.
 
-## Routing, merge recovery and TLS (2026-10-13; uncommitted)
+## Routing, merge recovery and TLS (2026-10-13; committed 8764e0c)
 - Missing PREVIEW_ACCESS_URL caused activation 112/120 failures; 0029/UI/POST require configured routing workers.
 - Locked AcceptRoute rejects missing auth; private_preview_unconfigured stays permanent if sync fails; startup warns.
 - Sync refreshes same-version settings and restores persisted preview networks after router down/up; older tables stay fenced. River snoozes lease/backoff waits.
 - WSL forwarded Go's dual-stack IPv6 listener only on Windows ::1; explicit IPv4 binds now use tcp4 (IPv6 preserved).
 - Local .env binds 0.0.0.0:8080 and sets http://host.docker.internal:8080/previews/auth; Air loaded the fixed server.
 - Missed merge delivery failed HTTP 502 at the dev tunnel; rebuilt PR retained a teardown marker, hiding it from reconciliation and misreporting removal. New owner intents clear the marker atomically; live-work confirmation no longer excludes legacy markers.
-- Live PR 61 is merged, environment 58 torn_down, route removed (HTTPS 302 unavailable); PR 129 remains running and HTTPS 200. Worker heartbeat + /readyz verified after the limit interruption; all capabilities ready.
+- Live previa.live PR #3 is merged, environment torn_down, route removed (HTTPS 302 unavailable); PR #4 remains running and HTTPS 200. Worker heartbeat + /readyz verified after regression; all capabilities ready.
 - Staging certificate replaced by trusted production CA + /acme/acme-production.json; same previously working hostname, historical TLS/browser state unknown.
 - ACME_STORAGE_FILE (local Compose) preserves staging state; router-up restores preview networks after recreation.
-- Proof: 1424 Go tests/81 packages, 39 opt-in skips, 8 real Traefik; build/vet/lint passed. Regressions reproduced before fixes; prior UI proof: 52 browser cases.
-- docs/02,12,13,15 cover recovery/setup; make test-routing includes TestRealPrivateRouting. No migration beyond 0029; server reload + worker restart needed for code fixes. Expired quick tunnel replaced with outside-covered-soundtrack-royalty.trycloudflare.com; existing App webhook updated, signed ping 204, tunnel ready (session 10708). Keep tunnel running; a new URL requires updating the App.
+- docs/02,12,13,15 cover recovery/setup; test-routing includes private auth. Code fixes require migration 0029 + server/worker restart. Quick tunnel outside-covered-soundtrack-royalty.trycloudflare.com expired during interruption; session 10708 stopped. Earlier signed ping 204; restart was rejected by auto-review pending explicit public-exposure approval, then update existing App webhook URL. Worker ready; preview URLs healthy.
 
 ## Backend previews and outbound (docs/11)
 - services {postgres|redis|mysql: version} resolves through PREVIEW_SERVICE_CATALOG
@@ -92,8 +88,12 @@ Last updated: 2026-10-13
 - Current branch: ui-improvements (tracks origin/ui-improvements).
   master changes only through main -> master PRs. CI runs for PRs
   into master and pushes to master; last observed green on c94d35f.
-- docs/25 is the deployment guide: OVHcloud VPS-2 + Cloudflare DNS + R2 backups
-  (~€7/mo), the owner's choice. NEXT-FEATURES.md lists ten candidates, none built.
-- docs/26: staging ready; production needs host/backups/domains/ACME, hosted GitHub
-  OAuth/App/webhooks, disposable-PR proof and protected releases. ACME not rerun.
-- Regression tracker: 242 cases/16 files; only tick proof. Tailwind curl retry/time limit undecided.
+- docs/25: deployment guide (OVHcloud VPS-2 + Cloudflare DNS + R2); NEXT-FEATURES.md has ten unbuilt candidates.
+- docs/26: staging ready; production still needs host acceptance and a complete hosted PR lifecycle.
+- Regression 2026-10-13: 240/242 cases verified; test-docs/2026-10-13-regression-report.md has proof and limits.
+- Final Go: 1428 passes, no races; 39 baseline opt-ins exercised separately. Browser 52/52; real Docker 39 passes across five packages including both E2E journeys; build/vet/lint passed.
+- Repeated checks: 200 concurrency/recovery passes; 50 migration/capability passes; capacity x10 passed.
+- All 3 release images built/scanned (no fixable HIGH/CRITICAL); production smoke 40/40 with encrypted backup/restore. Govulncheck: no reachable/imported-package vulnerabilities; observability/actionlint passed.
+- E2E gets named gateways, so independent test workers cannot overwrite dev forwarding. Default production gateway unchanged. Capacity fixture accounts for live reservations; smoke derives schema/alert counts and checks its own bindings.
+- Live App access/source/reporting passed on owner-authorized previa.live PR #4. Unique proof comment scope preserves existing feedback; temporary comments cleaned; 3 completed live-proof checks remain.
+- Pending: production host/object-store acceptance, complete hosted PR lifecycle, real private-registry pull. Old-dump smoke branch not run; 0029 upgrade/rollback/reapply verified. Tailwind retry/time limit undecided.

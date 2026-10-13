@@ -78,8 +78,8 @@ test-source:
 	$(GO) test -count=1 -v -run '^TestRealSourcePrepare$$' ./internal/source
 
 # Opt-in live PR feedback proof on an authorized disposable PR: writes one
-# living comment and check runs named "Previa preview (live proof)" to that PR,
-# then deletes the comment and completes open runs. Uses a throwaway schema.
+# uniquely marked comment and check runs named "Previa preview (live proof)",
+# then deletes only test comments and completes open runs. Uses a throwaway schema.
 test-reporting:
 	@$(load_run_env) if [ -z "$${TEST_GITHUB_INSTALLATION_ID:-}" ] || [ -z "$${TEST_GITHUB_REPO_ID:-}" ] || [ -z "$${TEST_GITHUB_PR_NUMBER:-}" ]; then \
 		echo 'Set TEST_GITHUB_INSTALLATION_ID, TEST_GITHUB_REPO_ID and TEST_GITHUB_PR_NUMBER to a disposable PR you may write to' >&2; exit 1; \

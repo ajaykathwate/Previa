@@ -9,6 +9,13 @@ production-ready.** Production readiness is conditional on the pending live chec
 at the end, which need a host, a domain, a DNS token and an authorized GitHub
 repository that were not available.
 
+**2026-10-13 follow-up:** the [current regression report](../test-docs/2026-10-13-regression-report.md)
+records 240 verified cases, all 52 browser scenarios, all real Docker suites and
+40 production smoke checks. Actual GitHub App access, source preparation and
+owner-authorized PR feedback also passed. The historical evidence below remains
+the release-candidate record; production host acceptance and the complete hosted
+PR lifecycle still remain.
+
 ## Environment
 
 | Component | Version |
