@@ -190,7 +190,7 @@ func TestBrowserRegression(t *testing.T) {
 		outbound.NewHandler(outboundService, handler, logger).Mount(r, auth.RequireUser)
 		// Real workspace templates; database ownership is verified in pullrequests.
 		panel := func(r *http.Request, repoID int64) prpages.Page {
-			p := prpages.Page{RepoID: repoID, Name: "fixture-owner/repository-" + strconv.FormatInt(repoID, 10), Mode: sessions.GetString(r.Context(), "fixture-mode"), Available: repoID%2 == 1, DiscoveryEnabled: true, SyncState: "complete", Fetched: 25, LastRefresh: "2026-10-04T10:00:00Z", Number: 1, Pages: 3, Total: 25, State: r.URL.Query().Get("pr_state"), Search: r.URL.Query().Get("pr_q"), WorkspaceQuery: r.URL.RawQuery}
+			p := prpages.Page{RepoID: repoID, Name: "fixture-owner/repository-" + strconv.FormatInt(repoID, 10), Mode: sessions.GetString(r.Context(), "fixture-mode"), Available: repoID%2 == 1, PrivatePreviewsReady: repoID != 101 && repoID != 103, PrivatePreviews: repoID == 103, DiscoveryEnabled: true, SyncState: "complete", Fetched: 25, LastRefresh: "2026-10-04T10:00:00Z", Number: 1, Pages: 3, Total: 25, State: r.URL.Query().Get("pr_state"), Search: r.URL.Query().Get("pr_q"), WorkspaceQuery: r.URL.RawQuery}
 			if p.Mode == "" {
 				p.Mode = "manual"
 			}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/platform/database"
+	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/previewaccess/dbgen"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	accesspages "github.com/ajaykathwatee/previa/web/pages/previewaccess"
@@ -63,21 +64,32 @@ type Enqueuer interface {
 	InsertTx(ctx context.Context, tx pgx.Tx, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error)
 }
 
+// Capabilities reports whether the running routing workers have auth configured.
+type Capabilities interface {
+	Current(context.Context) (workers.Capabilities, error)
+}
+
 type Handler struct {
-	pool        *pgxpool.Pool
-	users       UserSession
-	permissions Permissions // nil without the GitHub App: only owners get in
-	jobs        Enqueuer
-	signer      signer
-	baseDomain  string
-	appBaseURL  string
-	logger      *slog.Logger
-	now         func() time.Time
+	pool         *pgxpool.Pool
+	users        UserSession
+	permissions  Permissions // nil without the GitHub App: only owners get in
+	jobs         Enqueuer
+	capabilities Capabilities
+	signer       signer
+	baseDomain   string
+	appBaseURL   string
+	logger       *slog.Logger
+	now          func() time.Time
 }
 
 func NewHandler(pool *pgxpool.Pool, users UserSession, permissions Permissions, jobs Enqueuer, sessionSecret, baseDomain, appBaseURL string, logger *slog.Logger) *Handler {
 	return &Handler{pool: pool, users: users, permissions: permissions, jobs: jobs, signer: newSigner(sessionSecret),
 		baseDomain: baseDomain, appBaseURL: strings.TrimSuffix(appBaseURL, "/"), logger: logger, now: time.Now}
+}
+
+func (h *Handler) WithCapabilities(c Capabilities) *Handler {
+	h.capabilities = c
+	return h
 }
 
 // MountPublic serves the router's forward-authentication check; it reads
@@ -217,12 +229,21 @@ func (h *Handler) set(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	private := r.PostFormValue("private") == "true"
+	// Read worker metadata before acquiring a transaction connection. Ownership
+	// is still checked first inside the transaction, including on guard failures.
+	var capabilityErr error
+	if private {
+		capabilityErr = h.canMakePrivate(r.Context())
+	}
 	changed := false
 	err = database.InTransaction(r.Context(), h.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
 		owns, err := q.OwnsRepository(r.Context(), dbgen.OwnsRepositoryParams{RepoID: repoID, OwnerUserID: user})
 		if err != nil || !owns {
 			return errors.Join(err, errNotOwned)
+		}
+		if capabilityErr != nil {
+			return capabilityErr
 		}
 		n, err := q.SetPrivatePreviews(r.Context(), dbgen.SetPrivatePreviewsParams{RepoID: repoID, OwnerUserID: user, Private: private})
 		if err != nil || n == 0 {
@@ -244,6 +265,10 @@ func (h *Handler) set(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if errors.Is(err, errPrivateUnavailable) {
+		http.Redirect(w, r, "/repositories/"+strconv.FormatInt(repoID, 10)+"?preview_access=unavailable", http.StatusSeeOther)
+		return
+	}
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -255,6 +280,21 @@ func (h *Handler) set(w http.ResponseWriter, r *http.Request) {
 }
 
 var errNotOwned = errors.New("repository not owned")
+var errPrivateUnavailable = errors.New("private preview authentication is not configured")
+
+func (h *Handler) canMakePrivate(ctx context.Context) error {
+	if h.capabilities == nil {
+		return errPrivateUnavailable
+	}
+	caps, err := h.capabilities.Current(ctx)
+	if err != nil {
+		return fmt.Errorf("read private preview capability: %w", err)
+	}
+	if !caps.PrivatePreviews {
+		return errPrivateUnavailable
+	}
+	return nil
+}
 
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	h.logger.ErrorContext(r.Context(), "preview access request failed", "error", err)

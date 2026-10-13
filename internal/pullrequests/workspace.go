@@ -44,7 +44,9 @@ func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Val
 			return pages.Page{}, err
 		}
 		page.WorkerMissing = !caps.Discovery
+		page.PrivatePreviewsReady = caps.PrivatePreviews
 	}
+	page.PrivatePreviewUnavailable = params.Get("preview_access") == "unavailable"
 	if page.Syncing() && data.Sync.RequestedAt.Valid {
 		page.SyncStale = syncStale(data.Sync, time.Now())
 		page.SyncStaleAt = data.Sync.RequestedAt.Time.Add(SyncStaleAfter).UTC().Format(time.RFC3339)

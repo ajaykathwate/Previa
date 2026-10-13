@@ -153,9 +153,16 @@ templ repositoryHero(p Page, csrf string) {
 				}
 			</form>
 			@AutomaticSwitch(p, csrf)
-			<button type="button" role="switch" aria-checked={ strconv.FormatBool(p.PrivatePreviews) } class="automatic-switch" disabled?={ !p.Available } data-open-dialog="preview-access" commandfor="preview-access" command="show-modal" aria-haspopup="dialog" title={ privateTitle(p.PrivatePreviews) }><span>Private previews</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
+			<button type="button" role="switch" aria-checked={ strconv.FormatBool(p.PrivatePreviews) } class="automatic-switch" disabled?={ !p.Available || (!p.PrivatePreviews && !p.PrivatePreviewsReady) } data-open-dialog="preview-access" commandfor="preview-access" command="show-modal" aria-haspopup="dialog" aria-describedby={ privateSetupDescription(p) } title={ privateTitle(p.PrivatePreviews) }><span>Private previews</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
 		</div>
 	</header>
+	if !p.PrivatePreviewsReady || p.PrivatePreviewUnavailable {
+		<p id="private-preview-setup" class="tone-warning">Private previews need authentication configured on all routing workers. Ask the operator to set PREVIEW_ACCESS_URL and restart the workers.
+			if p.PrivatePreviews {
+				 Existing previews remain private and may be unavailable until configuration is restored.
+			}
+		</p>
+	}
 }
 
 func privateTitle(private bool) string {
@@ -165,6 +172,13 @@ func privateTitle(private bool) string {
 	return "Previews are public: anyone with a preview's address can open it."
 }
 
+func privateSetupDescription(p Page) string {
+	if !p.PrivatePreviewsReady || p.PrivatePreviewUnavailable {
+		return "private-preview-setup"
+	}
+	return ""
+}
+
 // PreviewAccessDialog confirms making the repository's previews private or
 // public again.
 templ PreviewAccessDialog(p Page, csrf string) {
@@ -172,7 +186,7 @@ templ PreviewAccessDialog(p Page, csrf string) {
 		@components.ConfirmationDialog("preview-access", "Make previews public?", "Anyone with a preview's address will be able to open it again, without signing in.") {
 			@previewAccessForm(p, csrf, "Make public")
 		}
-	} else {
+	} else if p.PrivatePreviewsReady {
 		@components.ConfirmationDialog("preview-access", "Make previews private?", "Visitors will sign in with GitHub, and only people who can see this repository on GitHub get in. Each visitor's access lasts 12 hours on that preview. Reviewers without a GitHub account lose access.") {
 			@previewAccessForm(p, csrf, "Make private")
 		}
@@ -186,7 +200,7 @@ templ previewAccessForm(p Page, csrf, label string) {
 		@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "preview-access", "command": "close", "data-close-dialog": true}}) {
 			Cancel
 		}
-		@button.Button(button.Props{Type: button.TypeSubmit}) {
+		@button.Button(button.Props{Type: button.TypeSubmit, Disabled: !p.PrivatePreviews && !p.PrivatePreviewsReady}) {
 			{ label }
 		}
 	</form>

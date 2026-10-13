@@ -19,6 +19,7 @@ type fakeFence struct {
 	decision environments.RouteDecision
 	err      error
 	table    environments.RouteTable
+	tableErr error
 	state    environments.RouteState
 	hasState bool
 	served   []string
@@ -47,7 +48,7 @@ func (f *fakeFence) MarkRouteServed(_ context.Context, env, generation, revision
 func (f *fakeFence) RouteTable(context.Context) (environments.RouteTable, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.table, nil
+	return f.table, f.tableErr
 }
 func (f *fakeFence) RouteState(context.Context, int64) (environments.RouteState, bool, error) {
 	f.mu.Lock()
@@ -136,6 +137,57 @@ func TestControllerActivatesVerifiedCandidate(t *testing.T) {
 	}
 	if len(fence.served) != 1 || fence.served[0] != "preview-5-g2-r1" {
 		t.Fatalf("served %v", fence.served)
+	}
+}
+
+func TestPrivateActivationReportsMissingAuthInsteadOfConvergence(t *testing.T) {
+	route := environments.Route{EnvironmentID: 5, Hostname: "pr-11-1-aaaaaaaa", Generation: 2, Revision: 1, Backend: "previa-pr11-g2-r1-1", Port: 8080, Private: true}
+	fence := &fakeFence{err: &environments.OperationFailure{Code: "private_preview_unconfigured", Permanent: true}, table: environments.RouteTable{Version: 4, Routes: []environments.Route{route}}}
+	c, file := newTestController(t, fence, healthyBackend, &fakeRouter{observe: serving("noop")})
+	var failure *environments.OperationFailure
+	if err := c.Execute(t.Context(), activation()); !errors.As(err, &failure) || failure.Code != "private_preview_unconfigured" || !failure.Permanent {
+		t.Fatalf("missing auth must fail explicitly: %v", err)
+	}
+	data, err := os.ReadFile(file.Path())
+	if err != nil || strings.Contains(string(data), "http://previa-pr11") || len(fence.served) != 0 {
+		t.Fatalf("missing auth exposed or confirmed a private app: %s, %v", data, err)
+	}
+}
+
+func TestMissingPrivateAuthRemainsPermanentWhenRouteRefreshFails(t *testing.T) {
+	refreshErr := errors.New("route table unavailable")
+	fence := &fakeFence{
+		err:      &environments.OperationFailure{Code: "private_preview_unconfigured", Permanent: true},
+		tableErr: refreshErr,
+	}
+	c, _ := newTestController(t, fence, healthyBackend, &fakeRouter{})
+	err := c.Execute(t.Context(), activation())
+	var failure *environments.OperationFailure
+	if !errors.As(err, &failure) || failure.Code != "private_preview_unconfigured" || !failure.Permanent {
+		t.Fatalf("route refresh hid a permanent configuration failure: %v", err)
+	}
+	if !errors.Is(err, refreshErr) || len(fence.served) != 0 {
+		t.Fatalf("refresh failure lost or route confirmed: %v, %v", err, fence.served)
+	}
+}
+
+func TestSyncRefreshesAuthConfigurationWithoutANewRouteVersion(t *testing.T) {
+	route := environments.Route{EnvironmentID: 5, Hostname: "pr-11-1-aaaaaaaa", Generation: 2, Revision: 1, Backend: "previa-pr11-g2-r1-1", Port: 8080, Private: true}
+	fence := &fakeFence{table: environments.RouteTable{Version: 4, Routes: []environments.Route{route}}}
+	c, file := newTestController(t, fence, healthyBackend, &fakeRouter{})
+	if err := c.Sync(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	c.settings.AccessURL = "http://server:8080/previews/auth"
+	if err := c.Sync(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(file.Path())
+	if err != nil || !strings.Contains(string(data), "forwardAuth") || !strings.Contains(string(data), "preview-5-g2-r1") {
+		t.Fatalf("auth config was not refreshed: %s, %v", data, err)
+	}
+	if version, err := file.Version(); err != nil || version != 4 {
+		t.Fatalf("version = %d, %v", version, err)
 	}
 }
 
@@ -243,6 +295,46 @@ func TestControllerSyncWritesOnlyWhenBehind(t *testing.T) {
 	}
 	if v, _ := file.Version(); v != 3 {
 		t.Fatalf("version went back to %d", v)
+	}
+}
+
+func TestControllerSyncRestoresNetworksAtTheSameVersion(t *testing.T) {
+	fence := &fakeFence{table: environments.RouteTable{Version: 3, Routes: []environments.Route{
+		{EnvironmentID: 5, Hostname: "pr-11-1-aaaaaaaa", Backend: "app-11", Port: 8080, NetworkID: "net-11"},
+		{EnvironmentID: 6, Hostname: "pr-12-1-aaaaaaaa", Backend: "app-12", Port: 8080, NetworkID: "net-12", Asleep: true},
+		{EnvironmentID: 7, Hostname: "pr-13-1-aaaaaaaa", Backend: "app-13", Port: 8080, NetworkID: "net-11", Private: true},
+	}}}
+	router := &fakeRouter{}
+	c, file := newTestController(t, fence, healthyBackend, router)
+	for range 2 {
+		if err := c.Sync(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if strings.Join(router.attached, ",") != "net-11,net-12,net-11,net-12" {
+		t.Fatalf("network recovery: %v", router.attached)
+	}
+	// An older table must not connect networks or replace a newer file.
+	fence.table.Version = 2
+	if err := c.Sync(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := file.Version(); v != 3 || len(router.attached) != 4 || len(fence.accepts) != 0 {
+		t.Fatalf("stale sync changed accepted routing: version=%d attachments=%v", v, router.attached)
+	}
+}
+
+func TestControllerSyncKeepsPrivateDenialWhenNetworkRecoveryFails(t *testing.T) {
+	route := environments.Route{EnvironmentID: 5, Hostname: "pr-11-1-aaaaaaaa", Backend: "app-11", Port: 8080, NetworkID: "net-11", Private: true}
+	fence := &fakeFence{table: environments.RouteTable{Version: 3, Routes: []environments.Route{route}}}
+	router := &fakeRouter{attachErr: ErrRouterUnavailable}
+	c, file := newTestController(t, fence, healthyBackend, router)
+	if err := c.Sync(t.Context()); !errors.Is(err, ErrRouterUnavailable) {
+		t.Fatalf("network failure not returned for retry: %v", err)
+	}
+	data, err := os.ReadFile(file.Path())
+	if err != nil || strings.Contains(string(data), "http://app-11") || len(router.attached) != 1 {
+		t.Fatalf("missing auth denial was not written: %s %v", data, err)
 	}
 }
 

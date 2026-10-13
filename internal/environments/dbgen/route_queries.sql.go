@@ -280,7 +280,7 @@ func (q *Queries) ReadRoute(ctx context.Context, pullRequestID int64) (Environme
 
 const readRouteTable = `-- name: ReadRouteTable :many
 SELECT t.version AS table_version, r.environment_id, e.subdomain,
-       r.generation, r.revision, r.backend, r.port,
+       r.generation, r.revision, r.backend, r.port, r.network_id,
        coalesce(e.asleep_at IS NOT NULL, false)::boolean AS asleep,
        coalesce(rp.private_previews, false)::boolean AS private
 FROM route_table t
@@ -299,6 +299,7 @@ type ReadRouteTableRow struct {
 	Revision      pgtype.Int8
 	Backend       pgtype.Text
 	Port          pgtype.Int4
+	NetworkID     pgtype.Text
 	Asleep        bool
 	Private       bool
 }
@@ -322,6 +323,7 @@ func (q *Queries) ReadRouteTable(ctx context.Context) ([]ReadRouteTableRow, erro
 			&i.Revision,
 			&i.Backend,
 			&i.Port,
+			&i.NetworkID,
 			&i.Asleep,
 			&i.Private,
 		); err != nil {

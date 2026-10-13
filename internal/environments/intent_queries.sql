@@ -9,7 +9,7 @@ WHERE id = sqlc.arg(installation_id) AND owner_user_id = sqlc.arg(user_id)
 FOR UPDATE;
 
 -- name: LockIntentRepository :one
-SELECT id, build_mode FROM repos
+SELECT id, build_mode, private_previews FROM repos
 WHERE id = sqlc.arg(repo_id) AND installation_id = sqlc.arg(installation_id) AND accessible
 FOR UPDATE;
 
@@ -62,6 +62,13 @@ RETURNING *;
 UPDATE build_intents SET state = 'superseded', completed_at = clock_timestamp(),
     updated_at = clock_timestamp()
 WHERE pull_request_id = $1 AND state IN ('pending', 'queued', 'running');
+
+-- name: ClearLocalTeardownForBuild :exec
+-- A fresh owner-authorized build restores the preview after local teardown.
+-- Keep the completed-generation fence for old teardown jobs; clear the active
+-- decision so reports, expiry and subsequent owner teardowns see the new build.
+UPDATE pull_requests SET teardown_requested_generation = -1, teardown_reason = NULL
+WHERE id = $1 AND state = 'open' AND teardown_requested_generation = generation;
 
 -- name: AdvanceBuildIntent :one
 UPDATE build_intents b SET state = sqlc.arg(next_state), updated_at = clock_timestamp(),

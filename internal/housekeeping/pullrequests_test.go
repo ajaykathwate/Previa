@@ -87,17 +87,63 @@ func TestOutcomesAreSafeCategories(t *testing.T) {
 
 // closedUpstream reports every PR closed by GitHub, a minute after the
 // recorded state.
-type closedUpstream struct{}
+type closedUpstream struct{ state string }
 
 func (closedUpstream) Page(context.Context, int64, int64, int32) ([]pr.Observation, int32, error) {
 	return nil, 0, errors.New("not used")
 }
 
-func (closedUpstream) Inspect(_ context.Context, _, _ int64, number int32) (pr.Upstream, error) {
+func (s closedUpstream) Inspect(_ context.Context, _, _ int64, number int32) (pr.Upstream, error) {
+	state := s.state
+	if state == "" {
+		state = "closed"
+	}
 	return pr.Upstream{Owner: "octo", Repository: "app", Observation: pr.Observation{
-		Number: number, SHA: "sha-live", State: "closed", Title: "t", Author: "a", Branch: "b",
+		Number: number, SHA: "sha-live", State: state, Title: "t", Author: "a", Branch: "b",
 		HeadRepoID: 100, UpdatedAt: time.Now().Add(time.Minute),
 	}}, nil
+}
+
+func TestMissedMergeAfterRebuildStillGetsConfirmed(t *testing.T) {
+	f := newFixture(t)
+	live := f.open(t, 1, "sha-live")
+	f.publish(t, live, time.Hour)
+	// Reproduce existing rows: a rebuilt preview retains a completed local teardown marker.
+	f.exec(t, `UPDATE pull_requests SET teardown_requested_generation=generation,
+		teardown_completed_generation=generation, teardown_reason='requested' WHERE id=$1`, live.PullRequestID)
+	producer, err := queue.NewProducer(f.pool, f.logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sync := pr.NewSyncService(f.pool, producer, closedUpstream{state: "merged"}, f.broker)
+	p, err := NewPullRequests(f.pool, sync, f.logger, f.settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pass, err := p.RunOnce(t.Context())
+	if err != nil || pass.Outcomes["closed"] != 1 {
+		t.Fatalf("merged rebuilt preview was not confirmed: %+v %v", pass, err)
+	}
+	var state string
+	f.scan(t, "SELECT state FROM pull_requests WHERE id=$1", []any{&state}, live.PullRequestID)
+	if state != "merged" {
+		t.Fatalf("missed merge not recorded: %s", state)
+	}
+	if _, err := f.recovery(t).RunOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var raw []byte
+	f.scan(t, "SELECT args FROM river_job WHERE kind='environment_wake' AND (args->>'pull_request_id')::bigint=$1 ORDER BY id DESC LIMIT 1", []any{&raw}, live.PullRequestID)
+	var wake environments.WakeArgs
+	if err := json.Unmarshal(raw, &wake); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.broker.Dispatch(t.Context(), wake); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(t, "SELECT count(*) FROM river_job WHERE kind='teardown' AND (args->>'pull_request_id')::bigint=$1", live.PullRequestID); n != 1 {
+		t.Fatalf("%d teardown jobs for the missed merge", n)
+	}
 }
 
 func TestMissedCloseFoundByReconciliationTearsDown(t *testing.T) {

@@ -224,12 +224,14 @@ type Page struct {
 	Available, DiscoveryEnabled                     bool
 	// PrivatePreviews: only GitHub users who can see the repository may
 	// open its previews.
-	PrivatePreviews      bool
-	Rows                 []PR
-	Number, Pages, Total int64
-	Search, State        string
-	WorkspaceQuery       string
-	SelectedPR           *PR
+	PrivatePreviews           bool
+	PrivatePreviewsReady      bool
+	PrivatePreviewUnavailable bool
+	Rows                      []PR
+	Number, Pages, Total      int64
+	Search, State             string
+	WorkspaceQuery            string
+	SelectedPR                *PR
 	// LiveURL is the repository event stream, including the resume cursor read
 	// before this page's state. Empty disables live updates.
 	LiveURL string

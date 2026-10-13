@@ -192,7 +192,7 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	if appClient != nil {
 		permissions = githubPermissions{app: appClient}
 	}
-	f.access = previewaccess.NewHandler(pool, f.auth, permissions, producer, cfg.SessionSecret, cfg.PreviewBaseDomain, cfg.AppBaseURL, logger)
+	f.access = previewaccess.NewHandler(pool, f.auth, permissions, producer, cfg.SessionSecret, cfg.PreviewBaseDomain, cfg.AppBaseURL, logger).WithCapabilities(f.capabilities)
 	return f, nil
 }
 
@@ -332,7 +332,7 @@ func newHTTPServer(addr string, handler http.Handler, logger *slog.Logger) *http
 
 // serveHTTP serves until ctx ends, then shuts the server down gracefully.
 func serveHTTP(ctx context.Context, server *http.Server, logger *slog.Logger) error {
-	listener, err := net.Listen("tcp", server.Addr)
+	listener, err := listenHTTP(server.Addr)
 	if err != nil {
 		return fmt.Errorf("listen for HTTP: %w", err)
 	}
@@ -359,6 +359,18 @@ func serveHTTP(ctx context.Context, server *http.Server, logger *slog.Logger) er
 		}
 	}
 	return nil
+}
+
+func listenHTTP(addr string) (net.Listener, error) {
+	// An explicit IPv4 bind must create an IPv4 socket. Go's generic TCP
+	// listener can turn 0.0.0.0 into a dual-stack IPv6 socket, which WSL may
+	// forward only on Windows ::1; Docker Desktop then cannot reach it by IPv4.
+	network := "tcp"
+	host, _, err := net.SplitHostPort(addr)
+	if err == nil && net.ParseIP(host).To4() != nil {
+		network = "tcp4"
+	}
+	return net.Listen(network, addr)
 }
 
 // githubPermissions reads a user's role on a repository with the GitHub

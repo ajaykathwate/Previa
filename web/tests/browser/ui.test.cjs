@@ -998,6 +998,22 @@ test('sync and automatic controls appear only on the PR list and breadcrumbs use
  assert.equal(await page.getByRole('switch',{name:'Automatic builds'}).count(),0);assert.equal(await page.getByRole('button',{name:'Sync Pull Requests'}).count(),0);
 });
 
+test('private previews explain missing auth and preserve the owner public toggle',async()=>{
+ await login();await page.goto(`${origin}/repositories/101`);
+ const privacy=page.getByRole('switch',{name:'Private previews'});
+ assert.equal(await privacy.isDisabled(),true);
+ assert.match(await page.locator('#private-preview-setup').textContent(),/PREVIEW_ACCESS_URL/);
+ assert.equal(await page.locator('#preview-access').count(),0);
+ await page.goto(`${origin}/repositories/103`);
+ assert.equal(await privacy.getAttribute('aria-checked'),'true');
+ assert.equal(await privacy.isDisabled(),false);
+ assert.match(await page.locator('#private-preview-setup').textContent(),/remain private/);
+ await privacy.click();await page.waitForFunction(()=>document.querySelector('#preview-access').matches(':modal'));
+ assert.equal(await page.locator('#preview-access-title').textContent(),'Make previews public?');
+ assert.equal(await page.getByRole('button',{name:'Make public',exact:true}).isEnabled(),true);
+ await page.keyboard.press('Escape');
+});
+
 test('small repository collections use compact cards with natural height and no pagination',async()=>{
  await login();
  for(const count of [1,2,3,5]) {

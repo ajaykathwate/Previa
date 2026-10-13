@@ -68,6 +68,8 @@ func FailureMessage(code string) string {
 		return "GitHub access to this repository was removed."
 	case "runtime_unavailable":
 		return "The preview infrastructure was unavailable."
+	case "private_preview_unconfigured":
+		return "Private previews need a configured authentication endpoint on every routing worker. Ask the operator to set PREVIEW_ACCESS_URL, restart the workers, and retry the build."
 	case "missing", "not_owned", "route_not_converged", "router_unavailable", "route_store_unavailable", "route_config_unwritable":
 		return "The preview could not be published."
 	default:

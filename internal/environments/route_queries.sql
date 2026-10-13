@@ -88,7 +88,7 @@ SELECT * FROM environment_routes WHERE pull_request_id = $1;
 -- One statement, one snapshot: the version and every active route at it. The
 -- outer join returns the version even when no route is active.
 SELECT t.version AS table_version, r.environment_id, e.subdomain,
-       r.generation, r.revision, r.backend, r.port,
+       r.generation, r.revision, r.backend, r.port, r.network_id,
        coalesce(e.asleep_at IS NOT NULL, false)::boolean AS asleep,
        coalesce(rp.private_previews, false)::boolean AS private
 FROM route_table t

@@ -131,6 +131,11 @@ repositories are not read; an `inaccessible` answer tears nothing down, because
 installation lifecycle events and repository sync are the authority on access
 ([04](04-github-sign-in-and-app.md), [13](13-teardown-and-cleanup.md)).
 
+A running preview remains eligible even if a legacy row still carries a completed
+local-teardown marker. That marker must not hide a rebuilt preview from merge or
+close reconciliation. A confirmed merge records `merged` and schedules the usual
+teardown; the next recovery pass recreates a missing wake-up.
+
 ## Pruning
 
 - **Untagged images** of this instance (an attempt for the same revision re-tagged

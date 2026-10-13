@@ -142,6 +142,10 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 	p.capabilities.Execution, p.capabilities.Routing, p.capabilities.Reporting, p.capabilities.Housekeeping = true, true, true, true
 	p.capabilities.Services = x.catalog.Offers()
 	p.capabilities.BuildTimeout = cfg.BuildTimeout
+	p.capabilities.PrivatePreviews = cfg.PreviewAccessURL != ""
+	if !p.capabilities.PrivatePreviews {
+		p.unavailable = append(p.unavailable, "PREVIEW_ACCESS_URL is not set: private previews deny access and their builds cannot be published; configure the router's server URL and restart this worker")
+	}
 	if x.catalog.Empty() {
 		p.unavailable = append(p.unavailable, "PREVIEW_SERVICE_CATALOG is none: previews cannot request managed PostgreSQL, Redis or MySQL")
 	}

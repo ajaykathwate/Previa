@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
+	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -75,6 +76,9 @@ func isolatedPool(t *testing.T) *pgxpool.Pool {
 		t.Fatal("invalid test database URL")
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+	// The handler must not read worker metadata using a second connection
+	// while its transaction holds the only one.
+	cfg.MaxConns = 1
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -124,6 +128,15 @@ func (g github) RepositoryPermission(_ context.Context, _ int64, fullName, login
 
 type jobs struct{ syncs int }
 
+type capabilities struct {
+	ready bool
+	err   error
+}
+
+func (c capabilities) Current(context.Context) (workers.Capabilities, error) {
+	return workers.Capabilities{PrivatePreviews: c.ready}, c.err
+}
+
 func TestAccessSettingUsesRealQueue(t *testing.T) {
 	pool := isolatedPool(t)
 	ctx := t.Context()
@@ -148,7 +161,7 @@ func TestAccessSettingUsesRealQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewHandler(pool, session{}, nil, producer, "secret", "preview.test", "https://previa.test", logger)
+	h := NewHandler(pool, session{}, nil, producer, "secret", "preview.test", "https://previa.test", logger).WithCapabilities(capabilities{ready: true})
 	r := chi.NewRouter()
 	h.Mount(r, func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -188,6 +201,22 @@ func TestAccessSettingUsesRealQueue(t *testing.T) {
 		return version
 	}
 	initial := check(false, 0)
+	h.capabilities = nil
+	set(true, http.StatusSeeOther)
+	if check(false, 0) != initial {
+		t.Fatal("missing capabilities changed privacy or route version")
+	}
+	h.capabilities = workers.NewReader(pool)
+	set(true, http.StatusSeeOther)
+	if check(false, 0) != initial {
+		t.Fatal("unconfigured workers changed privacy or route version")
+	}
+	h.capabilities = capabilities{err: errors.New("heartbeat unavailable")}
+	set(true, http.StatusServiceUnavailable)
+	if check(false, 0) != initial {
+		t.Fatal("failed readiness check changed privacy or route version")
+	}
+	h.capabilities = capabilities{ready: true}
 	set(true, http.StatusSeeOther)
 	if version := check(true, 1); version != initial+1 {
 		t.Fatal("route version did not advance")
@@ -195,6 +224,8 @@ func TestAccessSettingUsesRealQueue(t *testing.T) {
 	if _, err := pool.Exec(ctx, "UPDATE river_job SET state='running', attempted_at=now()"); err != nil {
 		t.Fatal(err)
 	}
+	// Turning private previews off remains an owner decision even without auth.
+	h.capabilities = capabilities{}
 	set(false, http.StatusSeeOther)
 	version := check(false, 2)
 	set(false, http.StatusSeeOther)
@@ -202,6 +233,7 @@ func TestAccessSettingUsesRealQueue(t *testing.T) {
 		t.Fatal("unchanged setting advanced route version")
 	}
 	h.jobs = rejectedJobs{}
+	h.capabilities = capabilities{ready: true}
 	set(true, http.StatusServiceUnavailable)
 	if check(false, 2) != version {
 		t.Fatal("failed enqueue did not roll back route version")
@@ -245,7 +277,7 @@ func TestPrivatePreviewRoundTrip(t *testing.T) {
 	}
 	queue := &jobs{}
 	h := NewHandler(pool, session{names: map[int64]string{owner: "owner", reviewer: "reviewer", stranger: "stranger"}},
-		github{"reviewer": "read"}, queue, "secret", "preview.test", "https://previa.test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+		github{"reviewer": "read"}, queue, "secret", "preview.test", "https://previa.test", slog.New(slog.NewTextHandler(io.Discard, nil))).WithCapabilities(capabilities{ready: true})
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

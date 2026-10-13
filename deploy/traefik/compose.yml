@@ -7,8 +7,9 @@
 #   not on any network). The worker reads it with docker exec.
 # - ACME_CA_SERVER defaults to Let's Encrypt staging. Switch to production
 #   only after a staging certificate was issued (docs/12-routing-and-https.md).
+#   Use a separate ACME_STORAGE_FILE when changing CAs to preserve test state.
 # - The DNS provider credential is a Docker secret file, not an environment
-#   value, and acme.json lives on a persistent volume with mode 600.
+#   value, and certificate storage lives on a persistent volume with mode 600.
 name: previa-router
 
 services:
@@ -40,7 +41,7 @@ services:
       # through docker exec for "Last opened"; served on the loopback API.
       - --metrics.prometheus=true
       - --certificatesresolvers.preview.acme.email=${ACME_EMAIL:-}
-      - --certificatesresolvers.preview.acme.storage=/acme/acme.json
+      - --certificatesresolvers.preview.acme.storage=${ACME_STORAGE_FILE:-/acme/acme.json}
       - --certificatesresolvers.preview.acme.caserver=${ACME_CA_SERVER:-https://acme-staging-v02.api.letsencrypt.org/directory}
       - --certificatesresolvers.preview.acme.dnschallenge.provider=${ACME_DNS_PROVIDER:-}
       - --certificatesresolvers.preview.acme.dnschallenge.resolvers=${ACME_DNS_RESOLVERS:-1.1.1.1:53,8.8.8.8:53}

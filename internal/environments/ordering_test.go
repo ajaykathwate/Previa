@@ -819,7 +819,21 @@ func TestOperationOutboxRetriesAndFinalizes(t *testing.T) {
 	if err := f.pool.QueryRow(t.Context(), "SELECT available_at > now() FROM environment_operations WHERE id=$1", id).Scan(&delayed); err != nil || !delayed {
 		t.Fatalf("retry backoff was not persisted: delayed=%v err=%v", delayed, err)
 	}
-	if _, err := f.pool.Exec(t.Context(), "UPDATE environment_operations SET available_at=now() WHERE id=$1", id); err != nil {
+	var snooze *river.JobSnoozeError
+	if err := worker.Process(t.Context(), id, "early-retry", 2, 5); !errors.As(err, &snooze) || snooze.Duration <= 0 {
+		t.Fatalf("early retry must snooze without spending an attempt: %v", err)
+	}
+	var attempts int
+	if err := f.pool.QueryRow(t.Context(), "SELECT attempts FROM environment_operations WHERE id=$1", id).Scan(&attempts); err != nil || attempts != 1 {
+		t.Fatalf("early retry changed attempts: %d, %v", attempts, err)
+	}
+	if _, err := f.pool.Exec(t.Context(), "UPDATE environment_operations SET state='running', available_at=now(), lease_owner='another-attempt', lease_expires_at=now()+interval '1 minute' WHERE id=$1", id); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Process(t.Context(), id, "rescued-retry", 2, 5); !errors.As(err, &snooze) || snooze.Duration < 50*time.Second {
+		t.Fatalf("a live lease must snooze until expiry: %v", err)
+	}
+	if _, err := f.pool.Exec(t.Context(), "UPDATE environment_operations SET state='retryable', available_at=now(), lease_owner=NULL, lease_expires_at=NULL WHERE id=$1", id); err != nil {
 		t.Fatal(err)
 	}
 	p.externalErr = nil

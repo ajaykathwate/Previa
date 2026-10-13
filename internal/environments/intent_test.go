@@ -85,8 +85,10 @@ func newIntentFixture(t *testing.T) *intentFixture {
 	applyIntentMigration(t, pool, "0007_intent_dispatch.sql")
 	applyIntentMigration(t, pool, "0008_pr_workspace.sql")
 	applyIntentMigration(t, pool, "0010_pr_mergeability.sql")
-	applyIntentMigration(t, pool, "0016_housekeeping.sql")     // build requests that wait for capacity
-	applyIntentMigration(t, pool, "0022_account_fairness.sql") // waits that take turns between accounts
+	applyIntentMigration(t, pool, "0014_routes_and_teardown.sql") // local teardown markers cleared by a new owner build
+	applyIntentMigration(t, pool, "0016_housekeeping.sql")        // build requests that wait for capacity
+	applyIntentMigration(t, pool, "0022_account_fairness.sql")    // waits that take turns between accounts
+	applyIntentMigration(t, pool, "0027_private_previews.sql")    // publication reads privacy under the repository lock
 	if _, err := pool.Exec(ctx, "UPDATE pull_requests SET mergeable=true, mergeable_state='clean', build_status='open', head_repo_id=501"); err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +118,32 @@ func applyIntentMigration(t *testing.T, pool *pgxpool.Pool, name string) {
 
 func (f *intentFixture) command(key string, revision int64, action env.IntentAction) env.IntentCommand {
 	return env.IntentCommand{UserID: f.owner, PullRequestID: f.prID, ExpectedRevision: revision, IdempotencyKey: key, Action: action}
+}
+
+func TestManualBuildClearsPreviousTeardownRequest(t *testing.T) {
+	f := newIntentFixture(t)
+	if _, err := f.pool.Exec(t.Context(), `UPDATE pull_requests SET teardown_requested_generation=generation,
+		teardown_completed_generation=generation, teardown_reason='requested' WHERE id=$1`, f.prID); err != nil {
+		t.Fatal(err)
+	}
+	check := func(want bool) {
+		t.Helper()
+		var requested bool
+		if err := f.pool.QueryRow(t.Context(), `SELECT teardown_requested_generation=generation
+			FROM pull_requests WHERE id=$1`, f.prID).Scan(&requested); err != nil {
+			t.Fatal(err)
+		}
+		if requested != want {
+			t.Fatalf("teardown requested=%v, want %v", requested, want)
+		}
+	}
+	// A rejected command must keep the existing teardown decision.
+	if _, err := f.service.Request(t.Context(), f.command("stale-rebuild-request", 99, env.BuildLatest)); !errors.Is(err, env.ErrIntentConflict) {
+		t.Fatalf("stale request: %v", err)
+	}
+	check(true)
+	f.request(t, "restore-after-teardown", 0, env.BuildLatest)
+	check(false)
 }
 
 func (f *intentFixture) request(t *testing.T, key string, revision int64, action env.IntentAction) env.IntentOutcome {

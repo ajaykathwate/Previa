@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 28**, **River 007**. After pulling changes, run
+Current schema: **Goose 29**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker. When the egress proxy or the
 router changed (this version changed both), also run `make egress-image` (builds
 are metered and may be limited to package registries) and `make router-up` (the
@@ -210,6 +210,7 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0026 | Idle previews ([10](10-preview-runtime.md#idle-previews-sleep)): `environments.asleep_at`, `woke_at`, `wake_requested_at` and `wake_error`. |
 | 0027 | Private previews ([12](12-routing-and-https.md#private-previews)): `repos.private_previews`. |
 | 0028 | Opt-in build secrets ([07](07-repository-secrets.md)): `env_secrets.build`, false for all existing secrets; `worker_capabilities.build_timeout_ns` lets Starter kits validate against live worker ceilings. Server and worker require this schema. |
+| 0029 | `worker_capabilities.private_previews`: all live routing workers must advertise a configured auth URL before an owner can enable private previews. Legacy workers default false; server and worker require this schema. |
 
 Optional check that live updates are wired:
 
@@ -512,18 +513,27 @@ token. Then:
 ```sh
 make router-up            # checks settings, writes the route table, starts Traefik
 docker logs -f previa-router
-curl -v https://anything.$PREVIEW_BASE_DOMAIN/   # staging issuer; redirect to the unavailable page
+curl -v https://anything.$PREVIEW_BASE_DOMAIN/   # staging issuer: certificate verification fails
 make router-down
 ```
 
 **Expected:** `Routes: … holds route table version N`, then within a minute a Let's
-Encrypt **staging** wildcard certificate and a 302 to
-`APP_BASE_URL/previews/unavailable`. `make router-up` first runs `make route-sync`,
+Encrypt **staging** wildcard certificate. Browsers and ordinary `curl` reject that
+issuer; Chrome reports `NET::ERR_CERT_AUTHORITY_INVALID`. A diagnostic staging
+request using `curl -vk` shows a 302 to `APP_BASE_URL/previews/unavailable`.
+`make router-up` first runs `make route-sync`,
 which writes the accepted route table from PostgreSQL (the worker's route controller
 does the same at start and on every route change); Traefik requests the certificate only once a
-router uses it, and the table's fallback router does. Switch `ACME_CA_SERVER` to
-production and remove the `previa-router_acme` volume only after staging works
-([12](12-routing-and-https.md)).
+router uses it, and the table's fallback router does. After staging issuance works,
+set `ACME_CA_SERVER=https://acme-v02.api.letsencrypt.org/directory` and
+`ACME_STORAGE_FILE=/acme/acme-production.json` in `.env`, then run
+`ENV_FILE=.env make router-up` again. This preserves the staging file and restores
+existing preview network attachments after the router is recreated. Keep the
+production storage path on later starts. Once issuance completes, ordinary `curl`
+must verify the preview certificate without `-k`; Chrome should open the app or its
+private sign-in flow. The app needs no rebuild. These settings belong to Compose,
+not the Go config loader; Make loads `.env` automatically, and exported values
+take precedence. See [12](12-routing-and-https.md) for storage and TLS details.
 
 The router serves Prometheus metrics on its loopback API address; the worker reads
 each preview's request count there every minute (`ROUTER_METRICS_ADDRESS`, empty =
@@ -541,17 +551,85 @@ to sleep while that lasts.
 its sign-in check. Run the server on all interfaces and point the worker at it:
 `HTTP_ADDR=0.0.0.0:8080` and
 `PREVIEW_ACCESS_URL=http://host.docker.internal:8080/previews/auth` in `.env`, then
-`make router-up` and restart both. Without `PREVIEW_ACCESS_URL`, a repository made
-private serves its previews to nobody (the router sends visitors to the unavailable
-page). Production sets it in the Compose file.
+`make migrate-up`, `make router-up`, and restart both server and worker. Set the URL
+on all routing workers; production sets it in the Compose file. The **Private
+previews** switch stays disabled, with a setup explanation, until all live routing
+workers advertise it (workers expire after 90 seconds). The server checks the same
+capability on POST, so submitting an old form cannot enable an unconfigured feature.
+
+**Expected:** the switch becomes available after configured workers start. A
+private preview sends anonymous visitors to GitHub sign-in and lets authorized
+visitors through. A configured URL must still be reachable from the router; the
+capability advertises configuration, not an HTTP health check. If private previews
+were enabled before this guard, they remain private and deny access without an auth
+URL. New publications fail with `private_preview_unconfigured`, rather than
+repeated `route_not_converged` failures. Startup/recovery refreshes an existing deny
+route when settings change, even if the route-table version is unchanged. Retry a
+failed build after configuring and restarting; historical River errors remain in
+the job history. Enabling public access still requires the owner's confirmation.
+
+On WSL with Docker Desktop, an explicit `HTTP_ADDR=0.0.0.0:8080` creates an IPv4
+listener. WSL can forward a dual-stack IPv6 listener only on Windows `::1`, which
+makes Docker Desktop's IPv4 `host.docker.internal` connection fail even though the
+server works at WSL `localhost`. Restart the server after upgrading this binding
+fix (Air reloads changed Go code). Verify from inside the router:
+
+```sh
+docker exec previa-router wget -S -T 5 -O - http://host.docker.internal:8080/previews/auth
+```
+
+**Expected:** HTTP 403 `Not a preview.` without forwarded preview headers. That
+proves the auth server is reachable; an anonymous request through the private
+preview URL should receive a 302 to the dashboard's sign-in flow. A refused or
+timed-out connection is a networking issue, and Traefik may return HTTP 500.
+Hostname or unspecified listener addresses retain Go's usual binding behavior;
+explicit IPv6 addresses remain supported.
+
+An operation retry arriving before the durable retry deadline or while a previous
+attempt holds a live lease now snoozes until it can run. Waiting does not consume a
+River attempt or append an `already leased` error.
+
+If a build stops at **Publish** with `The preview is healthy. It is not routed
+yet.`, the app has passed readiness, but the router has not confirmed publication.
+For an existing private repository, check the worker's startup warnings and
+`localhost:9091/readyz` for private preview support. An unset `PREVIEW_ACCESS_URL`
+is now named in a `capability unavailable` warning. Stop and rerun
+`make run-worker` after changing worker code or `.env`; restart Air/server too
+after changing `HTTP_ADDR`. `make dev` rebuilds only the server. On restart,
+startup sync refreshes the routes and pending operations resume; retry the build
+if its publication already failed. Do not change the repository to public to
+work around an authentication configuration error.
 
 Private Preview changes save the setting, route version and River sync job in
 one transaction. A failed enqueue leaves the setting unchanged. Jobs deduplicate
 per route version, allowing a newer change while an older sync is running.
 App output follows the running app's stdout/stderr via the worker's `app_output`
 queue; Build logs cover building and startup instead. After code updates, restart
-both server and worker so they use the corrected queue options; no new migration
-is needed for these fixes.
+both server and worker so they use the corrected queue options. These queue fixes
+alone need no migration; the private-preview configuration guard requires 0029.
+
+**Router recreation and merge recovery.** After upgrading these fixes, restart
+`make run-worker` (Air reloads only the server). No new migration is needed beyond
+0029. Worker startup and its one-minute recovery pass now restore the router's
+preview-network attachments from the accepted routes, even if the route file is
+unchanged. This recovers HTTP 502 after recreating the router. `make router-up`
+also preserves the existing attachments during recreation.
+
+An accepted owner build clears an earlier local teardown request atomically.
+Rebuilt live previews, including existing rows with an old marker, remain eligible
+for the normal 15-minute GitHub reconciliation. A received merge webhook records
+`merged` and queues teardown immediately; reconciliation provides recovery when
+the webhook is missed. Verify that the PR page shows **Merged**, its URL redirects
+to `/previews/unavailable`, and its preview containers are absent. An updated GitHub
+comment alone does not prove that a merge delivery reached this local server.
+
+```sh
+go test ./internal/environments ./internal/housekeeping ./internal/routing ./internal/pullrequests ./internal/reporting
+make test-routing
+```
+
+Export `TEST_DATABASE_URL` for the direct Go command as described above; Make
+loads `.env` and supplies its database fallback for the real routing suite.
 
 To verify these flows against local PostgreSQL, export `.env` explicitly for
 direct Go commands (Make's run targets load it automatically):
@@ -559,11 +637,12 @@ direct Go commands (Make's run targets load it automatically):
 ```sh
 set -a; . ./.env; set +a
 export TEST_DATABASE_URL="${TEST_DATABASE_URL:-$DATABASE_URL}"
-go test ./internal/appoutput ./internal/previewaccess ./internal/auth ./internal/pullrequests
+go test ./internal/appoutput ./internal/previewaccess ./internal/auth ./internal/pullrequests ./internal/environments ./internal/routing ./internal/platform/workers
 ```
 
 **Expected:** tests pass, including real River enqueue/deduplication, stale
-follower replacement, privacy rollback, and OAuth return to the requested PR
+follower replacement, privacy rollback/configuration guards, River snoozes without
+spent attempts, same-version route refresh, and OAuth return to the requested PR
 logs. Tests use disposable schemas. Automatic builds offer **Build now** only
 during the quiet period; queued/running requests show a disabled progress button.
 
@@ -599,7 +678,7 @@ make run-server
 ```
 
 **Expected:** `internal listener serving /livez, /readyz and /metrics`,
-`database health check passed` (with `version`, `schema=28` and `environment`), then
+`database health check passed` (with `version`, `schema=29` and `environment`), then
 `HTTP server listening`. Open <http://localhost:8080/> and sign in with GitHub.
 `curl -s localhost:9090/readyz` answers `{"checks":{"database":"ok","schema":"ok"},"status":"ready",...}`.
 The server refuses to start if migrations are behind (`run migrations first`).
@@ -634,6 +713,29 @@ webhook check, once the secret is configured and the server is running:
 ```sh
 make test-webhook   # expect: HTTP 204: signed fixture accepted
 ```
+
+If development webhooks arrive through a Cloudflare quick tunnel, keep that
+process running alongside the server. For example:
+
+```sh
+cloudflared tunnel --no-autoupdate --protocol http2 --url http://127.0.0.1:8080 --metrics 127.0.0.1:20241
+curl --fail http://127.0.0.1:20241/ready
+```
+
+**Expected:** cloudflared registers a connection and `/ready` returns HTTP 200.
+After restarting the tunnel, set the existing GitHub App's **Webhook URL** to the
+new printed HTTPS address followed by `/webhooks/github`, keeping its webhook
+secret unchanged. Verify the external path as well:
+
+```sh
+WEBHOOK_TEST_URL=https://YOUR-TUNNEL.trycloudflare.com/webhooks/github make test-webhook
+```
+
+**Expected:** HTTP 204. Make loads the secret from `.env`; direct invocation of
+`deploy/test-webhook.py` requires exporting it first. An old tunnel URL, HTTP 502,
+or a failed `/ready` check means GitHub events cannot reach this server; changing
+the dashboard's `APP_BASE_URL` is unnecessary for this webhook tunnel. Missed
+merge events recover through the reconciliation described above.
 
 ## 7. Inspect jobs and operations
 

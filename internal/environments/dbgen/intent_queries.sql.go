@@ -65,6 +65,19 @@ func (q *Queries) AdvanceBuildIntent(ctx context.Context, arg AdvanceBuildIntent
 	return i, err
 }
 
+const clearLocalTeardownForBuild = `-- name: ClearLocalTeardownForBuild :exec
+UPDATE pull_requests SET teardown_requested_generation = -1, teardown_reason = NULL
+WHERE id = $1 AND state = 'open' AND teardown_requested_generation = generation
+`
+
+// A fresh owner-authorized build restores the preview after local teardown.
+// Keep the completed-generation fence for old teardown jobs; clear the active
+// decision so reports, expiry and subsequent owner teardowns see the new build.
+func (q *Queries) ClearLocalTeardownForBuild(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, clearLocalTeardownForBuild, id)
+	return err
+}
+
 const findIntentScope = `-- name: FindIntentScope :one
 SELECT pr.repo_id, r.installation_id
 FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id WHERE pr.id = $1
@@ -175,7 +188,7 @@ func (q *Queries) LockIntentPR(ctx context.Context, arg LockIntentPRParams) (Loc
 }
 
 const lockIntentRepository = `-- name: LockIntentRepository :one
-SELECT id, build_mode FROM repos
+SELECT id, build_mode, private_previews FROM repos
 WHERE id = $1 AND installation_id = $2 AND accessible
 FOR UPDATE
 `
@@ -186,14 +199,15 @@ type LockIntentRepositoryParams struct {
 }
 
 type LockIntentRepositoryRow struct {
-	ID        int64
-	BuildMode string
+	ID              int64
+	BuildMode       string
+	PrivatePreviews bool
 }
 
 func (q *Queries) LockIntentRepository(ctx context.Context, arg LockIntentRepositoryParams) (LockIntentRepositoryRow, error) {
 	row := q.db.QueryRow(ctx, lockIntentRepository, arg.RepoID, arg.InstallationID)
 	var i LockIntentRepositoryRow
-	err := row.Scan(&i.ID, &i.BuildMode)
+	err := row.Scan(&i.ID, &i.BuildMode, &i.PrivatePreviews)
 	return i, err
 }
 

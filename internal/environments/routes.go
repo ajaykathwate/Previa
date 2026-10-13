@@ -25,6 +25,9 @@ type RouteTarget struct {
 	Backend   string
 	Port      int
 	NetworkID string
+	// AuthConfigured lets the publisher serve private requests. Checked against
+	// the repository setting under its lock before accepting a new target.
+	AuthConfigured bool
 }
 
 // RouteDecision is the route controller's durable answer to one operation.
@@ -45,6 +48,7 @@ type Route struct {
 	Revision      int64
 	Backend       string
 	Port          int
+	NetworkID     string // persisted attachment restored after the router is recreated
 	// Asleep: its app is stopped while idle; visitors go to the wake page.
 	Asleep bool
 	// Private: only signed-in GitHub users who can see the repository may
@@ -125,6 +129,9 @@ func (r *Repository) AcceptRoute(ctx context.Context, op Operation, target Route
 		}
 		if !pendingCandidate(env, request, target.Artifact) {
 			return nil
+		}
+		if scope.private && !target.AuthConfigured {
+			return &OperationFailure{Code: "private_preview_unconfigured", Permanent: true}
 		}
 		decision.EnvironmentID = env.ID
 		route, err := q.LockRoute(ctx, env.ID)
@@ -303,7 +310,7 @@ func (r *Repository) RouteTable(ctx context.Context) (RouteTable, error) {
 		table.Routes = append(table.Routes, Route{
 			EnvironmentID: row.EnvironmentID.Int64, Hostname: row.Subdomain.String,
 			Generation: row.Generation.Int64, Revision: row.Revision.Int64,
-			Backend: row.Backend.String, Port: int(row.Port.Int32), Asleep: row.Asleep, Private: row.Private,
+			Backend: row.Backend.String, Port: int(row.Port.Int32), NetworkID: row.NetworkID.String, Asleep: row.Asleep, Private: row.Private,
 		})
 	}
 	return table, nil

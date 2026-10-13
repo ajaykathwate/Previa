@@ -395,6 +395,38 @@ func TestFailedActivationKeepsTheServingPreview(t *testing.T) {
 	}
 }
 
+func TestPrivateRouteWithoutAuthFailsBeforeAcceptanceAndCleansCandidate(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.pool.Exec(t.Context(), "UPDATE repos SET private_previews=true WHERE id=$1", f.repoID); err != nil {
+		t.Fatal(err)
+	}
+	a := f.event(t, "opened", "sha-A")
+	f.provision(t, a)
+	r := newRuntime()
+	s := service(t, f, r, &fakePublisher{})
+	if err := s.Build(t.Context(), a); err != nil {
+		t.Fatal(err)
+	}
+	executor := &fenceExecutor{repo: f.repo, runtime: r}
+	drainWith(t, f, executor)
+	op := loadOperation(t, f, env.ActivateRoute, a.Generation)
+	if op.State != env.OperationFailed {
+		t.Fatalf("unconfigured activation state: %s", op.State)
+	}
+	if state, ok, err := f.repo.RouteState(t.Context(), a.PullRequestID); err != nil || ok {
+		t.Fatalf("failed candidate was accepted: %+v %v", state, err)
+	}
+	var code string
+	if err := f.pool.QueryRow(t.Context(), "SELECT last_error_code FROM environments WHERE pull_request_id=$1", a.PullRequestID).Scan(&code); err != nil || code != "private_preview_unconfigured" {
+		t.Fatalf("private preview failure: %q %v", code, err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.resources) != 0 || len(r.removedContainers) != 1 || r.removedContainers[0] != op.Payload.Artifact.ContainerID {
+		t.Fatalf("failed candidate was not cleaned: removed=%v resources=%+v", r.removedContainers, r.resources)
+	}
+}
+
 func TestOldTeardownAfterReopenKeepsTheReplacement(t *testing.T) {
 	f := newFixture(t)
 	a := f.event(t, "opened", "sha-A")

@@ -276,7 +276,6 @@ LEFT JOIN environments e ON e.pull_request_id = pr.id
 LEFT JOIN build_intents b ON b.pull_request_id = pr.id
 LEFT JOIN pr_reconciliations c ON c.pull_request_id = pr.id
 WHERE pr.state = 'open' AND r.accessible AND i.status = 'active'
-  AND pr.teardown_requested_generation <> pr.generation
   AND ((e.status IN ('running', 'failed', 'publishing') AND e.container_id IS NOT NULL)
        OR b.state IN ('pending', 'queued', 'running'))
   AND (c.reconciled_at IS NULL OR c.reconciled_at <= $1)
