@@ -1,12 +1,13 @@
 # Project handoff
-Last updated: 2026-10-13
+Last updated: 2026-10-14
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
+- README-MVP-PRODUCT-EXPANSION.md: detailed specification for the first six team SaaS features; onboarding minimal, native Previa reviews with GitHub summaries, notification integrations deferred. Documentation only; no feature implementation or old task resumed.
+- Doc-task verification (2026-10-14): links/structure, Go build/vet and pinned lint passed; Go tests 1195 passed, 244 database/opt-in skips. Test retry needed local listener access; vet retry used lower concurrency.
 - Edit technical-docs/inside-previa.md only when the owner asks (last updated 2026-10-12).
 - docs/27-roadmap.md: Prompts 1-13 done; Prompt 14 (GitHub access reconciliation) not started.
-- Flat features: internal/<feature>, wiring: internal/app; web/ has no backend imports.
-  Preserve signal theme, modal confirmations and server-rendered GET/POST fallbacks.
+- Flat features: internal/<feature>, wiring: internal/app; web/ has no backend imports. Preserve signal theme, modal confirmations and server-rendered GET/POST fallbacks.
 
 ## Run and configuration
 - Go 1.26.9+; make build/test/lint/vuln, river-ui (jobs, :8090), observability-check.
@@ -88,8 +89,7 @@ Last updated: 2026-10-13
   /etc/hosts maps names to the proxy; forks get none.
 
 ## Branches, release and pending work
-- Current branch: ui-improvements (tracks origin/ui-improvements).
-  master changes only through main -> master PRs; CI runs on master PRs/pushes (last observed green c94d35f).
+- Current branch: ui-improvements (tracks origin/ui-improvements). master changes only through main -> master PRs; CI runs on master PRs/pushes (last observed green c94d35f).
 - Regression 2026-10-13: 240/242 cases verified; test-docs/2026-10-13-regression-report.md has proof and limits.
 - Final Go: 1428 passes, no races; 39 baseline opt-ins exercised separately. Browser 52/52; real Docker 39 passes across five packages including both E2E journeys; build/vet/lint passed.
 - Repeated checks: 200 concurrency/recovery; 50 migration/capability; capacity x10 passed.
