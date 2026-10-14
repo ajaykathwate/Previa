@@ -125,8 +125,8 @@ type WorkerConfig struct {
 	GitHubAppPrivateKeyPath string        `envconfig:"GITHUB_APP_PRIVATE_KEY_PATH"`
 	MaxConcurrentBuilds     int           `envconfig:"MAX_CONCURRENT_BUILDS" required:"true"`
 	BuildTimeout            time.Duration `envconfig:"BUILD_TIMEOUT" default:"12m"`
-	// Fair sharing between accounts (installation owners) on one server;
-	// zero turns a limit off. Waiting builds always take turns by account.
+	// Fair sharing between workspaces on one server; zero turns a limit off.
+	// The existing account-named configuration keys retain their spelling.
 	BuildsPerAccount          int `envconfig:"BUILDS_PER_ACCOUNT" default:"0"`
 	BuildMinutesPerAccountDay int `envconfig:"BUILD_MINUTES_PER_ACCOUNT_DAY" default:"0"`
 	// InternalAddr serves /livez, /readyz and /metrics; never publish it.

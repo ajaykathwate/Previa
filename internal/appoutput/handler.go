@@ -247,7 +247,7 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 	if err := sse.Retry(h.opts.Retry); err != nil {
 		return
 	}
-	state := &streamState{cursor: parseCursor(r)}
+	state := &streamState{cursor: parseCursor(r), authorize: func(ctx context.Context) error { _, _, err := h.preview(r.WithContext(ctx)); return err }}
 	if err := h.sync(r.Context(), sse, p, state); err != nil {
 		return
 	}
@@ -263,11 +263,17 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 		case <-deadline.C:
 			return // The browser reconnects with its cursor.
 		case <-heartbeat.C:
+			if err := state.authorize(r.Context()); err != nil {
+				return
+			}
 			if err := sse.Comment("keep-alive"); err != nil {
 				return
 			}
 			continue
 		case <-touch.C:
+			if err := state.authorize(r.Context()); err != nil {
+				return
+			}
 			if err := h.watch(r.Context(), p.EnvironmentID, true); err != nil {
 				return
 			}
@@ -284,8 +290,9 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 }
 
 type streamState struct {
-	cursor struct{ epoch, next int64 }
-	status string
+	authorize func(context.Context) error
+	cursor    struct{ epoch, next int64 }
+	status    string
 }
 
 func (s *streamState) id() string {
@@ -295,6 +302,11 @@ func (s *streamState) id() string {
 // sync sends what the browser is missing: a reset for a new follower, new
 // lines in bounded frames, and the status when it changed.
 func (h *Handler) sync(ctx context.Context, sse *realtime.SSE, p Preview, s *streamState) error {
+	if s.authorize != nil {
+		if err := s.authorize(ctx); err != nil {
+			return err
+		}
+	}
 	watch, err := h.store.Watch(ctx, p.EnvironmentID)
 	if err != nil {
 		return err
@@ -308,6 +320,11 @@ func (h *Handler) sync(ctx context.Context, sse *realtime.SSE, p Preview, s *str
 	// Lines beyond the kept window are gone; continue from the oldest kept.
 	s.cursor.next = max(s.cursor.next, watch.First)
 	for watch.Epoch > 0 && ctx.Err() == nil {
+		if s.authorize != nil {
+			if err := s.authorize(ctx); err != nil {
+				return err
+			}
+		}
 		lines, err := h.store.Lines(ctx, p.EnvironmentID, watch.Epoch, s.cursor.next, frameLines)
 		if err != nil {
 			return err

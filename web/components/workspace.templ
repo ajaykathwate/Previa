@@ -1,0 +1,57 @@
+package components
+
+import "strconv"
+
+templ WorkspaceSwitcher() {
+	if Workspace(ctx).ID > 0 {
+		<details class="workspace-switcher" data-workspace-switcher>
+			<summary>
+				<span class="workspace-avatar">
+					{ WorkspaceInitial(Workspace(ctx).Name) }
+				</span>
+				<span class="workspace-switcher-label">
+					<strong>
+						{ Workspace(ctx).Name }
+					</strong>
+					<small>
+						{ Workspace(ctx).Role }
+					</small>
+				</span><span aria-hidden="true">⌄</span>
+			</summary>
+			<div class="workspace-switcher-menu">
+				<p class="eyebrow">Switch workspace</p>
+				for _, item := range Workspace(ctx).Items {
+					<form method="post" action={ templ.SafeURL("/workspaces/" + strconv.FormatInt(item.ID, 10) + "/select") }>
+						<input type="hidden" name="csrf_token" value={ Workspace(ctx).CSRF }/>
+						<button type="submit" aria-current={ workspaceCurrent(Workspace(ctx).ID, item.ID) }>
+							<span class="workspace-avatar">
+								{ WorkspaceInitial(item.Name) }
+							</span>
+							<span>
+								<strong>
+									{ item.Name }
+								</strong>
+								<small>
+									{ item.Role }
+								</small>
+							</span>
+							if item.ID == Workspace(ctx).ID {
+								@CheckIcon()
+							}
+						</button>
+					</form>
+				}
+				<a href="/workspaces">All workspaces · create a workspace</a><a href={ templ.SafeURL("/workspaces/" + strconv.FormatInt(Workspace(ctx).ID, 10) + "/members") }>Manage members & invitations</a>
+			</div>
+		</details>
+	} else {
+		<a class="nav-link" href="/workspaces">Choose a workspace</a>
+	}
+}
+
+func workspaceCurrent(id, want int64) string {
+	if id == want {
+		return "true"
+	}
+	return "false"
+}

@@ -12,20 +12,27 @@ templ CommandPalette() {
 		<div id="command-list" class="command-list" role="listbox" aria-label="Commands">
 			<div class="command-group" role="group" aria-label="Navigate">
 				<p class="command-group-label" aria-hidden="true">Navigate</p>
+				if CanOperate(ctx) {
 				@CommandItem("cmd-overview", "/dashboard", "", "Overview", "Workspace summary", "home dashboard summary", OverviewIcon())
 				@CommandItem("cmd-repositories", "/repositories", "", "Repositories", "Connected sources", "repos sources github", RepositoryIcon())
 				@CommandItem("cmd-starter-kits", "/starter-kits", "", "Starter kits", "Dockerfile and .previewrc.yaml for your stack", "templates dockerfile previewrc yaml setup config generate", KitIcon())
 				@CommandItem("cmd-builds", "/builds", "", "Builds", "Current build requests", "build intents queue", BuildIcon())
 				@CommandItem("cmd-previews", "/previews", "", "Previews", "Live previews and their links", "environments deployments live links expiry", EnvironmentIcon())
+				if CanManage(ctx) {
 				@CommandItem("cmd-tools", "/developer-tools", "", "Developer tools", "Queue diagnostics", "ping river worker queue", TerminalIcon())
+ }
+				}
+ @CommandItem("cmd-workspaces", "/workspaces", "", "Workspaces", "Your teams and members", "team workspace invitations members", UserIcon())
 				@CommandItem("cmd-faq", "/faq", "", "FAQ", "Answers from Previa", "help questions answers support how", QuestionIcon())
 			</div>
+			if CanOperate(ctx) {
 			<div class="command-group" role="group" aria-label="Repository filters">
 				<p class="command-group-label" aria-hidden="true">Repository filters</p>
 				@CommandItem("cmd-repos-available", "/repositories?access=available", "", "Available repositories", "Access granted", "filter accessible", RepositoryIcon())
 				@CommandItem("cmd-repos-unavailable", "/repositories?access=unavailable", "", "Unavailable repositories", "Access removed or suspended", "filter revoked suspended", RepositoryIcon())
 				@CommandItem("cmd-repos-all", "/repositories?access=all", "", "All repositories", "Every linked source", "filter everything", RepositoryIcon())
 			</div>
+			}
 			<div class="command-group" role="group" aria-label="Account">
 				<p class="command-group-label" aria-hidden="true">Account</p>
 				@CommandItem("cmd-theme", "", "theme", "Switch colour theme", "Light or dark", "dark light mode appearance", SunIcon())

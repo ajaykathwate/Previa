@@ -15,6 +15,7 @@ templ RepositoryTabs(repoID int64, active string) {
 			@PullRequestIcon()
 			<span>Pull requests</span>
 		</a>
+		if CanManage(ctx) {
 		<a
 			href={ templ.SafeURL("/repositories/" + strconv.FormatInt(repoID, 10) + "/secrets") }
 			if active == "secrets" {
@@ -33,5 +34,6 @@ templ RepositoryTabs(repoID int64, active string) {
 			@SendIcon()
 			<span>Outbound</span>
 		</a>
+		}
 	</nav>
 }

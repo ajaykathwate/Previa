@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/platform/database"
+	workspacescope "github.com/ajaykathwatee/previa/internal/platform/scope"
 	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -50,7 +51,7 @@ func (r *Repository) Page(ctx context.Context, userID, repoID int64, f Filter) (
 		}
 		result.Pages = max(int64(1), (result.Total+9)/10)
 		result.Page = min(max(int64(1), f.Page), result.Pages)
-		result.Rows, err = q.ListPRs(ctx, dbgen.ListPRsParams{ID: repoID, OwnerUserID: owner(userID), Column3: f.State, Lower: f.Search, Offset: int32((result.Page - 1) * 10)})
+		result.Rows, err = q.ListPRs(ctx, dbgen.ListPRsParams{ID: repoID, OwnerUserID: owner(userID), Column3: f.State, Lower: f.Search, RowOffset: int32((result.Page - 1) * 10)})
 		return err
 	})
 	return
@@ -99,13 +100,13 @@ func (r *Repository) Activity(ctx context.Context, userID int64, aq ActivityQuer
 		}
 		since := pgtype.Timestamptz{Time: aq.Since, Valid: true}
 		var err error
-		result.Total, err = q.CountActivity(ctx, dbgen.CountActivityParams{OwnerUserID: userID, RepoID: aq.RepoID, Previews: aq.Previews, Failures: aq.Failures, AttentionSince: since})
+		result.Total, err = q.CountActivity(ctx, dbgen.CountActivityParams{WorkspaceID: workspacescope.WorkspaceID(ctx), OwnerUserID: userID, RepoID: aq.RepoID, Previews: aq.Previews, Failures: aq.Failures, AttentionSince: since})
 		if err != nil {
 			return err
 		}
 		result.Pages = max(int64(1), (result.Total+9)/10)
 		result.Page = min(max(int64(1), aq.Page), result.Pages)
-		result.Rows, err = q.Activity(ctx, dbgen.ActivityParams{OwnerUserID: userID, RepoID: aq.RepoID, Previews: aq.Previews, Failures: aq.Failures,
+		result.Rows, err = q.Activity(ctx, dbgen.ActivityParams{WorkspaceID: workspacescope.WorkspaceID(ctx), OwnerUserID: userID, RepoID: aq.RepoID, Previews: aq.Previews, Failures: aq.Failures,
 			AttentionSince: since, RowOffset: int32((result.Page - 1) * 10)})
 		return err
 	})
@@ -115,7 +116,7 @@ func (r *Repository) Activity(ctx context.Context, userID int64, aq ActivityQuer
 // Delivery counts the owner's current requests and live previews on open PRs;
 // failures that finished before since and were not dismissed count as older.
 func (r *Repository) Delivery(ctx context.Context, userID int64, since time.Time) (dbgen.DeliverySummaryRow, error) {
-	row, err := dbgen.New(r.pool).DeliverySummary(ctx, dbgen.DeliverySummaryParams{OwnerUserID: userID, AttentionSince: pgtype.Timestamptz{Time: since, Valid: true}})
+	row, err := dbgen.New(r.pool).DeliverySummary(ctx, dbgen.DeliverySummaryParams{WorkspaceID: workspacescope.WorkspaceID(ctx), OwnerUserID: userID, AttentionSince: pgtype.Timestamptz{Time: since, Valid: true}})
 	if err != nil {
 		return row, fmt.Errorf("count delivery: %w", err)
 	}

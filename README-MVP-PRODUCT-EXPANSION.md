@@ -1,11 +1,11 @@
 # Previa: complete team SaaS MVP specification
 
-**Status:** implementation specification, not an implemented feature report.  
+**Status:** Feature 1's shared workspace core is implemented. Its review and account-lifecycle dependencies remain pending in Features 3 and 6; Features 2–6 remain implementation specifications.
 **Prepared:** 14 October 2026.  
 **Audience:** small development teams using hosted Previa.  
 **Scope:** the first six product improvements agreed with the owner; onboarding is deliberately minimal. Separate notification integrations are deferred.
 
-This document explains the complete product behavior to implement, the changes to the existing application, and how completion will be demonstrated. It does not claim that the features described below already exist. No application implementation accompanies this document.
+This document explains the complete product behavior to implement, the changes to the existing application, and how completion will be demonstrated. Feature 1's workspace creation, membership, access, invitations, handover and shared quota identity now have application code and verification described in [Shared team workspaces](docs/28-shared-workspaces.md). Review/assignment interactions, visible account usage and billing controls, and durable workspace deletion/disconnection referenced in its permission matrix depend on Features 3 and 6 and are not implemented. The remaining features are planned; this document does not claim they already exist.
 
 All six capabilities belong to the existing Previa application. Previa owns team access, review instructions, feedback, review decisions, activity, usage, and account settings. GitHub continues to provide identity, source, PR lifecycle, and a living status comment/check; it receives summaries and links back to Previa. Reviewers must not have to finish the Previa review workflow in GitHub, Slack, or another application.
 
@@ -140,6 +140,8 @@ Reviewers receive a compact review-oriented page. They do not see disabled admin
 Previa review content is escaped plain text with paragraph formatting and validated links. Arbitrary HTML, rich-text libraries, injected preview scripts, and uploaded files are outside this scope. An API preview uses its docs path and reproduction instructions rather than an HTML-specific review overlay.
 
 ## 4. Feature 1: shared team workspace
+
+Implementation and current scope: [Shared team workspaces](docs/28-shared-workspaces.md). Native review interactions and durable workspace deletion in this section are boundaries for Features 3 and 6; their UI remains labelled Coming next.
 
 ### 4.1 Problem and user benefit
 

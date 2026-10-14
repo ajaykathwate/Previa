@@ -2091,6 +2091,14 @@ Healthy existing previews can survive a core server/worker upgrade, but a router
 restart interrupts their request path and an egress restart can interrupt their
 outbound dependency calls.
 
+Migration 0030 is a coordinated authorization cutover: drain/stop the old worker
+and stop the old server before applying it, then start workspace-aware binaries.
+Do not serve traffic with old installer-only authorization after teams are enabled.
+Once team records exist, its Down migration refuses lossy rollback; use a forward
+fix or a rehearsed pre-upgrade restore with previous binaries. A solo rollback
+before team records exist preserves newly recorded consumption. See
+[shared workspace cutover](02-development-setup.md#shared-workspace-cutover).
+
 ### Step U1 — Prepare and record the previous release
 
 Before touching the host:

@@ -56,7 +56,7 @@ func (f *fixture) prEventIn(t *testing.T, repoID int64, number int32, sha string
 // build counts its time and wakes the next request in line.
 func TestAccountsTakeTurnsAndKeepTheirLimits(t *testing.T) {
 	f := newFixture(t)
-	other, otherOwner := f.secondAccount(t)
+	other, _ := f.secondAccount(t)
 	r := newGatedRuntime()
 	s := newCapacityService(t, f, r)
 	exec := func(sql string, args ...any) {
@@ -138,11 +138,11 @@ func TestAccountsTakeTurnsAndKeepTheirLimits(t *testing.T) {
 	// UTC; another account is unaffected.
 	f.repo.WithBuildSlots(2).WithAccountLimits(env.AccountLimits{MinutesPerDay: 1})
 	var owner int64
-	if err := f.pool.QueryRow(t.Context(), "SELECT i.owner_user_id FROM installations i JOIN repos r ON r.installation_id=i.id WHERE r.id=$1", f.repoID).Scan(&owner); err != nil {
+	if err := f.pool.QueryRow(t.Context(), "SELECT i.workspace_id FROM installations i JOIN repos r ON r.installation_id=i.id WHERE r.id=$1", f.repoID).Scan(&owner); err != nil {
 		t.Fatal(err)
 	}
-	exec(`INSERT INTO account_build_usage(user_id,day,build_seconds,builds) VALUES($1,(now() AT TIME ZONE 'UTC')::date,60,1)
-		ON CONFLICT (user_id,day) DO UPDATE SET build_seconds=60`, owner)
+	exec(`INSERT INTO workspace_build_usage(workspace_id,day,build_seconds,builds) VALUES($1,(now() AT TIME ZONE 'UTC')::date,60,1)
+		ON CONFLICT (workspace_id,day) DO UPDATE SET build_seconds=60`, owner)
 	a5, b3 := f.prEvent(t, 25, "sha-a5"), f.prEventIn(t, other, 33, "sha-b3")
 	until := waits(a5, env.WaitQuota).UTC()
 	now := time.Now().UTC()
@@ -160,7 +160,7 @@ func TestAccountsTakeTurnsAndKeepTheirLimits(t *testing.T) {
 		t.Fatalf("b4's job ended %s", state)
 	}
 	var builds int
-	if err := f.pool.QueryRow(t.Context(), "SELECT builds FROM account_build_usage WHERE user_id=$1", otherOwner).Scan(&builds); err != nil || builds != 1 {
+	if err := f.pool.QueryRow(t.Context(), "SELECT builds FROM workspace_build_usage WHERE workspace_id=(SELECT i.workspace_id FROM installations i JOIN repos r ON r.installation_id=i.id WHERE r.id=$1)", other).Scan(&builds); err != nil || builds != 1 {
 		t.Fatalf("the finished build's time is not counted for its account: %d %v", builds, err)
 	}
 }

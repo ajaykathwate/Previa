@@ -87,7 +87,7 @@ SELECT d.id, d.host, d.port, d.created_at
 FROM repository_destinations d
 JOIN repos r ON r.id = d.repo_id
 JOIN installations i ON i.id = r.installation_id
-WHERE d.repo_id = $1 AND i.owner_user_id = $2
+WHERE d.repo_id = $1 AND workspace_repository_access(r.id,$2::bigint,'manage')
 ORDER BY d.port, d.host
 `
 
@@ -128,9 +128,20 @@ func (q *Queries) ListDestinations(ctx context.Context, arg ListDestinationsPara
 	return items, nil
 }
 
+const lockOutboundInstallation = `-- name: LockOutboundInstallation :one
+SELECT i.id FROM installations i JOIN repos r ON r.installation_id=i.id WHERE r.id=$1 FOR UPDATE OF i
+`
+
+func (q *Queries) LockOutboundInstallation(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lockOutboundInstallation, id)
+	var id_2 int64
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const lockOwnedRepository = `-- name: LockOwnedRepository :one
 SELECT r.id FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE r.id = $1 AND i.owner_user_id = $2 AND r.accessible AND i.status = 'active'
+WHERE r.id = $1 AND workspace_repository_access(r.id,$2::bigint,'manage') AND r.accessible AND i.status = 'active'
 FOR UPDATE OF r
 `
 
@@ -152,7 +163,7 @@ const ownedRepository = `-- name: OwnedRepository :one
 
 SELECT r.id, r.full_name, (r.accessible AND i.status = 'active')::boolean AS available
 FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE r.id = $1 AND i.owner_user_id = $2
+WHERE r.id = $1 AND workspace_repository_access(r.id,$2::bigint,'manage')
 `
 
 type OwnedRepositoryParams struct {
@@ -180,7 +191,7 @@ const removeDestination = `-- name: RemoveDestination :one
 DELETE FROM repository_destinations d
 USING repos r, installations i
 WHERE d.id = $1 AND d.repo_id = $2 AND r.id = d.repo_id
-  AND i.id = r.installation_id AND i.owner_user_id = $3
+  AND i.id = r.installation_id AND workspace_repository_access(r.id,$3::bigint,'manage')
 RETURNING d.host, d.port
 `
 

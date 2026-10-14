@@ -204,9 +204,9 @@ func finishBuildIntentTx(ctx context.Context, broker *Broker, tx pgx.Tx, request
 		return fmt.Errorf("finish build intent: %w", err)
 	}
 	if finished == 1 {
-		// The account's build time, for its daily budget (BUILD_MINUTES_PER_ACCOUNT_DAY).
+		// The workspace's build time, for BUILD_MINUTES_PER_ACCOUNT_DAY.
 		if err := q.RecordFinishedBuildTime(ctx, dbgen.RecordFinishedBuildTimeParams{PrID: request.PullRequestID, Revision: request.Revision}); err != nil {
-			return fmt.Errorf("record the account's build time: %w", err)
+			return fmt.Errorf("record workspace build time: %w", err)
 		}
 	}
 	return broker.reportTx(ctx, tx, request.PullRequestID)

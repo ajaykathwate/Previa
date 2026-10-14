@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 29**, **River 007**. After pulling changes, run
+Current schema: **Goose 30**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker. When the egress proxy or the
 router changed (this version changed both), also run `make egress-image` (builds
 are metered and may be limited to package registries) and `make router-up` (the
@@ -211,6 +211,35 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0027 | Private previews ([12](12-routing-and-https.md#private-previews)): `repos.private_previews`. |
 | 0028 | Opt-in build secrets ([07](07-repository-secrets.md)): `env_secrets.build`, false for all existing secrets; `worker_capabilities.build_timeout_ns` lets Starter kits validate against live worker ceilings. Server and worker require this schema. |
 | 0029 | `worker_capabilities.private_previews`: all live routing workers must advertise a configured auth URL before an owner can enable private previews. Legacy workers default false; server and worker require this schema. |
+| 0030 | Shared workspaces, roles/grants, invitation consent and handover, installation workspace ownership, manual-intent/publication authorization fences, and workspace consumption. Backfills existing connections without changing resource IDs. Coordinated server/worker cutover required. |
+
+### Shared workspace cutover
+
+Stop Air/the server and drain/stop the old worker before applying migration 0030.
+Keep your pre-upgrade backup. Do not leave an owner-based old server accepting
+requests alongside workspace-aware code; this migration changes authorization.
+Existing preview containers can remain and their old labels resolve through PR IDs.
+
+```sh
+make migrate-up
+make build
+make run-server      # terminal 1
+make run-worker      # terminal 2
+```
+
+**Expected:** Goose reports schema 30; server/worker pass the schema check. Existing
+installers see their original repositories in a backfilled workspace. Sign in,
+open **Team & settings**, invite a Developer/Reviewer, and select explicit
+repositories. No new environment variable, notification integration or frontend
+runtime is required. Make's run/migration targets load `.env`; direct Go commands
+and test targets require manual exports as described below. Air rebuilds code and
+assets but does not apply migrations automatically.
+
+Rollback is safe only before team data exists; it copies workspace consumption
+back to the legacy ledger. With invitations, extra memberships, new workspaces
+or transferred ownership, `make migrate-down` refuses to discard team data. Use a
+forward fix or restore a rehearsed pre-upgrade backup with its matching previous
+binaries. See [workspaces](28-shared-workspaces.md#upgrade-and-verification).
 
 Optional check that live updates are wired:
 
@@ -671,6 +700,23 @@ needed. To use an existing Chromium, set
 scenarios whose titles match (for example `UI_TEST_PATTERN='slow|offline'`); the
 whole suite takes about two minutes. Details: [web/tests/browser/README.md](../web/tests/browser/README.md).
 
+To verify shared workspace flows against real PostgreSQL:
+
+```sh
+set -a; . ./.env; set +a
+export TEST_DATABASE_URL="$DATABASE_URL"
+go test -race ./internal/workspaces ./internal/previewaccess ./internal/buildlogs ./internal/appoutput ./internal/environments ./internal/runtime
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-workspace-browser
+```
+
+**Expected:** fixtures create/drop isolated schemas; roles, grants, callback binding,
+shared quota enforcement, token/cookie/stream revocation, safe rollback and handover
+pass. Four browser scenarios cover access editing and modal confirmation,
+light/dark/mobile layouts, creation/switching, invitation acceptance without
+JavaScript and ownership acceptance. Only GitHub responses are fixtures; sessions,
+CSRF, workspace handlers and PostgreSQL are real. `RUN_WORKSPACE_BROWSER_TESTS=1`
+enables that suite for direct Go runs; browser tooling remains optional.
+
 To verify the build-log viewer specifically:
 
 ```sh
@@ -702,7 +748,7 @@ make run-server
 ```
 
 **Expected:** `internal listener serving /livez, /readyz and /metrics`,
-`database health check passed` (with `version`, `schema=29` and `environment`), then
+`database health check passed` (with `version`, `schema=30` and `environment`), then
 `HTTP server listening`. Open <http://localhost:8080/> and sign in with GitHub.
 `curl -s localhost:9090/readyz` answers `{"checks":{"database":"ok","schema":"ok"},"status":"ready",...}`.
 The server refuses to start if migrations are behind (`run migrations first`).
@@ -848,6 +894,17 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
   shows a Server section, and on WSL check Docker Desktop's integration settings.
 - **Port 5432 in use:** stop the other database, or change the host port in
   `deploy/docker-compose.yml` and `DATABASE_URL` together.
+- **Port 8080 in use:** stop the old `make dev`/Air or server terminal with Ctrl+C.
+  To identify and gracefully stop the remaining listener on Linux/WSL:
+
+  ```sh
+  sudo lsof -nP -iTCP:8080 -sTCP:LISTEN
+  sudo lsof -tiTCP:8080 -sTCP:LISTEN | xargs -r sudo kill -TERM
+  ```
+
+  **Expected:** the first command identifies the server; after it exits, it lists
+  no listener. If a listener still remains, repeat the second command with
+  `kill -KILL` as a last resort. Stop the supervisor first so it cannot restart it.
 - **Password authentication failed:** Compose credentials live in the YAML, not
   `.env`; changing them does not change an already initialized volume.
 - **Missing tables or skipped integration tests:** run `make migrate-up`, then export
@@ -875,3 +932,61 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
   generated `*_templ.go` files are ignored and must exist locally. If the build
   passes, restart the Go/templ language servers. `make watch-templates` regenerates
   templates on save without starting the server.
+
+### Fresh local setup after deleting Docker data
+
+A new database can run all migrations from scratch, including workspace migration
+0030. Deleting the PostgreSQL volume erases users/sessions, workspace memberships,
+invitations, repository links, stored secrets, preview history and usage. Remove
+data only if you intend to discard it, or take a database backup first. Restrict
+cleanup to Previa resources; global Docker cleanup can erase other projects.
+
+Keep the configured `.env`, GitHub App private-key file, encryption keys and DNS
+credential file on the host. Keep the router's ACME certificate volume if you
+want to retain existing certificates; deleting it requires certificate issuance
+again. Images and build caches can be recreated.
+
+Stop Air/server and worker terminals with Ctrl+C, then stop the router with
+`make router-down` (keeps its certificate volume). If resetting the database
+through Compose, this explicitly deletes its local data volume:
+
+```sh
+docker compose -f deploy/docker-compose.yml down -v
+```
+
+Also remove the old Previa preview/build/service containers and their associated
+resources when discarding the database. Compose's database shutdown does not
+remove containers created dynamically by the worker. Docker Desktop can remove
+those Previa resources without selecting other projects or the ACME volume.
+
+If you removed the database, clear its old generated route table while the router
+and workers are stopped. `ROUTER_DYNAMIC_DIR` is a host bind mount, so Docker
+volume deletion does not clear it. Its old monotonic table version can prevent a
+fresh database's lower versions from being published:
+
+```sh
+(
+    . ./.env
+    rm -f -- "${ROUTER_DYNAMIC_DIR:?Set ROUTER_DYNAMIC_DIR}/previa-routes.yml"
+)
+```
+
+This subshell manually reads the trusted `.env` without printing its contents and
+removes only Previa's generated routes file. Then rebuild and start prerequisites:
+
+```sh
+docker compose -f deploy/docker-compose.yml up -d --wait postgres
+make migrate-up
+make build
+make egress-image
+make router-up
+```
+
+**Expected:** PostgreSQL is healthy; Goose reaches 30 and River reaches 007;
+the application builds, the egress image exists and Traefik starts with the fresh
+route table. These Make targets automatically read `.env`. Start `make dev`
+(or `make run-server`) and `make run-worker` in separate terminals. Sign in,
+create a workspace, reconnect the existing GitHub App installation and choose
+repositories. Re-enter any discarded repository secrets/settings and rebuild
+previews. Resetting Docker/PostgreSQL does not remove the App installation or
+existing comments/check runs on GitHub.

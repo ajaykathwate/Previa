@@ -12,6 +12,7 @@ const (
 	NavBuilds       NavItem = "builds"
 	NavTools        NavItem = "tools"
 	NavFAQ          NavItem = "faq"
+	NavWorkspaces   NavItem = "workspaces"
 )
 
 // Crumb is the previous level in the header's trail: the page one step up.

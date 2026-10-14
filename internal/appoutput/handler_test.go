@@ -1,7 +1,9 @@
 package appoutput
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -143,5 +145,62 @@ func TestOutputPageIsOwnerScopedAndStartsAFollower(t *testing.T) {
 	f.exec(t, "UPDATE environments SET status='torn_down', container_id=NULL")
 	if status, body := get(f.owner); status != http.StatusOK || !strings.Contains(body, "Not running") || strings.Contains(body, "data-log-events=") {
 		t.Fatalf("not running: %d\n%s", status, body)
+	}
+}
+
+func TestLiveOutputStopsBeforeSendingLinesAfterMemberRemoval(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	f.exec(t, "INSERT INTO users(github_id,username) VALUES(200,'developer')")
+	f.exec(t, "INSERT INTO workspace_memberships(workspace_id,user_id,role) SELECT i.workspace_id,2,'developer' FROM installations i JOIN repos r ON r.installation_id=i.id WHERE r.id=$1", f.repoID)
+	f.exec(t, "INSERT INTO repository_memberships(repo_id,workspace_id,user_id) SELECT r.id,i.workspace_id,2 FROM repos r JOIN installations i ON i.id=r.installation_id WHERE r.id=$1", f.repoID)
+	if _, err := f.store.Request(ctx, f.envID); err != nil {
+		t.Fatal(err)
+	}
+	epoch, _, err := f.store.Begin(ctx, f.envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Append(ctx, f.envID, epoch, []Line{{Text: "initial output"}}); err != nil {
+		t.Fatal(err)
+	}
+	hub := realtime.NewHub()
+	defer hub.Close()
+	h := NewHandler(f.store, session{}, &jobs{}, hub, realtime.StreamOptions{Retry: time.Second, Heartbeat: time.Second, MaxDuration: time.Minute}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	router := chi.NewRouter()
+	h.Mount(router, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, int64(2))))
+		})
+	})
+	server := httptest.NewServer(router)
+	defer server.Close()
+	client := &http.Client{Timeout: 5 * time.Second}
+	res, err := client.Get(server.URL + fmt.Sprintf("/repositories/%d/pull-requests/7/output/events", f.repoID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	reader := bufio.NewReader(res.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(line, "event: state") {
+			break
+		}
+	}
+	f.exec(t, "UPDATE workspace_memberships SET state='removed',revision=revision+1 WHERE user_id=2")
+	if err := f.store.Append(ctx, f.envID, epoch, []Line{{Text: "must not disclose"}}); err != nil {
+		t.Fatal(err)
+	}
+	hub.Publish(Topic(f.envID), "app_output_lines")
+	rest, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal("revoked stream stayed open", err)
+	}
+	if strings.Contains(string(rest), "must not disclose") {
+		t.Fatal("output disclosed after removal")
 	}
 }

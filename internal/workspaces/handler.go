@@ -1,0 +1,264 @@
+package workspaces
+
+import (
+	"errors"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/a-h/templ"
+	pages "github.com/ajaykathwatee/previa/web/pages/workspaces"
+	"github.com/go-chi/chi/v5"
+)
+
+type Handler struct {
+	service        *Service
+	users          UserSession
+	logger         *slog.Logger
+	appURL, domain string
+}
+
+func NewHandler(s *Service, u UserSession, l *slog.Logger, appURL, domain string) *Handler {
+	return &Handler{s, u, l, strings.TrimSuffix(appURL, "/"), domain}
+}
+func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handler) {
+	r.Group(func(r chi.Router) {
+		r.Use(requireUser)
+		r.Get("/workspaces", h.index)
+		r.Post("/workspaces", h.create)
+		r.Get("/workspaces/{workspaceID}", h.page)
+		r.Get("/workspaces/{workspaceID}/members", h.page)
+		r.Get("/workspaces/{workspaceID}/settings", h.page)
+		r.Get("/workspaces/{workspaceID}/previews", h.page)
+		r.Post("/workspaces/{workspaceID}/select", h.selectWorkspace)
+		r.Post("/workspaces/{workspaceID}/rename", h.rename)
+		r.Post("/workspaces/{workspaceID}/members/{userID}", h.changeMember)
+		r.Post("/workspaces/{workspaceID}/invitations", h.invite)
+		r.Post("/workspaces/{workspaceID}/invitations/{invitationID}", h.changeInvitation)
+		r.Post("/workspaces/{workspaceID}/ownership", h.ownership)
+		r.Get("/workspace-invitations/{token}", h.invitation)
+		r.Post("/workspace-invitations/{token}", h.respondInvitation)
+	})
+}
+func parseID(value string) int64 { n, _ := strconv.ParseInt(value, 10, 64); return n }
+func (h *Handler) identity(r *http.Request) (int64, int64) {
+	u, _, _ := h.users.UserIDs(r.Context())
+	return u, parseID(chi.URLParam(r, "workspaceID"))
+}
+func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
+	status, message := http.StatusServiceUnavailable, "Workspace temporarily unavailable. Please try again."
+	switch {
+	case errors.Is(err, ErrUnavailable):
+		http.NotFound(w, r)
+		return
+	case errors.Is(err, ErrInput):
+		status, message = http.StatusBadRequest, "Check the workspace name, GitHub account, role, and selected repositories."
+	case errors.Is(err, ErrConflict):
+		status, message = http.StatusConflict, "The workspace, member, or invitation changed. Reload to see its current state; no change was saved."
+	case errors.Is(err, ErrOwner):
+		status, message = http.StatusConflict, "Transfer ownership to an existing administrator before leaving or removing the owner."
+	case errors.Is(err, ErrInvitation):
+		status, message = http.StatusForbidden, "This invitation is expired, revoked, already answered, or addressed to another GitHub account. Ask an administrator for a new link."
+	case errors.Is(err, ErrSourceUnavailable):
+		message = "GitHub could not verify that account or source permission. Please try again."
+	default:
+		h.logger.ErrorContext(r.Context(), "workspace request failed", "error", err)
+	}
+	user, _, _ := h.users.UserIDs(r.Context())
+	login, _ := h.users.Username(r.Context())
+	templ.Handler(pages.Failure(login, h.users.CSRFToken(r.Context()), user, message), templ.WithStatus(status)).ServeHTTP(w, r)
+}
+func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
+	u, _, _ := h.users.UserIDs(r.Context())
+	items, err := h.service.List(r.Context(), u)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	p := pages.Page{ActorID: u, CSRF: h.users.CSRFToken(r.Context())}
+	for _, v := range items {
+		p.Workspaces = append(p.Workspaces, pages.Workspace{ID: v.ID, Revision: v.Revision, Name: v.Name, Role: v.Role})
+	}
+	login, _ := h.users.Username(r.Context())
+	templ.Handler(pages.Directory(login, p)).ServeHTTP(w, r)
+}
+func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
+	h.renderPage(w, r, "")
+}
+func (h *Handler) renderPage(w http.ResponseWriter, r *http.Request, invitationToken string) {
+	u, id := h.identity(r)
+	tab := "members"
+	if strings.HasSuffix(r.URL.Path, "/settings") {
+		tab = "settings"
+	}
+	if strings.HasSuffix(r.URL.Path, "/previews") {
+		tab = "previews"
+	}
+	p, err := h.service.Page(r.Context(), u, id, tab, h.domain, parseID(r.URL.Query().Get("page")))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	p.CSRF = h.users.CSRFToken(r.Context())
+	if invitationToken != "" {
+		p.InvitationURL = h.appURL + "/workspace-invitations/" + invitationToken
+	}
+	if r.URL.Query().Get("saved") == "1" {
+		p.Message = "Workspace updated."
+	}
+	login, _ := h.users.Username(r.Context())
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "same-origin")
+	templ.Handler(pages.Index(login, p)).ServeHTTP(w, r)
+}
+func (h *Handler) redirect(w http.ResponseWriter, r *http.Request, id int64) {
+	http.Redirect(w, r, "/workspaces/"+pages.ID(id)+"/members?saved=1", http.StatusSeeOther)
+}
+func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+	u, _, _ := h.users.UserIDs(r.Context())
+	id, err := h.service.Create(r.Context(), u, r.PostFormValue("name"))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.redirect(w, r, id)
+}
+func (h *Handler) selectWorkspace(w http.ResponseWriter, r *http.Request) {
+	u, id := h.identity(r)
+	if err := h.service.Select(r.Context(), u, id); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+}
+func (h *Handler) rename(w http.ResponseWriter, r *http.Request) {
+	u, id := h.identity(r)
+	err := h.service.Rename(r.Context(), u, id, parseID(r.PostFormValue("workspace_revision")), r.PostFormValue("name"))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/workspaces/"+pages.ID(id)+"/settings?saved=1", http.StatusSeeOther)
+}
+func repositoryIDs(r *http.Request) ([]int64, error) {
+	if err := r.ParseForm(); err != nil {
+		return nil, ErrInput
+	}
+	values := r.PostForm["repository"]
+	if len(values) > 500 {
+		return nil, ErrInput
+	}
+	out := make([]int64, 0, len(values))
+	for _, v := range values {
+		id := parseID(v)
+		if id <= 0 {
+			return nil, ErrInput
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+func (h *Handler) changeMember(w http.ResponseWriter, r *http.Request) {
+	u, id := h.identity(r)
+	repos, err := repositoryIDs(r)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	c := MemberChange{ActorID: u, WorkspaceID: id, WorkspaceRevision: parseID(r.PostFormValue("workspace_revision")), UserID: parseID(chi.URLParam(r, "userID")), Revision: parseID(r.PostFormValue("revision")), Role: r.PostFormValue("role"), Repositories: repos, Remove: r.PostFormValue("action") == "remove"}
+	if err := h.service.ChangeMember(r.Context(), c); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if c.Remove && c.UserID == u {
+		http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
+		return
+	}
+	h.redirect(w, r, id)
+}
+func (h *Handler) invite(w http.ResponseWriter, r *http.Request) {
+	u, id := h.identity(r)
+	repos, err := repositoryIDs(r)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	token, err := h.service.Invite(r.Context(), InvitationCommand{ActorID: u, WorkspaceID: id, Revision: parseID(r.PostFormValue("workspace_revision")), Login: r.PostFormValue("login"), Role: r.PostFormValue("role"), Repositories: repos})
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.renderPage(w, r, token)
+}
+func (h *Handler) changeInvitation(w http.ResponseWriter, r *http.Request) {
+	u, id := h.identity(r)
+	token, err := h.service.ChangeInvitation(r.Context(), u, id, parseID(r.PostFormValue("workspace_revision")), parseID(chi.URLParam(r, "invitationID")), parseID(r.PostFormValue("revision")), r.PostFormValue("action") == "regenerate")
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if token != "" {
+		h.renderPage(w, r, token)
+		return
+	}
+	h.redirect(w, r, id)
+}
+func (h *Handler) ownership(w http.ResponseWriter, r *http.Request) {
+	u, id := h.identity(r)
+	revision := parseID(r.PostFormValue("workspace_revision"))
+	var err error
+	switch r.PostFormValue("action") {
+	case "accept":
+		err = h.service.AcceptOwnership(r.Context(), u, id, revision, parseID(r.PostFormValue("transfer_revision")))
+	case "cancel":
+		err = h.service.CancelOwnership(r.Context(), u, id, revision)
+	case "nominate":
+		err = h.service.NominateOwner(r.Context(), u, id, revision, parseID(r.PostFormValue("target")))
+	default:
+		err = ErrInput
+	}
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/workspaces/"+pages.ID(id)+"/settings?saved=1", http.StatusSeeOther)
+}
+func (h *Handler) invitation(w http.ResponseWriter, r *http.Request) {
+	u, githubID, _ := h.users.UserIDs(r.Context())
+	token := chi.URLParam(r, "token")
+	v, err := h.service.Invitation(r.Context(), githubID, token)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	p := pages.Page{Workspace: pages.Workspace{ID: v.WorkspaceID, Name: v.Name, Role: v.Role}, ActorID: u, CSRF: h.users.CSRFToken(r.Context()), InvitationURL: "/workspace-invitations/" + token}
+	repos, err := h.service.InvitationScope(r.Context(), githubID, token)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	p.Repositories = repos
+	login, _ := h.users.Username(r.Context())
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "same-origin")
+	templ.Handler(pages.AcceptInvitation(login, p)).ServeHTTP(w, r)
+}
+func (h *Handler) respondInvitation(w http.ResponseWriter, r *http.Request) {
+	u, githubID, _ := h.users.UserIDs(r.Context())
+	action := r.PostFormValue("action")
+	if action != "accept" && action != "decline" {
+		h.fail(w, r, ErrInput)
+		return
+	}
+	id, err := h.service.RespondInvitation(r.Context(), u, githubID, chi.URLParam(r, "token"), action == "accept")
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if action == "decline" {
+		http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
+		return
+	}
+	h.redirect(w, r, id)
+}

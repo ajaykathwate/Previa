@@ -41,25 +41,27 @@ type BuildFailureDismissal struct {
 }
 
 type BuildIntent struct {
-	PullRequestID    int64
-	Revision         int64
-	BaseRevision     int64
-	Generation       int64
-	HeadSha          string
-	Source           string
-	RequestAction    string
-	RequestedBy      pgtype.Int8
-	IdempotencyKey   string
-	State            string
-	AvailableAt      pgtype.Timestamptz
-	RequestedAt      pgtype.Timestamptz
-	StartedAt        pgtype.Timestamptz
-	CompletedAt      pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-	WaitingRevision  pgtype.Int8
-	WaitingReason    pgtype.Text
-	WaitingSince     pgtype.Timestamptz
-	WaitingCheckedAt pgtype.Timestamptz
+	PullRequestID      int64
+	Revision           int64
+	BaseRevision       int64
+	Generation         int64
+	HeadSha            string
+	Source             string
+	RequestAction      string
+	RequestedBy        pgtype.Int8
+	IdempotencyKey     string
+	State              string
+	AvailableAt        pgtype.Timestamptz
+	RequestedAt        pgtype.Timestamptz
+	StartedAt          pgtype.Timestamptz
+	CompletedAt        pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	WaitingRevision    pgtype.Int8
+	WaitingReason      pgtype.Text
+	WaitingSince       pgtype.Timestamptz
+	WaitingCheckedAt   pgtype.Timestamptz
+	WorkspaceID        pgtype.Int8
+	AuthorizationStamp pgtype.Text
 }
 
 type BuildLog struct {
@@ -181,6 +183,7 @@ type Installation struct {
 	Revision             int64
 	SourceUpdatedAt      pgtype.Timestamptz
 	CleanupPending       bool
+	WorkspaceID          pgtype.Int8
 }
 
 type InstallationRepositoryEvent struct {
@@ -307,6 +310,13 @@ type RepositoryDestination struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type RepositoryMembership struct {
+	RepoID      int64
+	WorkspaceID int64
+	UserID      int64
+	Revision    int64
+}
+
 type RouteTable struct {
 	Singleton bool
 	Version   int64
@@ -346,4 +356,63 @@ type WorkerCapability struct {
 	Services        []string
 	BuildTimeoutNs  int64
 	PrivatePreviews bool
+}
+
+type Workspace struct {
+	ID           int64
+	Name         string
+	OwnerUserID  int64
+	LegacyUserID pgtype.Int8
+	State        string
+	Revision     int64
+	CreatedAt    pgtype.Timestamptz
+}
+
+type WorkspaceBuildUsage struct {
+	WorkspaceID  int64
+	Day          pgtype.Date
+	BuildSeconds int64
+	Builds       int32
+}
+
+type WorkspaceInvitation struct {
+	ID          int64
+	WorkspaceID int64
+	GithubID    int64
+	Login       string
+	Role        string
+	TokenHash   []byte
+	ExpiresAt   pgtype.Timestamptz
+	State       string
+	CreatedBy   int64
+	Revision    int64
+	CreatedAt   pgtype.Timestamptz
+}
+
+type WorkspaceInvitationRepository struct {
+	InvitationID int64
+	RepoID       int64
+}
+
+type WorkspaceMembership struct {
+	WorkspaceID int64
+	UserID      int64
+	Role        string
+	State       string
+	Revision    int64
+	JoinedAt    pgtype.Timestamptz
+	RemovedAt   pgtype.Timestamptz
+}
+
+type WorkspacePreference struct {
+	UserID      int64
+	WorkspaceID pgtype.Int8
+}
+
+type WorkspaceTransfer struct {
+	WorkspaceID int64
+	FromUserID  int64
+	ToUserID    int64
+	Revision    int64
+	ExpiresAt   pgtype.Timestamptz
 }

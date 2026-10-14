@@ -366,6 +366,18 @@ func (q *Queries) LockPullRequest(ctx context.Context, id int64) (int64, error) 
 	return id_2, err
 }
 
+const pruneWorkspaceBuildUsage = `-- name: PruneWorkspaceBuildUsage :execrows
+DELETE FROM workspace_build_usage WHERE day<$1::date
+`
+
+func (q *Queries) PruneWorkspaceBuildUsage(ctx context.Context, before pgtype.Date) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneWorkspaceBuildUsage, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const recordReconciliation = `-- name: RecordReconciliation :exec
 INSERT INTO pr_reconciliations (pull_request_id, reconciled_at, outcome)
 VALUES ($1, $2, $3)

@@ -28,18 +28,19 @@ FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
 LEFT JOIN build_failure_dismissals d ON d.pull_request_id=p.id AND d.user_id=$1 AND d.revision=b.revision
-WHERE i.owner_user_id=$1 AND ($2::bigint=0 OR r.id=$2)
-AND (($3::boolean AND e.head_sha IS NOT NULL) OR (NOT $3::boolean AND b.pull_request_id IS NOT NULL))
-AND ($4::text = '' OR (b.state = 'failed' AND (
- ($4 = 'attention' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= $5)
- OR ($4 = 'older' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at < $5)
- OR ($4 = 'dismissed' AND d.pull_request_id IS NOT NULL))))
-ORDER BY (CASE WHEN $3::boolean THEN e.last_active_at ELSE b.updated_at END) DESC NULLS LAST, p.id DESC
-LIMIT 10 OFFSET $6
+WHERE ($2::bigint=0 OR i.workspace_id=$2::bigint) AND workspace_repository_access(r.id,$1::bigint,'read') AND ($3::bigint=0 OR r.id=$3)
+AND (($4::boolean AND e.head_sha IS NOT NULL) OR (NOT $4::boolean AND b.pull_request_id IS NOT NULL))
+AND ($5::text = '' OR (b.state = 'failed' AND (
+ ($5 = 'attention' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= $6)
+ OR ($5 = 'older' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at < $6)
+ OR ($5 = 'dismissed' AND d.pull_request_id IS NOT NULL))))
+ORDER BY (CASE WHEN $4::boolean THEN e.last_active_at ELSE b.updated_at END) DESC NULLS LAST, p.id DESC
+LIMIT 10 OFFSET $7
 `
 
 type ActivityParams struct {
 	OwnerUserID    int64
+	WorkspaceID    int64
 	RepoID         int64
 	Previews       bool
 	Failures       string
@@ -85,6 +86,7 @@ type ActivityRow struct {
 func (q *Queries) Activity(ctx context.Context, arg ActivityParams) ([]ActivityRow, error) {
 	rows, err := q.db.Query(ctx, activity,
 		arg.OwnerUserID,
+		arg.WorkspaceID,
 		arg.RepoID,
 		arg.Previews,
 		arg.Failures,
@@ -146,6 +148,22 @@ func (q *Queries) BumpObservation(ctx context.Context, id int64) error {
 	return err
 }
 
+const canOperateRepository = `-- name: CanOperateRepository :one
+SELECT workspace_repository_access($1::bigint,$2::bigint,'operate')::boolean
+`
+
+type CanOperateRepositoryParams struct {
+	Column1 int64
+	Column2 int64
+}
+
+func (q *Queries) CanOperateRepository(ctx context.Context, arg CanOperateRepositoryParams) (bool, error) {
+	row := q.db.QueryRow(ctx, canOperateRepository, arg.Column1, arg.Column2)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const clearMergeabilityUnresolved = `-- name: ClearMergeabilityUnresolved :exec
 UPDATE pull_requests SET mergeability_unresolved_at=NULL WHERE id=$1 AND mergeability_unresolved_at IS NOT NULL
 `
@@ -160,16 +178,17 @@ SELECT count(*) FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN install
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
 LEFT JOIN build_failure_dismissals d ON d.pull_request_id=p.id AND d.user_id=$1 AND d.revision=b.revision
-WHERE i.owner_user_id=$1 AND ($2::bigint=0 OR r.id=$2)
-AND (($3::boolean AND e.head_sha IS NOT NULL) OR (NOT $3::boolean AND b.pull_request_id IS NOT NULL))
-AND ($4::text = '' OR (b.state = 'failed' AND (
- ($4 = 'attention' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= $5)
- OR ($4 = 'older' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at < $5)
- OR ($4 = 'dismissed' AND d.pull_request_id IS NOT NULL))))
+WHERE ($2::bigint=0 OR i.workspace_id=$2::bigint) AND workspace_repository_access(r.id,$1::bigint,'read') AND ($3::bigint=0 OR r.id=$3)
+AND (($4::boolean AND e.head_sha IS NOT NULL) OR (NOT $4::boolean AND b.pull_request_id IS NOT NULL))
+AND ($5::text = '' OR (b.state = 'failed' AND (
+ ($5 = 'attention' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= $6)
+ OR ($5 = 'older' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at < $6)
+ OR ($5 = 'dismissed' AND d.pull_request_id IS NOT NULL))))
 `
 
 type CountActivityParams struct {
 	OwnerUserID    int64
+	WorkspaceID    int64
 	RepoID         int64
 	Previews       bool
 	Failures       string
@@ -179,6 +198,7 @@ type CountActivityParams struct {
 func (q *Queries) CountActivity(ctx context.Context, arg CountActivityParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countActivity,
 		arg.OwnerUserID,
+		arg.WorkspaceID,
 		arg.RepoID,
 		arg.Previews,
 		arg.Failures,
@@ -191,8 +211,8 @@ func (q *Queries) CountActivity(ctx context.Context, arg CountActivityParams) (i
 
 const countPRs = `-- name: CountPRs :one
 SELECT count(*) FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
-WHERE r.id=$1 AND i.owner_user_id=$2 AND ($3::text='all' OR p.state=$3)
-AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower($4))>0
+WHERE r.id=$1::bigint AND workspace_repository_access(r.id,$2::bigint,'read') AND ($3::text::text='all' OR p.state=$3::text)
+AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower($4::text))>0
 `
 
 type CountPRsParams struct {
@@ -226,12 +246,13 @@ FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id
 LEFT JOIN build_failure_dismissals d ON d.pull_request_id=p.id AND d.user_id=$2 AND d.revision=b.revision
-WHERE i.owner_user_id=$2 AND p.state='open'
+WHERE ($3::bigint=0 OR i.workspace_id=$3::bigint) AND workspace_repository_access(r.id,$2::bigint,'read') AND p.state='open'
 `
 
 type DeliverySummaryParams struct {
 	AttentionSince pgtype.Timestamptz
 	OwnerUserID    int64
+	WorkspaceID    int64
 }
 
 type DeliverySummaryRow struct {
@@ -248,7 +269,7 @@ type DeliverySummaryRow struct {
 // finished at or after attention_since and the owner has not dismissed it;
 // earlier undismissed ones are counted as older.
 func (q *Queries) DeliverySummary(ctx context.Context, arg DeliverySummaryParams) (DeliverySummaryRow, error) {
-	row := q.db.QueryRow(ctx, deliverySummary, arg.AttentionSince, arg.OwnerUserID)
+	row := q.db.QueryRow(ctx, deliverySummary, arg.AttentionSince, arg.OwnerUserID, arg.WorkspaceID)
 	var i DeliverySummaryRow
 	err := row.Scan(
 		&i.OpenPrs,
@@ -394,7 +415,7 @@ func (q *Queries) HasAutomaticIntent(ctx context.Context, arg HasAutomaticIntent
 
 const initialDiscoveryRepositories = `-- name: InitialDiscoveryRepositories :many
 SELECT r.id FROM repos r JOIN installations i ON i.id=r.installation_id
-WHERE i.github_installation_id=$1 AND i.owner_user_id IS NOT NULL AND i.status='active'
+WHERE i.github_installation_id=$1 AND i.workspace_id IS NOT NULL AND i.status='active'
  AND r.accessible AND NOT EXISTS(SELECT 1 FROM pr_syncs s WHERE s.repo_id=r.id)
 ORDER BY r.id FOR UPDATE OF r
 `
@@ -442,9 +463,9 @@ SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.cr
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id
-WHERE r.id=$1 AND i.owner_user_id=$2 AND ($3::text='all' OR p.state=$3)
-AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower($4))>0
-ORDER BY p.number DESC LIMIT 10 OFFSET $5
+WHERE r.id=$1::bigint AND workspace_repository_access(r.id,$2::bigint,'read') AND ($3::text::text='all' OR p.state=$3::text)
+AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower($4::text))>0
+ORDER BY p.number DESC LIMIT 10 OFFSET $5::integer
 `
 
 type ListPRsParams struct {
@@ -452,7 +473,7 @@ type ListPRsParams struct {
 	OwnerUserID pgtype.Int8
 	Column3     string
 	Lower       string
-	Offset      int32
+	RowOffset   int32
 }
 
 type ListPRsRow struct {
@@ -495,7 +516,7 @@ func (q *Queries) ListPRs(ctx context.Context, arg ListPRsParams) ([]ListPRsRow,
 		arg.OwnerUserID,
 		arg.Column3,
 		arg.Lower,
-		arg.Offset,
+		arg.RowOffset,
 	)
 	if err != nil {
 		return nil, err
@@ -545,7 +566,7 @@ func (q *Queries) ListPRs(ctx context.Context, arg ListPRsParams) ([]ListPRsRow,
 }
 
 const lockInstallation = `-- name: LockInstallation :one
-SELECT id, github_installation_id, revision, status, owner_user_id FROM installations WHERE id=$1 FOR UPDATE
+SELECT id, github_installation_id, revision, status, owner_user_id, workspace_id FROM installations WHERE id=$1 FOR UPDATE
 `
 
 type LockInstallationRow struct {
@@ -554,6 +575,7 @@ type LockInstallationRow struct {
 	Revision             int64
 	Status               string
 	OwnerUserID          pgtype.Int8
+	WorkspaceID          pgtype.Int8
 }
 
 func (q *Queries) LockInstallation(ctx context.Context, id int64) (LockInstallationRow, error) {
@@ -565,6 +587,7 @@ func (q *Queries) LockInstallation(ctx context.Context, id int64) (LockInstallat
 		&i.Revision,
 		&i.Status,
 		&i.OwnerUserID,
+		&i.WorkspaceID,
 	)
 	return i, err
 }
@@ -721,7 +744,7 @@ LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN users u ON u.id=b.requested_by
 LEFT JOIN environments e ON e.pull_request_id=p.id
 LEFT JOIN preview_components pc ON pc.pull_request_id=p.id AND pc.generation=e.applied_generation AND pc.revision=e.applied_revision
-WHERE r.id=$1 AND i.owner_user_id=$2 AND p.number=$3
+WHERE r.id=$1::bigint AND workspace_repository_access(r.id,$2::bigint,'read') AND p.number=$3::integer
 `
 
 type OwnedPRParams struct {
@@ -852,7 +875,7 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 const ownedRepository = `-- name: OwnedRepository :one
 SELECT r.id,r.full_name,r.accessible,r.build_mode,r.private_previews,i.status,i.github_installation_id
 FROM repos r JOIN installations i ON i.id=r.installation_id
-WHERE r.id=$1 AND i.owner_user_id=$2
+WHERE r.id=$1 AND workspace_repository_access(r.id,$2::bigint,'read')
 `
 
 type OwnedRepositoryParams struct {

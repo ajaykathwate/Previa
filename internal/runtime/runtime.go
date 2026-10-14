@@ -24,7 +24,7 @@ import (
 type Targets interface {
 	Current(ctx context.Context, request environments.Request) (Target, error)
 	// AdmissionScope returns the PR's base repository (BaseRepoID) and account
-	// (AccountID), for the advisory capacity check.
+	// (WorkspaceID), for the advisory capacity check.
 	AdmissionScope(ctx context.Context, pullRequestID int64) (Target, error)
 }
 
@@ -230,6 +230,11 @@ func (r *Runtime) Build(ctx context.Context, request environments.Request, attem
 	containerID, err := r.startCandidate(ctx, id, target, image, settings, appEnv, plan, startLogs)
 	if err != nil {
 		startLogs.System("The preview did not start: " + messageOf(err))
+		return environments.Artifact{}, err
+	}
+	// Readiness/setup can take time. Recheck the actor before returning a
+	// publishable artifact; request cleanup discovers the labelled candidate.
+	if _, err := r.targets.Current(ctx, request); err != nil {
 		return environments.Artifact{}, err
 	}
 	return environments.Artifact{ContainerID: containerID, ImageTag: image.Ref}, nil

@@ -103,6 +103,11 @@ func currentOperationRequest(ctx context.Context, q *dbgen.Queries, request Requ
 	if request.State != StateOpen {
 		return request.Revision == 0, nil
 	}
+	if kind == ActivateRoute {
+		if allowed, err := publicationAuthorized(ctx, q, request.PullRequestID); err != nil || !allowed {
+			return false, err
+		}
+	}
 	i, err := q.ReadBuildIntent(ctx, request.PullRequestID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
@@ -115,7 +120,7 @@ func currentOperationRequest(ctx context.Context, q *dbgen.Queries, request Requ
 		return false, fmt.Errorf("read operation owner: %w", err)
 	}
 	// Ownership/access for publication, without acquiring locks across external IO.
-	if _, err := q.ReadOwnedIntentView(ctx, dbgen.ReadOwnedIntentViewParams{PrID: request.PullRequestID, UserID: owner}); err != nil {
+	if _, err := q.ReadOwnedIntentView(ctx, dbgen.ReadOwnedIntentViewParams{PrID: request.PullRequestID, UserID: pgtype.Int8{Int64: owner, Valid: true}}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}

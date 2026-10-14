@@ -163,8 +163,8 @@ disk refusal after it keeps the running request and its slot while it waits
 
 ## Fair sharing between accounts
 
-On a server shared by several accounts (an account is the GitHub account that
-installed the App), admission under the same build-slot lock also checks, in order:
+On a server shared by several accounts (since migration 0030 an account is a
+stable workspace, shared by its members), admission under the same build-slot lock also checks, in order:
 
 | Check | Setting | Wait |
 | --- | --- | --- |
@@ -177,7 +177,7 @@ Turns: a waiting request records when it started waiting (`waiting_since`, kept
 while the same revision keeps waiting) and when it last looked again
 (`waiting_checked_at`). Only waits that looked again within 10 minutes hold a turn,
 so an abandoned wait never blocks anyone. When a build finishes, its time is added
-to its account's day (`account_build_usage`), and the next request in turn is woken
+to its captured workspace's day (`workspace_build_usage`), and the next request in turn is woken
 at once: accounts with nothing building first, then the longest wait. Its snoozed
 River job is made due now instead of waiting out its backoff. Accounts never see
 each other's builds; the wait text says only what applies to their own.
@@ -275,3 +275,7 @@ permanent failures ending after one attempt (`TestPermanentFailuresEndAfterOneAt
 and a shutdown mid-build that is no failure (`TestAWorkerShutdownMidBuildIsNoFailure`).
 `make test-e2e` runs these workers with the real source, build, runtime, routing and
 reporting adapters ([22](22-mvp-operations.md)).
+
+Shared workspace authorization, cancellation and handover are detailed in
+[28 · Shared team workspaces](28-shared-workspaces.md). Existing ACCOUNT configuration
+names are retained; their quota identity is workspace, not requesting user.

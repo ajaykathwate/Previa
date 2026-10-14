@@ -4,13 +4,13 @@ FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id WHERE pr.id = $1;
 
 -- name: LockIntentInstallation :one
 SELECT id FROM installations
-WHERE id = sqlc.arg(installation_id) AND owner_user_id = sqlc.arg(user_id)
+WHERE id = sqlc.arg(installation_id) AND workspace_installation_access(id,sqlc.narg(user_id)::bigint,'read')
     AND status = 'active'
 FOR UPDATE;
 
 -- name: LockIntentRepository :one
 SELECT id, build_mode, private_previews FROM repos
-WHERE id = sqlc.arg(repo_id) AND installation_id = sqlc.arg(installation_id) AND accessible
+WHERE id = sqlc.arg(repo_id) AND installation_id = sqlc.arg(installation_id) AND accessible AND workspace_repository_access(id,sqlc.narg(user_id)::bigint,'operate')
 FOR UPDATE;
 
 -- name: LockIntentPR :one
@@ -34,7 +34,7 @@ SELECT pr.id, pr.generation, pr.head_sha, pr.state AS pr_state, r.build_mode,
 FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
 JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = pr.id
-WHERE pr.id = sqlc.arg(pr_id) AND i.owner_user_id = sqlc.arg(user_id)
+WHERE pr.id = sqlc.arg(pr_id) AND workspace_repository_access(r.id,sqlc.narg(user_id)::bigint,'read')
     AND i.status = 'active' AND r.accessible;
 
 -- name: ReplaceBuildIntent :one

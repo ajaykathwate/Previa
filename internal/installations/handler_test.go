@@ -14,6 +14,7 @@ import (
 
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/scope"
 	"github.com/alexedwards/scs/v2/memstore"
 	"github.com/go-chi/chi/v5"
 )
@@ -34,7 +35,7 @@ func (fixtureOAuth) Authenticate(context.Context, string) (auth.Identity, error)
 	return auth.Identity{}, nil
 }
 func TestInstallRedirectCallbackStateAndSession(t *testing.T) {
-	for _, scenario := range []string{"success", "forged setup state", "forged authorization state", "replayed callback", "expired", "different session user", "declined", "approval requested", "missing installation", "anonymous", "CSRF"} {
+	for _, scenario := range []string{"success", "forged setup state", "forged authorization state", "replayed callback", "expired", "different session user", "declined", "approval requested", "missing installation", "anonymous", "CSRF", "workspace changed"} {
 		t.Run(scenario, func(t *testing.T) {
 			service, store, _, _ := testService(t)
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -44,6 +45,19 @@ func TestInstallRedirectCallbackStateAndSession(t *testing.T) {
 			handler := NewHandler(service, authHandler, sessions, "test-app", logger)
 			router := chi.NewRouter()
 			router.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
+			router.Use(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					wid := sessions.GetInt64(r.Context(), "fixture_workspace")
+					if wid == 0 {
+						wid = 42
+					}
+					next.ServeHTTP(w, r.WithContext(scope.With(r.Context(), wid, "owner")))
+				})
+			})
+			router.Get("/fixture-workspace", func(w http.ResponseWriter, r *http.Request) {
+				sessions.Put(r.Context(), "fixture_workspace", int64(77))
+				w.WriteHeader(200)
+			})
 			router.Get("/fixture-login", func(w http.ResponseWriter, r *http.Request) {
 				sessions.Put(r.Context(), "user_id", int64(1))
 				sessions.Put(r.Context(), "csrf_token", "test-csrf")
@@ -147,6 +161,9 @@ func TestInstallRedirectCallbackStateAndSession(t *testing.T) {
 			if scenario == "forged authorization state" {
 				state = "forged"
 			}
+			if scenario == "workspace changed" {
+				request("GET", "/fixture-workspace", "")
+			}
 			callback := "/installations/authorize/callback?code=valid&state=" + state
 			if scenario == "declined" {
 				callback += "&error=access_denied"
@@ -160,6 +177,9 @@ func TestInstallRedirectCallbackStateAndSession(t *testing.T) {
 			}
 			if code != 303 || location != "/repositories" || !store.linked {
 				t.Fatalf("link did not finish: %d %s", code, location)
+			}
+			if store.workspace != 42 {
+				t.Fatalf("callback used current workspace instead of captured selection: %d", store.workspace)
 			}
 			if scenario == "replayed callback" {
 				if code, _ := request("GET", callback, ""); code != 400 {

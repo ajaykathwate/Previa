@@ -21,7 +21,7 @@ WHERE b.pull_request_id = pr.id AND pr.id = $2
     AND b.generation = pr.generation AND b.head_sha = pr.head_sha
     AND b.revision = $4 AND b.state = $5
     AND ($1::text <> 'running' OR b.available_at <= clock_timestamp())
-RETURNING b.pull_request_id, b.revision, b.base_revision, b.generation, b.head_sha, b.source, b.request_action, b.requested_by, b.idempotency_key, b.state, b.available_at, b.requested_at, b.started_at, b.completed_at, b.updated_at, b.waiting_revision, b.waiting_reason, b.waiting_since, b.waiting_checked_at
+RETURNING b.pull_request_id, b.revision, b.base_revision, b.generation, b.head_sha, b.source, b.request_action, b.requested_by, b.idempotency_key, b.state, b.available_at, b.requested_at, b.started_at, b.completed_at, b.updated_at, b.waiting_revision, b.waiting_reason, b.waiting_since, b.waiting_checked_at, b.workspace_id, b.authorization_stamp
 `
 
 type AdvanceBuildIntentParams struct {
@@ -61,6 +61,8 @@ func (q *Queries) AdvanceBuildIntent(ctx context.Context, arg AdvanceBuildIntent
 		&i.WaitingReason,
 		&i.WaitingSince,
 		&i.WaitingCheckedAt,
+		&i.WorkspaceID,
+		&i.AuthorizationStamp,
 	)
 	return i, err
 }
@@ -96,7 +98,7 @@ func (q *Queries) FindIntentScope(ctx context.Context, id int64) (FindIntentScop
 }
 
 const lockBuildIntent = `-- name: LockBuildIntent :one
-SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at FROM build_intents WHERE pull_request_id = $1 FOR UPDATE
+SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at, workspace_id, authorization_stamp FROM build_intents WHERE pull_request_id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockBuildIntent(ctx context.Context, pullRequestID int64) (BuildIntent, error) {
@@ -122,13 +124,15 @@ func (q *Queries) LockBuildIntent(ctx context.Context, pullRequestID int64) (Bui
 		&i.WaitingReason,
 		&i.WaitingSince,
 		&i.WaitingCheckedAt,
+		&i.WorkspaceID,
+		&i.AuthorizationStamp,
 	)
 	return i, err
 }
 
 const lockIntentInstallation = `-- name: LockIntentInstallation :one
 SELECT id FROM installations
-WHERE id = $1 AND owner_user_id = $2
+WHERE id = $1 AND workspace_installation_access(id,$2::bigint,'read')
     AND status = 'active'
 FOR UPDATE
 `
@@ -189,13 +193,14 @@ func (q *Queries) LockIntentPR(ctx context.Context, arg LockIntentPRParams) (Loc
 
 const lockIntentRepository = `-- name: LockIntentRepository :one
 SELECT id, build_mode, private_previews FROM repos
-WHERE id = $1 AND installation_id = $2 AND accessible
+WHERE id = $1 AND installation_id = $2 AND accessible AND workspace_repository_access(id,$3::bigint,'operate')
 FOR UPDATE
 `
 
 type LockIntentRepositoryParams struct {
 	RepoID         int64
 	InstallationID int64
+	UserID         pgtype.Int8
 }
 
 type LockIntentRepositoryRow struct {
@@ -205,14 +210,14 @@ type LockIntentRepositoryRow struct {
 }
 
 func (q *Queries) LockIntentRepository(ctx context.Context, arg LockIntentRepositoryParams) (LockIntentRepositoryRow, error) {
-	row := q.db.QueryRow(ctx, lockIntentRepository, arg.RepoID, arg.InstallationID)
+	row := q.db.QueryRow(ctx, lockIntentRepository, arg.RepoID, arg.InstallationID, arg.UserID)
 	var i LockIntentRepositoryRow
 	err := row.Scan(&i.ID, &i.BuildMode, &i.PrivatePreviews)
 	return i, err
 }
 
 const readBuildIntent = `-- name: ReadBuildIntent :one
-SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at FROM build_intents WHERE pull_request_id = $1
+SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at, workspace_id, authorization_stamp FROM build_intents WHERE pull_request_id = $1
 `
 
 func (q *Queries) ReadBuildIntent(ctx context.Context, pullRequestID int64) (BuildIntent, error) {
@@ -238,6 +243,8 @@ func (q *Queries) ReadBuildIntent(ctx context.Context, pullRequestID int64) (Bui
 		&i.WaitingReason,
 		&i.WaitingSince,
 		&i.WaitingCheckedAt,
+		&i.WorkspaceID,
+		&i.AuthorizationStamp,
 	)
 	return i, err
 }
@@ -251,7 +258,7 @@ SELECT pr.id, pr.generation, pr.head_sha, pr.state AS pr_state, r.build_mode,
 FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
 JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = pr.id
-WHERE pr.id = $1 AND i.owner_user_id = $2
+WHERE pr.id = $1 AND workspace_repository_access(r.id,$2::bigint,'read')
     AND i.status = 'active' AND r.accessible
 `
 
@@ -326,7 +333,7 @@ SET revision = build_intents.revision + 1, base_revision = EXCLUDED.base_revisio
     requested_at = clock_timestamp(), updated_at = clock_timestamp(),
     started_at = NULL, completed_at = NULL
 WHERE build_intents.revision = $1::bigint
-RETURNING pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at
+RETURNING pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at, workspace_id, authorization_stamp
 `
 
 type ReplaceBuildIntentParams struct {
@@ -374,6 +381,8 @@ func (q *Queries) ReplaceBuildIntent(ctx context.Context, arg ReplaceBuildIntent
 		&i.WaitingReason,
 		&i.WaitingSince,
 		&i.WaitingCheckedAt,
+		&i.WorkspaceID,
+		&i.AuthorizationStamp,
 	)
 	return i, err
 }

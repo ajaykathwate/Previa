@@ -33,6 +33,7 @@ Each feature has five parts:
 17. Build log streaming and dashboard
 18. Observability
 19. End-to-end sequence diagram
+21. Shared team workspaces (approved SaaS Feature 1)
 
 ---
 
@@ -589,7 +590,7 @@ Medium.
 2. The logs page loads existing lines, then opens an SSE stream that pushes new lines as they arrive. Use `internal/platform/realtime`: the hub wakes the stream on a log notification and `realtime.SSE` frames lines whose ids are log sequence numbers.
 3. A reconnecting client resumes from the last sequence number it received, so nothing is duplicated or lost.
 4. The workspace has separate Overview, Repositories, Builds and Previews pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 records), search and Available/Unavailable/All access tabs (Available by default). Environments shows each preview's status, URL, deployed commit SHA (marked when earlier than the latest), expiry and a **Tear down** action confirmed in a modal; it shows the expiry rather than the age, because expiry is what an owner acts on. Builds shows queued and running work with latest and requested SHAs, wait and failure reasons and log links. Overview places the owner's open pull requests along the delivery pipeline (waiting, building, live, failed) with their shares and preview coverage, lists the newest build requests and previews (rows expand to their details) and shows which pipeline stages a running worker provides. Developer tools has its own local diagnostic page. An FAQ page, and the home page's How it works and FAQ sections, explain Previa as a conversation with it: static copy kept true to the current release, with examples labelled as examples.
-5. Dashboard actions check both authentication and ownership: a user can only see and act on environments in installations they own.
+5. Dashboard actions check active workspace membership and repository grants. Owner/Admins span their workspace; Developers operate granted repositories with current GitHub source permission; Reviewers use the permitted preview directory. The original installer is provenance, not an authorization bypass. See Section 21.
 6. Log retention has a size and age cap; old logs are pruned.
 7. Build log viewers share a presentation component (`web/components/logviewer`):
    full inline copyable timestamps, source colors and owner-scoped source/literal
@@ -851,6 +852,10 @@ preview/
 │   └── egress/main.go              # previa-egress: proxy and prober, in its own container
 │
 ├── internal/
+│   ├── workspaces/                 # FEATURE: shared teams, grants, invitations, handover
+│   │   ├── handler.go  middleware.go  repository.go  service.go
+│   │   ├── membership.go  invitations.go  pages.go  queries.sql
+│   │   └── dbgen/
 │   ├── app/                        # composition root: builds and wires everything
 │   │   ├── server.go               # creates features, mounts routes, starts HTTP
 │   │   ├── worker.go               # starts River, the capability heartbeat, draining
@@ -1174,3 +1179,75 @@ the server records work and the worker executes it.
 - One `platform/` package holding cross-cutting infrastructure mirrors what teams call "shared kernel" or "common".
 
 Start with a smaller version: create `auth`, `environments`, `platform` and `dashboard` first, and add the other folders as you reach each feature. The names above are the ones to grow into.
+
+
+## 21. Shared team workspaces
+
+### Requirement
+
+Implement approved Feature 1 of `README-MVP-PRODUCT-EXPANSION.md`: shared teams,
+explicit roles/grants, invitation consent and handover. Connections, serving
+previews, stable URLs and consumption belong to a workspace across staff changes.
+Later native review and account-deletion features remain minimal labelled UI
+boundaries; they are not implemented in this phase.
+
+### Complexity
+
+High. Tenant isolation must cover every existing resource path and asynchronous
+execution boundary; navigation alone cannot provide access control.
+
+### Tech stack (feature-specific)
+
+Existing Go, PostgreSQL/pgx/sqlc, Goose, SCS, templ/HTMX and theme tokens. No new
+application library. GitHub numeric identities and App permission reads establish
+human source authority. Shared modal components provide accessible confirmation.
+
+### Technical implementation
+
+- `internal/workspaces` owns team handlers/services/repository queries in flat
+  files. Resource features keep their queries and call invoker-security SQL
+  predicates. Consumer-defined runtime/source interfaces are wired in `internal/app`.
+- Migration 0030 backfills one workspace per installer with connections and leaves
+  resource IDs unchanged. `installations.workspace_id` is ownership;
+  `owner_user_id` is provenance. A deferred constraint and unique index enforce
+  exactly one active Owner. Relational grants cannot cross workspace boundaries.
+- A session remembers selected navigation; an explicit switch saves a default.
+  Resource URLs derive and authorize their actual workspace before display.
+  `internal/platform/scope` carries selection without becoming authorization.
+  Shared shell display data flows through `web/components`; presentation imports
+  no backend features. Team pages use database pagination.
+- Invitations store token digests and immutable intended GitHub IDs, have seven-day
+  expiry, exact scope consent, revoke/regenerate, decline and idempotent accept.
+  Acceptance cannot replace existing active membership. Removed inviters lose
+  their pending invitation authority. Logging redacts invite paths.
+- Membership changes lock workspace, installations in ID order and affected PRs.
+  Existing protected mutation paths repeat authorization after compatible locks.
+  Manual intents capture workspace and membership/grant stamps; stale work is
+  cancelled, generation-fenced and cleaned up while serving previews remain.
+  This includes finished builds whose candidate has not passed the route fence.
+  Accepted routes belong to the workspace, so departure preserves their recovery
+  and final accounting; unaccepted candidates release their resource references.
+  Workers verify manual actors' current GitHub permission at admission/runtime
+  boundaries. Source permissions are verified outside database transactions.
+- Cookies/tokens for private previews recheck current database grants on every
+  request. SSE checks access before subsequent frames and heartbeats. Reviewer
+  navigation contains granted previews without operational logs/actions.
+- Quotas and fairness use workspace IDs and a workspace usage ledger. Container
+  labels identify workspace; legacy labels resolve through PR identity. Captured
+  attempt consumption survives ownership transfer and running cancellation.
+
+### Design decisions and edge cases
+
+Only Owners appoint/demote Admins. Admins manage Developers/Reviewers. The Owner
+cannot leave until a nominated Admin accepts an atomic handover. Stale forms and
+concurrent acceptance fail safely. Saving unchanged access does not cancel work.
+GitHub outages block source-sensitive actions while local preview reads remain.
+Administrators retain credential/approval cleanup even when source access is lost.
+Removed local members cannot use GitHub outsider access to bypass offboarding.
+
+Migration 0030 requires a coordinated old-server/worker stop and new-binary
+restart; it is an explicit exception to the ordinary rolling schema compatibility
+assumption. A solo rollback preserves usage; rollback after team data exists
+refuses data loss. Detailed flows, permissions and upgrade steps:
+[28-shared-workspaces.md](docs/28-shared-workspaces.md) and
+[02-development-setup.md](docs/02-development-setup.md#shared-workspace-cutover).

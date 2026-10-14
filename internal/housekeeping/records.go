@@ -81,6 +81,11 @@ func (r *Records) RunOnce(ctx context.Context) (RecordsPass, error) {
 		if pass.Usage, err = q.DeleteOldUsage(ctx, pgtype.Date{Time: time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC), Valid: true}); err != nil {
 			return fmt.Errorf("delete old build-minute ledgers: %w", err)
 		}
+		workspaceUsage, err := q.PruneWorkspaceBuildUsage(ctx, pgtype.Date{Time: day, Valid: true})
+		if err != nil {
+			return fmt.Errorf("delete old workspace usage: %w", err)
+		}
+		pass.Usage += workspaceUsage
 		if pass.OutputWatches, err = q.DeleteStaleOutputWatches(ctx, at(now.Add(-OutputRetention))); err != nil {
 			return fmt.Errorf("delete unwatched app output: %w", err)
 		}

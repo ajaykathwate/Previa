@@ -79,7 +79,7 @@ func lockPolicyScope(ctx context.Context, q *dbgen.Queries, userID, repoID int64
 	if _, err := q.LockPolicyInstallation(ctx, dbgen.LockPolicyInstallationParams{InstallationID: installationID, UserID: pgtype.Int8{Int64: userID, Valid: true}}); err != nil {
 		return policyAccessError("lock policy installation", err)
 	}
-	if _, err := q.LockPolicyRepository(ctx, dbgen.LockPolicyRepositoryParams{RepoID: repoID, InstallationID: installationID}); err != nil {
+	if _, err := q.LockPolicyRepository(ctx, dbgen.LockPolicyRepositoryParams{RepoID: repoID, InstallationID: installationID, UserID: userID}); err != nil {
 		return policyAccessError("lock policy repository", err)
 	}
 	return nil

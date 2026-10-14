@@ -32,6 +32,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/starterkits"
 	"github.com/ajaykathwatee/previa/internal/webhooks"
+	"github.com/ajaykathwatee/previa/internal/workspaces"
 	"github.com/ajaykathwatee/previa/web"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
 	"github.com/alexedwards/scs/pgxstore"
@@ -99,22 +100,24 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 // and queue. The server records observations, owner requests and teardowns
 // with their durable wake-ups and operations; workers execute them.
 type serverFeatures struct {
-	sessions      *scs.SessionManager
-	auth          *auth.Handler
-	installations *installations.Handler
-	prs           *pullrequests.Handler
-	secrets       *secrets.Handler
-	outbound      *outbound.Handler
-	logs          *buildlogs.Handler
-	output        *appoutput.Handler
-	wake          *idle.WakePage
-	access        *previewaccess.Handler
-	deliveries    *webhooks.DeliveryService
-	pings         *queue.Service
-	summary       dashboard.SummaryReader
-	environments  *environments.Repository
-	capabilities  *workers.Reader
-	kits          *starterkits.Handler
+	sessions       *scs.SessionManager
+	auth           *auth.Handler
+	installations  *installations.Handler
+	prs            *pullrequests.Handler
+	secrets        *secrets.Handler
+	outbound       *outbound.Handler
+	logs           *buildlogs.Handler
+	output         *appoutput.Handler
+	wake           *idle.WakePage
+	access         *previewaccess.Handler
+	deliveries     *webhooks.DeliveryService
+	pings          *queue.Service
+	summary        dashboard.SummaryReader
+	environments   *environments.Repository
+	capabilities   *workers.Reader
+	kits           *starterkits.Handler
+	workspaces     *workspaces.Handler
+	workspaceScope *workspaces.Middleware
 }
 
 func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
@@ -190,9 +193,17 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	f.wake = idle.NewWakePage(pool, producer, cfg.PreviewBaseDomain, routing.UnavailablePage, logger)
 	var permissions previewaccess.Permissions
 	if appClient != nil {
-		permissions = githubPermissions{app: appClient}
+		permissions = workspaceGitHub{app: appClient}
 	}
 	f.access = previewaccess.NewHandler(pool, f.auth, permissions, producer, cfg.SessionSecret, cfg.PreviewBaseDomain, cfg.AppBaseURL, logger).WithCapabilities(f.capabilities)
+	workspaceAccess := workspaceGitHub{}
+	if appClient != nil {
+		workspaceAccess.app = appClient
+	}
+	workspaceService := workspaces.NewService(workspaces.NewRepository(pool), workspaceAccess, workspaceAccess, coordinator)
+	f.prs.WithSourceAccess(workspaceService)
+	f.workspaces = workspaces.NewHandler(workspaceService, f.auth, logger, cfg.AppBaseURL, cfg.PreviewBaseDomain)
+	f.workspaceScope = workspaces.NewMiddleware(workspaceService, f.auth, logger)
 	return f, nil
 }
 
@@ -297,7 +308,13 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 	router.Post(webhookPath, httpx.LimitConcurrency(webhookConcurrency, webhooks.NewHandler(cfg.GitHubWebhookSecret, f.deliveries, logger)).ServeHTTP)
 	router.Group(func(r chi.Router) {
 		r.Use(f.sessions.LoadAndSave, f.auth.LoadUser, f.auth.CSRF)
+		if f.workspaceScope != nil {
+			r.Use(f.workspaceScope.Load)
+		}
 		f.auth.Mount(r)
+		if f.workspaces != nil {
+			f.workspaces.Mount(r, auth.RequireUser)
+		}
 		// Queue diagnostics are for development; production does not serve them.
 		dashboard.MountWithSummary(r, f.auth, auth.RequireUser, dashboard.Options{
 			Summary: f.summary, Identity: f.auth.UserIDs, DeveloperTools: !cfg.Production(),
@@ -371,24 +388,4 @@ func listenHTTP(addr string) (net.Listener, error) {
 		network = "tcp4"
 	}
 	return net.Listen(network, addr)
-}
-
-// githubPermissions reads a user's role on a repository with the GitHub
-// App's installation token, for private previews.
-type githubPermissions struct{ app *githubapp.Client }
-
-func (g githubPermissions) RepositoryPermission(ctx context.Context, installationID int64, fullName, login string) (string, error) {
-	client, err := g.app.InstallationClient(installationID)
-	if err != nil {
-		return "", err
-	}
-	owner, repo, _ := strings.Cut(fullName, "/")
-	level, res, err := client.Repositories.GetPermissionLevel(ctx, owner, repo, login)
-	if res != nil && res.StatusCode == http.StatusNotFound {
-		return "none", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("read %s's permission: %w", login, err)
-	}
-	return level.GetPermission(), nil
 }

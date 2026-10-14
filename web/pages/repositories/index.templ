@@ -15,7 +15,9 @@ templ Index(username string, csrfToken string, page Page) {
 					<p>Repositories your GitHub App installations can reach. Open one to browse its pull requests, previews and build policy.</p>
 				</div>
 				<div class="repository-action">
-					if page.Enabled {
+					if !components.CanManage(ctx) {
+ <p class="availability-note">An administrator can connect repositories and grant your access.</p>
+ } else if page.Enabled {
 						<form method="post" action="/installations/start">
 							<input type="hidden" name="csrf_token" value={ csrfToken }/>
 							@button.Button(button.Props{Type: button.TypeSubmit}) {

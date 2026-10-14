@@ -66,7 +66,7 @@ func (b *Broker) ObserveTx(ctx context.Context, tx pgx.Tx, request Request) (Req
 	if err != nil {
 		return Request{}, fmt.Errorf("find PR owner: %w", err)
 	}
-	outcome, err := NewIntentRepository(b.pool).ObserveIntentTx(ctx, tx, owner.Int64, request.PullRequestID, b.now().Add(QuietPeriod))
+	outcome, err := NewIntentRepository(b.pool).ObserveIntentTx(ctx, tx, owner, request.PullRequestID, b.now().Add(QuietPeriod))
 	if err != nil {
 		return Request{}, err
 	}

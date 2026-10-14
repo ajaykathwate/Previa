@@ -1,6 +1,6 @@
 -- name: FindPROwner :one
-SELECT i.owner_user_id FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
-JOIN installations i ON i.id = r.installation_id WHERE pr.id = $1;
+SELECT w.owner_user_id FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
+JOIN installations i ON i.id = r.installation_id JOIN workspaces w ON w.id=i.workspace_id WHERE pr.id = $1;
 
 -- name: LockSchedulingPR :one
 SELECT id, generation, head_sha, state, teardown_completed_generation FROM pull_requests WHERE id = $1 FOR UPDATE;
@@ -22,7 +22,7 @@ FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
 WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
     AND (b.source = 'manual' OR b.state = 'running'
          OR NOT (pr.is_fork OR pr.head_repo_id IS NULL OR pr.head_repo_id IS DISTINCT FROM r.github_repo_id))
-    AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation) AND pr.head_sha = sqlc.arg(head_sha)
+    AND workspace_intent_authorized(pr.id) AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation) AND pr.head_sha = sqlc.arg(head_sha)
     AND b.generation = pr.generation AND b.head_sha = pr.head_sha AND b.revision = sqlc.arg(revision)
     AND b.state IN ('pending','queued','running') AND b.available_at <= sqlc.arg(now_at)
     AND (b.source = 'manual' OR sqlc.arg(build_mode)::text = 'automatic' OR b.state = 'running');
@@ -51,7 +51,7 @@ UPDATE build_intents b SET state = sqlc.arg(next_state), completed_at = clock_ti
     waiting_revision = NULL, waiting_reason = NULL, waiting_since = NULL, waiting_checked_at = NULL
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
-    AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation)
+    AND workspace_publication_authorized(pr.id) AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation)
     AND b.generation = pr.generation AND b.revision = sqlc.arg(revision)
     AND b.state IN ('queued','running');
 
@@ -100,17 +100,17 @@ WHERE pull_request_id = sqlc.arg(pr_id) AND waiting_revision = sqlc.arg(revision
 -- name: ReadIntentWait :one
 SELECT state, waiting_since FROM build_intents WHERE pull_request_id = $1;
 
--- name: CountAccountRunningBuilds :one
--- Running builds of other PRs of one account (installation owner).
+-- name: CountWorkspaceRunningBuilds :one
+-- Running builds of other PRs in one stable workspace.
 SELECT count(*) FROM build_intents b
 JOIN pull_requests p ON p.id = b.pull_request_id
 JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
-WHERE b.state = 'running' AND b.pull_request_id <> sqlc.arg(pr_id) AND i.owner_user_id = sqlc.arg(owner_user_id)::bigint;
+WHERE b.state = 'running' AND b.pull_request_id <> sqlc.arg(pr_id) AND i.workspace_id = sqlc.arg(workspace_id)::bigint;
 
--- name: AccountBuildSeconds :one
-SELECT coalesce((SELECT build_seconds FROM account_build_usage WHERE user_id = sqlc.arg(user_id) AND day = sqlc.arg(day)), 0)::bigint;
+-- name: WorkspaceBuildSeconds :one
+SELECT coalesce((SELECT build_seconds FROM workspace_build_usage WHERE workspace_id = sqlc.arg(workspace_id) AND day = sqlc.arg(day)), 0)::bigint;
 
--- name: OlderWaiterFromIdleAccount :one
+-- name: OlderWaiterFromIdleWorkspace :one
 -- Whether another account with nothing building has waited longer for a
 -- build slot: then the last free slot is its turn. Only waits that looked
 -- again since live_after count, so an abandoned wait never holds a turn.
@@ -120,12 +120,12 @@ SELECT EXISTS (
     JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
     WHERE b.state IN ('pending', 'queued') AND b.waiting_reason = 'capacity' AND b.waiting_revision = b.revision
       AND b.waiting_since < sqlc.arg(since) AND b.waiting_checked_at > sqlc.arg(live_after)
-      AND i.owner_user_id IS DISTINCT FROM sqlc.arg(owner_user_id)::bigint
+      AND i.workspace_id IS DISTINCT FROM sqlc.arg(workspace_id)::bigint
       AND NOT EXISTS (
           SELECT 1 FROM build_intents rb
           JOIN pull_requests rp ON rp.id = rb.pull_request_id
           JOIN repos rr ON rr.id = rp.repo_id JOIN installations ri ON ri.id = rr.installation_id
-          WHERE rb.state = 'running' AND ri.owner_user_id = i.owner_user_id)
+          WHERE rb.state = 'running' AND ri.workspace_id = i.workspace_id)
 )::boolean;
 
 -- name: NextWaitingBuild :one
@@ -140,18 +140,21 @@ ORDER BY EXISTS (
     SELECT 1 FROM build_intents rb
     JOIN pull_requests rp ON rp.id = rb.pull_request_id
     JOIN repos rr ON rr.id = rp.repo_id JOIN installations ri ON ri.id = rr.installation_id
-    WHERE rb.state = 'running' AND ri.owner_user_id = i.owner_user_id), b.waiting_since, b.pull_request_id
+    WHERE rb.state = 'running' AND ri.workspace_id = i.workspace_id), b.waiting_since, b.pull_request_id
 LIMIT 1;
 
 -- name: RecordFinishedBuildTime :exec
 -- Adds a finished build's time to its account's day (UTC).
-INSERT INTO account_build_usage (user_id, day, build_seconds, builds)
-SELECT i.owner_user_id, (b.completed_at AT TIME ZONE 'UTC')::date,
+INSERT INTO workspace_build_usage (workspace_id, day, build_seconds, builds)
+SELECT b.workspace_id, (b.completed_at AT TIME ZONE 'UTC')::date,
        GREATEST(0, floor(extract(epoch FROM b.completed_at - b.started_at)))::bigint, 1
 FROM build_intents b
 JOIN pull_requests p ON p.id = b.pull_request_id
 JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 WHERE b.pull_request_id = sqlc.arg(pr_id) AND b.revision = sqlc.arg(revision)
-  AND b.completed_at IS NOT NULL AND b.started_at IS NOT NULL AND i.owner_user_id IS NOT NULL
-ON CONFLICT (user_id, day) DO UPDATE SET build_seconds = account_build_usage.build_seconds + EXCLUDED.build_seconds,
-    builds = account_build_usage.builds + 1;
+  AND b.completed_at IS NOT NULL AND b.started_at IS NOT NULL AND b.workspace_id IS NOT NULL
+ON CONFLICT (workspace_id, day) DO UPDATE SET build_seconds = workspace_build_usage.build_seconds + EXCLUDED.build_seconds,
+    builds = workspace_build_usage.builds + 1;
+
+-- name: FindPRWorkspace :one
+SELECT i.workspace_id FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id WHERE p.id=$1;

@@ -91,8 +91,17 @@ func lockScope(ctx context.Context, tx pgx.Tx, repoID, userID int64) (scope, err
 	if err != nil {
 		return scope{}, scopeError(err)
 	}
-	if !r.GithubRepoID.Valid || r.GithubRepoID.Int64 <= 0 || r.InstallationID != i.ID || !r.Accessible || i.Status != "active" || !i.OwnerUserID.Valid || (userID > 0 && i.OwnerUserID.Int64 != userID) {
+	if !r.GithubRepoID.Valid || r.GithubRepoID.Int64 <= 0 || r.InstallationID != i.ID || !r.Accessible || i.Status != "active" || !i.WorkspaceID.Valid {
 		return scope{}, ErrUnavailable
+	}
+	if userID > 0 {
+		allowed, err := q.CanOperateRepository(ctx, dbgen.CanOperateRepositoryParams{Column1: repoID, Column2: userID})
+		if err != nil {
+			return scope{}, fmt.Errorf("verify workspace source action: %w", err)
+		}
+		if !allowed {
+			return scope{}, ErrUnavailable
+		}
 	}
 	return scope{i, r}, nil
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/environments"
+	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -206,5 +207,34 @@ func TestRecordComponentsKeepsOnlyServedRows(t *testing.T) {
 	}
 	if strings.Join(rows, ",") != "1.1,3.1" {
 		t.Fatalf("rows kept: %v", rows)
+	}
+}
+
+func TestLegacyContainerAccountLabelResolvesStableWorkspaceAfterHandover(t *testing.T) {
+	pool := isolatedPool(t)
+	ctx := t.Context()
+	for _, sql := range []string{
+		"INSERT INTO users(github_id,username) VALUES(11,'next'),(12,'installer')",
+		"INSERT INTO installations(github_installation_id,owner_user_id) VALUES(99,2)",
+		"INSERT INTO repos(installation_id,github_repo_id,full_name) VALUES(1,100,'team/app')",
+		"INSERT INTO pull_requests(repo_id,number,head_sha) VALUES(1,1,'sha')",
+		"INSERT INTO workspace_memberships(workspace_id,user_id,role) VALUES(1,1,'admin')",
+	} {
+		if _, err := pool.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rt := &Runtime{targets: NewTargetStore(pool)}
+	labels := map[string]string{dockerx.LabelAccount: "2", dockerx.LabelPR: "1"}
+	before, err := rt.containerWorkspace(ctx, labels, map[string]int64{})
+	if err != nil || before != 1 {
+		t.Fatalf("legacy user counted as workspace: %d %v", before, err)
+	}
+	if _, err := pool.Exec(ctx, "BEGIN; UPDATE workspace_memberships SET role='admin' WHERE workspace_id=1 AND user_id=2; UPDATE workspace_memberships SET role='owner' WHERE workspace_id=1 AND user_id=1; UPDATE workspaces SET owner_user_id=1 WHERE id=1; COMMIT;"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := rt.containerWorkspace(ctx, labels, map[string]int64{})
+	if err != nil || after != before {
+		t.Fatalf("handover moved consumption: %d %v", after, err)
 	}
 }

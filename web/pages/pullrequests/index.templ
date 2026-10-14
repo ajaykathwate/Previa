@@ -84,6 +84,7 @@ templ Panel(p Page, csrf string) {
 					@Results(p)
 				</div>
 			</section>
+			if components.CanManage(ctx) {
 			@components.ConfirmationDialog("build-policy", "Enable automatic builds?", "Future PR updates will schedule work after five quiet minutes. Existing PRs are not bulk-built.") {
 				@PolicyForm(p, csrf, true)
 			}
@@ -95,6 +96,7 @@ templ Panel(p Page, csrf string) {
 					@PolicyForm(p, csrf, false)
 				</section>
 			</noscript>
+			}
 		}
 	</div>
 }
@@ -152,8 +154,10 @@ templ repositoryHero(p Page, csrf string) {
 					Sync Pull Requests
 				}
 			</form>
+			if components.CanManage(ctx) {
 			@AutomaticSwitch(p, csrf)
 			<button type="button" role="switch" aria-checked={ strconv.FormatBool(p.PrivatePreviews) } class="automatic-switch" disabled?={ !p.Available || (!p.PrivatePreviews && !p.PrivatePreviewsReady) } data-open-dialog="preview-access" commandfor="preview-access" command="show-modal" aria-haspopup="dialog" aria-describedby={ privateSetupDescription(p) } title={ privateTitle(p.PrivatePreviews) }><span>Private previews</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
+			}
 		</div>
 	</header>
 	if !p.PrivatePreviewsReady || p.PrivatePreviewUnavailable {
@@ -167,7 +171,7 @@ templ repositoryHero(p Page, csrf string) {
 
 func privateTitle(private bool) string {
 	if private {
-		return "Previews are private: visitors sign in with GitHub and must be able to see this repository."
+		return "Previews are private: visitors sign in with GitHub and need workspace preview access or GitHub repository permission."
 	}
 	return "Previews are public: anyone with a preview's address can open it."
 }
@@ -187,7 +191,7 @@ templ PreviewAccessDialog(p Page, csrf string) {
 			@previewAccessForm(p, csrf, "Make public")
 		}
 	} else if p.PrivatePreviewsReady {
-		@components.ConfirmationDialog("preview-access", "Make previews private?", "Visitors will sign in with GitHub, and only people who can see this repository on GitHub get in. Each visitor's access lasts 12 hours on that preview. Reviewers without a GitHub account lose access.") {
+		@components.ConfirmationDialog("preview-access", "Make previews private?", "Visitors sign in with GitHub. Workspace members need a repository grant; GitHub-readable outsiders can also open the preview. Removing a member or grant ends their access immediately.") {
 			@previewAccessForm(p, csrf, "Make private")
 		}
 	}

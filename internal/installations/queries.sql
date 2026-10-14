@@ -3,14 +3,14 @@ INSERT INTO installations (github_installation_id, status)
 VALUES ($1, 'active') ON CONFLICT (github_installation_id) DO NOTHING;
 
 -- name: LockInstallation :one
-SELECT id, github_installation_id, owner_user_id, status, account_login, revision
+SELECT id, github_installation_id, owner_user_id, status, account_login, revision, workspace_id
 FROM installations WHERE github_installation_id = $1 FOR UPDATE;
 
 -- name: GetInstallationRevision :one
 SELECT revision FROM installations WHERE github_installation_id = $1;
 
 -- name: LinkInstallation :exec
-UPDATE installations SET owner_user_id = $2, account_login = $3,
+UPDATE installations SET owner_user_id = coalesce(owner_user_id,$2), workspace_id=sqlc.narg(workspace_id)::bigint, account_login = $3,
 status = $4, revision = revision + 1 WHERE id = $1;
 
 -- name: UpdateInstallationLifecycle :exec
@@ -38,7 +38,8 @@ WHERE github_repo_id = $2 AND installation_id = $1;
 SELECT i.github_installation_id, i.status, i.account_login, r.full_name,
        r.github_repo_id, r.accessible
 FROM installations i LEFT JOIN repos r ON r.installation_id = i.id
-WHERE i.owner_user_id = $1
+WHERE (sqlc.arg(workspace_id)::bigint=0 OR i.workspace_id=sqlc.arg(workspace_id)::bigint) AND workspace_installation_access(i.id,sqlc.narg(owner_user_id)::bigint,'read')
+AND (r.id IS NULL OR workspace_repository_access(r.id,sqlc.narg(owner_user_id)::bigint,'read'))
 ORDER BY i.github_installation_id, r.full_name;
 
 -- name: GetRepositoryInstallation :one
@@ -52,21 +53,21 @@ WHERE github_repo_id = sqlc.arg(github_repo_id)
     SELECT 1 FROM installations old_i JOIN installations new_i
       ON new_i.id = sqlc.arg(new_installation_id)
     WHERE old_i.id = repos.installation_id AND old_i.status = 'inactive'
-      AND new_i.owner_user_id IS NOT NULL
-      AND old_i.owner_user_id = new_i.owner_user_id
+      AND new_i.workspace_id IS NOT NULL
+      AND old_i.workspace_id = new_i.workspace_id
   );
 
 -- name: GetWorkspaceSummary :one
 SELECT
- (SELECT count(*) FROM installations own_i WHERE own_i.owner_user_id = $1) AS installations,
+ (SELECT count(*) FROM installations own_i WHERE workspace_installation_access(own_i.id,sqlc.narg(owner_user_id)::bigint,'read') AND (sqlc.arg(workspace_id)::bigint=0 OR own_i.workspace_id=sqlc.arg(workspace_id)::bigint)) AS installations,
  count(*) AS repositories,
  count(*) FILTER (WHERE r.accessible AND i.status = 'active') AS available
 FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE i.owner_user_id = $1;
+WHERE (sqlc.arg(workspace_id)::bigint=0 OR i.workspace_id=sqlc.arg(workspace_id)::bigint) AND workspace_repository_access(r.id,sqlc.narg(owner_user_id)::bigint,'read');
 
 -- name: CountRepositoryPage :one
 SELECT count(*) FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE i.owner_user_id = sqlc.arg(user_id)
+WHERE (sqlc.arg(workspace_id)::bigint=0 OR i.workspace_id=sqlc.arg(workspace_id)::bigint) AND workspace_repository_access(r.id,sqlc.narg(user_id)::bigint,'read')
  AND strpos(lower(r.full_name), lower(sqlc.arg(search)::text)) > 0
  AND (sqlc.arg(access)::text = 'all'
    OR (sqlc.arg(access)::text = 'available' AND r.accessible AND i.status = 'active')
@@ -83,7 +84,7 @@ SELECT r.id, r.full_name, r.accessible, i.status, i.account_login, i.github_inst
  s.last_success_at
 FROM repos r JOIN installations i ON i.id = r.installation_id
 LEFT JOIN pr_syncs s ON s.repo_id = r.id
-WHERE i.owner_user_id = sqlc.arg(user_id)
+WHERE (sqlc.arg(workspace_id)::bigint=0 OR i.workspace_id=sqlc.arg(workspace_id)::bigint) AND workspace_repository_access(r.id,sqlc.narg(user_id)::bigint,'read')
  AND strpos(lower(r.full_name), lower(sqlc.arg(search)::text)) > 0
  AND (sqlc.arg(access)::text = 'all'
    OR (sqlc.arg(access)::text = 'available' AND r.accessible AND i.status = 'active')
@@ -94,22 +95,28 @@ LIMIT sqlc.arg(page_size)::bigint OFFSET sqlc.arg(page_offset)::bigint;
 -- name: ReadOwnedBuildPolicy :one
 SELECT r.id, r.build_mode
 FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE r.id = sqlc.arg(repo_id) AND i.owner_user_id = sqlc.arg(user_id)
+WHERE r.id = sqlc.arg(repo_id) AND workspace_repository_access(r.id,sqlc.narg(user_id)::bigint,'manage')
     AND i.status = 'active' AND r.accessible;
 
 -- name: FindPolicyInstallation :one
 SELECT installation_id FROM repos WHERE id = $1;
 
+-- name: DefaultWorkspace :one
+SELECT workspace_default($1::bigint)::bigint AS workspace_id;
+
+-- name: LockLinkWorkspace :one
+SELECT id FROM workspaces WHERE id=$1 AND state='active' FOR UPDATE;
+
 -- name: LockPolicyInstallation :one
 SELECT id FROM installations
-WHERE id = sqlc.arg(installation_id) AND owner_user_id = sqlc.arg(user_id)
+WHERE id = sqlc.arg(installation_id) AND workspace_installation_access(id,sqlc.narg(user_id)::bigint,'manage')
     AND status = 'active'
 FOR UPDATE;
 
 -- name: LockPolicyRepository :one
 SELECT id, build_mode FROM repos
 WHERE id = sqlc.arg(repo_id) AND installation_id = sqlc.arg(installation_id) AND accessible
-FOR UPDATE;
+AND workspace_repository_access(id,sqlc.arg(user_id)::bigint,'manage') FOR UPDATE;
 
 -- name: SetRepositoryBuildMode :exec
 UPDATE repos SET build_mode = $2 WHERE id = $1;
@@ -126,3 +133,7 @@ FROM locked_prs pr
 WHERE b.pull_request_id = pr.id AND b.source = 'automatic'
     AND b.state IN ('pending', 'queued')
 RETURNING b.pull_request_id;
+
+-- name: AuthorizedLinkWorkspace :one
+SELECT EXISTS(SELECT 1 FROM workspaces w JOIN workspace_memberships m ON m.workspace_id=w.id
+ WHERE w.id=$1 AND m.user_id=$2 AND w.state='active' AND m.state='active' AND m.role IN ('owner','admin'))::boolean;

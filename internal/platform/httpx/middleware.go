@@ -35,12 +35,19 @@ func requestLogging(logger *slog.Logger) func(http.Handler) http.Handler {
 				metrics.HTTPRequest(route, r.Method, status, time.Since(start), stream)
 				logger.InfoContext(r.Context(), "HTTP request",
 					"request_id", requestID(r), "method", r.Method,
-					"path", r.URL.Path, "status", status, "client_ip", ClientIP(r),
+					"path", safeRequestPath(r.URL.Path), "status", status, "client_ip", ClientIP(r),
 					"bytes", ww.BytesWritten(), "duration", time.Since(start))
 			}()
 			next.ServeHTTP(ww, r)
 		})
 	}
+}
+
+func safeRequestPath(path string) string {
+	if strings.HasPrefix(path, "/workspace-invitations/") {
+		return "/workspace-invitations/{token}"
+	}
+	return path
 }
 
 func panicRecovery(logger *slog.Logger) func(http.Handler) http.Handler {

@@ -33,7 +33,7 @@ func lockIntentScope(ctx context.Context, q *dbgen.Queries, userID, prID int64) 
 	if _, err := q.LockIntentInstallation(ctx, dbgen.LockIntentInstallationParams{InstallationID: scope.InstallationID, UserID: pgtype.Int8{Int64: userID, Valid: true}}); err != nil {
 		return intentScope{}, intentAccessError("lock intent installation", err)
 	}
-	repo, err := q.LockIntentRepository(ctx, dbgen.LockIntentRepositoryParams(scope))
+	repo, err := q.LockIntentRepository(ctx, dbgen.LockIntentRepositoryParams{RepoID: scope.RepoID, InstallationID: scope.InstallationID, UserID: pgtype.Int8{Int64: userID, Valid: true}})
 	if err != nil {
 		return intentScope{}, intentAccessError("lock intent repository", err)
 	}
@@ -50,9 +50,12 @@ func lockIntentScope(ctx context.Context, q *dbgen.Queries, userID, prID int64) 
 func lockOwnerIntentScope(ctx context.Context, q *dbgen.Queries, prID int64, step string) (intentScope, error) {
 	owner, err := q.FindPROwner(ctx, prID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return intentScope{}, ErrIntentUnavailable
+		}
 		return intentScope{}, fmt.Errorf("find %s owner: %w", step, err)
 	}
-	return lockIntentScope(ctx, q, owner.Int64, prID)
+	return lockIntentScope(ctx, q, owner, prID)
 }
 
 func intentAccessError(operation string, err error) error {

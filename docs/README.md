@@ -31,6 +31,7 @@ rest explain how and why it works.
 | 25 | [Production deployment](25-production-deployment.md) | Release images, host setup, GitHub and DNS, staged certificates, backups and restore, upgrades and rollback, CI and releases, the smoke test. |
 | 26 | [Release report](26-release-report.md) | Evidence for each release acceptance item: what passed, how, and what is still pending. |
 | 27 | [Roadmap](27-roadmap.md) | Prompts 1–13 (13: backend previews), the planned Prompt 14 (missed uninstall detection), and the release checklist. |
+| 28 | [Shared team workspaces](28-shared-workspaces.md) | Roles, repository grants, invitation consent, ownership handover, revocation, shared quotas and migration cutover. |
 
 Related files outside this folder:
 

@@ -31,10 +31,11 @@ const (
 
 // fakeLogs is an in-memory Reader whose stream can change during a test.
 type fakeLogs struct {
-	mu     sync.Mutex
-	target Target
-	stream *Stream
-	lines  []Line
+	mu      sync.Mutex
+	revoked bool
+	target  Target
+	stream  *Stream
+	lines   []Line
 }
 
 func (f *fakeLogs) Target(_ context.Context, userID, repoID int64, number int32) (Target, error) {
@@ -43,6 +44,9 @@ func (f *fakeLogs) Target(_ context.Context, userID, repoID int64, number int32)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.revoked {
+		return Target{}, ErrUnavailable
+	}
 	return f.target, nil
 }
 
@@ -675,5 +679,27 @@ func TestFilteredPaginationAndDownloadKeepSparseSequences(t *testing.T) {
 	_, body = get(t, server.URL+testPRPath+"?q=%25", testOwner)
 	if strings.Count(body, `class="log-number"`) != 0 || !strings.Contains(body, "No log events match") {
 		t.Fatal("search treated percent as a wildcard")
+	}
+}
+
+func TestLiveLogsStopBeforeSendingDataAfterRevocation(t *testing.T) {
+	logs := newFakeLogs(1)
+	server, hub := testServer(t, logs)
+	events, stop := openStream(t, server.URL+testPRPath+"/events", "")
+	defer stop()
+	next(t, events, "lines")
+	next(t, events, "state")
+	logs.mu.Lock()
+	logs.revoked = true
+	logs.mu.Unlock()
+	logs.add("must not disclose")
+	hub.Publish(Topic(testEnv), "build_logs")
+	select {
+	case e, open := <-events:
+		if open {
+			t.Fatalf("frame after removal: %+v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("revoked stream did not close")
 	}
 }

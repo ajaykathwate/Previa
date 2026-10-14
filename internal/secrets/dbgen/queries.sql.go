@@ -54,7 +54,7 @@ func (q *Queries) CountSecretsByKeyVersion(ctx context.Context) ([]CountSecretsB
 const deleteOwnedSecrets = `-- name: DeleteOwnedSecrets :execrows
 DELETE FROM env_secrets s
 USING repos r JOIN installations i ON i.id = r.installation_id
-WHERE s.repo_id = r.id AND r.id = $1 AND i.owner_user_id = $2
+WHERE s.repo_id = r.id AND r.id = $1 AND workspace_repository_access(r.id,$2::bigint,'manage')
   AND s.key = ANY($3::text[])
 `
 
@@ -134,7 +134,7 @@ func (q *Queries) ListSecrets(ctx context.Context, repoID int64) ([]ListSecretsR
 const lockOwnedRepository = `-- name: LockOwnedRepository :one
 SELECT r.id, (r.accessible AND i.status = 'active')::boolean AS available
 FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE r.id = $1 AND i.owner_user_id = $2
+WHERE r.id = $1 AND workspace_repository_access(r.id,$2::bigint,'manage')
 FOR UPDATE OF r
 `
 
@@ -155,10 +155,21 @@ func (q *Queries) LockOwnedRepository(ctx context.Context, arg LockOwnedReposito
 	return i, err
 }
 
+const lockSecretInstallation = `-- name: LockSecretInstallation :one
+SELECT i.id FROM installations i JOIN repos r ON r.installation_id=i.id WHERE r.id=$1 FOR UPDATE OF i
+`
+
+func (q *Queries) LockSecretInstallation(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lockSecretInstallation, id)
+	var id_2 int64
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const ownedRepository = `-- name: OwnedRepository :one
 SELECT r.id, r.full_name, (r.accessible AND i.status = 'active')::boolean AS available
 FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE r.id = $1 AND i.owner_user_id = $2
+WHERE r.id = $1 AND workspace_repository_access(r.id,$2::bigint,'manage')
 `
 
 type OwnedRepositoryParams struct {
@@ -291,7 +302,7 @@ func (q *Queries) SecretsNeedingRotation(ctx context.Context, arg SecretsNeeding
 const setSecretBuild = `-- name: SetSecretBuild :execrows
 UPDATE env_secrets s SET build = $1::boolean, updated_at = now()
 FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE s.repo_id = r.id AND r.id = $2 AND i.owner_user_id = $3
+WHERE s.repo_id = r.id AND r.id = $2 AND workspace_repository_access(r.id,$3::bigint,'manage')
   AND s.key = $4 AND s.build IS DISTINCT FROM $1::boolean
   AND (NOT $1::boolean OR (r.accessible AND i.status = 'active'))
 `

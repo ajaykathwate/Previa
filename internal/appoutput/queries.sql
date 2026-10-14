@@ -8,7 +8,7 @@ SELECT p.id AS pull_request_id, p.repo_id, p.number, p.title, r.full_name,
        coalesce(e.head_sha, '')::text AS deployed_sha
 FROM pull_requests p JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 LEFT JOIN environments e ON e.pull_request_id = p.id
-WHERE r.id = sqlc.arg(repo_id) AND i.owner_user_id = sqlc.arg(owner_user_id) AND p.number = sqlc.arg(number);
+WHERE r.id = sqlc.arg(repo_id) AND workspace_repository_access(r.id,sqlc.narg(owner_user_id)::bigint,'operate') AND p.number = sqlc.arg(number);
 
 -- name: RequestWatch :one
 -- A viewer opened the output: note it and ask for a follower unless one is

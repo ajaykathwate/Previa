@@ -204,7 +204,7 @@ func (h *Handler) describeFailure(ctx context.Context, pr *pages.PR, row dbgen.O
 			code = row.FailureCode
 		}
 		pr.Failure, pr.FailureCode = environments.FailureMessage(code), code
-		if h.logs != nil && row.EnvironmentID > 0 {
+		if h.logs != nil && row.EnvironmentID > 0 && h.canReadLogTail(ctx, row.RepoID) {
 			lines, err := h.logs.Tail(ctx, row.EnvironmentID, row.Generation, row.RequestRevision.Int64, failureLogLines)
 			if err != nil {
 				// The page stays useful without the excerpt; the log page has it all.

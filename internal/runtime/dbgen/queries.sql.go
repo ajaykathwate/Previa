@@ -12,26 +12,26 @@ import (
 )
 
 const admissionScope = `-- name: AdmissionScope :one
-SELECT r.github_repo_id, i.owner_user_id FROM pull_requests p JOIN repos r ON r.id = p.repo_id
+SELECT r.github_repo_id, i.workspace_id FROM pull_requests p JOIN repos r ON r.id = p.repo_id
 JOIN installations i ON i.id = r.installation_id WHERE p.id = $1
 `
 
 type AdmissionScopeRow struct {
 	GithubRepoID pgtype.Int8
-	OwnerUserID  pgtype.Int8
+	WorkspaceID  pgtype.Int8
 }
 
 // The PR's base repository and account, for the advisory capacity check.
 func (q *Queries) AdmissionScope(ctx context.Context, id int64) (AdmissionScopeRow, error) {
 	row := q.db.QueryRow(ctx, admissionScope, id)
 	var i AdmissionScopeRow
-	err := row.Scan(&i.GithubRepoID, &i.OwnerUserID)
+	err := row.Scan(&i.GithubRepoID, &i.WorkspaceID)
 	return i, err
 }
 
 const executionTarget = `-- name: ExecutionTarget :one
-SELECT p.id AS pull_request_id, p.repo_id, p.number, p.head_sha, p.state, p.generation, p.is_fork, p.head_repo_id,
-       r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status, i.owner_user_id,
+SELECT workspace_intent_authorized(p.id)::boolean AS workspace_authorized, p.id AS pull_request_id, p.repo_id, p.number, p.head_sha, p.state, p.generation, p.is_fork, p.head_repo_id,
+       r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status, b.workspace_id,
        b.generation AS intent_generation, b.revision AS intent_revision, b.head_sha AS intent_head_sha, b.state AS intent_state
 FROM pull_requests p JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = p.id
@@ -39,6 +39,7 @@ WHERE p.id = $1
 `
 
 type ExecutionTargetRow struct {
+	WorkspaceAuthorized  bool
 	PullRequestID        int64
 	RepoID               int64
 	Number               int32
@@ -51,7 +52,7 @@ type ExecutionTargetRow struct {
 	Accessible           bool
 	GithubInstallationID int64
 	InstallationStatus   string
-	OwnerUserID          pgtype.Int8
+	WorkspaceID          pgtype.Int8
 	IntentGeneration     pgtype.Int8
 	IntentRevision       pgtype.Int8
 	IntentHeadSha        pgtype.Text
@@ -64,6 +65,7 @@ func (q *Queries) ExecutionTarget(ctx context.Context, id int64) (ExecutionTarge
 	row := q.db.QueryRow(ctx, executionTarget, id)
 	var i ExecutionTargetRow
 	err := row.Scan(
+		&i.WorkspaceAuthorized,
 		&i.PullRequestID,
 		&i.RepoID,
 		&i.Number,
@@ -76,7 +78,7 @@ func (q *Queries) ExecutionTarget(ctx context.Context, id int64) (ExecutionTarge
 		&i.Accessible,
 		&i.GithubInstallationID,
 		&i.InstallationStatus,
-		&i.OwnerUserID,
+		&i.WorkspaceID,
 		&i.IntentGeneration,
 		&i.IntentRevision,
 		&i.IntentHeadSha,
@@ -86,7 +88,7 @@ func (q *Queries) ExecutionTarget(ctx context.Context, id int64) (ExecutionTarge
 }
 
 const listOutboundPreviews = `-- name: ListOutboundPreviews :many
-SELECT p.id AS pull_request_id, p.repo_id,
+SELECT workspace_intent_authorized(p.id)::boolean AS workspace_authorized, p.id AS pull_request_id, p.repo_id,
        (NOT p.is_fork AND p.head_repo_id IS NOT NULL AND p.head_repo_id = r.github_repo_id)::boolean AS trusted
 FROM pull_requests p
 JOIN repos r ON r.id = p.repo_id
@@ -99,9 +101,10 @@ ORDER BY p.id
 `
 
 type ListOutboundPreviewsRow struct {
-	PullRequestID int64
-	RepoID        int64
-	Trusted       bool
+	WorkspaceAuthorized bool
+	PullRequestID       int64
+	RepoID              int64
+	Trusted             bool
 }
 
 // Pull requests whose preview network may carry outbound connections now: a
@@ -117,7 +120,12 @@ func (q *Queries) ListOutboundPreviews(ctx context.Context) ([]ListOutboundPrevi
 	var items []ListOutboundPreviewsRow
 	for rows.Next() {
 		var i ListOutboundPreviewsRow
-		if err := rows.Scan(&i.PullRequestID, &i.RepoID, &i.Trusted); err != nil {
+		if err := rows.Scan(
+			&i.WorkspaceAuthorized,
+			&i.PullRequestID,
+			&i.RepoID,
+			&i.Trusted,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

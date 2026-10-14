@@ -49,10 +49,13 @@
     document.addEventListener('click', (event) => {
       const backdrop = event.target.closest('[data-mobile-nav-close]');
       if (backdrop) backdrop.closest('details').open = false;
+      document.querySelectorAll('[data-workspace-switcher][open]').forEach(menu => {
+        if (!menu.contains(event.target)) menu.open = false;
+      });
     });
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
-      document.querySelectorAll('[data-mobile-nav][open]').forEach((nav) => {
+      document.querySelectorAll('[data-mobile-nav][open], [data-workspace-switcher][open]').forEach((nav) => {
         nav.open = false;
         nav.querySelector('summary').focus();
       });

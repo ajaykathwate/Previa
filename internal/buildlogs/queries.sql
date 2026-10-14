@@ -1,6 +1,6 @@
 -- name: OwnedTarget :one
 -- The PR, its lifetime environment and current build intent, scoped to the
--- installation owner. Retained PRs stay readable after access is revoked.
+-- workspace's operational member. Retained PRs stay readable after repository access is revoked.
 SELECT p.id AS pull_request_id, p.repo_id, p.number, p.title, p.head_sha, p.state AS pr_state,
        r.full_name, (r.accessible AND i.status = 'active') AS available,
        e.id AS environment_id, b.generation AS intent_generation, b.revision AS intent_revision,
@@ -8,7 +8,7 @@ SELECT p.id AS pull_request_id, p.repo_id, p.number, p.title, p.head_sha, p.stat
 FROM pull_requests p JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 LEFT JOIN environments e ON e.pull_request_id = p.id
 LEFT JOIN build_intents b ON b.pull_request_id = p.id
-WHERE r.id = $1 AND i.owner_user_id = $2 AND p.number = $3;
+WHERE r.id = sqlc.arg(id)::bigint AND workspace_repository_access(r.id,sqlc.narg(owner_user_id)::bigint,'operate') AND p.number = sqlc.arg(number)::integer;
 
 -- name: ReadStream :one
 SELECT * FROM build_log_streams WHERE environment_id = $1;

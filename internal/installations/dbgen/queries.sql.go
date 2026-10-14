@@ -11,6 +11,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const authorizedLinkWorkspace = `-- name: AuthorizedLinkWorkspace :one
+SELECT EXISTS(SELECT 1 FROM workspaces w JOIN workspace_memberships m ON m.workspace_id=w.id
+ WHERE w.id=$1 AND m.user_id=$2 AND w.state='active' AND m.state='active' AND m.role IN ('owner','admin'))::boolean
+`
+
+type AuthorizedLinkWorkspaceParams struct {
+	ID     int64
+	UserID int64
+}
+
+func (q *Queries) AuthorizedLinkWorkspace(ctx context.Context, arg AuthorizedLinkWorkspaceParams) (bool, error) {
+	row := q.db.QueryRow(ctx, authorizedLinkWorkspace, arg.ID, arg.UserID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const cancelUnstartedAutomaticIntents = `-- name: CancelUnstartedAutomaticIntents :many
 WITH locked_prs AS MATERIALIZED (
     SELECT pr.id FROM pull_requests pr JOIN build_intents b ON b.pull_request_id = pr.id
@@ -47,24 +64,41 @@ func (q *Queries) CancelUnstartedAutomaticIntents(ctx context.Context, repoID in
 
 const countRepositoryPage = `-- name: CountRepositoryPage :one
 SELECT count(*) FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE i.owner_user_id = $1
- AND strpos(lower(r.full_name), lower($2::text)) > 0
- AND ($3::text = 'all'
-   OR ($3::text = 'available' AND r.accessible AND i.status = 'active')
-   OR ($3::text = 'unavailable' AND NOT (r.accessible AND i.status = 'active')))
+WHERE ($1::bigint=0 OR i.workspace_id=$1::bigint) AND workspace_repository_access(r.id,$2::bigint,'read')
+ AND strpos(lower(r.full_name), lower($3::text)) > 0
+ AND ($4::text = 'all'
+   OR ($4::text = 'available' AND r.accessible AND i.status = 'active')
+   OR ($4::text = 'unavailable' AND NOT (r.accessible AND i.status = 'active')))
 `
 
 type CountRepositoryPageParams struct {
-	UserID pgtype.Int8
-	Search string
-	Access string
+	WorkspaceID int64
+	UserID      pgtype.Int8
+	Search      string
+	Access      string
 }
 
 func (q *Queries) CountRepositoryPage(ctx context.Context, arg CountRepositoryPageParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countRepositoryPage, arg.UserID, arg.Search, arg.Access)
+	row := q.db.QueryRow(ctx, countRepositoryPage,
+		arg.WorkspaceID,
+		arg.UserID,
+		arg.Search,
+		arg.Access,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const defaultWorkspace = `-- name: DefaultWorkspace :one
+SELECT workspace_default($1::bigint)::bigint AS workspace_id
+`
+
+func (q *Queries) DefaultWorkspace(ctx context.Context, dollar_1 int64) (int64, error) {
+	row := q.db.QueryRow(ctx, defaultWorkspace, dollar_1)
+	var workspace_id int64
+	err := row.Scan(&workspace_id)
+	return workspace_id, err
 }
 
 const ensureInstallation = `-- name: EnsureInstallation :exec
@@ -112,12 +146,17 @@ func (q *Queries) GetRepositoryInstallation(ctx context.Context, githubRepoID pg
 
 const getWorkspaceSummary = `-- name: GetWorkspaceSummary :one
 SELECT
- (SELECT count(*) FROM installations own_i WHERE own_i.owner_user_id = $1) AS installations,
+ (SELECT count(*) FROM installations own_i WHERE workspace_installation_access(own_i.id,$1::bigint,'read') AND ($2::bigint=0 OR own_i.workspace_id=$2::bigint)) AS installations,
  count(*) AS repositories,
  count(*) FILTER (WHERE r.accessible AND i.status = 'active') AS available
 FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE i.owner_user_id = $1
+WHERE ($2::bigint=0 OR i.workspace_id=$2::bigint) AND workspace_repository_access(r.id,$1::bigint,'read')
 `
+
+type GetWorkspaceSummaryParams struct {
+	OwnerUserID pgtype.Int8
+	WorkspaceID int64
+}
 
 type GetWorkspaceSummaryRow struct {
 	Installations int64
@@ -125,15 +164,15 @@ type GetWorkspaceSummaryRow struct {
 	Available     int64
 }
 
-func (q *Queries) GetWorkspaceSummary(ctx context.Context, ownerUserID pgtype.Int8) (GetWorkspaceSummaryRow, error) {
-	row := q.db.QueryRow(ctx, getWorkspaceSummary, ownerUserID)
+func (q *Queries) GetWorkspaceSummary(ctx context.Context, arg GetWorkspaceSummaryParams) (GetWorkspaceSummaryRow, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceSummary, arg.OwnerUserID, arg.WorkspaceID)
 	var i GetWorkspaceSummaryRow
 	err := row.Scan(&i.Installations, &i.Repositories, &i.Available)
 	return i, err
 }
 
 const linkInstallation = `-- name: LinkInstallation :exec
-UPDATE installations SET owner_user_id = $2, account_login = $3,
+UPDATE installations SET owner_user_id = coalesce(owner_user_id,$2), workspace_id=$5::bigint, account_login = $3,
 status = $4, revision = revision + 1 WHERE id = $1
 `
 
@@ -142,6 +181,7 @@ type LinkInstallationParams struct {
 	OwnerUserID  pgtype.Int8
 	AccountLogin string
 	Status       string
+	WorkspaceID  pgtype.Int8
 }
 
 func (q *Queries) LinkInstallation(ctx context.Context, arg LinkInstallationParams) error {
@@ -150,6 +190,7 @@ func (q *Queries) LinkInstallation(ctx context.Context, arg LinkInstallationPara
 		arg.OwnerUserID,
 		arg.AccountLogin,
 		arg.Status,
+		arg.WorkspaceID,
 	)
 	return err
 }
@@ -158,9 +199,15 @@ const listLinkedInstallations = `-- name: ListLinkedInstallations :many
 SELECT i.github_installation_id, i.status, i.account_login, r.full_name,
        r.github_repo_id, r.accessible
 FROM installations i LEFT JOIN repos r ON r.installation_id = i.id
-WHERE i.owner_user_id = $1
+WHERE ($1::bigint=0 OR i.workspace_id=$1::bigint) AND workspace_installation_access(i.id,$2::bigint,'read')
+AND (r.id IS NULL OR workspace_repository_access(r.id,$2::bigint,'read'))
 ORDER BY i.github_installation_id, r.full_name
 `
+
+type ListLinkedInstallationsParams struct {
+	WorkspaceID int64
+	OwnerUserID pgtype.Int8
+}
 
 type ListLinkedInstallationsRow struct {
 	GithubInstallationID int64
@@ -171,8 +218,8 @@ type ListLinkedInstallationsRow struct {
 	Accessible           pgtype.Bool
 }
 
-func (q *Queries) ListLinkedInstallations(ctx context.Context, ownerUserID pgtype.Int8) ([]ListLinkedInstallationsRow, error) {
-	rows, err := q.db.Query(ctx, listLinkedInstallations, ownerUserID)
+func (q *Queries) ListLinkedInstallations(ctx context.Context, arg ListLinkedInstallationsParams) ([]ListLinkedInstallationsRow, error) {
+	rows, err := q.db.Query(ctx, listLinkedInstallations, arg.WorkspaceID, arg.OwnerUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -207,21 +254,22 @@ SELECT r.id, r.full_name, r.accessible, i.status, i.account_login, i.github_inst
  s.last_success_at
 FROM repos r JOIN installations i ON i.id = r.installation_id
 LEFT JOIN pr_syncs s ON s.repo_id = r.id
-WHERE i.owner_user_id = $1
- AND strpos(lower(r.full_name), lower($2::text)) > 0
- AND ($3::text = 'all'
-   OR ($3::text = 'available' AND r.accessible AND i.status = 'active')
-   OR ($3::text = 'unavailable' AND NOT (r.accessible AND i.status = 'active')))
+WHERE ($1::bigint=0 OR i.workspace_id=$1::bigint) AND workspace_repository_access(r.id,$2::bigint,'read')
+ AND strpos(lower(r.full_name), lower($3::text)) > 0
+ AND ($4::text = 'all'
+   OR ($4::text = 'available' AND r.accessible AND i.status = 'active')
+   OR ($4::text = 'unavailable' AND NOT (r.accessible AND i.status = 'active')))
 ORDER BY lower(r.full_name), r.id
-LIMIT $5::bigint OFFSET $4::bigint
+LIMIT $6::bigint OFFSET $5::bigint
 `
 
 type ListRepositoryPageParams struct {
-	UserID     pgtype.Int8
-	Search     string
-	Access     string
-	PageOffset int64
-	PageSize   int64
+	WorkspaceID int64
+	UserID      pgtype.Int8
+	Search      string
+	Access      string
+	PageOffset  int64
+	PageSize    int64
 }
 
 type ListRepositoryPageRow struct {
@@ -241,6 +289,7 @@ type ListRepositoryPageRow struct {
 // previews and when PRs were last discovered.
 func (q *Queries) ListRepositoryPage(ctx context.Context, arg ListRepositoryPageParams) ([]ListRepositoryPageRow, error) {
 	rows, err := q.db.Query(ctx, listRepositoryPage,
+		arg.WorkspaceID,
 		arg.UserID,
 		arg.Search,
 		arg.Access,
@@ -277,7 +326,7 @@ func (q *Queries) ListRepositoryPage(ctx context.Context, arg ListRepositoryPage
 }
 
 const lockInstallation = `-- name: LockInstallation :one
-SELECT id, github_installation_id, owner_user_id, status, account_login, revision
+SELECT id, github_installation_id, owner_user_id, status, account_login, revision, workspace_id
 FROM installations WHERE github_installation_id = $1 FOR UPDATE
 `
 
@@ -288,6 +337,7 @@ type LockInstallationRow struct {
 	Status               string
 	AccountLogin         string
 	Revision             int64
+	WorkspaceID          pgtype.Int8
 }
 
 func (q *Queries) LockInstallation(ctx context.Context, githubInstallationID int64) (LockInstallationRow, error) {
@@ -300,13 +350,25 @@ func (q *Queries) LockInstallation(ctx context.Context, githubInstallationID int
 		&i.Status,
 		&i.AccountLogin,
 		&i.Revision,
+		&i.WorkspaceID,
 	)
 	return i, err
 }
 
+const lockLinkWorkspace = `-- name: LockLinkWorkspace :one
+SELECT id FROM workspaces WHERE id=$1 AND state='active' FOR UPDATE
+`
+
+func (q *Queries) LockLinkWorkspace(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lockLinkWorkspace, id)
+	var id_2 int64
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const lockPolicyInstallation = `-- name: LockPolicyInstallation :one
 SELECT id FROM installations
-WHERE id = $1 AND owner_user_id = $2
+WHERE id = $1 AND workspace_installation_access(id,$2::bigint,'manage')
     AND status = 'active'
 FOR UPDATE
 `
@@ -326,12 +388,13 @@ func (q *Queries) LockPolicyInstallation(ctx context.Context, arg LockPolicyInst
 const lockPolicyRepository = `-- name: LockPolicyRepository :one
 SELECT id, build_mode FROM repos
 WHERE id = $1 AND installation_id = $2 AND accessible
-FOR UPDATE
+AND workspace_repository_access(id,$3::bigint,'manage') FOR UPDATE
 `
 
 type LockPolicyRepositoryParams struct {
 	RepoID         int64
 	InstallationID int64
+	UserID         int64
 }
 
 type LockPolicyRepositoryRow struct {
@@ -340,7 +403,7 @@ type LockPolicyRepositoryRow struct {
 }
 
 func (q *Queries) LockPolicyRepository(ctx context.Context, arg LockPolicyRepositoryParams) (LockPolicyRepositoryRow, error) {
-	row := q.db.QueryRow(ctx, lockPolicyRepository, arg.RepoID, arg.InstallationID)
+	row := q.db.QueryRow(ctx, lockPolicyRepository, arg.RepoID, arg.InstallationID, arg.UserID)
 	var i LockPolicyRepositoryRow
 	err := row.Scan(&i.ID, &i.BuildMode)
 	return i, err
@@ -358,7 +421,7 @@ func (q *Queries) MarkRepositoriesUnavailable(ctx context.Context, installationI
 const readOwnedBuildPolicy = `-- name: ReadOwnedBuildPolicy :one
 SELECT r.id, r.build_mode
 FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE r.id = $1 AND i.owner_user_id = $2
+WHERE r.id = $1 AND workspace_repository_access(r.id,$2::bigint,'manage')
     AND i.status = 'active' AND r.accessible
 `
 
@@ -387,8 +450,8 @@ WHERE github_repo_id = $3
     SELECT 1 FROM installations old_i JOIN installations new_i
       ON new_i.id = $1
     WHERE old_i.id = repos.installation_id AND old_i.status = 'inactive'
-      AND new_i.owner_user_id IS NOT NULL
-      AND old_i.owner_user_id = new_i.owner_user_id
+      AND new_i.workspace_id IS NOT NULL
+      AND old_i.workspace_id = new_i.workspace_id
   )
 `
 

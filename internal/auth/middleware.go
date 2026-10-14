@@ -140,3 +140,16 @@ func (h *Handler) UserIDs(ctx context.Context) (int64, int64, bool) {
 	u, ok := CurrentUser(ctx)
 	return u.ID, u.GitHubID, ok
 }
+
+// SelectedWorkspaceID remembers navigation in this session. Resource access is
+// always checked independently by the workspace feature.
+func (h *Handler) SelectedWorkspaceID(ctx context.Context) int64 {
+	return h.sessions.GetInt64(ctx, "active_workspace")
+}
+func (h *Handler) RememberWorkspace(ctx context.Context, id int64) {
+	if id <= 0 {
+		h.sessions.Remove(ctx, "active_workspace")
+		return
+	}
+	h.sessions.Put(ctx, "active_workspace", id)
+}

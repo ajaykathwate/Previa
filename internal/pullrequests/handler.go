@@ -39,17 +39,22 @@ type LiveEvents interface {
 	Cursor() realtime.Cursor
 	Subscribe(topic string, since realtime.Cursor) *realtime.Subscription
 }
+type SourceAccess interface {
+	CanReadSource(context.Context, int64, int64) (bool, error)
+}
+
 type Handler struct {
-	repo    *Repository
-	sync    Refresher
-	policy  Policy
-	users   UserSession
-	logger  *slog.Logger
-	enabled bool
-	live    LiveEvents
-	actions *Actions
-	logs    LogTail
-	now     func() time.Time // when failures stop needing attention is measured from
+	sourceAccess SourceAccess
+	repo         *Repository
+	sync         Refresher
+	policy       Policy
+	users        UserSession
+	logger       *slog.Logger
+	enabled      bool
+	live         LiveEvents
+	actions      *Actions
+	logs         LogTail
+	now          func() time.Time // when failures stop needing attention is measured from
 }
 
 func NewHandler(repo *Repository, sync Refresher, policy Policy, users UserSession, logger *slog.Logger, enabled bool) *Handler {
@@ -217,7 +222,9 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 	}
 	sub := h.live.Subscribe(RepositoryTopic(id), realtime.RequestCursor(r))
 	defer sub.Close()
-	if err := realtime.Stream(w, r, sub, realtime.DefaultStreamOptions); err != nil && r.Context().Err() == nil {
+	opts := realtime.DefaultStreamOptions
+	opts.Authorize = func(ctx context.Context) error { return h.repo.Owns(ctx, user, id) }
+	if err := realtime.Stream(w, r, sub, opts); err != nil && r.Context().Err() == nil {
 		h.logger.WarnContext(r.Context(), "repository event stream ended", "error", err)
 	}
 }
@@ -404,4 +411,17 @@ func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool, since tim
 		out.PublishedAt = ""
 	}
 	return out
+}
+
+func (h *Handler) WithSourceAccess(access SourceAccess) *Handler { h.sourceAccess = access; return h }
+func (h *Handler) canReadLogTail(ctx context.Context, repo int64) bool {
+	if h.sourceAccess == nil {
+		return true
+	}
+	user, _, ok := h.users.UserIDs(ctx)
+	if !ok {
+		return false
+	}
+	allowed, err := h.sourceAccess.CanReadSource(ctx, user, repo)
+	return err == nil && allowed
 }

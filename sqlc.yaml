@@ -120,3 +120,12 @@ sql:
         package: dbgen
         out: internal/previewaccess/dbgen
         sql_package: pgx/v5
+
+  - engine: postgresql
+    schema: db/migrations
+    queries: internal/workspaces/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: internal/workspaces/dbgen
+        sql_package: pgx/v5

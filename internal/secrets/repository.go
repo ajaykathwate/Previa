@@ -57,12 +57,14 @@ func (r *Repository) List(ctx context.Context, userID, repoID int64) ([]Summary,
 }
 
 // PutMany stores several sealed values in one transaction: all or nothing.
-// It locks only the repository row, which serializes the per-repository limit
-// without a second lock, so it cannot form a cycle with the installation →
-// repository → PR order used elsewhere. It reports how many names were new.
+// Installation then repository locks serialize access revocation and the
+// per-repository limit in the same order as other protected mutations.
 func (r *Repository) PutMany(ctx context.Context, userID, repoID int64, items []SealedSecret) (created int, err error) {
 	err = database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
+		if _, err := q.LockSecretInstallation(ctx, repoID); err != nil {
+			return ownedError(err)
+		}
 		repo, err := q.LockOwnedRepository(ctx, dbgen.LockOwnedRepositoryParams{ID: repoID, OwnerUserID: owner(userID)})
 		if err != nil {
 			return ownedError(err)

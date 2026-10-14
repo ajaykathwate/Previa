@@ -1,7 +1,7 @@
 -- name: FindScope :one
 SELECT r.installation_id FROM repos r WHERE r.id=$1;
 -- name: LockInstallation :one
-SELECT id, github_installation_id, revision, status, owner_user_id FROM installations WHERE id=$1 FOR UPDATE;
+SELECT id, github_installation_id, revision, status, owner_user_id, workspace_id FROM installations WHERE id=$1 FOR UPDATE;
 -- name: LockRepository :one
 SELECT id, installation_id, github_repo_id, full_name, accessible, build_mode, observation_version FROM repos WHERE id=$1 FOR UPDATE;
 -- name: FindGitHubRepository :one
@@ -52,11 +52,11 @@ UPDATE pr_syncs SET state='syncing',message='' WHERE repo_id=$1 AND revision=$2;
 -- name: OwnedRepository :one
 SELECT r.id,r.full_name,r.accessible,r.build_mode,r.private_previews,i.status,i.github_installation_id
 FROM repos r JOIN installations i ON i.id=r.installation_id
-WHERE r.id=$1 AND i.owner_user_id=$2;
+WHERE r.id=$1 AND workspace_repository_access(r.id,sqlc.narg(owner_user_id)::bigint,'read');
 -- name: CountPRs :one
 SELECT count(*) FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
-WHERE r.id=$1 AND i.owner_user_id=$2 AND ($3::text='all' OR p.state=$3)
-AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower($4))>0;
+WHERE r.id=sqlc.arg(id)::bigint AND workspace_repository_access(r.id,sqlc.narg(owner_user_id)::bigint,'read') AND (sqlc.arg(column_3)::text::text='all' OR p.state=sqlc.arg(column_3)::text)
+AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower(sqlc.arg(lower)::text))>0;
 -- name: ListPRs :many
 -- One page of a repository's PRs with their current request and preview, so
 -- the list can say which PRs have a live preview and whether the request is
@@ -68,9 +68,9 @@ SELECT p.*,coalesce(b.state,'Not requested') AS build_state,
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id
-WHERE r.id=$1 AND i.owner_user_id=$2 AND ($3::text='all' OR p.state=$3)
-AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower($4))>0
-ORDER BY p.number DESC LIMIT 10 OFFSET $5;
+WHERE r.id=sqlc.arg(id)::bigint AND workspace_repository_access(r.id,sqlc.narg(owner_user_id)::bigint,'read') AND (sqlc.arg(column_3)::text::text='all' OR p.state=sqlc.arg(column_3)::text)
+AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower(sqlc.arg(lower)::text))>0
+ORDER BY p.number DESC LIMIT 10 OFFSET sqlc.arg(row_offset)::integer;
 -- name: OwnedPR :one
 -- The PR's three lifecycle columns (observed, requested, deployed) and what
 -- the owner may do next. A torn-down environment is shown as removed.
@@ -95,13 +95,13 @@ LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN users u ON u.id=b.requested_by
 LEFT JOIN environments e ON e.pull_request_id=p.id
 LEFT JOIN preview_components pc ON pc.pull_request_id=p.id AND pc.generation=e.applied_generation AND pc.revision=e.applied_revision
-WHERE r.id=$1 AND i.owner_user_id=$2 AND p.number=$3;
+WHERE r.id=sqlc.arg(id)::bigint AND workspace_repository_access(r.id,sqlc.narg(owner_user_id)::bigint,'read') AND p.number=sqlc.arg(number)::integer;
 -- name: CountActivity :one
 SELECT count(*) FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
 LEFT JOIN build_failure_dismissals d ON d.pull_request_id=p.id AND d.user_id=sqlc.arg(owner_user_id) AND d.revision=b.revision
-WHERE i.owner_user_id=sqlc.arg(owner_user_id) AND (sqlc.arg(repo_id)::bigint=0 OR r.id=sqlc.arg(repo_id))
+WHERE (sqlc.arg(workspace_id)::bigint=0 OR i.workspace_id=sqlc.arg(workspace_id)::bigint) AND workspace_repository_access(r.id,sqlc.arg(owner_user_id)::bigint,'read') AND (sqlc.arg(repo_id)::bigint=0 OR r.id=sqlc.arg(repo_id))
 AND ((sqlc.arg(previews)::boolean AND e.head_sha IS NOT NULL) OR (NOT sqlc.arg(previews)::boolean AND b.pull_request_id IS NOT NULL))
 AND (sqlc.arg(failures)::text = '' OR (b.state = 'failed' AND (
  (sqlc.arg(failures) = 'attention' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= sqlc.arg(attention_since))
@@ -129,7 +129,7 @@ FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
 LEFT JOIN build_failure_dismissals d ON d.pull_request_id=p.id AND d.user_id=sqlc.arg(owner_user_id) AND d.revision=b.revision
-WHERE i.owner_user_id=sqlc.arg(owner_user_id) AND (sqlc.arg(repo_id)::bigint=0 OR r.id=sqlc.arg(repo_id))
+WHERE (sqlc.arg(workspace_id)::bigint=0 OR i.workspace_id=sqlc.arg(workspace_id)::bigint) AND workspace_repository_access(r.id,sqlc.arg(owner_user_id)::bigint,'read') AND (sqlc.arg(repo_id)::bigint=0 OR r.id=sqlc.arg(repo_id))
 AND ((sqlc.arg(previews)::boolean AND e.head_sha IS NOT NULL) OR (NOT sqlc.arg(previews)::boolean AND b.pull_request_id IS NOT NULL))
 AND (sqlc.arg(failures)::text = '' OR (b.state = 'failed' AND (
  (sqlc.arg(failures) = 'attention' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= sqlc.arg(attention_since))
@@ -151,7 +151,7 @@ DELETE FROM build_failure_dismissals WHERE user_id = sqlc.arg(user_id) AND pull_
 
 -- name: InitialDiscoveryRepositories :many
 SELECT r.id FROM repos r JOIN installations i ON i.id=r.installation_id
-WHERE i.github_installation_id=$1 AND i.owner_user_id IS NOT NULL AND i.status='active'
+WHERE i.github_installation_id=$1 AND i.workspace_id IS NOT NULL AND i.status='active'
  AND r.accessible AND NOT EXISTS(SELECT 1 FROM pr_syncs s WHERE s.repo_id=r.id)
 ORDER BY r.id FOR UPDATE OF r;
 
@@ -177,4 +177,7 @@ FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id
 LEFT JOIN build_failure_dismissals d ON d.pull_request_id=p.id AND d.user_id=sqlc.arg(owner_user_id) AND d.revision=b.revision
-WHERE i.owner_user_id=sqlc.arg(owner_user_id) AND p.state='open';
+WHERE (sqlc.arg(workspace_id)::bigint=0 OR i.workspace_id=sqlc.arg(workspace_id)::bigint) AND workspace_repository_access(r.id,sqlc.arg(owner_user_id)::bigint,'read') AND p.state='open';
+
+-- name: CanOperateRepository :one
+SELECT workspace_repository_access($1::bigint,$2::bigint,'operate')::boolean;

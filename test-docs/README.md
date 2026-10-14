@@ -1,5 +1,10 @@
 # Previa regression test documents
 
+Feature 1 implementation verification is recorded separately in the
+[2026-10-14 shared workspace report](2026-10-14-shared-workspaces-report.md).
+It includes team access/offboarding, migration, browser and worker-pipeline checks;
+the full product regression cycle below remains the earlier baseline.
+
 These documents are Previa's regression test specification: **242 test cases**
 across 16 modules, from signing in to a preview URL being served, reported and
 torn down. Each case says what is tested, how, what must happen, and which

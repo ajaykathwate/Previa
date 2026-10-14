@@ -68,7 +68,7 @@ func (q *Queries) FinishInstallationEvent(ctx context.Context, arg FinishInstall
 }
 
 const lockEventInstallation = `-- name: LockEventInstallation :one
-SELECT id FROM installations WHERE id = $1 AND status = 'active' AND owner_user_id IS NOT NULL FOR UPDATE
+SELECT id FROM installations WHERE id = $1 AND status = 'active' AND workspace_id IS NOT NULL FOR UPDATE
 `
 
 func (q *Queries) LockEventInstallation(ctx context.Context, id int64) (int64, error) {

@@ -399,7 +399,7 @@ SELECT p.id AS pull_request_id, p.repo_id, p.number, p.title, p.head_sha, p.stat
 FROM pull_requests p JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 LEFT JOIN environments e ON e.pull_request_id = p.id
 LEFT JOIN build_intents b ON b.pull_request_id = p.id
-WHERE r.id = $1 AND i.owner_user_id = $2 AND p.number = $3
+WHERE r.id = $1::bigint AND workspace_repository_access(r.id,$2::bigint,'operate') AND p.number = $3::integer
 `
 
 type OwnedTargetParams struct {
@@ -426,7 +426,7 @@ type OwnedTargetRow struct {
 }
 
 // The PR, its lifetime environment and current build intent, scoped to the
-// installation owner. Retained PRs stay readable after access is revoked.
+// workspace's operational member. Retained PRs stay readable after repository access is revoked.
 func (q *Queries) OwnedTarget(ctx context.Context, arg OwnedTargetParams) (OwnedTargetRow, error) {
 	row := q.db.QueryRow(ctx, ownedTarget, arg.ID, arg.OwnerUserID, arg.Number)
 	var i OwnedTargetRow

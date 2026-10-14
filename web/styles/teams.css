@@ -1,0 +1,47 @@
+/* Team controls reuse the signal palette and existing workspace shell. */
+.team-page { max-width: 1120px; margin: 0 auto; display: grid; gap: 24px; }
+.team-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.team-heading h1 { font-size: clamp(1.6rem,3vw,2.1rem); font-weight: 650; letter-spacing: -.035em; margin: 5px 0; }
+.team-heading p,.team-panel-header p,.team-settings-panel > p { color: var(--text-muted); font-size: .875rem; line-height: 1.65; }
+.team-identity,.team-person { display: flex; align-items: center; gap: 14px; }
+.workspace-avatar { display: inline-grid; place-items: center; flex: 0 0 auto; width: 38px; height: 38px; border-radius: 11px; background: var(--signal-soft); border: 1px solid var(--signal-line); color: var(--signal-ink); font-weight: 700; text-transform: uppercase; }
+.team-identity > .workspace-avatar { width: 60px; height: 60px; font-size: 1.4rem; border-radius: 16px; }
+.team-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--line); }
+.team-tabs a { padding: 12px 0; color: var(--text-muted); border-bottom: 2px solid transparent; font-size: .875rem; }
+.team-tabs a[aria-current=page] { color: var(--ink); border-color: var(--signal); font-weight: 600; }
+.team-panel-header { padding: 22px 24px; display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); }
+.team-panel-header h2,.team-settings-panel h2,.team-link-notice h2 { font-size: 1rem; font-weight: 600; }
+.team-member-row { position: relative; display: grid; grid-template-columns: minmax(180px,1fr) 100px 160px; align-items: center; gap: 20px; padding: 20px 24px; border-bottom: 1px solid var(--line); }
+.team-member-row:last-child { border-bottom: 0; }
+.team-person-avatar { display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid var(--line); background: var(--surface-muted); color: var(--ink-soft); border-radius: 50%; font-weight: 600; text-transform: uppercase; }
+.team-person strong { font-size: .875rem; }.team-person p { font-size: .75rem; margin-top: 3px; }
+.team-you { margin-left: 7px; color: var(--text-faint); font-size: .75rem; }
+.team-member-actions { min-width: 0; }.team-member-actions summary { cursor: pointer; }
+.team-member-actions[open] { grid-column: 1/-1; background: var(--surface-muted); padding: 18px; border: 1px solid var(--line); border-radius: 12px; }
+.team-form { display: grid; gap: 12px; max-width: 640px; margin-top: 18px; }
+.team-form > label,.team-repository-choices legend { font-size: .8rem; color: var(--ink-soft); font-weight: 600; }
+.team-form input:not([type=hidden]):not([type=checkbox]),.team-form select,.team-link-notice input { width: 100%; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); border-radius: 8px; padding: 11px 13px; min-height: 44px; }
+.team-form > button { justify-self: start; }.team-form .dialog-actions { margin-top: 8px; }
+.team-repository-choices { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 14px; display: grid; gap: 10px; max-height: 280px; overflow-y: auto; }
+.team-repository-choices > p { font-size: .8rem; color: var(--text-muted); line-height: 1.5; }.team-repository-choices label { display: flex; align-items: center; gap: 10px; font-size: .8rem; }.team-repository-choices code { overflow-wrap: anywhere; }
+.team-settings-panel,.team-link-notice { padding: 28px; }.team-settings-panel h2 { margin-bottom: 7px; }.team-settings-panel dl { display: grid; gap: 8px; margin-top: 18px; font-size: .875rem; }
+.team-link-notice { display: grid; gap: 12px; border-color: var(--signal-line); background: var(--signal-soft); }.team-link-notice button { justify-self: start; }
+.team-invitation-row,.team-preview-row { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 22px 24px; border-bottom: 1px solid var(--line); }.team-invitation-row strong { font-size: .875rem; }.team-invitation-row .badge { margin-left: 10px; }.team-invitation-row p,.team-preview-row p { font-size: .75rem; margin-top: 6px; }.team-preview-row code { font-size: .75rem; overflow-wrap: anywhere; }.team-preview-row h3 { font-size: 1rem; margin: 7px 0; }.team-preview-row > div:last-child { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.team-danger { color: var(--danger-ink); }.team-empty { padding: 40px 24px; color: var(--text-muted); }.team-empty h2,.team-empty h3 { color: var(--ink); margin-bottom: 8px; }
+.team-workspace-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(230px,1fr)); gap: 18px; }.team-workspace-card { display: grid; justify-items: start; gap: 16px; padding: 28px; }.team-workspace-card h2 { font-size: 1.1rem; font-weight: 600; }.team-invitation-page { max-width: 660px; }.team-invitation-page h1 { font-size: 1.8rem; font-weight: 650; margin: 16px 0; }
+.workspace-switcher { position: relative; margin: 0 0 12px; }.workspace-switcher > summary { display: flex; align-items: center; gap: 10px; padding: 10px 5px; cursor: pointer; list-style: none; }.workspace-switcher > summary::-webkit-details-marker { display: none; }.workspace-switcher-label { min-width: 0; flex: 1; }.workspace-switcher strong { display: block; font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.workspace-switcher small { display: block; font-size: .7rem; color: var(--text-muted); margin-top: 3px; }
+.workspace-switcher-menu { position: fixed; z-index: 60; top: 144px; left: 12px; width: min(320px,80vw); background: var(--surface-raised); border: 1px solid var(--line-strong); box-shadow: var(--shadow-lg); border-radius: 12px; padding: 12px; max-height: 400px; overflow-y: auto; }.workspace-switcher-menu button { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px; text-align: left; border-radius: 8px; }.workspace-switcher-menu button > span:nth-child(2) { flex: 1; min-width: 0; }.workspace-switcher-menu button:hover,.workspace-switcher-menu button[aria-current=true] { background: var(--surface-hover); }.workspace-switcher-menu a { display: block; font-size: .75rem; color: var(--text-muted); padding: 12px 8px; border-top: 1px solid var(--line); }
+.team-page :is(button,a,input,select,summary):focus-visible { outline: 2px solid var(--signal-strong); outline-offset: 3px; }
+@media(max-width:700px) { .team-heading { align-items: flex-start; flex-direction: column; }.team-member-row { grid-template-columns: minmax(100px,1fr) auto; gap: 14px; padding: 18px; }.team-member-actions { grid-column: 1/-1; }.team-invitation-row,.team-preview-row { align-items: flex-start; flex-wrap: wrap; padding: 18px; }.team-settings-panel { padding: 20px; }.team-tabs { gap: 20px; } }
+@media(min-width:768px) and (max-width:1023px) { .app-sidebar .workspace-switcher-label,.app-sidebar .workspace-switcher > summary > span:last-child { display: none; }.app-sidebar .workspace-switcher-menu { position: fixed; left: 70px; top: 90px; }.app-sidebar .workspace-switcher > summary { justify-content: center; } }
+
+.team-page :is(.primary-action,.secondary-action) { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 9px 15px; border: 1px solid transparent; border-radius: 8px; font-size: .8125rem; font-weight: 600; cursor: pointer; text-decoration: none; }
+.team-page .primary-action { color: var(--action-ink); background: var(--action); }
+.team-page .primary-action:hover { background: var(--action-hover); }
+.team-page .secondary-action { color: var(--ink); background: var(--surface); border-color: var(--line-strong); }
+.team-page .secondary-action:hover { background: var(--surface-hover); }
+.team-page .text-link { font-size: .8125rem; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.team-page .pagination { display: flex; align-items: center; justify-content: center; gap: 18px; padding: 12px; font-size: .8125rem; color: var(--text-muted); }
+.team-heading h1,.team-person strong,.team-workspace-card h2 { overflow-wrap: anywhere; }
+@media(max-width:700px) { .team-panel-header { flex-direction: column; padding: 20px 18px; }.team-panel-header > .badge { align-self: flex-start; } }
+.workspace-switcher :is(summary,button,a):focus-visible { outline: 2px solid var(--signal-strong); outline-offset: 2px; }

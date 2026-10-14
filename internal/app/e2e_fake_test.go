@@ -225,6 +225,8 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case path == repoPath+"/collaborators/owner/permission":
+		write(200, map[string]any{"permission": "admin", "user": map[string]any{"id": 1, "login": "owner"}})
 	case strings.HasPrefix(path, repoPath+"/pulls/") && f.forks[atoi(strings.TrimPrefix(path, repoPath+"/pulls/"))] != "":
 		number := atoi(strings.TrimPrefix(path, repoPath+"/pulls/"))
 		write(200, map[string]any{"number": number, "state": "open", "title": "From a fork", "html_url": "https://github.com/octo/app/pull/" + strconv.Itoa(number),

@@ -116,7 +116,7 @@ func (s session) Username(ctx context.Context) (string, bool) {
 
 type github map[string]string
 
-func (g github) RepositoryPermission(_ context.Context, _ int64, fullName, login string) (string, error) {
+func (g github) RepositoryUserPermission(_ context.Context, _ int64, fullName, login string, _ int64) (string, error) {
 	if fullName != "owner/app" {
 		return "", fmt.Errorf("unexpected repository %s", fullName)
 	}
@@ -272,7 +272,7 @@ func TestPrivatePreviewRoundTrip(t *testing.T) {
 	scan(&install, `INSERT INTO installations(github_installation_id,owner_user_id) VALUES (99,$1) RETURNING id`, owner)
 	scan(&repo, `INSERT INTO repos(installation_id,github_repo_id,full_name) VALUES ($1,100,'owner/app') RETURNING id`, install)
 	scan(&pr, `INSERT INTO pull_requests(repo_id,number,head_sha) VALUES ($1,1,'sha') RETURNING id`, repo)
-	if _, err := pool.Exec(ctx, `INSERT INTO environments(pull_request_id,subdomain,expires_at) VALUES ($1,'pr-1-x',now()+interval '1 day')`, pr); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO environments(pull_request_id,subdomain,expires_at,status) VALUES ($1,'pr-1-x',now()+interval '1 day','running')`, pr); err != nil {
 		t.Fatal(err)
 	}
 	queue := &jobs{}
@@ -383,5 +383,76 @@ func TestPrivatePreviewRoundTrip(t *testing.T) {
 	}
 	if res := do(http.MethodGet, signIn.RequestURI(), stranger, nil, nil); res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "https://"+host+"/dashboard?x=1" {
 		t.Fatalf("public: %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+}
+
+func TestPrivatePreviewCookieAndTokenStopAfterMemberRemoval(t *testing.T) {
+	pool := isolatedPool(t)
+	ctx := t.Context()
+	for _, sql := range []string{
+		"INSERT INTO users(github_id,username) VALUES(1,'owner'),(2,'reviewer')",
+		"INSERT INTO installations(github_installation_id,owner_user_id) VALUES(99,1)",
+		"INSERT INTO repos(installation_id,github_repo_id,full_name,private_previews) VALUES(1,100,'owner/app',true)",
+		"INSERT INTO pull_requests(repo_id,number,head_sha) VALUES(1,1,'sha')",
+		"INSERT INTO environments(pull_request_id,subdomain,status,expires_at) VALUES(1,'private-host','running',now()+interval '1 day')",
+		"INSERT INTO workspace_memberships(workspace_id,user_id,role) VALUES(1,2,'reviewer')",
+		"INSERT INTO repository_memberships(repo_id,workspace_id,user_id) VALUES(1,1,2)",
+	} {
+		if _, err := pool.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewHandler(pool, session{names: map[int64]string{2: "reviewer"}}, github{"reviewer": "read"}, nil, "secret", "preview.test", "https://previa.test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	req := httptest.NewRequest(http.MethodGet, "/previews/access?host=private-host.preview.test&path=/", nil)
+	req = req.WithContext(context.WithValue(ctx, userKey{}, int64(2)))
+	res := httptest.NewRecorder()
+	h.access(res, req)
+	if res.Code != 303 {
+		t.Fatal("reviewer without source access denied", res.Code, res.Body.String())
+	}
+	location, err := url.Parse(res.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	forward := func(uri, cookie string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, routing.AccessPath, nil)
+		request.Header.Set("X-Forwarded-Host", "private-host.preview.test")
+		request.Header.Set("X-Forwarded-Uri", uri)
+		if cookie != "" {
+			request.AddCookie(&http.Cookie{Name: cookieName, Value: cookie})
+		}
+		result := httptest.NewRecorder()
+		h.check(result, request)
+		return result
+	}
+	issued := forward(location.RequestURI(), "")
+	cookies := issued.Result().Cookies()
+	if issued.Code != 302 || len(cookies) != 1 {
+		t.Fatal("cookie was not issued", issued.Code)
+	}
+	if got := forward("/", cookies[0].Value); got.Code != 200 {
+		t.Fatal("valid local grant denied", got.Code)
+	}
+	for _, status := range []string{"publishing", "failed"} {
+		if _, err := pool.Exec(ctx, "UPDATE environments SET status=$1 WHERE pull_request_id=1", status); err != nil {
+			t.Fatal(err)
+		}
+		if got := forward("/", cookies[0].Value); got.Code != 200 {
+			t.Fatal("previous private preview denied during replacement", status, got.Code)
+		}
+	}
+	if _, err := pool.Exec(ctx, "UPDATE workspace_memberships SET state='removed',revision=revision+1 WHERE workspace_id=1 AND user_id=2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := forward("/", cookies[0].Value); got.Code == 200 {
+		t.Fatal("removed member's cookie retained access")
+	}
+	if got := forward(location.RequestURI(), ""); got.Code != 403 {
+		t.Fatal("pre-removal token replayed", got.Code)
+	}
+	denied := httptest.NewRecorder()
+	h.access(denied, req)
+	if denied.Code != 403 {
+		t.Fatal("removed member fell back to GitHub outsider permission", denied.Code)
 	}
 }

@@ -113,12 +113,8 @@ func (r *Repository) AcceptRoute(ctx context.Context, op Operation, target Route
 		if !scope.publishes(request) {
 			return nil
 		}
-		intent, err := readLockedIntent(ctx, q, op.PullRequestID)
-		if err != nil {
+		if allowed, err := requestPublishable(ctx, q, request); err != nil || !allowed {
 			return err
-		}
-		if !intent.publishes(request) {
-			return nil
 		}
 		env, err := q.LockRouteEnvironment(ctx, op.PullRequestID)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -162,6 +158,25 @@ func (r *Repository) AcceptRoute(ctx context.Context, op Operation, target Route
 		return RouteDecision{}, err
 	}
 	return decision, nil
+}
+
+func requestPublishable(ctx context.Context, q *dbgen.Queries, request Request) (bool, error) {
+	intent, err := readLockedIntent(ctx, q, request.PullRequestID)
+	if err != nil {
+		return false, err
+	}
+	if !intent.publishes(request) {
+		return false, nil
+	}
+	return publicationAuthorized(ctx, q, request.PullRequestID)
+}
+
+func publicationAuthorized(ctx context.Context, q *dbgen.Queries, pr int64) (bool, error) {
+	allowed, err := q.WorkspacePublicationAuthorized(ctx, pr)
+	if err != nil {
+		return false, fmt.Errorf("check workspace publication authority: %w", err)
+	}
+	return allowed, nil
 }
 
 // complete reports whether the target names a candidate and where it listens.

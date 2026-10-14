@@ -42,3 +42,14 @@ func TestRouterLogsRequestAndRecoversPanic(t *testing.T) {
 		t.Fatalf("logs did not preserve request ID and recovered status: %+v %+v", panicLog, requestLog)
 	}
 }
+
+func TestInvitationTokenIsRedactedFromRequestLogs(t *testing.T) {
+	var logs bytes.Buffer
+	r := NewRouter(slog.New(slog.NewJSONHandler(&logs, nil)))
+	r.Get("/workspace-invitations/{token}", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	token := "an-addressed-secret-token"
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/workspace-invitations/"+token+"?also="+token, nil))
+	if strings.Contains(logs.String(), token) || !strings.Contains(logs.String(), "/workspace-invitations/{token}") {
+		t.Fatal("invitation path was not redacted", logs.String())
+	}
+}

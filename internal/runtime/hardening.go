@@ -160,8 +160,9 @@ func previewLabels(instance string, t Target, request requestIdentity, imageRef 
 	if healthPath != "" {
 		labels[dockerx.LabelHealthPath] = healthPath
 	}
-	if t.AccountID > 0 {
-		labels[dockerx.LabelAccount] = strconv.FormatInt(t.AccountID, 10)
+	if t.WorkspaceID > 0 {
+		labels[dockerx.LabelAccount] = strconv.FormatInt(t.WorkspaceID, 10)
+		labels[dockerx.LabelWorkspace] = strconv.FormatInt(t.WorkspaceID, 10)
 	}
 
 	return labels

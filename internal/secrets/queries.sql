@@ -1,12 +1,12 @@
 -- name: OwnedRepository :one
 SELECT r.id, r.full_name, (r.accessible AND i.status = 'active')::boolean AS available
 FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE r.id = $1 AND i.owner_user_id = $2;
+WHERE r.id = $1 AND workspace_repository_access(r.id,sqlc.narg(owner_user_id)::bigint,'manage');
 
 -- name: LockOwnedRepository :one
 SELECT r.id, (r.accessible AND i.status = 'active')::boolean AS available
 FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE r.id = $1 AND i.owner_user_id = $2
+WHERE r.id = $1 AND workspace_repository_access(r.id,sqlc.narg(owner_user_id)::bigint,'manage')
 FOR UPDATE OF r;
 
 -- name: ListSecrets :many
@@ -27,7 +27,7 @@ SET encrypted_value = EXCLUDED.encrypted_value, key_version = EXCLUDED.key_versi
 -- name: DeleteOwnedSecrets :execrows
 DELETE FROM env_secrets s
 USING repos r JOIN installations i ON i.id = r.installation_id
-WHERE s.repo_id = r.id AND r.id = sqlc.arg(id) AND i.owner_user_id = sqlc.arg(owner_user_id)
+WHERE s.repo_id = r.id AND r.id = sqlc.arg(id) AND workspace_repository_access(r.id,sqlc.narg(owner_user_id)::bigint,'manage')
   AND s.key = ANY(sqlc.arg(keys)::text[]);
 
 -- name: SealedSecrets :many
@@ -37,7 +37,7 @@ SELECT key, encrypted_value, key_version, build FROM env_secrets WHERE repo_id =
 -- Whether Dockerfile steps of trusted builds may read the secret.
 UPDATE env_secrets s SET build = sqlc.arg(build)::boolean, updated_at = now()
 FROM repos r JOIN installations i ON i.id = r.installation_id
-WHERE s.repo_id = r.id AND r.id = sqlc.arg(repo_id) AND i.owner_user_id = sqlc.arg(owner_user_id)
+WHERE s.repo_id = r.id AND r.id = sqlc.arg(repo_id) AND workspace_repository_access(r.id,sqlc.narg(owner_user_id)::bigint,'manage')
   AND s.key = sqlc.arg(key) AND s.build IS DISTINCT FROM sqlc.arg(build)::boolean
   AND (NOT sqlc.arg(build)::boolean OR (r.accessible AND i.status = 'active'));
 
@@ -52,3 +52,6 @@ WHERE id = sqlc.arg(id) AND key_version = sqlc.arg(old_version) AND encrypted_va
 
 -- name: CountSecretsByKeyVersion :many
 SELECT key_version, count(*) AS secrets FROM env_secrets GROUP BY key_version ORDER BY key_version;
+
+-- name: LockSecretInstallation :one
+SELECT i.id FROM installations i JOIN repos r ON r.installation_id=i.id WHERE r.id=$1 FOR UPDATE OF i;

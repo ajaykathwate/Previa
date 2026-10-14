@@ -8,11 +8,13 @@ import (
 	"os"
 	"testing"
 
+	"github.com/ajaykathwatee/previa/internal/platform/scope"
 	"github.com/google/go-github/v91/github"
 )
 
 type fakeStore struct {
 	revision       int64
+	workspace      int64
 	linked         bool
 	linkErr        error
 	events         int
@@ -21,13 +23,14 @@ type fakeStore struct {
 }
 
 func (f *fakeStore) Prepare(context.Context, int64) (int64, error) { return f.revision, nil }
-func (f *fakeStore) Link(_ context.Context, _, _, revision int64, _ string, _ []RepositoryInfo) error {
+func (f *fakeStore) Link(ctx context.Context, _, _, revision int64, _ string, _ []RepositoryInfo) error {
 	if revision != f.revision {
 		return ErrSuperseded
 	}
 	if f.linkErr != nil {
 		return f.linkErr
 	}
+	f.workspace = scope.WorkspaceID(ctx)
 	f.linked = true
 	return nil
 }

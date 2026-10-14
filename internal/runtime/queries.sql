@@ -1,8 +1,8 @@
 -- name: ExecutionTarget :one
 -- Everything the runtime rechecks immediately before work that needs access or
 -- secrets: lifecycle, freshness, the authorized intent and repository access.
-SELECT p.id AS pull_request_id, p.repo_id, p.number, p.head_sha, p.state, p.generation, p.is_fork, p.head_repo_id,
-       r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status, i.owner_user_id,
+SELECT workspace_intent_authorized(p.id)::boolean AS workspace_authorized, p.id AS pull_request_id, p.repo_id, p.number, p.head_sha, p.state, p.generation, p.is_fork, p.head_repo_id,
+       r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status, b.workspace_id,
        b.generation AS intent_generation, b.revision AS intent_revision, b.head_sha AS intent_head_sha, b.state AS intent_state
 FROM pull_requests p JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = p.id
@@ -10,7 +10,7 @@ WHERE p.id = $1;
 
 -- name: AdmissionScope :one
 -- The PR's base repository and account, for the advisory capacity check.
-SELECT r.github_repo_id, i.owner_user_id FROM pull_requests p JOIN repos r ON r.id = p.repo_id
+SELECT r.github_repo_id, i.workspace_id FROM pull_requests p JOIN repos r ON r.id = p.repo_id
 JOIN installations i ON i.id = r.installation_id WHERE p.id = $1;
 
 -- name: RecordComponents :exec
@@ -37,7 +37,7 @@ WHERE c.pull_request_id = sqlc.arg(pull_request_id) AND e.pull_request_id = c.pu
 -- deployed or pending candidate, or a build starting one, in an accessible
 -- repository of an active installation. Only same-repository pull requests
 -- are trusted with approved destinations.
-SELECT p.id AS pull_request_id, p.repo_id,
+SELECT workspace_intent_authorized(p.id)::boolean AS workspace_authorized, p.id AS pull_request_id, p.repo_id,
        (NOT p.is_fork AND p.head_repo_id IS NOT NULL AND p.head_repo_id = r.github_repo_id)::boolean AS trusted
 FROM pull_requests p
 JOIN repos r ON r.id = p.repo_id

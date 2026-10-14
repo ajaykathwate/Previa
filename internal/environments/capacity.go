@@ -63,8 +63,8 @@ func (r *Repository) WithBuildSlots(slots int) *Repository {
 	return r
 }
 
-// AccountLimits share one server fairly between accounts (installation
-// owners). Zero turns a limit off.
+// AccountLimits share one server fairly between stable workspaces. Configuration
+// names keep ACCOUNT for compatibility; zero turns a limit off.
 type AccountLimits struct {
 	BuildsPerAccount int // running builds at once (BUILDS_PER_ACCOUNT)
 	MinutesPerDay    int // build minutes per UTC day (BUILD_MINUTES_PER_ACCOUNT_DAY)
@@ -107,14 +107,14 @@ func (r *Repository) admissionWaitTx(ctx context.Context, q *dbgen.Queries, pull
 	if r.buildSlots > 0 && running >= int64(r.buildSlots) {
 		return &WaitingError{Reason: WaitCapacity}, nil
 	}
-	owner, err := q.FindPROwner(ctx, pullRequestID)
+	workspace, err := q.FindPRWorkspace(ctx, pullRequestID)
 	if err != nil {
-		return nil, fmt.Errorf("find the build's account: %w", err)
+		return nil, fmt.Errorf("find the build's workspace: %w", err)
 	}
 	if r.accounts.BuildsPerAccount > 0 {
-		mine, err := q.CountAccountRunningBuilds(ctx, dbgen.CountAccountRunningBuildsParams{PrID: pullRequestID, OwnerUserID: owner.Int64})
+		mine, err := q.CountWorkspaceRunningBuilds(ctx, dbgen.CountWorkspaceRunningBuildsParams{PrID: pullRequestID, WorkspaceID: workspace.Int64})
 		if err != nil {
-			return nil, fmt.Errorf("count the account's running builds: %w", err)
+			return nil, fmt.Errorf("count the workspace's running builds: %w", err)
 		}
 		if mine >= int64(r.accounts.BuildsPerAccount) {
 			return &WaitingError{Reason: WaitAccount}, nil
@@ -122,9 +122,9 @@ func (r *Repository) admissionWaitTx(ctx context.Context, q *dbgen.Queries, pull
 	}
 	if r.accounts.MinutesPerDay > 0 {
 		day := now.UTC()
-		used, err := q.AccountBuildSeconds(ctx, dbgen.AccountBuildSecondsParams{UserID: owner.Int64, Day: pgtype.Date{Time: day, Valid: true}})
+		used, err := q.WorkspaceBuildSeconds(ctx, dbgen.WorkspaceBuildSecondsParams{WorkspaceID: workspace.Int64, Day: pgtype.Date{Time: day, Valid: true}})
 		if err != nil {
-			return nil, fmt.Errorf("read the account's build minutes: %w", err)
+			return nil, fmt.Errorf("read the workspace's build minutes: %w", err)
 		}
 		if used >= int64(r.accounts.MinutesPerDay)*60 {
 			midnight := time.Date(day.Year(), day.Month(), day.Day()+1, 0, 0, 0, 0, time.UTC)
@@ -136,11 +136,11 @@ func (r *Repository) admissionWaitTx(ctx context.Context, q *dbgen.Queries, pull
 		if current.WaitingSince.Valid {
 			since = current.WaitingSince.Time
 		}
-		turn, err := q.OlderWaiterFromIdleAccount(ctx, dbgen.OlderWaiterFromIdleAccountParams{
-			Since: pgtype.Timestamptz{Time: since, Valid: true}, LiveAfter: pgtype.Timestamptz{Time: now.Add(-liveWait), Valid: true}, OwnerUserID: owner.Int64,
+		turn, err := q.OlderWaiterFromIdleWorkspace(ctx, dbgen.OlderWaiterFromIdleWorkspaceParams{
+			Since: pgtype.Timestamptz{Time: since, Valid: true}, LiveAfter: pgtype.Timestamptz{Time: now.Add(-liveWait), Valid: true}, WorkspaceID: workspace.Int64,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("check other accounts' turns: %w", err)
+			return nil, fmt.Errorf("check other workspaces' turns: %w", err)
 		}
 		if turn {
 			return &WaitingError{Reason: WaitCapacity}, nil

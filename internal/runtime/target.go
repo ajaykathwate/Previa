@@ -23,7 +23,7 @@ type Target struct {
 	// unknown or deleted.
 	BaseRepoID, HeadRepoID int64
 	Fork                   bool
-	AccountID              int64 // the installation owner's Previa user, for per-account limits; 0 if unknown
+	WorkspaceID            int64 // the stable workspace ID, for shared limits; 0 if unknown
 }
 
 // secretSource is the source identity secrets are decided on. Anything GitHub
@@ -36,7 +36,33 @@ func (t Target) secretSource() secrets.Source {
 }
 
 // TargetStore reads targets from PostgreSQL.
-type TargetStore struct{ pool *pgxpool.Pool }
+type BuildAuthorizer interface {
+	AuthorizeBuild(context.Context, int64) (bool, error)
+}
+
+type TargetStore struct {
+	pool          *pgxpool.Pool
+	authorization BuildAuthorizer
+}
+
+func (s *TargetStore) WithAuthorization(a BuildAuthorizer) *TargetStore {
+	s.authorization = a
+	return s
+}
+
+func (s *TargetStore) authorize(ctx context.Context, pr int64) error {
+	if s.authorization == nil {
+		return nil
+	}
+	allowed, err := s.authorization.AuthorizeBuild(ctx, pr)
+	if err != nil {
+		return failure(CodeUnavailable, "GitHub source permission could not be verified. Try again shortly.", true, err)
+	}
+	if !allowed {
+		return failure(CodeNotCurrent, "This build's requesting member no longer has access.", false, nil)
+	}
+	return nil
+}
 
 func NewTargetStore(pool *pgxpool.Pool) *TargetStore { return &TargetStore{pool: pool} }
 
@@ -50,7 +76,18 @@ func (s *TargetStore) Current(ctx context.Context, request environments.Request)
 	if err != nil {
 		return Target{}, failure(CodeUnavailable, "The build target could not be read.", true, fmt.Errorf("read execution target: %w", err))
 	}
-	return currentTarget(row, request)
+	target, err := currentTarget(row, request)
+	if err != nil {
+		return Target{}, err
+	}
+	if err := s.authorize(ctx, request.PullRequestID); err != nil {
+		return Target{}, err
+	}
+	return target, nil
+}
+
+func (s *TargetStore) AuthorizeRequest(ctx context.Context, pr int64) error {
+	return s.authorize(ctx, pr)
 }
 
 // BaseRepository returns the GitHub ID of the PR's base repository.
@@ -62,12 +99,12 @@ func (s *TargetStore) AdmissionScope(ctx context.Context, pullRequestID int64) (
 	if err != nil {
 		return Target{}, failure(CodeUnavailable, "The build target could not be read.", true, fmt.Errorf("read base repository: %w", err))
 	}
-	return Target{PullRequestID: pullRequestID, BaseRepoID: row.GithubRepoID.Int64, AccountID: row.OwnerUserID.Int64}, nil
+	return Target{PullRequestID: pullRequestID, BaseRepoID: row.GithubRepoID.Int64, WorkspaceID: row.WorkspaceID.Int64}, nil
 }
 
 func currentTarget(row dbgen.ExecutionTargetRow, request environments.Request) (Target, error) {
 	switch {
-	case row.State != "open" || row.Generation != request.Generation || row.HeadSha != request.HeadSHA:
+	case !row.WorkspaceAuthorized || !row.WorkspaceID.Valid || row.WorkspaceID.Int64 <= 0 || row.State != "open" || row.Generation != request.Generation || row.HeadSha != request.HeadSHA:
 		return Target{}, failure(CodeNotCurrent, "A newer commit or a close replaced this build.", false, nil)
 	case !row.IntentState.Valid || row.IntentState.String != "running" || row.IntentRevision.Int64 != request.Revision ||
 		row.IntentGeneration.Int64 != request.Generation || row.IntentHeadSha.String != request.HeadSHA:
@@ -82,7 +119,7 @@ func currentTarget(row dbgen.ExecutionTargetRow, request environments.Request) (
 	return Target{
 		PullRequestID: row.PullRequestID, RepoID: row.RepoID, Number: row.Number, InstallationID: row.GithubInstallationID,
 		BaseRepoID: row.GithubRepoID.Int64, HeadRepoID: head, Fork: row.IsFork || head != row.GithubRepoID.Int64,
-		AccountID: row.OwnerUserID.Int64,
+		WorkspaceID: row.WorkspaceID.Int64,
 	}, nil
 }
 

@@ -7,6 +7,8 @@ package dbgen
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const advanceRouteTable = `-- name: AdvanceRouteTable :one
@@ -21,14 +23,25 @@ func (q *Queries) AdvanceRouteTable(ctx context.Context) (int64, error) {
 	return version, err
 }
 
+const lockPreviewInstallation = `-- name: LockPreviewInstallation :one
+SELECT i.id FROM installations i JOIN repos r ON r.installation_id=i.id WHERE r.id=$1 FOR UPDATE OF i
+`
+
+func (q *Queries) LockPreviewInstallation(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lockPreviewInstallation, id)
+	var id_2 int64
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const ownsRepository = `-- name: OwnsRepository :one
 SELECT EXISTS (SELECT 1 FROM repos r JOIN installations i ON i.id = r.installation_id
-    WHERE r.id = $1 AND i.owner_user_id = $2::bigint)::boolean
+    WHERE r.id = $1 AND workspace_repository_access(r.id,$2::bigint,'manage'))::boolean
 `
 
 type OwnsRepositoryParams struct {
 	RepoID      int64
-	OwnerUserID int64
+	OwnerUserID pgtype.Int8
 }
 
 func (q *Queries) OwnsRepository(ctx context.Context, arg OwnsRepositoryParams) (bool, error) {
@@ -38,20 +51,50 @@ func (q *Queries) OwnsRepository(ctx context.Context, arg OwnsRepositoryParams) 
 	return column_1, err
 }
 
+const previewAuthorization = `-- name: PreviewAuthorization :one
+SELECT w.revision AS authorization_revision,
+ workspace_repository_access(r.id,$1::bigint,'preview')::boolean AS allowed,
+ EXISTS(SELECT 1 FROM workspace_memberships m WHERE m.workspace_id=w.id AND m.user_id=$1::bigint)::boolean AS membership_exists
+FROM environments e JOIN pull_requests p ON p.id=e.pull_request_id
+JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
+JOIN workspaces w ON w.id=i.workspace_id AND w.state='active'
+WHERE e.subdomain=$2::text AND r.accessible AND i.status='active'
+`
+
+type PreviewAuthorizationParams struct {
+	UserID    int64
+	Subdomain string
+}
+
+type PreviewAuthorizationRow struct {
+	AuthorizationRevision int64
+	Allowed               bool
+	MembershipExists      bool
+}
+
+func (q *Queries) PreviewAuthorization(ctx context.Context, arg PreviewAuthorizationParams) (PreviewAuthorizationRow, error) {
+	row := q.db.QueryRow(ctx, previewAuthorization, arg.UserID, arg.Subdomain)
+	var i PreviewAuthorizationRow
+	err := row.Scan(&i.AuthorizationRevision, &i.Allowed, &i.MembershipExists)
+	return i, err
+}
+
 const previewForHost = `-- name: PreviewForHost :one
-SELECT e.id AS environment_id, r.full_name, r.private_previews, i.github_installation_id,
-       coalesce(i.owner_user_id, 0)::bigint AS owner_user_id
-FROM environments e JOIN pull_requests p ON p.id = e.pull_request_id
-JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
-WHERE e.subdomain = $1
+SELECT e.id AS environment_id,r.id AS repo_id,r.full_name,r.private_previews,i.github_installation_id,
+ w.revision AS authorization_revision
+FROM environments e JOIN pull_requests p ON p.id=e.pull_request_id
+JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
+JOIN workspaces w ON w.id=i.workspace_id AND w.state='active'
+WHERE e.subdomain=$1 AND r.accessible AND i.status='active'
 `
 
 type PreviewForHostRow struct {
-	EnvironmentID        int64
-	FullName             string
-	PrivatePreviews      bool
-	GithubInstallationID int64
-	OwnerUserID          int64
+	EnvironmentID         int64
+	RepoID                int64
+	FullName              string
+	PrivatePreviews       bool
+	GithubInstallationID  int64
+	AuthorizationRevision int64
 }
 
 func (q *Queries) PreviewForHost(ctx context.Context, subdomain string) (PreviewForHostRow, error) {
@@ -59,10 +102,11 @@ func (q *Queries) PreviewForHost(ctx context.Context, subdomain string) (Preview
 	var i PreviewForHostRow
 	err := row.Scan(
 		&i.EnvironmentID,
+		&i.RepoID,
 		&i.FullName,
 		&i.PrivatePreviews,
 		&i.GithubInstallationID,
-		&i.OwnerUserID,
+		&i.AuthorizationRevision,
 	)
 	return i, err
 }
@@ -71,14 +115,14 @@ const setPrivatePreviews = `-- name: SetPrivatePreviews :execrows
 
 UPDATE repos r SET private_previews = $1::boolean
 FROM installations i
-WHERE r.id = $2 AND i.id = r.installation_id AND i.owner_user_id = $3::bigint
+WHERE r.id = $2 AND i.id = r.installation_id AND workspace_repository_access(r.id,$3::bigint,'manage')
   AND r.private_previews IS DISTINCT FROM $1::boolean
 `
 
 type SetPrivatePreviewsParams struct {
 	Private     bool
 	RepoID      int64
-	OwnerUserID int64
+	OwnerUserID pgtype.Int8
 }
 
 // Private previews (db/migrations/0027_private_previews.sql).

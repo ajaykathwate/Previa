@@ -4,7 +4,8 @@
 
 A self-hosted service that builds and deploys isolated, publicly reachable preview
 environments for pull requests on connected GitHub repositories. Each repository
-defaults to **Manual**: its owner requests a build for a specific PR. Owners can
+defaults to **Manual**: a workspace Owner, Admin or granted Developer requests a
+build for a specific PR. Owners and Admins can
 enable **Automatic**, which builds the latest commit after a five-minute quiet
 period. Previews are torn down when the PR closes or merges.
 
@@ -227,7 +228,9 @@ The dashboard supports login, installation linking and the accepted manual build
 workflow. Owners need repository mode controls and a way to select a PR and request
 its latest commit. GitHub comments/checks remain the review-facing feedback channel.
 
-Current pages are Overview, Repositories, Builds, Previews and Developer Tools.
+Current pages are Overview, Repositories, Builds, Previews, Workspaces (members,
+invitations and settings), and Developer Tools. Reviewer navigation exposes only
+permitted previews and team settings.
 The workspace uses a "signal" theme (graphite neutrals, a lime accent, light and
 dark modes that follow the OS with a manual toggle, system sans plus monospace for
 commits and branches). A grouped sidebar collapses to an icon rail on medium screens
@@ -339,6 +342,24 @@ Reviewer clicks preview link
    → Router (subdomain → container)
    → Running container serves the request directly
 ```
+
+### Shared team workspace requirement
+
+Workspace membership is authoritative for Previa access. Owner/Admin access spans
+that workspace; Developer and Reviewer access requires explicit repository grants.
+Source-sensitive actions and logs additionally verify current GitHub permission
+and numeric identity. Reviewer access intentionally includes granted private
+previews without source permission. Invitations expire and require consent from
+the addressed GitHub account. Ownership handover preserves connections, URLs and
+shared workspace quotas. Removal fences unfinished manual builds and revokes
+protected previews and live streams.
+
+The detailed contract and current user flows are in
+[Shared team workspaces](docs/28-shared-workspaces.md). References below to a
+GitHub repository owner describe the GitHub connection authority; they do not
+create a separate installer-only dashboard authorization path. Review feedback,
+billing and deletion remain the later features specified in
+[the team SaaS plan](README-MVP-PRODUCT-EXPANSION.md).
 
 ### 3.3 Key design decisions worth being able to explain
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/a-h/templ"
+	"github.com/ajaykathwatee/previa/internal/platform/scope"
 	authpages "github.com/ajaykathwatee/previa/web/pages/auth"
 	"github.com/alexedwards/scs/v2"
 	"github.com/go-chi/chi/v5"
@@ -71,9 +72,14 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusUnauthorized, "Sign in before connecting a repository.")
 		return
 	}
+	if scope.WorkspaceID(r.Context()) <= 0 {
+		http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
+		return
+	}
 	state := newState()
 	h.sessions.Put(r.Context(), "installation_state", state)
 	h.sessions.Put(r.Context(), "installation_user", userID)
+	h.sessions.Put(r.Context(), "installation_workspace", scope.WorkspaceID(r.Context()))
 	h.sessions.Put(r.Context(), "installation_expires", time.Now().Add(10*time.Minute).Unix())
 	h.sessions.Remove(r.Context(), "pending_installation")
 	h.sessions.Remove(r.Context(), "installation_authorize_state")
@@ -115,12 +121,15 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) {
 	h.sessions.Remove(r.Context(), "installation_user")
 	h.sessions.Remove(r.Context(), "installation_expires")
 	code := r.URL.Query().Get("code")
-	if id <= 0 || strings.TrimSpace(code) == "" || r.URL.Query().Get("error") != "" {
+	if id <= 0 || h.sessions.GetInt64(r.Context(), "installation_workspace") <= 0 || strings.TrimSpace(code) == "" || r.URL.Query().Get("error") != "" {
 		h.fail(w, r, http.StatusBadRequest, "GitHub App authorization was declined or interrupted. You can try again.")
 		return
 	}
 	userID, githubID, _ := h.users.UserIDs(r.Context())
-	if err := h.service.Link(r.Context(), code, userID, githubID, id); err != nil {
+	workspaceID := h.sessions.GetInt64(r.Context(), "installation_workspace")
+	h.sessions.Remove(r.Context(), "installation_workspace")
+	linkContext := scope.With(r.Context(), workspaceID, "")
+	if err := h.service.Link(linkContext, code, userID, githubID, id); err != nil {
 		// OAuth/provider errors can contain sensitive response bodies. Never log them.
 		h.logger.WarnContext(r.Context(), "installation linking failed", "installation_id", id)
 		status := http.StatusBadGateway
@@ -130,7 +139,7 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, ErrSuperseded) {
 			status = http.StatusConflict
 		}
-		h.fail(w, r, status, "This installation could not be linked. Check that the same GitHub account has access, then start again. An installation already linked to another user cannot be reassigned.")
+		h.fail(w, r, status, "This installation could not be linked. Check your workspace administration and GitHub access, then start again. An installation linked to another workspace cannot be reassigned.")
 		return
 	}
 	h.logger.InfoContext(r.Context(), "installation linked; authenticated repository verification completed", "installation_id", id)

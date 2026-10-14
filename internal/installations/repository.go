@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/installations/dbgen"
+	"github.com/ajaykathwatee/previa/internal/platform/scope"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -78,6 +79,27 @@ func (r *Repository) transaction(ctx context.Context, operation func(pgx.Tx, *db
 }
 func (r *Repository) Link(ctx context.Context, id, userID, revision int64, account string, repos []RepositoryInfo) error {
 	return r.transaction(ctx, func(tx pgx.Tx, q *dbgen.Queries) error {
+		workspaceID := scope.WorkspaceID(ctx)
+		if workspaceID == 0 {
+			var err error
+			workspaceID, err = q.DefaultWorkspace(ctx, userID)
+			if err != nil {
+				return fmt.Errorf("resolve installation workspace: %w", err)
+			}
+		}
+		if _, err := q.LockLinkWorkspace(ctx, workspaceID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrForbidden
+			}
+			return fmt.Errorf("lock connection workspace: %w", err)
+		}
+		allowed, err := q.AuthorizedLinkWorkspace(ctx, dbgen.AuthorizedLinkWorkspaceParams{ID: workspaceID, UserID: userID})
+		if err != nil {
+			return fmt.Errorf("verify workspace connection authority: %w", err)
+		}
+		if !allowed {
+			return ErrForbidden
+		}
 		if err := q.EnsureInstallation(ctx, id); err != nil {
 			return fmt.Errorf("ensure verified installation: %w", err)
 		}
@@ -85,14 +107,14 @@ func (r *Repository) Link(ctx context.Context, id, userID, revision int64, accou
 		if err != nil {
 			return fmt.Errorf("lock installation: %w", err)
 		}
-		if row.OwnerUserID.Valid && row.OwnerUserID.Int64 != userID {
+		if row.WorkspaceID.Valid && row.WorkspaceID.Int64 != workspaceID {
 			return ErrForbidden
 		}
 		if row.Revision != revision || row.Status != "active" {
 			return ErrSuperseded
 		}
-		if err := q.LinkInstallation(ctx, dbgen.LinkInstallationParams{ID: row.ID, OwnerUserID: pgtype.Int8{Int64: userID, Valid: true}, AccountLogin: account, Status: "active"}); err != nil {
-			return fmt.Errorf("set installation owner: %w", err)
+		if err := q.LinkInstallation(ctx, dbgen.LinkInstallationParams{ID: row.ID, OwnerUserID: pgtype.Int8{Int64: userID, Valid: true}, WorkspaceID: pgtype.Int8{Int64: workspaceID, Valid: true}, AccountLogin: account, Status: "active"}); err != nil {
+			return fmt.Errorf("link installation to workspace: %w", err)
 		}
 		if err := q.MarkRepositoriesUnavailable(ctx, row.ID); err != nil {
 			return fmt.Errorf("reset installation repository access: %w", err)
@@ -195,7 +217,7 @@ func applyEvent(ctx context.Context, q *dbgen.Queries, id int64, status, account
 	return nil
 }
 func (r *Repository) List(ctx context.Context, userID int64) ([]InstallationInfo, error) {
-	rows, err := dbgen.New(r.db).ListLinkedInstallations(ctx, pgtype.Int8{Int64: userID, Valid: true})
+	rows, err := dbgen.New(r.db).ListLinkedInstallations(ctx, dbgen.ListLinkedInstallationsParams{OwnerUserID: pgtype.Int8{Int64: userID, Valid: true}, WorkspaceID: scope.WorkspaceID(ctx)})
 	if err != nil {
 		return nil, fmt.Errorf("list linked installations: %w", err)
 	}

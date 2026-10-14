@@ -124,3 +124,6 @@ DELETE FROM pull_requests WHERE id = $1;
 -- App output nobody watched for an hour, with its lines. A running follower
 -- removes its own when its viewer leaves; this catches the rest.
 DELETE FROM app_output_watches WHERE seen_at < sqlc.arg(cutoff) AND state <> 'following';
+
+-- name: PruneWorkspaceBuildUsage :execrows
+DELETE FROM workspace_build_usage WHERE day<sqlc.arg(before)::date;

@@ -1,23 +1,36 @@
 package components
 
+import "strconv"
+
 // SidebarContent is shared by the desktop sidebar and the mobile drawer.
 templ SidebarContent(active NavItem) {
 	<nav aria-label="Workspace navigation" class="sidebar-nav">
+		@WorkspaceSwitcher()
+ if Workspace(ctx).Role=="reviewer" {
+ @WorkspaceLink("/workspaces/"+strconv.FormatInt(Workspace(ctx).ID,10)+"/previews","Permitted previews",EnvironmentIcon(),NavPreviews,active)
+ }
 		<div class="nav-group">
 			<p class="nav-group-label">Workspace</p>
+			if CanOperate(ctx) {
 			@WorkspaceLink("/dashboard", "Overview", OverviewIcon(), NavOverview, active)
 			@WorkspaceLink("/repositories", "Repositories", RepositoryIcon(), NavRepositories, active)
 			@WorkspaceLink("/starter-kits", "Starter kits", KitIcon(), NavStarterKits, active)
+			}
+			@WorkspaceLink("/workspaces", "Team & settings", TeamIcon(), NavWorkspaces, active)
 		</div>
+		if CanOperate(ctx) {
 		<div class="nav-group">
 			<p class="nav-group-label">Delivery</p>
 			@WorkspaceLink("/builds", "Builds", BuildIcon(), NavBuilds, active)
 			@WorkspaceLink("/previews", "Previews", EnvironmentIcon(), NavPreviews, active)
 		</div>
+		}
+		if CanManage(ctx) {
 		<div class="nav-group">
 			<p class="nav-group-label">System</p>
 			@WorkspaceLink("/developer-tools", "Developer tools", TerminalIcon(), NavTools, active)
 		</div>
+		}
 		<div class="nav-group">
 			<p class="nav-group-label">Help</p>
 			@WorkspaceLink("/faq", "FAQ", QuestionIcon(), NavFAQ, active)
@@ -42,7 +55,7 @@ templ Sidebar(active NavItem) {
 			</button>
 			<p class="sidebar-status">
 				@ServerIcon()
-				<span class="nav-label">Self-hosted control plane</span>
+				<span class="nav-label">Preview control plane</span>
 			</p>
 		</div>
 	</aside>

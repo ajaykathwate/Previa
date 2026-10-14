@@ -80,3 +80,18 @@ npm exec --prefix web/tests/browser -- playwright install-deps chromium
 If the browser executable is missing, rerun `make browser-install`. Both Air
 configurations exclude this directory so dependencies/artifacts do not trigger
 application reloads. Installed packages and screenshots are Git-ignored.
+
+
+Shared-team flows also have a database-backed suite:
+
+```sh
+set -a; . ./.env; set +a
+export TEST_DATABASE_URL="$DATABASE_URL"
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-workspace-browser
+```
+
+`internal/workspaces/browser_test.go` creates a temporary schema and serves real
+session/CSRF/workspace handlers with fixture GitHub responses. Four scenarios in
+`workspaces.test.cjs` cover layouts, access confirmation, workspace creation and
+switching, JavaScript-free invitation consent, and ownership handover. Screenshots
+use the existing `UI_BROWSER_SCREENSHOTS=1` setting and ignored artifacts folder.

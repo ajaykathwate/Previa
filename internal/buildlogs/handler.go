@@ -50,7 +50,6 @@ const (
 	MaxStreams        = 256
 	MaxStreamsPerUser = 8
 	frameTimeout      = 10 * time.Second
-	ownershipRecheck  = 30 * time.Second
 )
 
 // Topic is the realtime topic raised when an environment's log stream changes
@@ -411,7 +410,6 @@ type liveState struct {
 	user, repoID int64
 	number       int32
 	target       Target
-	checked      time.Time
 	cursor       liveCursor
 	status       string
 }
@@ -464,10 +462,10 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 	if err := sse.Retry(h.opts.Retry); err != nil {
 		return
 	}
-	state := &liveState{user: user, repoID: repoID, number: number, target: target, checked: time.Now(), cursor: parseCursor(r)}
+	state := &liveState{user: user, repoID: repoID, number: number, target: target, cursor: parseCursor(r)}
 	// Re-read the target now that the subscriptions exist, so an environment
 	// created after the first read is watched from the start.
-	if err := h.sync(r.Context(), sse, state, true); err != nil {
+	if err := h.sync(r.Context(), sse, state); err != nil {
 		return
 	}
 	subscribeLogs(state.target.EnvironmentID)
@@ -480,14 +478,13 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 		if logSub != nil {
 			logReady = logSub.Ready()
 		}
-		recheck := false
 		select {
 		case <-r.Context().Done():
 			return
 		case <-deadline.C:
 			return // The browser reconnects through authentication with its cursor.
 		case <-heartbeat.C:
-			if err := sse.Comment("keep-alive"); err != nil {
+			if err := h.streamHeartbeat(r.Context(), sse, state); err != nil {
 				return
 			}
 			continue
@@ -496,14 +493,13 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
-			recheck = true // Intent, environment or access changed.
 		case _, open := <-logReady:
 			logSub.Next()
 			if !open {
 				return
 			}
 		}
-		if err := h.sync(r.Context(), sse, state, recheck); err != nil {
+		if err := h.sync(r.Context(), sse, state); err != nil {
 			return
 		}
 		subscribeLogs(state.target.EnvironmentID)
@@ -514,13 +510,13 @@ var errStopStream = errors.New("stop log stream")
 
 // sync sends whatever the browser is missing: a reset when the attempt changed,
 // new lines in bounded frames, and the status when it changed.
-func (h *Handler) sync(ctx context.Context, sse *realtime.SSE, s *liveState, recheck bool) error {
-	if recheck || time.Since(s.checked) >= ownershipRecheck {
+func (h *Handler) sync(ctx context.Context, sse *realtime.SSE, s *liveState) error {
+	{
 		target, err := h.logs.Target(ctx, s.user, s.repoID, s.number)
 		if err != nil {
 			return errStopStream // Ownership lost or storage failing: let the browser reconnect.
 		}
-		s.target, s.checked = target, time.Now()
+		s.target = target
 	}
 	stream, err := h.logs.Stream(ctx, s.target.EnvironmentID)
 	hasStream := err == nil
@@ -534,6 +530,9 @@ func (h *Handler) sync(ctx context.Context, sse *realtime.SSE, s *liveState, rec
 		}
 	}
 	for hasStream && stream.PrunedAt.IsZero() && ctx.Err() == nil {
+		if _, err := h.logs.Target(ctx, s.user, s.repoID, s.number); err != nil {
+			return errStopStream
+		}
 		lines, err := h.logs.LinesFrom(ctx, stream.EnvironmentID, stream.Epoch, s.cursor.next, frameLines)
 		if err != nil {
 			return err
@@ -589,4 +588,16 @@ func send(sse *realtime.SSE, event, id string, payload any) error {
 		return fmt.Errorf("encode %s event: %w", event, err)
 	}
 	return sse.Send(realtime.Message{ID: id, Event: event, Data: string(data)})
+}
+
+func (h *Handler) checkStream(ctx context.Context, s *liveState) error {
+	_, err := h.logs.Target(ctx, s.user, s.repoID, s.number)
+	return err
+}
+
+func (h *Handler) streamHeartbeat(ctx context.Context, sse *realtime.SSE, s *liveState) error {
+	if err := h.checkStream(ctx, s); err != nil {
+		return err
+	}
+	return sse.Comment("keep-alive")
 }

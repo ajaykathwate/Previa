@@ -255,3 +255,49 @@ func TestAWorkerShutdownMidBuildIsNoFailure(t *testing.T) {
 		t.Fatalf("an interruption was recorded as a failure: %s %v", status, err)
 	}
 }
+
+func TestDifferentDevelopersShareTheWorkspaceBuildLimit(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := f.pool.Exec(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var developer, owner int64
+	if err := f.pool.QueryRow(ctx, "INSERT INTO users(github_id,username) VALUES(9001,'teammate') RETURNING id").Scan(&developer); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(ctx, "SELECT i.owner_user_id FROM installations i JOIN repos r ON r.installation_id=i.id WHERE r.id=$1", f.repoID).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	exec("INSERT INTO workspace_memberships(workspace_id,user_id,role) SELECT i.workspace_id,$2,'developer' FROM installations i JOIN repos r ON r.installation_id=i.id WHERE r.id=$1", f.repoID, developer)
+	exec("INSERT INTO repository_memberships(repo_id,workspace_id,user_id) SELECT r.id,i.workspace_id,$2 FROM repos r JOIN installations i ON i.id=r.installation_id WHERE r.id=$1", f.repoID, developer)
+	a, b := f.prEvent(t, 90, "sha-owner"), f.prEvent(t, 91, "sha-developer")
+	exec("UPDATE build_intents SET source='manual',request_action='build',requested_by=$2 WHERE pull_request_id=$1", a.PullRequestID, owner)
+	exec("UPDATE build_intents SET source='manual',request_action='build',requested_by=$2 WHERE pull_request_id=$1", b.PullRequestID, developer)
+	f.repo.WithAccountLimits(env.AccountLimits{BuildsPerAccount: 1})
+	runtime := newGatedRuntime()
+	runtime.gates[a.PullRequestID] = make(chan struct{})
+	service := newCapacityService(t, f, runtime)
+	done := make(chan error, 1)
+	go func() { done <- service.Build(ctx, a) }()
+	released := false
+	defer func() {
+		if !released {
+			close(runtime.gates[a.PullRequestID])
+			<-done
+		}
+	}()
+	<-runtime.started
+	var wait *env.WaitingError
+	if err := service.Build(ctx, b); !errors.As(err, &wait) || wait.Reason != env.WaitAccount {
+		t.Fatalf("second actor bypassed workspace limit: %v", err)
+	}
+	close(runtime.gates[a.PullRequestID])
+	released = true
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

@@ -21,6 +21,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/runtime"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/source"
+	"github.com/ajaykathwatee/previa/internal/workspaces"
 	"github.com/google/go-github/v91/github"
 )
 
@@ -167,7 +168,7 @@ func newPreparer(in pipelineInput, workspaces *source.Workspaces, catalog config
 }
 
 func newRuntime(in pipelineInput, instance string, gateway *egress.Gateway, preparer *source.Preparer, builder *builds.Builder, provider *secrets.Provider, logStore *buildlogs.Store) (*runtime.Runtime, error) {
-	targets := runtime.NewTargetStore(in.pool)
+	targets := runtime.NewTargetStore(in.pool).WithAuthorization(workspaces.NewService(workspaces.NewRepository(in.pool), nil, workspaceGitHub{app: in.github}, nil))
 	return runtime.New(runtime.Parts{
 		Instance: instance, Admission: runtime.NewAdmissionLock(in.pool), Docker: in.docker, Egress: gateway,
 		Targets: targets, Sources: preparer, Builder: builder, Secrets: provider,
