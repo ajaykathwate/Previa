@@ -30,3 +30,19 @@ templ LogoutConfirmation(csrfToken string) {
 		</form>
 	}
 }
+
+// CreateWorkspaceDialog is part of the app shell, so "Create workspace" opens
+// over the current page; only a successful create navigates.
+templ CreateWorkspaceDialog(csrfToken string) {
+	@ConfirmationDialog("create-workspace", "Create a workspace", "Give your team a name. Next, you'll invite teammates and connect repositories.") {
+		<form method="post" action="/workspaces" class="team-form create-workspace-form">
+			<input type="hidden" name="csrf_token" value={ csrfToken }/>
+			<label for="workspace-name">Workspace name</label>
+			<input id="workspace-name" name="name" autofocus maxlength="80" required placeholder="Acme Engineering" autocomplete="off"/>
+			<div class="dialog-actions">
+				<button type="button" class="secondary-action" commandfor="create-workspace" command="close" data-close-dialog>Cancel</button>
+				<button class="primary-action" type="submit">Create workspace</button>
+			</div>
+		</form>
+	}
+}

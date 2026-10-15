@@ -15,16 +15,9 @@ import (
 templ Index(username string, p Page) {
 	@layouts.App("Starter kits", username, p.CSRF, components.NavStarterKits) {
 		<div class="kit-page">
-			<header class="page-hero">
-				<div class="page-hero-main">
-					<span class="page-hero-icon" aria-hidden="true">
-						@components.KitIcon()
-					</span>
-					<div class="page-hero-text">
-						<p class="page-hero-kicker">Set up a repository</p>
-						<h1>Starter kits</h1>
-						<p class="page-hero-sub">Pick your stack and what it uses. Previa writes the <code>Dockerfile</code> and <code>.previewrc.yaml</code> your repository needs; edit them here, then copy or download.</p>
-					</div>
+			<header class="page-header">
+				<div class="page-header-text">
+					@components.PageTitle("Starter kits", "Pick your stack and what it uses. Previa writes the Dockerfile and .previewrc.yaml your repository needs; edit them here, then copy or download.")
 				</div>
 			</header>
 			@Kit(p)

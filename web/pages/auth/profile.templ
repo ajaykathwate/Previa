@@ -12,7 +12,9 @@ templ MemberProfile(p Profile) {
 	@layouts.App("Your profile", p.Name, p.CSRF, components.NavNone) {
 		<div class="team-page profile-page">
 			<header class="team-heading">
-				<div class="team-heading-copy"><h1>Your profile</h1><p>How you appear to teammates in Previa, and the GitHub account you sign in with.</p></div>
+				<div class="team-heading-copy">
+					@components.PageTitle("Your profile", "How you appear to teammates in Previa, and the GitHub account you sign in with.")
+				</div>
 			</header>
 			<div class="field-grid">
 				@PreviaProfile(p)

@@ -77,7 +77,7 @@ func TestFAQIsPublicOnHomeAndAPageInTheWorkspace(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("signed-in /faq: %d", w.Code)
 	}
-	for _, want := range []string{"Frequently asked questions", `title="FAQ" aria-current="page"`, `id="faq-build-disabled"`, "chat-avatar is-you"} {
+	for _, want := range []string{"Frequently asked questions", `title="Help &amp; FAQ" aria-current="page"`, `id="faq-build-disabled"`, "chat-avatar is-you"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("workspace FAQ missing %q", want)
 		}

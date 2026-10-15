@@ -97,12 +97,16 @@ templ AcceptInvitation(username string, p Page) {
 
 templ Failure(username, csrf, message, target, label string) {
 	@layouts.App("Workspace action", username, csrf, components.NavWorkspaces) {
-		<div class="team-page">
-			<section class="workspace-panel team-settings-panel">
-				<h1>Action needs attention</h1>
-				<p role="alert">
-					{ message }
-				</p><a class="secondary-action" href={ components.PublicURL(ctx, target) }>{ label }</a>
+		<div class="team-page team-failure">
+			<section class="workspace-panel team-settings-panel team-failure-card">
+				<span class="team-empty-icon" aria-hidden="true">
+					@components.AlertIcon()
+				</span>
+				<div>
+					<h1>Action needs attention</h1>
+					<p role="alert">{ message }</p>
+					<a class="secondary-action" href={ components.PublicURL(ctx, target) }>{ label }</a>
+				</div>
 			</section>
 		</div>
 	}

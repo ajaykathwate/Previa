@@ -9,7 +9,9 @@ templ Directory(username string, p Page) {
 	@layouts.App("Workspaces", username, p.CSRF, components.NavWorkspaces) {
 		<div class="team-page">
 			<header class="team-heading">
-				<div class="team-heading-copy"><h1>Choose your workspace</h1><p>Each workspace is one team, with its own people, repositories and settings.</p></div>
+				<div class="team-heading-copy">
+					@components.PageTitle("Choose your workspace", "Each workspace is one team, with its own people, repositories and settings.")
+				</div>
 				<button class="primary-action" type="button" commandfor="create-workspace" command="show-modal" data-open-dialog="create-workspace" aria-haspopup="dialog">
 					@components.PlusIcon()
 					Create workspace
@@ -47,9 +49,6 @@ templ Directory(username string, p Page) {
 					</article>
 				}
 			</div>
-			@components.ConfirmationDialog("create-workspace", "Create a workspace", "Give your team a name. You can add a description and logo in workspace settings.") {
-				<form method="post" action="/workspaces" class="team-form"><input type="hidden" name="csrf_token" value={ p.CSRF }/><label for="workspace-name">Workspace name</label><input id="workspace-name" name="name" autofocus maxlength="80" required placeholder="Acme Engineering"/><div class="dialog-actions"><button type="button" class="secondary-action" commandfor="create-workspace" command="close" data-close-dialog>Cancel</button><button class="primary-action" type="submit">Create workspace</button></div></form>
-			}
 		</div>
 	}
 }
@@ -67,16 +66,7 @@ templ Index(username string, p Page) {
 		<div class="team-page">
 			<header class="team-heading">
 				<div class="team-heading-copy">
-					<h1>{ title }</h1>
-					if p.Tab=="members" {
-						if p.Manage() {
-							<p>Invite teammates and choose what they can access.</p>
-						} else {
-							<p>The people in this workspace and their roles.</p>
-						}
-					} else {
-						<p>Name, description, logo and ownership for this team.</p>
-					}
+					@components.PageTitle(title, headingInfo(p))
 				</div>
 				<div class="team-heading-actions">
 					if p.Tab=="members" {
@@ -129,5 +119,16 @@ templ Index(username string, p Page) {
 			}
 		</div>
 		@components.Toasts(p.Message)
+	}
+}
+
+func headingInfo(p Page) string {
+	switch {
+	case p.Tab == "settings":
+		return "Name, description, logo and ownership for this team."
+	case p.Manage():
+		return "Invite teammates and choose what they can access. Owners and admins access every repository; developers and reviewers get explicit grants."
+	default:
+		return "The people in this workspace and their roles."
 	}
 }

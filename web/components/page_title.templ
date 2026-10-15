@@ -1,0 +1,24 @@
+package components
+
+// PageTitle is the compact heading every app page uses: the title, with what
+// the page is for one hover or focus away in an info tooltip.
+templ PageTitle(title, info string) {
+	<div class="page-title">
+		<h1>{ title }</h1>
+		if info != "" {
+			@InfoTip(info)
+		}
+	</div>
+}
+
+// InfoTip explains something on hover or keyboard focus. The bubble stays
+// open while the pointer is over it, and Escape dismisses it (ui.js).
+templ InfoTip(text string) {
+	{{ id := TipID(text) }}
+	<span class="info-tip" data-info-tip>
+		<button type="button" class="info-tip-trigger" aria-label="About this page" aria-describedby={ id }>
+			@InfoIcon()
+		</button>
+		<span id={ id } role="tooltip" class="info-tip-bubble">{ text }</span>
+	</span>
+}

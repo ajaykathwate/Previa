@@ -43,21 +43,24 @@
   }
 
   function initNavigation() {
-    const workspaceMenus = [...document.querySelectorAll('[data-workspace-switcher]')];
-    const placeWorkspaceMenus = () => workspaceMenus.forEach(menu => {
-      if (!menu.open) return;
-      const anchor = menu.querySelector('summary').getBoundingClientRect();
-      const panel = menu.querySelector('.workspace-switcher-menu');
-      const width = Math.min(320, innerWidth - 24);
-      const top = Math.max(12, Math.min(anchor.bottom + 8, innerHeight - 180));
-      panel.style.width = `${width}px`;
-      panel.style.left = `${Math.max(12, Math.min(anchor.left, innerWidth - width - 12))}px`;
-      panel.style.top = `${top}px`;
-      panel.style.maxHeight = `${innerHeight - top - 12}px`;
+    // The workspace switcher's menu is anchored to it in CSS (beside the icon rail when collapsed).
+    // Menus close as soon as one of their links or forms starts a navigation, so
+    // the outgoing page (and its view transition) never shows a menu still open.
+    const closeMenus = () => document.querySelectorAll('details[data-menu][open], details[data-workspace-switcher][open], details[data-mobile-nav][open]').forEach(menu => { menu.open = false; });
+    document.addEventListener('click', event => {
+      const link = event.target.closest('a[href]');
+      if (link && link.closest('details[data-menu], details[data-workspace-switcher]') && !event.defaultPrevented) closeMenus();
     });
-    workspaceMenus.forEach(menu => menu.addEventListener('toggle', placeWorkspaceMenus));
-    window.addEventListener('resize', placeWorkspaceMenus, {passive: true});
-    window.addEventListener('scroll', placeWorkspaceMenus, {passive: true, capture: true});
+    document.addEventListener('submit', event => {
+      if (event.target.closest('details[data-menu], details[data-workspace-switcher]')) closeMenus();
+    });
+    // Open dialogs (a submitted confirmation, the create form) close too, so the
+    // view transition never cross-fades a modal into the next page.
+    window.addEventListener('pageswap', () => {
+      closeMenus();
+      document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
+    });
+    window.addEventListener('pagehide', closeMenus);
     document.querySelectorAll('[data-mobile-nav] a').forEach(link => {
       link.addEventListener('click', () => { link.closest('details').open = false; });
     });
@@ -349,6 +352,29 @@
     });
   }
 
+  // Info tooltips show on hover and focus in CSS; Escape hides one until the
+  // pointer or focus leaves it.
+  function initInfoTips() {
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      document.querySelectorAll('[data-info-tip]').forEach(tip => { if (tip.matches(':hover, :focus-within')) tip.dataset.dismissed = ''; });
+    });
+    document.querySelectorAll('[data-info-tip]').forEach(tip => {
+      tip.addEventListener('mouseleave', () => { delete tip.dataset.dismissed; });
+      tip.addEventListener('focusout', () => { delete tip.dataset.dismissed; });
+    });
+  }
+  // A destructive action stays disabled until its confirmation text matches.
+  function initConfirmMatch() {
+    document.querySelectorAll('[data-confirm-match]').forEach(input => {
+      const submit = input.form?.querySelector('[data-confirm-submit]');
+      if (!submit) return;
+      const update = () => { submit.disabled = input.value.trim() !== input.dataset.confirmMatch; };
+      input.addEventListener('input', update);
+      update();
+    });
+  }
+
   // Restore forms when navigating back to a page from the browser's cache.
   window.addEventListener('pageshow', () => {
     document.querySelectorAll('[data-submitting]').forEach(form => {
@@ -418,7 +444,10 @@
       const trigger = event.target.closest('[data-open-dialog]');
       if (trigger) {
         event.preventDefault(); // Prevent duplicate native command handling.
-        openDialog(document.getElementById(trigger.dataset.openDialog), trigger);
+        // A dialog opened from a menu closes the menu first; focus returns to its button.
+        const menu = trigger.closest('details[data-menu], details[data-workspace-switcher]');
+        if (menu) menu.open = false;
+        openDialog(document.getElementById(trigger.dataset.openDialog), menu ? menu.querySelector('summary') : trigger);
       }
       const dismiss = event.target.closest('[data-close-dialog]');
       if (dismiss) {
@@ -1869,6 +1898,8 @@
   initToasts();
   initInlineForms();
   initImageEditors();
+  initConfirmMatch();
+  initInfoTips();
   initPrefetch();
   initConfirmationDialogs();
   initAccountMenus();

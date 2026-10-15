@@ -39,7 +39,8 @@ async function login() {
   await page.goto(origin);
   await page.getByRole('link', {name: 'Get started with GitHub', exact: true}).first().click();
   await page.waitForURL(`${origin}/dashboard`);
-  assert.match(await page.locator('.dashboard-heading').innerText(), /design-review/);
+  assert.match(await page.locator('.app-header .account-name').innerText(), /design-review/);
+  assert.equal(await page.locator('h1').innerText(), 'Overview');
 }
 
 test('signed-out PR build logs return to the same logs after GitHub login', async () => {
@@ -705,7 +706,8 @@ test('Previews show what is live with its link, Builds show attempts, and teardo
   await page.waitForURL(url => url.pathname === '/previews' && url.searchParams.get('fixture') === 'rows');
   assert.equal(await page.locator('h1').innerText(), 'Previews');
   assert.equal(await page.locator('.app-sidebar a[href="/previews"]').getAttribute('aria-current'), 'page');
-  assert.match(await page.locator('.page-header-text p').innerText(), /What is live now/);
+  assert.match(await page.locator('.page-header-text [role=tooltip]').textContent(), /What is live now/);
+  assert.ok(await page.locator('.page-header-text [role=tooltip]').isHidden(), 'the description waits in its tooltip');
   const preview = page.getByRole('link', {name: 'Open the preview of fixture-owner/repository-1 #3 in a new tab'});
   assert.equal(await preview.getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
   assert.equal(await preview.getAttribute('target'), '_blank');
@@ -728,7 +730,7 @@ test('Previews show what is live with its link, Builds show attempts, and teardo
   await page.locator('#teardown-1-3').getByRole('button', {name: 'Tear down preview', exact: true}).click();
   await page.waitForURL(url => url.pathname === '/previews' && url.searchParams.get('page') === '1');
   await page.goto(`${origin}/builds?fixture=rows`);
-  assert.match(await page.locator('.page-header-text p').innerText(), /latest attempt to build/);
+  assert.match(await page.locator('.page-header-text [role=tooltip]').textContent(), /latest attempt to build/);
   assert.match(await page.locator('.activity-table').innerText(), /Waiting for capacity/);
   // Row controls stay clickable above the row's whole-row link.
   await page.getByRole('link', {name: 'Build logs for fixture-owner/repository-1 #4'}).click();

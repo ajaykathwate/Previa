@@ -12,8 +12,7 @@ templ ReviewerIndex(username, csrf string, p pages.Activity) {
 		<div class="team-page">
 			<header class="team-heading">
 				<div class="team-heading-copy">
-					<h1>Previews</h1>
-					<p>Live previews for the repositories shared with you.</p>
+					@components.PageTitle("Previews", "Live previews for the repositories shared with you.")
 				</div>
 				<span class="badge tone-neutral">
 					if p.Total == 1 {

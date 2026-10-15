@@ -9,6 +9,7 @@ import (
 type WorkspaceShell struct {
 	ID               int64
 	LogoVersion      int64
+	Invitations      int64 // pending invitations addressed to the signed-in person
 	Name, Role, CSRF string
 	Items            []WorkspaceItem
 }

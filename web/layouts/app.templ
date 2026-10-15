@@ -27,5 +27,6 @@ templ AppTrail(title string, parent components.Crumb, current string, username s
 		</div>
 		@components.CommandPalette()
 		@components.LogoutConfirmation(csrfToken)
+		@components.CreateWorkspaceDialog(csrfToken)
 	}
 }

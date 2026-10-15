@@ -20,9 +20,7 @@ templ Index(username string, csrfToken string, summary Summary) {
 		<div class="ov" data-overview>
 			<header class="page-header dashboard-heading ov-hero">
 				<div class="page-header-text">
-					<span class="eyebrow">Overview</span>
-					<h1>Welcome back, <span class="accent-text">{ username }</span></h1>
-					<p>Your previews at a glance. Every number here comes from your own linked installations.</p>
+					@components.PageTitle("Overview", "Your previews at a glance. Every number here comes from your workspace's linked installations.")
 				</div>
 				<div class="ov-hero-side">
 					@workerStatus(summary.Workers)

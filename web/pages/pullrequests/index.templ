@@ -991,12 +991,10 @@ templ ActivityIndex(username, csrf string, p Activity) {
 		<div class="repository-workspace activity-page">
 			<header class="page-header workspace-page-heading">
 				<div class="page-header-text">
-					<span class="eyebrow">Delivery</span>
-					<h1>{ title }</h1>
 					if p.Previews {
-						<p>What is live now: each pull request's preview, the commit it serves, its link and when it expires. Every attempt to build, including ones that failed before going live, is on <a class="text-link" href="/builds">Builds</a>.</p>
+						@components.PageTitle(title, "What is live now: each pull request's preview, the commit it serves, its link and when it expires. Every build attempt, including ones that failed before going live, is on Builds.")
 					} else {
-						<p>Each pull request's latest attempt to build a commit: waiting, building, succeeded or failed, and why. A new attempt replaces the row. What is live, and its link, is on <a class="text-link" href="/previews">Previews</a>.</p>
+						@components.PageTitle(title, "Each pull request's latest attempt to build a commit: waiting, building, succeeded or failed, and why. A new attempt replaces the row. What is live, and its link, is on Previews.")
 					}
 				</div>
 				<nav class="segmented segmented-nav" aria-label="Delivery views">

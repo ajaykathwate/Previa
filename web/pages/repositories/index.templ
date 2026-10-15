@@ -10,9 +10,7 @@ templ Index(username string, csrfToken string, page Page) {
 		<div class="repository-workspace repository-catalog">
 			<header class="page-header workspace-page-heading">
 				<div class="page-header-text">
-					<span class="eyebrow">Workspace</span>
-					<h1>Repositories</h1>
-					<p>Repositories your GitHub App installations can reach. Open one to browse its pull requests, previews and build policy.</p>
+					@components.PageTitle("Repositories", "Repositories your GitHub App installations can reach. Open one to browse its pull requests, previews and build policy.")
 				</div>
 				<div class="repository-action">
 					if !components.CanManage(ctx) {
