@@ -28,7 +28,7 @@ func TestWorkspaceBrowser(t *testing.T) {
 	if _, err := f.pool.Exec(t.Context(), "INSERT INTO repos(installation_id,github_repo_id,full_name) SELECT installation_id,400+n,'acme/service-'||lpad(n::text,2,'0') FROM repos CROSS JOIN generate_series(1,28) AS n WHERE id=$1", f.repo); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.pool.Exec(t.Context(), "UPDATE pull_requests SET title='Make review previews easier to inspect',author='contributor',head_branch='feature/review-previews',description=$2 WHERE id=$1", f.pr, "Why this change\n\nA focused preview workflow for the whole team.\n\n<script>window.descriptionExecuted=true</script>"); err != nil {
+	if _, err := f.pool.Exec(t.Context(), "UPDATE pull_requests SET title='Make review previews easier to inspect',author='contributor',head_branch='feature/review-previews',description=$2,head_commit_sha=head_sha,head_commit_message=E'Tighten preview review flow\\n\\nKeeps reviewers on one page.',head_commit_author='Ada Committer',head_commit_at=now(),head_commit_checked_at=now() WHERE id=$1", f.pr, "Why this change\n\nA focused preview workflow for the whole team.\n\n<script>window.descriptionExecuted=true</script>"); err != nil {
 		t.Fatal(err)
 	}
 	seedPreview(t, f)

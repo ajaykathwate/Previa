@@ -177,6 +177,7 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 		WithLiveUpdates(hub).WithLogTail(logStore).WithPreviewDomain(cfg.PreviewBaseDomain)
 	if appClient != nil {
 		// Builds need fresh GitHub reads; without the App the controls say so.
+		f.prs.WithCommits(pullrequests.NewGitHubSource(appClient))
 		f.prs.WithActions(pullrequests.Actions{
 			Builds: coordinator, Verifier: syncService, Teardowns: f.environments, Capabilities: f.capabilities,
 			PreviewBaseDomain: cfg.PreviewBaseDomain,

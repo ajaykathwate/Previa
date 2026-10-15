@@ -42,8 +42,8 @@ func TestDescriptionPersistsEditsAndIsEscapedOnDetail(t *testing.T) {
 		if strings.Contains(html, "<script>alert(") || strings.Contains(html, "<b>details</b>") {
 			t.Fatal("untrusted PR HTML rendered")
 		}
-		if (body != "") != strings.Contains(html, "Pull request description") {
-			t.Fatal("empty or missing description panel")
+		if (body != "") != strings.Contains(html, "pr-description-content") || (body == "") != strings.Contains(html, "didn't add a description") {
+			t.Fatalf("description panel or its empty state is wrong for %q: content=%v empty=%v", body, strings.Contains(html, "pr-description-content"), strings.Contains(html, "didn't add a description"))
 		}
 	}
 }

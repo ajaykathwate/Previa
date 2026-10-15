@@ -30,11 +30,6 @@ templ Panel(p Page, csrf string) {
 		if p.SelectedPR!=nil {
 			@prHero(p, p.Selected())
 			@PRDetail(p, p.Selected(), csrf)
-			if strings.TrimSpace(p.Selected().Description)!="" {
-				<section class="workspace-panel pr-description" aria-labelledby="pr-description-heading"><div class="pr-description-heading"><h2 id="pr-description-heading">Pull request description</h2>if p.Selected().GitHubURL()!="" {
-<a class="text-link" href={ components.PublicURL(ctx, p.Selected().GitHubURL()) } target="_blank" rel="noopener noreferrer">View on GitHub</a>
-}</div><div class="pr-description-content">{ p.Selected().Description }</div></section>
-			}
 		} else {
 			@repositoryHero(p, csrf)
 			@components.RepositoryTabs(p.RepoID, "pull-requests")
@@ -589,6 +584,7 @@ templ PRDetail(p Page, pr PR, csrf string) {
 						</div>
 					}
 				</section>
+				@prDescription(pr)
 				<details class="pr-recent-logs" data-pr-logs data-pr-logs-url={ components.PublicURL(ctx, LogsURL(p.RepoID, pr.Number)+"/recent") }>
 					<summary>Recent build logs <span>Latest 300 events</span></summary>
 					<div id="pr-recent-log-content">
@@ -608,6 +604,7 @@ templ PRDetail(p Page, pr PR, csrf string) {
 							@commitChip(pr, pr.SHA, false)
 							<span class={ "badge", Tone(pr.State) }><span class="badge-dot" aria-hidden="true"></span>{ Gate(pr.State) }</span>
 						</div>
+						@commitMessage(pr)
 					</section>
 					<section class={ "lifecycle-step", templ.KV("is-current", progress.Active) } role="listitem" aria-labelledby="lifecycle-request">
 						<h3 id="lifecycle-request">
@@ -1366,5 +1363,48 @@ templ failureReturn(csrf string, p Activity) {
 	}
 	if p.RepoID > 0 {
 		<input type="hidden" name="repo_id" value={ components.PublicValue(ctx, "repository", p.RepoID) }/>
+	}
+}
+
+
+// prDescription shows what the author wrote on GitHub, escaped as plain text.
+templ prDescription(pr PR) {
+	<section class="workspace-panel pr-description" aria-labelledby="pr-description-heading">
+		<div class="pr-description-heading">
+			<h2 id="pr-description-heading">Description</h2>
+		</div>
+		if strings.TrimSpace(pr.Description) != "" {
+			<div class="pr-description-content" tabindex="0">{ pr.Description }</div>
+		} else {
+			<p class="pr-description-empty">The author didn't add a description to this pull request.</p>
+		}
+	</section>
+}
+
+// commitMessage shows the head commit's subject, its body on request, and who wrote it.
+templ commitMessage(pr PR) {
+	if pr.CommitMessage != "" {
+		<div class="commit-message">
+			<p class="commit-subject" title={ pr.CommitSubject() }>{ pr.CommitSubject() }</p>
+			if pr.CommitBody() != "" {
+				<details class="commit-body">
+					<summary>Full commit message</summary>
+					<pre>{ pr.CommitBody() }</pre>
+				</details>
+			}
+			if pr.CommitAuthor != "" || pr.CommitAt != "" {
+				<p class="commit-meta">
+					if pr.CommitAuthor != "" {
+						{ pr.CommitAuthor }
+					}
+					if pr.CommitAuthor != "" && pr.CommitAt != "" {
+						{ " · " }
+					}
+					if pr.CommitAt != "" {
+						@components.Time(pr.CommitAt, TimeLabel(pr.CommitAt))
+					}
+				</p>
+			}
+		</div>
 	}
 }

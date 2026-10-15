@@ -76,7 +76,8 @@ ORDER BY p.number DESC LIMIT 10 OFFSET sqlc.arg(row_offset)::integer;
 -- name: OwnedPR :one
 -- The PR's three lifecycle columns (observed, requested, deployed) and what
 -- the owner may do next. A torn-down environment is shown as removed.
-SELECT p.*,(r.accessible AND i.status='active') AS available,coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
+SELECT p.*,(r.accessible AND i.status='active') AS available,i.github_installation_id,coalesce(r.github_repo_id,0)::bigint AS github_repo_number,
+ coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
  coalesce((SELECT op.last_error_code FROM environment_operations op WHERE op.pull_request_id=p.id AND op.generation=b.generation AND op.revision=b.revision AND op.kind='activate_route' AND op.state='retryable' ORDER BY op.id DESC LIMIT 1),'')::text AS publication_error_code,
  b.available_at,b.revision AS request_revision, coalesce(b.execution_error_code,'')::text AS execution_error_code,
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
@@ -188,3 +189,9 @@ SELECT workspace_repository_access($1::bigint,$2::bigint,'operate')::boolean;
 -- name: UpdatePRMetadata :exec
 UPDATE pull_requests SET title=$3,description=$4,description_updated_at=$5
 WHERE repo_id=$1 AND number=$2 AND (description_updated_at IS NULL OR description_updated_at<=$5);
+
+-- name: SaveHeadCommit :exec
+-- Only the still-current head is cached; a newer push leaves the row for the next view.
+UPDATE pull_requests SET head_commit_sha=sqlc.arg(sha),head_commit_message=sqlc.arg(message),head_commit_author=sqlc.arg(author),
+ head_commit_at=sqlc.narg(committed_at),head_commit_checked_at=clock_timestamp()
+WHERE id=sqlc.arg(id) AND head_sha=sqlc.arg(sha);

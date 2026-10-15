@@ -458,7 +458,7 @@ func (q *Queries) InvalidateObservedIntent(ctx context.Context, arg InvalidateOb
 }
 
 const listPRs = `-- name: ListPRs :many
-SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason, p.mergeability_unresolved_at, p.public_id, p.description, p.description_updated_at,coalesce(b.state,'Not requested') AS build_state,
+SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason, p.mergeability_unresolved_at, p.public_id, p.description, p.description_updated_at, p.head_commit_sha, p.head_commit_message, p.head_commit_author, p.head_commit_at, p.head_commit_checked_at,coalesce(b.state,'Not requested') AS build_state,
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
  coalesce(e.status,'Not deployed') AS environment_status, coalesce(e.head_sha,'') AS deployed_sha,
  coalesce(e.subdomain,'')::text AS hostname
@@ -505,6 +505,11 @@ type ListPRsRow struct {
 	PublicID                    pgtype.UUID
 	Description                 string
 	DescriptionUpdatedAt        pgtype.Timestamptz
+	HeadCommitSha               string
+	HeadCommitMessage           string
+	HeadCommitAuthor            string
+	HeadCommitAt                pgtype.Timestamptz
+	HeadCommitCheckedAt         pgtype.Timestamptz
 	BuildState                  string
 	RequestCurrent              bool
 	EnvironmentStatus           string
@@ -557,6 +562,11 @@ func (q *Queries) ListPRs(ctx context.Context, arg ListPRsParams) ([]ListPRsRow,
 			&i.PublicID,
 			&i.Description,
 			&i.DescriptionUpdatedAt,
+			&i.HeadCommitSha,
+			&i.HeadCommitMessage,
+			&i.HeadCommitAuthor,
+			&i.HeadCommitAt,
+			&i.HeadCommitCheckedAt,
 			&i.BuildState,
 			&i.RequestCurrent,
 			&i.EnvironmentStatus,
@@ -601,7 +611,7 @@ func (q *Queries) LockInstallation(ctx context.Context, id int64) (LockInstallat
 }
 
 const lockPR = `-- name: LockPR :one
-SELECT id, repo_id, number, head_sha, state, github_comment_id, created_at, generation, teardown_completed_generation, title, author, head_branch, html_url, head_repo_id, is_fork, source_updated_at, needs_refresh, mergeable, mergeable_state, build_status, teardown_requested_generation, teardown_reason, mergeability_unresolved_at, public_id, description, description_updated_at FROM pull_requests WHERE repo_id=$1 AND number=$2 FOR UPDATE
+SELECT id, repo_id, number, head_sha, state, github_comment_id, created_at, generation, teardown_completed_generation, title, author, head_branch, html_url, head_repo_id, is_fork, source_updated_at, needs_refresh, mergeable, mergeable_state, build_status, teardown_requested_generation, teardown_reason, mergeability_unresolved_at, public_id, description, description_updated_at, head_commit_sha, head_commit_message, head_commit_author, head_commit_at, head_commit_checked_at FROM pull_requests WHERE repo_id=$1 AND number=$2 FOR UPDATE
 `
 
 type LockPRParams struct {
@@ -639,6 +649,11 @@ func (q *Queries) LockPR(ctx context.Context, arg LockPRParams) (PullRequest, er
 		&i.PublicID,
 		&i.Description,
 		&i.DescriptionUpdatedAt,
+		&i.HeadCommitSha,
+		&i.HeadCommitMessage,
+		&i.HeadCommitAuthor,
+		&i.HeadCommitAt,
+		&i.HeadCommitCheckedAt,
 	)
 	return i, err
 }
@@ -734,7 +749,8 @@ func (q *Queries) MarkSyncing(ctx context.Context, arg MarkSyncingParams) error 
 }
 
 const ownedPR = `-- name: OwnedPR :one
-SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason, p.mergeability_unresolved_at, p.public_id, p.description, p.description_updated_at,(r.accessible AND i.status='active') AS available,coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
+SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason, p.mergeability_unresolved_at, p.public_id, p.description, p.description_updated_at, p.head_commit_sha, p.head_commit_message, p.head_commit_author, p.head_commit_at, p.head_commit_checked_at,(r.accessible AND i.status='active') AS available,i.github_installation_id,coalesce(r.github_repo_id,0)::bigint AS github_repo_number,
+ coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
  coalesce((SELECT op.last_error_code FROM environment_operations op WHERE op.pull_request_id=p.id AND op.generation=b.generation AND op.revision=b.revision AND op.kind='activate_route' AND op.state='retryable' ORDER BY op.id DESC LIMIT 1),'')::text AS publication_error_code,
  b.available_at,b.revision AS request_revision, coalesce(b.execution_error_code,'')::text AS execution_error_code,
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
@@ -792,7 +808,14 @@ type OwnedPRRow struct {
 	PublicID                    pgtype.UUID
 	Description                 string
 	DescriptionUpdatedAt        pgtype.Timestamptz
+	HeadCommitSha               string
+	HeadCommitMessage           string
+	HeadCommitAuthor            string
+	HeadCommitAt                pgtype.Timestamptz
+	HeadCommitCheckedAt         pgtype.Timestamptz
 	Available                   pgtype.Bool
+	GithubInstallationID        int64
+	GithubRepoNumber            int64
 	BuildState                  string
 	RequestedSha                string
 	PublicationErrorCode        string
@@ -858,7 +881,14 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 		&i.PublicID,
 		&i.Description,
 		&i.DescriptionUpdatedAt,
+		&i.HeadCommitSha,
+		&i.HeadCommitMessage,
+		&i.HeadCommitAuthor,
+		&i.HeadCommitAt,
+		&i.HeadCommitCheckedAt,
 		&i.Available,
+		&i.GithubInstallationID,
+		&i.GithubRepoNumber,
 		&i.BuildState,
 		&i.RequestedSha,
 		&i.PublicationErrorCode,
@@ -971,6 +1001,32 @@ type RestoreFailureParams struct {
 
 func (q *Queries) RestoreFailure(ctx context.Context, arg RestoreFailureParams) error {
 	_, err := q.db.Exec(ctx, restoreFailure, arg.UserID, arg.PullRequestID)
+	return err
+}
+
+const saveHeadCommit = `-- name: SaveHeadCommit :exec
+UPDATE pull_requests SET head_commit_sha=$1,head_commit_message=$2,head_commit_author=$3,
+ head_commit_at=$4,head_commit_checked_at=clock_timestamp()
+WHERE id=$5 AND head_sha=$1
+`
+
+type SaveHeadCommitParams struct {
+	Sha         string
+	Message     string
+	Author      string
+	CommittedAt pgtype.Timestamptz
+	ID          int64
+}
+
+// Only the still-current head is cached; a newer push leaves the row for the next view.
+func (q *Queries) SaveHeadCommit(ctx context.Context, arg SaveHeadCommitParams) error {
+	_, err := q.db.Exec(ctx, saveHeadCommit,
+		arg.Sha,
+		arg.Message,
+		arg.Author,
+		arg.CommittedAt,
+		arg.ID,
+	)
 	return err
 }
 

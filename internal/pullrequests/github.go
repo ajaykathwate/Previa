@@ -155,3 +155,29 @@ func upstreamError(ctx context.Context, response *github.Response, err error) er
 	}
 	return environments.ErrUpstreamUnavailable
 }
+
+// Commit reads a commit's message and author. Pull request payloads omit them.
+func (s *GitHubSource) Commit(ctx context.Context, installationID, repoID int64, sha string) (CommitDetails, error) {
+	if installationID <= 0 || repoID <= 0 || sha == "" {
+		return CommitDetails{}, errors.New("invalid commit source identity")
+	}
+	client, err := s.app.InstallationClient(installationID)
+	if err != nil {
+		return CommitDetails{}, sourceError(err)
+	}
+	repo, _, err := client.Repositories.GetByID(ctx, repoID)
+	if err != nil {
+		return CommitDetails{}, sourceError(err)
+	}
+	if repo.GetID() != repoID {
+		return CommitDetails{}, errors.New("GitHub repository identity changed")
+	}
+	c, _, err := client.Git.GetCommit(ctx, repo.GetOwner().GetLogin(), repo.GetName(), sha)
+	if err != nil {
+		return CommitDetails{}, sourceError(err)
+	}
+	if c.GetSHA() != "" && c.GetSHA() != sha {
+		return CommitDetails{}, errors.New("GitHub commit identity changed")
+	}
+	return CommitDetails{Message: c.GetMessage(), Author: c.GetAuthor().GetName(), At: c.GetAuthor().GetDate().Time}, nil
+}

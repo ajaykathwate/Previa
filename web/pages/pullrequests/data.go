@@ -33,21 +33,23 @@ type PR struct {
 	BuildWorkerMissing  bool
 	NoWorker            bool
 	// Detail only: display data the handler derives from persisted state.
-	Description   string
-	Headline      Headline
-	Waiting       string // why the current request waits ("Waiting for capacity"), if it does
-	WaitingNote   string
-	Failure       string   // safe sentence for the latest failure of the current request
-	FailureCode   string   // its stored category, which Diagnosis explains in the owner's words
-	FailureLog    []string // the failed attempt's last output lines, already redacted
-	RequestSource string   // "manual" or "automatic"
-	RequestedBy   string   // login of the owner who asked, for manual requests
-	RequestedAt   string   // RFC 3339
-	StartedAt     string
-	CompletedAt   string
-	PreviewURL    string // only for a published preview on a configured domain
-	ExpiresAt     string // RFC 3339; empty when the preview does not expire
-	PublishedAt   string
+	Description string
+	// The head commit's message, author and time, when GitHub supplied them.
+	CommitMessage, CommitAuthor, CommitAt string
+	Headline                              Headline
+	Waiting                               string // why the current request waits ("Waiting for capacity"), if it does
+	WaitingNote                           string
+	Failure                               string   // safe sentence for the latest failure of the current request
+	FailureCode                           string   // its stored category, which Diagnosis explains in the owner's words
+	FailureLog                            []string // the failed attempt's last output lines, already redacted
+	RequestSource                         string   // "manual" or "automatic"
+	RequestedBy                           string   // login of the owner who asked, for manual requests
+	RequestedAt                           string   // RFC 3339
+	StartedAt                             string
+	CompletedAt                           string
+	PreviewURL                            string // only for a published preview on a configured domain
+	ExpiresAt                             string // RFC 3339; empty when the preview does not expire
+	PublishedAt                           string
 	// LastOpenedAt is when the router last passed the preview a request
 	// (RFC 3339, to the minute); Requests counts them. Empty when unknown.
 	LastOpenedAt string
@@ -622,4 +624,16 @@ func (a Activity) PublicReferences() []components.ResourceRef {
 		refs = append(refs, components.PRRefs(a.DismissedRepo, a.DismissedNumber)...)
 	}
 	return refs
+}
+
+// CommitSubject is the first line of the head commit's message.
+func (pr PR) CommitSubject() string {
+	subject, _, _ := strings.Cut(pr.CommitMessage, "\n")
+	return strings.TrimSpace(subject)
+}
+
+// CommitBody is the rest of the head commit's message, after its subject line.
+func (pr PR) CommitBody() string {
+	_, body, _ := strings.Cut(pr.CommitMessage, "\n")
+	return strings.TrimSpace(body)
 }

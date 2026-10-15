@@ -55,6 +55,7 @@ type Handler struct {
 	live          LiveEvents
 	actions       *Actions
 	logs          LogTail
+	commits       CommitSource
 	now           func() time.Time // when failures stop needing attention is measured from
 }
 

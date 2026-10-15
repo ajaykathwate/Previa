@@ -276,6 +276,11 @@ type PullRequest struct {
 	PublicID                    pgtype.UUID
 	Description                 string
 	DescriptionUpdatedAt        pgtype.Timestamptz
+	HeadCommitSha               string
+	HeadCommitMessage           string
+	HeadCommitAuthor            string
+	HeadCommitAt                pgtype.Timestamptz
+	HeadCommitCheckedAt         pgtype.Timestamptz
 }
 
 type PullRequestReport struct {
@@ -398,6 +403,7 @@ type Workspace struct {
 	Description     string
 	ProfileRevision int64
 	PublicID        pgtype.UUID
+	DeletedAt       pgtype.Timestamptz
 }
 
 type WorkspaceBuildUsage struct {
@@ -434,13 +440,15 @@ type WorkspaceLogo struct {
 }
 
 type WorkspaceMembership struct {
-	WorkspaceID int64
-	UserID      int64
-	Role        string
-	State       string
-	Revision    int64
-	JoinedAt    pgtype.Timestamptz
-	RemovedAt   pgtype.Timestamptz
+	WorkspaceID          int64
+	UserID               int64
+	Role                 string
+	State                string
+	Revision             int64
+	JoinedAt             pgtype.Timestamptz
+	RemovedAt            pgtype.Timestamptz
+	RemovedBy            pgtype.Int8
+	RemovedRepositoryIds []int64
 }
 
 type WorkspacePreference struct {

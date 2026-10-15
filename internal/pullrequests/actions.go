@@ -148,6 +148,12 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 	if row.RequestCurrent && row.WaitingReason != "" {
 		pr.Waiting, pr.WaitingNote = environments.WaitingTitle(row.WaitingReason), environments.WaitingMessage(row.WaitingReason)
 	}
+	if c := h.headCommit(ctx, row); c.Message != "" {
+		pr.CommitMessage, pr.CommitAuthor = c.Message, c.Author
+		if !c.At.IsZero() {
+			pr.CommitAt = c.At.UTC().Format(time.RFC3339)
+		}
+	}
 	pr.ExecutionRetrying = row.ExecutionErrorCode == "worker_retrying"
 	pr.PublicationRetrying = row.EnvironmentStatus == "publishing" && row.PublicationErrorCode != ""
 	h.describeFailure(ctx, &pr, row)

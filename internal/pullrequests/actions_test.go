@@ -36,13 +36,14 @@ type actionsHarness struct {
 	cookies  []*http.Cookie
 	caps     *fixedCapabilities
 	upstream *upstreamFake
+	commits  *commitFake
 	prID     int64
 }
 
 func newActionsHarness(t *testing.T) *actionsHarness {
 	t.Helper()
 	f := setup(t)
-	h := &actionsHarness{fixture: f, caps: &fixedCapabilities{execution: true, discovery: true}}
+	h := &actionsHarness{fixture: f, caps: &fixedCapabilities{execution: true, discovery: true}, commits: &commitFake{}}
 	h.prID = seedPR(t, f, `"mergeable":true,"mergeable_state":"clean",`)
 	h.upstream = &upstreamFake{inspect: func(context.Context, int64, int64, int32) (pr.Upstream, error) {
 		return upstreamPR("sha-a", "open", yes(), "clean", verifyBase), nil
@@ -61,7 +62,8 @@ func newActionsHarness(t *testing.T) *actionsHarness {
 		t.Fatal(err)
 	}
 	handler := pr.NewHandler(pr.NewRepository(f.pool), sync, policy, authHandler, f.log, true).
-		WithActions(pr.Actions{Builds: broker, Verifier: sync, Teardowns: repo, Capabilities: h.caps, PreviewBaseDomain: "preview.example.com"})
+		WithActions(pr.Actions{Builds: broker, Verifier: sync, Teardowns: repo, Capabilities: h.caps, PreviewBaseDomain: "preview.example.com"}).
+		WithCommits(h.commits)
 	router := chi.NewRouter()
 	router.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
 	authHandler.Mount(router)
