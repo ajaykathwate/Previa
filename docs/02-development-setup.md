@@ -4,11 +4,34 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 31**, **River 007**. After pulling changes, run
+Current schema: **Goose 34**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker. When the egress proxy or the
 router changed (this version changed both), also run `make egress-image` (builds
 are metered and may be limited to package registries) and `make router-up` (the
 router now serves request counts for "Last opened" and idle previews).
+
+This update adds member names/GitHub profile metadata (0032) and stable random
+public UUIDs (0033). It needs no new environment variables or Docker image rebuild.
+PR descriptions and execution health are added by 0034, and uploaded profile
+photos (with GitHub-name prefill for never-edited blank names) by 0035. Internal
+database keys and stored jobs remain unchanged. Apply migrations before
+starting the new binaries; old numeric HTML bookmarks redirect after access checks.
+Use UUIDs for forms, streams and downloads.
+
+```sh
+make migrate-up          # loads DATABASE_URL from exported env, otherwise .env
+make run-server          # automatically loads .env; exported values win
+make run-worker          # restart separately after migration
+```
+
+**Expected:** Goose reaches **35**, River stays **007**, and the new server accepts
+the schema (a server built for 35 refuses to start on 34 with "run migrations
+first"). Sign in again (or use Your profile → GitHub account → Refresh)
+to populate GitHub metadata. Login requests the read-only `user:email` OAuth scope
+for the verified primary email; tokens are still discarded. No repository OAuth
+scope is added. The account's first/last name is editable independently; refreshed
+GitHub data never overwrites it. If email lookup fails, sign-in still works and the
+profile explains that the email could not refresh. Existing saved email is retained.
 
 ## 1. Prerequisites
 
@@ -213,6 +236,11 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0029 | `worker_capabilities.private_previews`: all live routing workers must advertise a configured auth URL before an owner can enable private previews. Legacy workers default false; server and worker require this schema. |
 | 0030 | Shared workspaces, roles/grants, invitation consent and handover, installation workspace ownership, manual-intent/publication authorization fences, and workspace consumption. Backfills existing connections without changing resource IDs. Coordinated server/worker cutover required. |
 | 0031 | Workspace description, independent profile revision and authenticated small-logo storage. Existing memberships, connections and authorization revisions remain intact. |
+| 0032 | Editable personal first/last names and cached GitHub metadata, separate from workspace permissions. |
+| 0033 | Persisted random public UUID aliases for existing resources; internal relational keys and jobs stay stable. |
+| 0034 | Persisted PR descriptions and revision-bound execution-job health; failed/exhausted workers no longer leave active build requests spinning. |
+| 0035 | Uploaded profile photos (`user_avatars`, `users.avatar_version`, `users.custom_avatar`); never-edited blank names are filled from the cached GitHub name. No new configuration; the CSP now also allows images from `https://avatars.githubusercontent.com`. |
+
 
 ### Shared workspace cutover
 
@@ -733,10 +761,15 @@ UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-workspace-browser
 shared quota enforcement, token/cookie/stream revocation, safe rollback and handover
 pass. Browser scenarios cover access editing and modal confirmation,
 light/dark/mobile layouts, direct navigation, search, creation/switching,
-invitation acceptance without JavaScript, profile/logo persistence, stale edits
+invitation acceptance without JavaScript, in-place saves with toasts (and their
+no-JS fallback), profile photo upload/visibility, logo persistence, stale edits
 and ownership acceptance. Only GitHub responses are fixtures; sessions,
 CSRF, workspace handlers and PostgreSQL are real. `RUN_WORKSPACE_BROWSER_TESTS=1`
 enables that suite for direct Go runs; browser tooling remains optional.
+`UI_BROWSER_SCREENSHOTS=1` also writes `workspace-*.png` captures, including the
+open in-place editor and toast. The auth persistence test runs in a rolled-back
+transaction on `TEST_DATABASE_URL`'s own schema, so migrate that database first
+(`DATABASE_URL="$TEST_DATABASE_URL" make migrate-up`) or it fails at sign-in.
 
 To verify the build-log viewer specifically:
 
@@ -957,7 +990,7 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
 ### Fresh local setup after deleting Docker data
 
 A new database can run all migrations from scratch, including workspace migrations
-0030 and 0031. Deleting the PostgreSQL volume erases users/sessions, workspace memberships,
+0030–0035. Deleting the PostgreSQL volume erases users/sessions, workspace memberships,
 invitations, repository links, stored secrets, preview history and usage. Remove
 data only if you intend to discard it, or take a database backup first. Restrict
 cleanup to Previa resources; global Docker cleanup can erase other projects.
@@ -1003,7 +1036,7 @@ make egress-image
 make router-up
 ```
 
-**Expected:** PostgreSQL is healthy; Goose reaches 31 and River reaches 007;
+**Expected:** PostgreSQL is healthy; Goose reaches 34 and River reaches 007;
 the application builds, the egress image exists and Traefik starts with the fresh
 route table. These Make targets automatically read `.env`. Start `make dev`
 (or `make run-server`) and `make run-worker` in separate terminals. Sign in,

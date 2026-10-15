@@ -87,7 +87,7 @@ Medium. The standard flow is well understood, but the security details (state pa
 2. GitHub shows a consent screen and, on approval, redirects back to the server's callback URL with a temporary `code` and the same `state`.
 3. The callback handler compares the returned `state` with the cookie value and rejects the request on mismatch (CSRF protection).
 4. The server exchanges the `code` plus client secret for an access token by calling GitHub server to server.
-5. It calls GitHub's user endpoint with that token to fetch the numeric GitHub user ID, username and avatar.
+5. It calls GitHub's user endpoint with that token to fetch the numeric GitHub user ID, username and avatar (shown unless the member uploads their own photo).
 6. It upserts the user row keyed by the numeric GitHub ID (never by username or email, which can change).
 7. It creates a session (feature 3) and returns to the requested local page
    (including a PR's build logs); direct sign-in defaults to the dashboard.
@@ -865,6 +865,8 @@ preview/
 │   │
 │   ├── auth/                       # FEATURE: GitHub OAuth login + sessions
 │   │   ├── handler.go              # login, callback, logout (the "controller")
+│   │   ├── profile_handler.go      # own profile page, in-place name saves, photo upload/serve
+│   │   ├── avatar.go               # profile photo validation, crop/scale and storage
 │   │   ├── routes.go               # Mount(r chi.Router): this feature's URLs
 │   │   ├── service.go              # login logic: verify state, upsert user
 │   │   ├── repository.go           # wraps generated queries for users/sessions
@@ -1001,7 +1003,7 @@ preview/
 │       ├── dockerx/                # Docker client construction, shared labels
 │       ├── egress/                 # egress proxy, build metering, readiness probe, its container
 │       ├── textlines/              # control-sequence stripping and bounded line splitting
-│       ├── httpx/                  # router, ingress controls, security headers, internal listener
+│       ├── httpx/                  # router, ingress controls, security headers, in-place form results, internal listener
 │       ├── logging/                # slog setup, correlation, secret redaction
 │       ├── metrics/                # Prometheus registry + bounded shared metrics
 │       └── version/                # release identity for logs, readiness and metrics
@@ -1228,6 +1230,44 @@ human source authority. Shared modal components provide accessible confirmation.
   512 × 512, decoded and re-encoded as PNG to remove metadata. Logos are served
   only to active members through an authenticated, uncached same-origin endpoint.
   No asset service, image library or external logo URL is required.
+- Migration 0032 separates editable member first/last names from cached GitHub
+  metadata; verified primary email is visible only on the member's own profile.
+  OAuth requests only `user:email` and discards the token after fetching details.
+  Name edits use a separate revision and never change membership authorization.
+- Migration 0034 stores PR descriptions with independently ordered metadata edits:
+  a description-only edit does not advance code generation or schedule a build.
+  The detail page safely escapes the original text. Current build revisions keep
+  their admitted River job address and a safe execution error category. Retry,
+  failed finalization and recovery of abandoned terminal jobs update that exact
+  revision, clear stale progress, preserve serving previews and trigger the
+  existing realtime/report paths. Raw worker errors remain in operator logs.
+- Migration 0033 gives user-facing resources persisted random UUID addresses while
+  retaining bigint relational keys and worker payloads. `platform/publicid`
+  resolves addresses before feature-owned authorization and batches authorized
+  display references. Presentation formats from supplied data only. PR UUIDs are
+  bound to their repository; old numeric HTML bookmarks redirect after access
+  checks, while numeric mutations/streams/downloads are rejected. GitHub PR
+  numbers remain labels and upstream protocol IDs remain upstream identifiers.
+- Member access tables summarize grants with two chips and an overflow action.
+  Access/invitation dialogs use role radio cards, a bounded searchable repository
+  picker, selection counts and filtered bulk actions. Invitation validation keeps
+  form context and identifies invalid/missing accounts, existing membership,
+  pending invitations and GitHub outages at the username field.
+- Migration 0035 lets members replace their GitHub picture with an uploaded photo
+  (separate `user_avatars` row; `users.avatar_version` only grows so every upload
+  gets a new cacheable address). PNG/JPEG uploads (192 KiB, 2048 × 2048 max) are
+  centre-cropped, area-averaged down to 256 × 256 and re-encoded as PNG using only
+  the standard library; the browser shrinks large photos first. Photos are served
+  at `/avatars/{member UUID}` to the member and current teammates only — auth asks
+  workspaces through a consumer-defined `SharesWorkspace` interface — with a
+  private one-hour cache and ETag. GitHub pictures load directly from
+  `https://avatars.githubusercontent.com`, the CSP's only external image origin,
+  without a referrer; a failed image falls back to the initial.
+- Profile and workspace settings use compact side-by-side cards of label/value
+  rows edited in place: Enter/✓ saves, Esc/✕ restores, leaving a changed field
+  saves, and a small toast confirms (errors stay inline). Enhanced saves send
+  `Accept: application/json` and receive the new revision and saved values; the
+  same forms still post and redirect without JavaScript.
 - Invitations store token digests and immutable intended GitHub IDs, have seven-day
   expiry, exact scope consent, revoke/regenerate, decline and idempotent accept.
   Acceptance cannot replace existing active membership. Removed inviters lose

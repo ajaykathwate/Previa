@@ -287,6 +287,15 @@ See the [user guide](technical-docs/user-guide.md) for the current browser workf
 - All lists/actions are scoped to the logged-in installation owner. Mutations
   require CSRF protection; destructive confirmation uses a modal.
 
+**Your profile** shows the editable Previa profile (photo, first/last name, email,
+session) beside the read-only GitHub account, with in-place edits confirmed by a
+small toast. Personal first/last names take precedence over GitHub usernames without
+changing the linked identity; uploaded photos are visible only to teammates. Shared access forms support searchable repository
+lists and keep invitation errors in the form. Previa resource links and form
+identifiers use persisted random UUIDs; GitHub PR numbers remain readable labels.
+See [shared workspaces](docs/28-shared-workspaces.md) and
+[sign-in/profile behavior](docs/04-github-sign-in-and-app.md).
+
 ### 2.5 Explicit MVP boundaries (what's out of scope for v1)
 
 - Arbitrary multi-service apps (`docker-compose.yml` support). *Narrowed by

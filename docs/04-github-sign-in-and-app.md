@@ -36,13 +36,13 @@ Secure flag.
 
 1. **Get started with GitHub** creates random state, stores it in a signed
    10-minute HttpOnly cookie and in the server-side session, and redirects to
-   GitHub with the exact callback URL. No extra OAuth scopes are requested.
+   GitHub with the exact callback URL. Only the read-only `user:email` scope is requested for the signed-in account’s verified primary email; no repository scope is requested.
 2. The callback verifies the signature, expiry, cookie state and pending session
    state, consumes the state and clears the cookie.
 3. `golang.org/x/oauth2` exchanges the code server to server; `go-github` fetches
-   `/user` (numeric ID, login, avatar).
+   `/user` (immutable GitHub ID, login, name, avatar, profile URL, bio, company, location and creation date), then `/user/emails` for a verified primary email. An email API failure does not prevent sign-in; the profile shows its refresh status and preserves any previously saved email.
 4. sqlc upserts `users` on the immutable numeric GitHub ID, updating mutable
-   profile fields.
+   GitHub profile fields. First/last names are seeded for a new account, then remain controlled by the member even after subsequent GitHub sign-ins.
 5. SCS rotates the session token, stores the user ID and redirects to `/dashboard`.
 6. The OAuth token is discarded; it is never stored in the session or database.
 
@@ -168,3 +168,41 @@ GitHub APIs.
 lifecycle), `internal/platform/githubapp` (App JWT and token transport),
 migration `0005_installation_linking.sql`. Its rollback deliberately fails rather
 than delete history if unlinked rows prevent restoring the old NOT NULL owner.
+
+## Personal profile and public resource identifiers
+
+The account menu’s **Your profile** link opens `/protected`. The page puts two
+sections side by side — **Previa profile** (editable) and **GitHub account**
+(read-only) — so each fact appears once, without tabs:
+
+- **Previa profile:** photo, first and last name, verified primary email (read-only,
+  visible only to the member), member UUID, joining date, and session expiry with
+  Log out. Names are edited in place: a field reads as text, Enter or ✓ saves, Esc
+  or ✕ restores it, and leaving a changed field saves it. A small toast confirms the
+  save; errors stay next to the field. Both names are optional (80 Unicode characters
+  each); blank names fall back to the GitHub username. New members, and members who
+  never edited their name, start with GitHub's name split into first word and rest.
+  Saves use optimistic revision checks, so a stale tab gets a 409 and a message.
+- **GitHub account:** username, numeric GitHub ID, name, profile link, company,
+  location, bio, account creation and last refresh. **Refresh** repeats the normal
+  OAuth flow and returns here. OAuth access tokens are never persisted, and no
+  background job or extra GitHub App permission is involved.
+
+**Profile photos.** By default a member's GitHub picture is shown, loaded from
+`https://avatars.githubusercontent.com` (the only external image origin the CSP
+allows) without a referrer. Clicking the photo uploads a replacement: the browser
+crops it to a square and shrinks it first, and the server accepts a PNG or JPEG of
+at most 192 KiB and 2048 × 2048 pixels, crops it to a centred square, scales it to
+256 × 256 and re-encodes it as PNG (dropping metadata). **Use GitHub picture**
+removes the upload. Uploaded photos are served at `/avatars/{member UUID}?v=N`
+only to the member and people who currently share an active workspace with them;
+anyone else, and numeric addresses, get a 404. Without JavaScript, the same forms
+post normally and redirect back with the toast.
+
+Members cannot change another person’s name, photo or immutable GitHub identity.
+Full names are primary in the navbar and member list; the GitHub username remains
+visible as a secondary identity. Email appears only on the signed-in member’s own
+profile, never in workspace member queries.
+
+Previa-owned public identifiers are random UUIDs, independent of immutable numeric
+GitHub IDs and GitHub PR numbers. Existing internal relational keys remain stable.

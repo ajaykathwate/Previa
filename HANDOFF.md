@@ -1,83 +1,74 @@
 # Project handoff
 Last updated: 2026-10-15
 
-## Current task and sources
-- User requested workspace UI/UX refinements: separate direct Members/Settings,
-  aligned switcher, capsules/CTAs, no duplicate Previews tab, editable identity/logo.
-  Implementation, regression checks and documentation are complete.
-  Do not resume unrelated earlier deployment/tunnel/roadmap tasks.
-- README.md and DESIGN.md section 21 are source of truth. docs/28-shared-workspaces.md
-  records flows and boundaries. docs/02-development-setup.md records schema/startup.
-- Flat internal/<feature> packages; presentation has no backend imports. Preserve
-  signal tokens and accessible current-screen modal confirmations. No new library.
-- Do not edit technical-docs/inside-previa.md unless the owner asks.
+## Current state
+- Branch `mvp-complete`, baseline commit 2b112db. All work below is uncommitted;
+  the user has not asked for a commit or push.
+- Codex's member/workspace task (names, invitation errors, 25+ repo picker, public
+  UUIDs, PR descriptions, execution health) is finished and verified, together
+  with the compact profile/settings/members redesign and editable profile photos.
+- README/DESIGN remain source of truth (DESIGN workspace bullets now cover 0035,
+  photos, the CSP image origin and in-place editing). No subagents authorized.
 
-## Workspace state
-- One workspace is one team with multiple members/repositories; users can belong
-  to several workspaces. No nested teams/channels are implemented.
-- Members and Workspace settings are direct sidebar/switcher/palette destinations.
-  Members owns people, invitation list/search and access dialogs; Settings owns
-  name/description, logo and ownership. Settings requires current Owner/Admin.
-- Previews remains at /previews; Reviewer uses a read-only presentation of the
-  pullrequests scoped activity query. Legacy workspace-preview URLs redirect after
-  membership checks. The duplicate workspace query/tab has been removed.
-- Presentation: web/pages/workspaces/{index,members,settings,shared}.templ,
-  web/pages/previews/reviewer.templ, shared workspace components, teams.css and ui.js.
-  Switcher SVG/grid alignment and stacking keep its menu above page content.
-- internal/workspaces/profile.go and profile_handler.go own bounded PNG/JPEG
-  upload/re-encoding, protected reads, metadata and stale-form handling. Profiles
-  have a separate revision: branding edits do not revoke preview access/cancel work.
-- Members and invitations have literal case-insensitive username search and
-  database pagination. Admin repository access is explained in the access modal.
-  Ownership selection now lives inside the nomination modal. No-JS forms work.
+## UI direction (user requirement, also in memory)
+- Pages must be compact and use horizontal space well (Jira-like density):
+  side-by-side cards of label/value rows, in-place editing, small toast on save,
+  errors inline, no tabs for related details, each fact shown once. Check
+  1440px and 390px screenshots before calling UI work done.
+- Shared pieces: `web/components/inline_edit.templ` (UserAvatar, Toasts,
+  InlineText/InlineTextarea), `web/styles/fields.css`, ui.js `toast()`,
+  `initInlineForms`, `initImageEditors`. Inline focus follows base.css quiet focus
+  (ink-soft border, no glow). Team page spacing lives in `web/styles/teams.css`.
+- Profile (`/protected`): Previa profile (photo, names, email read-only, member ID,
+  joined, session/logout) beside GitHub account (username, ID, name, profile,
+  company, location, bio, joined GitHub, last refreshed, Refresh).
+- Settings: General (logo, name, description, ID) beside Overview; Ownership is a
+  full-width row. Members: dense rows, no repeated workspace context line.
 
-## Existing access invariants
+## Backend added this session
+- Migration 0035: `user_avatars`, `users.avatar_version` (monotonic) and
+  `users.custom_avatar`; backfills never-edited blank names from GitHub name.
+  UpsertUser also prefills when profile_revision=1 and names are blank.
+  `database.SchemaVersion` = 35.
+- CSP img-src adds `https://avatars.githubusercontent.com` (root cause of the
+  missing profile picture). Constant: `httpx.GitHubAvatarOrigin`.
+- auth: `/protected/profile/avatar` (multipart upload), `/avatar/remove`,
+  `GET /avatars/{userUUID}` (self or current teammates via consumer interface
+  `AvatarAudience.SharesWorkspace`, wired in server.go; others 404).
+- In-place saves: `Accept: application/json` → `httpx.FormResult` (message,
+  error, revision, fields) from profile name, photo, workspace details/logo.
+  Plain forms still redirect with `?saved=` (ui.js strips it after the toast).
+- Settings no-JS errors carry `Page.ErrorField` ("logo"/"details") so they render
+  once beside their field.
+
+## Environments and verification
+- Dev DB (previa-postgres-1) reached 0035 at 13:53 via the user's own `make dev`
+  restart; do not run migrations on it yourself.
+- Dedicated test DB container `previa-member-ux-test-postgres` (loopback 55439,
+  db previa_ux_test, user previa/previa-test) is migrated to 35. The auth
+  persistence test uses its public schema, so keep it migrated. Stop/remove only
+  this container when the user is done with it.
+- Browser: `UI_BROWSER_EXECUTABLE=/snap/bin/chromium` (Playwright's own cache is
+  incomplete). GOCACHE=/tmp/previa-product-spec-go-cache.
+- Verified this session: go build, go vet, golangci-lint (0 issues), full Go suite
+  with TEST_DATABASE_URL, workspace browser suite 11/11 with screenshots, UI
+  browser suite (see final summary for counts).
+- Screenshots: web/tests/browser/artifacts/workspace-{member-profile*,logo,
+  inline-edit,toast,members-*,settings-*,directory}.png.
+
+## Existing access invariants (unchanged)
 - Active workspace membership is authoritative. Owner/Admin span all repositories;
   Developer/Reviewer require explicit grants. Sessions remember selection, not roles.
-- Source-sensitive operations additionally check fresh GitHub numeric identity and
-  readable permission; local Reviewer preview grants work without source permission.
+- Source-sensitive operations check fresh GitHub numeric identity and readable
+  permission; GitHub permission checks use the GitHub login, never display names.
 - Membership mutations serialize workspace → installations → PRs, fence unfinished
-  manual candidates and revoke private cookies/streams. Accepted serving routes,
-  recovery and captured usage remain with the workspace after actor departure.
+  manual candidates and revoke private cookies/streams.
 - Invitations use digest-only, addressed seven-day consent/revoke/regenerate flows.
-  Only Owner appoints/demotes Admins; ownership handover requires nominee acceptance.
-- Quotas/fairness use stable workspace IDs. Existing *_PER_ACCOUNT* config names
-  remain; old container labels resolve through PR identity. Installer is provenance.
-- Native reviews/assignments and account usage/deletion/disconnection remain the
-  existing Features 3/6 boundaries. Their unbuilt settings controls are omitted.
-  Notification integrations remain deferred. No later feature scaffold added.
+  Only Owner appoints/demotes Admins; ownership handover requires acceptance.
+- Profile/logo/photo edits never change authorization revisions or cancel work.
+- Do not edit technical-docs/inside-previa.md unless asked. No deployment/push.
 
-## Schema and running
-- Go 1.26.9+, PostgreSQL 17; minimum Goose 31, River 007 unchanged.
-- 0030 is the coordinated access-model cutover; backfills preserve resource IDs.
-  Stop old owner-based server/worker before upgrading; see setup documentation.
-- 0031 adds description, profile_revision and workspace_logos. Stop server/worker,
-  make migrate-up, make build, restart both. Air does not apply migrations.
-  No new env/service; PNG/JPEG input max 192 KiB/512px, existing body cap 256 KiB.
-- 0031 Down drops profile data. 0030 rollback refuses lossy team rollback once
-  invitations/memberships/new workspaces/handovers exist; solo usage is preserved.
-- Development DB was not migrated/restarted in this task. Docker and development
-  PostgreSQL were unavailable in this WSL session. Tests used a disposable native
-  PostgreSQL 17 C.UTF-8 instance under /tmp; it was stopped and removed after checks.
-  Development data was not altered.
-- Make run/migration commands load trusted .env; direct Go/tests require exports.
-  UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-workspace-browser requires
-  TEST_DATABASE_URL. Existing make test-browser remains optional and database-free.
-
-## Verification and delivery
-- Generated assets/templates/sqlc, go build ./... and go vet ./... passed.
-  Final pinned golangci-lint: 0 issues. Full Go suite: 1481 test/subtest passes,
-  40 opt-in skips, no failures (PostgreSQL C.UTF-8).
-- Race checks passed for workspaces, auth, pullrequests and app. Initial full race
-  run was terminated externally without a test failure; do not claim full race pass.
-- Browser: existing 55/55, workspace 7/7 and final navigation/accessibility 6/6
-  passed. Screenshots were visually inspected and remain ignored artifacts.
-- First disposable DB used C locale; one existing Unicode search case failed.
-  Final checks use C.UTF-8. New profile/search/migration/CSRF tests passed.
-- Evidence: test-docs/2026-10-15-workspace-ux-report.md.
-- Branch mvp-complete, following adfef83 feat: add shared team workspace access.
-  User authorized a local commit of the completed UI refinements; commit title:
-  feat: refine shared workspace navigation and settings. No push/deployment requested.
-- Previous core report: test-docs/2026-10-14-shared-workspaces-report.md. Its Docker
-  and real runtime proofs are historical; this UI task does not repeat them or
-  claim hosted/live GitHub acceptance. No live GitHub writes or tunnel changes.
+## Next steps
+- User review of the redesigned pages; apply the same density rules to any other
+  page they flag (Overview, Repositories, Builds were not part of this pass).
+- Commit only when asked, on the current branch (see memory for push rules).

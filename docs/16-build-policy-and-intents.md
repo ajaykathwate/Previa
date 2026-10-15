@@ -177,3 +177,24 @@ rename/reinstall, duplicate keys and actions, Retry/Rebuild, stale same-SHA
 transitions, Manual observation, Automatic deadlines, manual override, mode switches
 during pending/queued/running work, close/new-commit supersession, concurrent
 requests and rollback after a failed cancellation.
+
+## Execution failures and recovery
+
+Migration 0034 stores the admitted River job ID on the exact current build
+revision, separately from the PR's domain identity. New requests clear the old
+execution link and error category. An attempt error records a safe retry notice;
+admission clears it when the next attempt starts. Exhausted attempts or failed
+finalization use a bounded failure-only transaction to mark that exact request
+failed. It cannot publish, overwrite a successor, or change an existing successful
+request. Raw worker/SQL errors stay in operator logs rather than being copied into
+the product UI or GitHub comments.
+
+The existing scheduler recovery also detects completed/discarded/cancelled jobs
+whose request was left active and records terminal failure instead of silently
+starting that same revision over. Legacy requests without a stored job ID are
+matched by captured PR, generation, revision and commit. This recovery runs after
+a worker restarts as well. Existing preview routes remain available; retry creates
+a new authorized revision. The PR headline distinguishes automatic retry and an
+unavailable worker from active build progress. The original missing database
+function remains a separate operator diagnosis; these changes do not recreate it
+or alter migration 0030.

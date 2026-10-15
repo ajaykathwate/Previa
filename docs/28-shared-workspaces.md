@@ -40,7 +40,7 @@ tooltip and current-workspace indicator make the selected scope visible. The men
 also links directly to members, settings and the workspace picker.
 
 **Members** handles people and access. Its Members and Invitations views keep
-pending invitations separate from joined people. Search matches GitHub usernames
+pending invitations separate from joined people. Search matches member names and GitHub usernames
 literally, ignoring case, and works across the full paginated list. Members have
 role capsules and repository summaries. Manage access opens one dialog containing
 the role and grants. Admin roles explain their all-repository access; Developer
@@ -48,27 +48,94 @@ and Reviewer roles show explicit checkboxes. Owners can appoint Admins. Removing
 or leaving requires a confirmation modal over the current page. Only managers see
 invitations and invitation actions.
 
-**Workspace settings** handles identity and ownership. Owners/Admins can edit the
-name (1–80 characters), optional description (up to 240 characters), and logo. A
-summary shows the actual owner, role, member/repository counts, creation date and
-copyable workspace ID. Upload PNG/JPEG up to 192 KiB and 512 × 512 pixels; square
-images work best. Preview a selected image, upload it, or remove it to restore the
+**Workspace settings** handles identity and ownership in a compact layout: a
+**General** card (logo, name, description, copyable workspace ID) beside an
+**Overview** card (owner, your role, member/repository counts, creation date), with
+**Ownership** as one full-width row underneath. Owners/Admins edit the name (1–80
+characters) and optional description (up to 240 characters) in place — Enter or ✓
+saves (Ctrl/⌘+Enter for the description), Esc or ✕ restores, leaving a changed
+field saves it — and a small toast confirms each save. Clicking the logo uploads a
+replacement; the browser shrinks large images first, and the server accepts PNG/JPEG
+up to 192 KiB and 512 × 512 pixels and re-encodes it. **Remove** restores the
 initial. No public image URL or image service is involved. Settings is hidden and
 inaccessible to Developers/Reviewers. A nominated Admin gets a handover link on
 Members; the nomination and acceptance controls live under Settings → Ownership.
 
-The primary CTA on Members is Invite teammate; Settings has a Manage members link.
+**Members** lists people in dense rows (photo, name and @username, role,
+repository access, actions) with Members/Invitations switching and search in one
+toolbar. Saves elsewhere on the page (access changes, removals) confirm with the
+same toast. The workspace name is not repeated in the page heading — the
+breadcrumb and switcher already show it.
+
+The primary CTA on Members is Invite teammate; Settings links back to Members.
 The command palette exposes both pages. **Previews** is the sole preview listing;
 Reviewers get a read-only version there without source/log/build controls. Older
 `/workspaces/{id}/previews` bookmarks select an authorized workspace and redirect
 to `/previews`. No duplicate Previews tab is rendered inside settings.
 
-Forms work without JavaScript; JavaScript adds role explanations, unchanged-save
-detection, image preview and menu positioning. Invalid profile inputs retain page
-context and typed values; a stale profile submission shows current details with a
-409 response so the user can review before trying again. Profile and logo edits
+Forms work without JavaScript: in-place fields are ordinary inputs whose ✓ submits
+the form, image pickers show an Upload button, and the redirect shows the toast.
+JavaScript adds in-place JSON saves (`Accept: application/json`), role
+explanations, image shrinking and menu positioning. Invalid inputs show their error
+next to the field and keep typed values; a stale submission gets a 409 with a
+message so the user can review before trying again. Profile and logo edits
 do not sign people out of previews or invalidate in-flight manual requests.
 Light/dark palettes and narrow layouts use the existing signal tokens.
+
+## Large repository lists and invitation recovery
+
+A member row displays at most two truncated repository chips and a **+N more**
+button. That button and **Manage access** open the same access form. Owners/Admins
+show **All repositories** instead. The role is a set of styled, keyboard-accessible
+radio cards with short capability descriptions. Admin access hides and disables
+explicit grants; Developer/Reviewer grants are checked explicitly.
+
+The repository picker has a bounded scroll area, search, a total selected count,
+and **Select visible / Clear visible** controls. Bulk actions affect only the
+current search results; selections outside the search remain intact. Full names
+are available on hover and in the accessible labels. New repositories never
+silently become Developer/Reviewer grants. The list and form remain usable on
+small screens and without JavaScript (checkboxes and scroll area).
+
+Invitation creation validates username syntax, resolves the real personal GitHub
+account, checks existing active membership, and checks unexpired pending invitations
+under the workspace mutation lock. Incorrect, missing, already-member, pending, and
+provider-unavailable results have distinct messages at the username field. The
+Members screen retains the typed value, selected role, and repository checks.
+JavaScript reopens the same form as a native modal; without JavaScript the form is
+visible inline. No invitation is saved on these failures. Pending invitations are
+managed from Invitations, where links can be regenerated or revoked.
+
+## Personal identity and UUID addresses
+
+The member’s own first/last name takes precedence over the GitHub username; the
+username remains visible for identification. Names and the profile photo can be
+changed in place from **Your profile**, with optional fields, stale-edit detection,
+and immutable GitHub identity. Uploaded photos are visible only to the member and
+their current teammates. GitHub metadata sits in its own section beside the Previa
+profile. Verified email is private to that member. See
+[GitHub sign-in](04-github-sign-in-and-app.md).
+
+Migration **0032** adds personal name and cached GitHub metadata. Migration **0033**
+backfills persisted random `public_id UUID` columns with unique indexes on users,
+workspaces, installations, repositories, pull requests, invitations, outbound
+destinations, and environments. Bigint primary/foreign keys remain internal so
+existing worker jobs, routes, usage, and containers keep their identity.
+Migration **0035** adds uploaded profile photos (`user_avatars`, plus
+`users.avatar_version` and `users.custom_avatar`) and fills never-edited blank
+names from the cached GitHub name.
+
+`internal/platform/publicid` resolves inbound UUIDs before feature authorization.
+A UUID is an address, never evidence of permission. Pull-request UUID resolution
+is bound to its repository. Handlers batch only references included in their
+authorized display models; `web/components/resourceid` formats URLs from that
+supplied data without importing backend features or querying during rendering.
+Links, form values, redirects, HTMX headers, live streams, and GitHub report log
+links use UUIDs. Older numeric HTML GET bookmarks authorize first and redirect to
+the canonical UUID address. Numeric mutation, stream, logo and download addresses
+are rejected by the production catalog. GitHub PR numbers remain readable labels
+and GitHub protocol IDs remain unchanged. River retains its own administrative job
+IDs. No global HTML response rewriting is involved.
 
 ## Roles
 
@@ -179,7 +246,7 @@ handover does not reset limits. Old and workspace ledgers use existing retention
 Follow [development setup](02-development-setup.md#shared-workspace-cutover).
 Stop old server/worker processes before applying 0030; run only workspace-aware
 binaries afterward. This access-model cutover is not compatible with leaving an
-old owner-based server serving requests. New binaries require Goose 31. Existing
+old owner-based server serving requests. New binaries require Goose 34. Existing
 preview containers do not need recreation for label migration.
 
 A solo upgrade can roll back before team data exists, preserving newly recorded
