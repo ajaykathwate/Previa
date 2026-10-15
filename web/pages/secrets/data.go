@@ -10,6 +10,23 @@ import (
 type Secret struct {
 	Name      string
 	UpdatedAt time.Time
+	Build     bool // Dockerfile steps of trusted builds may read it
+}
+
+// BuildLabel says how builds use an allowed secret.
+func (s Secret) BuildLabel() string {
+	if s.Name == "REGISTRY_AUTH" {
+		return "Registry login"
+	}
+	return "Allowed"
+}
+
+// BuildTitle explains the label.
+func (s Secret) BuildTitle() string {
+	if s.Name == "REGISTRY_AUTH" {
+		return "Builds log in to the registries it lists to pull private base images. Dockerfile steps never see it."
+	}
+	return "Dockerfile steps of this repository's own branches may read it with RUN --mount=type=secret,id=" + s.Name + "; forks never do."
 }
 
 // Row is one line of the secrets editor. Only the name is kept after a

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ const (
 type Gateway struct {
 	docker *client.Client
 	image  string
+	name   string // container and outward network identity
 	// managed: this gateway owns owner-approved forwarding (the worker's
 	// does); ports are what it forwards, none meaning off.
 	managed bool
@@ -50,11 +52,26 @@ type Gateway struct {
 
 // NewGateway runs image as the egress container.
 func NewGateway(docker *client.Client, image string) (*Gateway, error) {
+	return NewNamedGateway(docker, image, ContainerName)
+}
+
+var gatewayNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
+
+// NewNamedGateway gives an independent pipeline its own egress policy and
+// listeners. Production uses NewGateway; end-to-end tests must not share a
+// development worker's forwarding state.
+func NewNamedGateway(docker *client.Client, image, name string) (*Gateway, error) {
 	if docker == nil || strings.TrimSpace(image) == "" {
 		return nil, errors.New("egress gateway requires a Docker client and an image")
 	}
-	return &Gateway{docker: docker, image: image}, nil
+	if !gatewayNamePattern.MatchString(name) {
+		return nil, errors.New("egress gateway requires a valid container and network name")
+	}
+	return &Gateway{docker: docker, image: image, name: name}, nil
 }
+
+// Name identifies this gateway's container and outward network.
+func (g *Gateway) Name() string { return g.name }
 
 // ManageForwarding makes this gateway own owner-approved outbound forwarding
 // (PREVIEW_OUTBOUND_PORTS): every time it records approvals it also tells the
@@ -90,7 +107,7 @@ func (g *Gateway) Ensure(ctx context.Context) (string, error) {
 	}
 	spec := g.spec(image.ID)
 	for attempt := 0; attempt < 2; attempt++ {
-		inspected, err := g.docker.ContainerInspect(ctx, ContainerName, client.ContainerInspectOptions{})
+		inspected, err := g.docker.ContainerInspect(ctx, g.name, client.ContainerInspectOptions{})
 		if err == nil {
 			return g.reuse(ctx, inspected.Container, spec)
 		}
@@ -141,7 +158,7 @@ func (g *Gateway) create(ctx context.Context, spec string) (string, error) {
 	pids := int64(512)
 	cmd := []string{"serve", "-state", StateDir}
 	created, err := g.docker.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name: ContainerName,
+		Name: g.name,
 		Config: &container.Config{
 			Image:  g.image,
 			User:   "65532:65532",
@@ -149,7 +166,7 @@ func (g *Gateway) create(ctx context.Context, spec string) (string, error) {
 			Labels: map[string]string{dockerx.LabelManaged: "true", dockerx.LabelKind: dockerx.KindEgress, labelSpec: spec},
 		},
 		HostConfig: &container.HostConfig{
-			NetworkMode:    container.NetworkMode(NetworkName),
+			NetworkMode:    container.NetworkMode(g.name),
 			RestartPolicy:  container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 			ReadonlyRootfs: true,
 			// Forwarded ports, allow files and counters; lost on restart and
@@ -181,7 +198,7 @@ func (g *Gateway) replace(ctx context.Context, old container.InspectResponse, sp
 	var networks []string
 	if old.NetworkSettings != nil {
 		for name := range old.NetworkSettings.Networks {
-			if name != NetworkName {
+			if name != g.name {
 				networks = append(networks, name)
 			}
 		}
@@ -202,14 +219,14 @@ func (g *Gateway) replace(ctx context.Context, old container.InspectResponse, sp
 }
 
 func (g *Gateway) ensureNetwork(ctx context.Context) error {
-	_, err := g.docker.NetworkInspect(ctx, NetworkName, client.NetworkInspectOptions{})
+	_, err := g.docker.NetworkInspect(ctx, g.name, client.NetworkInspectOptions{})
 	if err == nil {
 		return nil
 	}
 	if !cerrdefs.IsNotFound(err) {
 		return fmt.Errorf("inspect egress network: %w", err)
 	}
-	_, err = g.docker.NetworkCreate(ctx, NetworkName, client.NetworkCreateOptions{
+	_, err = g.docker.NetworkCreate(ctx, g.name, client.NetworkCreateOptions{
 		Driver: "bridge", Labels: map[string]string{dockerx.LabelManaged: "true", dockerx.LabelKind: dockerx.KindEgress},
 	})
 	if err != nil && !cerrdefs.IsConflict(err) {
@@ -272,7 +289,7 @@ func ProxyURL(addr netip.Addr) string { return "http://" + addr.String() + ":" +
 
 // Address returns the egress container's address on a network it joined.
 func (g *Gateway) Address(ctx context.Context, networkID string) (netip.Addr, bool, error) {
-	return g.address(ctx, networkID, ContainerName)
+	return g.address(ctx, networkID, g.name)
 }
 
 // Allow records the destinations approved for the preview network on which
@@ -284,7 +301,7 @@ func (g *Gateway) Allow(ctx context.Context, network netip.Addr, destinations []
 	for _, d := range destinations {
 		cmd = append(cmd, "-dest", d.String())
 	}
-	result, err := dockerx.Run(ctx, g.docker, ContainerName, cmd...)
+	result, err := dockerx.Run(ctx, g.docker, g.name, cmd...)
 	switch {
 	case err != nil:
 		return fmt.Errorf("record approved destinations: %w", err)
@@ -316,7 +333,7 @@ func (g *Gateway) SyncAllow(ctx context.Context, desired map[netip.Addr][]Destin
 		}
 		cmd = append(cmd, "-network", network.String()+"="+strings.Join(hosts, ","))
 	}
-	result, err := dockerx.Run(ctx, g.docker, ContainerName, cmd...)
+	result, err := dockerx.Run(ctx, g.docker, g.name, cmd...)
 	switch {
 	case err != nil:
 		return fmt.Errorf("synchronize approved destinations: %w", err)
@@ -341,7 +358,7 @@ func (g *Gateway) portsFlag() []string {
 
 // Stats reads the egress container's forwarding counters.
 func (g *Gateway) Stats(ctx context.Context) (Stats, error) {
-	result, err := dockerx.Run(ctx, g.docker, ContainerName, binary, "stats", "-state", StateDir)
+	result, err := dockerx.Run(ctx, g.docker, g.name, binary, "stats", "-state", StateDir)
 	if err != nil {
 		return Stats{}, fmt.Errorf("read forwarding counters: %w", err)
 	}
@@ -355,15 +372,49 @@ func (g *Gateway) Stats(ctx context.Context) (Stats, error) {
 	return s, nil
 }
 
+// StartMetering counts a build network's traffic from now on, where the
+// egress container has address network; hosts, when given, are the only
+// destinations the network may reach.
+func (g *Gateway) StartMetering(ctx context.Context, network netip.Addr, hosts []string) error {
+	cmd := []string{binary, "meter", "-network", network.String(), "-start"}
+	if len(hosts) > 0 {
+		cmd = append(cmd, "-hosts", strings.Join(hosts, ","))
+	}
+	result, err := dockerx.Run(ctx, g.docker, g.name, cmd...)
+	if err != nil {
+		return fmt.Errorf("start metering build traffic: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("start metering build traffic: exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	return nil
+}
+
+// EndMetering returns a build network's traffic and stops counting it.
+func (g *Gateway) EndMetering(ctx context.Context, network netip.Addr) (Usage, error) {
+	result, err := dockerx.Run(ctx, g.docker, g.name, binary, "meter", "-network", network.String(), "-end")
+	if err != nil {
+		return Usage{}, fmt.Errorf("read build traffic: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return Usage{}, fmt.Errorf("read build traffic: exit code %d", result.ExitCode)
+	}
+	var u Usage
+	if err := json.Unmarshal([]byte(result.Stdout), &u); err != nil {
+		return Usage{}, fmt.Errorf("read build traffic: %w", err)
+	}
+	return u, nil
+}
+
 func (g *Gateway) address(ctx context.Context, networkID, containerID string) (netip.Addr, bool, error) {
 	inspected, err := g.docker.NetworkInspect(ctx, networkID, client.NetworkInspectOptions{})
 	if err != nil {
 		return netip.Addr{}, false, fmt.Errorf("inspect network: %w", err)
 	}
 	endpoint, ok := inspected.Network.Containers[containerID]
-	if !ok && containerID == ContainerName {
+	if !ok && containerID == g.name {
 		for _, e := range inspected.Network.Containers {
-			if e.Name == ContainerName {
+			if e.Name == g.name {
 				endpoint, ok = e, true
 				break
 			}
@@ -380,13 +431,13 @@ func (g *Gateway) address(ctx context.Context, networkID, containerID string) (n
 // as detached.
 func (g *Gateway) Detach(ctx context.Context, networkID string) error {
 	if g.Forwarding() {
-		if addr, ok, err := g.address(ctx, networkID, ContainerName); err == nil && ok {
+		if addr, ok, err := g.address(ctx, networkID, g.name); err == nil && ok {
 			if err := g.Allow(ctx, addr, nil); err != nil {
 				return err
 			}
 		}
 	}
-	_, err := g.docker.NetworkDisconnect(ctx, networkID, client.NetworkDisconnectOptions{Container: ContainerName, Force: true})
+	_, err := g.docker.NetworkDisconnect(ctx, networkID, client.NetworkDisconnectOptions{Container: g.name, Force: true})
 	if err != nil && !cerrdefs.IsNotFound(err) && !strings.Contains(err.Error(), "not connected") {
 		return fmt.Errorf("disconnect egress proxy: %w", err)
 	}
@@ -407,7 +458,7 @@ func (g *Gateway) Probe(ctx context.Context, target netip.AddrPort, path string,
 	if path != "" {
 		cmd = append(cmd, "-path", path)
 	}
-	out, code, err := dockerx.Exec(ctx, g.docker, ContainerName, cmd...)
+	out, code, err := dockerx.Exec(ctx, g.docker, g.name, cmd...)
 	switch {
 	case err != nil:
 		return fmt.Errorf("run readiness probe: %w", err)

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -28,9 +29,13 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	pr "github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/ajaykathwatee/previa/internal/repoconfig"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/secrets"
+	"github.com/ajaykathwatee/previa/internal/starterkits"
 	"github.com/ajaykathwatee/previa/web"
+	outputpages "github.com/ajaykathwatee/previa/web/pages/appoutput"
+	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
 	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
@@ -64,6 +69,15 @@ func TestBrowserRegression(t *testing.T) {
 	hub := realtime.NewHub()
 	var syncMu sync.Mutex
 	syncing := map[int64]int{}
+	buildState := ""
+	// External state changes model automatic builds without submitting a UI form.
+	router.Post("/__fixture/build-state", func(w http.ResponseWriter, r *http.Request) {
+		syncMu.Lock()
+		buildState = r.FormValue("state")
+		syncMu.Unlock()
+		hub.Publish(pr.RepositoryTopic(1), "build_intents")
+		w.WriteHeader(http.StatusNoContent)
+	})
 	startSync := func(id int64) {
 		syncMu.Lock()
 		syncing[id] = 2
@@ -91,7 +105,11 @@ func TestBrowserRegression(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	router.Post("/__fixture/logs/append", func(w http.ResponseWriter, r *http.Request) {
-		logs.add(r.FormValue("text"))
+		if r.FormValue("system") == "1" {
+			logs.addSystem(r.FormValue("text"))
+		} else {
+			logs.add(r.FormValue("text"))
+		}
 		publishLogs()
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -106,8 +124,30 @@ func TestBrowserRegression(t *testing.T) {
 		buildlogs.NewHandler(logs, handler, logger).
 			WithLiveUpdates(hub, realtime.StreamOptions{Retry: 500 * time.Millisecond, Heartbeat: 10 * time.Second, MaxDuration: time.Minute}).
 			Mount(r, auth.RequireUser)
+		// App output uses the same SSE event protocol. This presentation fixture
+		// exercises its actual template and renderer; backend tests cover followers.
+		r.With(auth.RequireUser).Get("/repositories/1/pull-requests/3/output", func(w http.ResponseWriter, r *http.Request) {
+			stream, err := logs.Stream(r.Context(), fixtureLogEnvironment)
+			if err != nil {
+				http.Error(w, "fixture stream unavailable", 500)
+				return
+			}
+			lines, err := logs.LinesBefore(r.Context(), fixtureLogEnvironment, stream.Epoch, stream.Lines, 500)
+			if err != nil {
+				http.Error(w, "fixture lines unavailable", 500)
+				return
+			}
+			view := outputpages.OutputPage{RepoID: 1, Repository: "fixture-owner/repository-1", Number: 3, Title: "App output", StatusLabel: "Live", StatusTone: "tone-ok", Summary: "The app is running.", Epoch: stream.Epoch, After: stream.Lines, EventsURL: prpages.LogsURL(1, 3) + "/events"}
+			for _, line := range lines {
+				view.Lines = append(view.Lines, buildpages.LogLine{Sequence: line.Sequence, System: line.System, Text: line.Text, At: line.At})
+			}
+			templ.Handler(outputpages.Output("design-review", handler.CSRFToken(r.Context()), view)).ServeHTTP(w, r)
+		})
 		// The Overview shows an empty workspace until a test asks for a busy one
 		// (GET /__fixture/overview?state=busy), kept in the session.
+		// Starter kits with Previa's default service versions and no worker.
+		starterkits.NewHandler(handler, nil, starterkits.Offer{Postgres: []string{"17", "16"}, Redis: []string{"8", "7"}, MySQL: []string{"8.4"}}, fixtureKitCheck, logger).
+			Mount(r, auth.RequireUser)
 		dashboard.MountWithSummary(r, handler, auth.RequireUser, dashboard.Options{
 			DeveloperTools: true, Identity: handler.UserIDs,
 			Summary: func(ctx context.Context, _ int64) (dashboardpages.Summary, error) {
@@ -121,18 +161,32 @@ func TestBrowserRegression(t *testing.T) {
 			sessions.Put(r.Context(), "fixture-overview", r.URL.Query().Get("state"))
 			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		})
-		for _, path := range []string{"/builds", "/environments"} {
+		r.With(auth.RequireUser).Get("/environments", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/previews?"+r.URL.RawQuery, http.StatusMovedPermanently)
+		})
+		for _, path := range []string{"/builds", "/previews"} {
 			r.With(auth.RequireUser).Get(path, func(w http.ResponseWriter, r *http.Request) {
-				activity := prpages.Activity{Environments: r.URL.Path == "/environments", Number: 1, Pages: 1}
+				activity := prpages.Activity{Previews: r.URL.Path == "/previews", Number: 1, Pages: 1, Failures: r.URL.Query().Get("failures"), AttentionDays: 7}
+				if d := r.URL.Query().Get("dismissed"); d == "1-4" {
+					activity.DismissedRepo, activity.DismissedNumber = 1, 4
+				}
 				if r.URL.Query().Get("fixture") == "rows" {
-					activity.Total = 2
+					activity.Total = 3
 					activity.Rows = []prpages.ActivityRow{
 						{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Latest: "latest-commit", Requested: "latest-commit", Deployed: "older-commit", State: "running", Available: true,
 							PreviewURL: "https://pr-3-1-fixture.preview.example.com", ExpiresAt: "2026-10-07T10:00:00Z", OlderPreview: true, Teardown: true, Waiting: "Waiting for capacity"},
-						{RepoID: 1, Number: 4, Name: "fixture-owner/repository-1", Latest: "latest-commit", Requested: "latest-commit", State: "failed", Available: true, Failure: "The app did not become ready."},
+						{RepoID: 1, Number: 4, Name: "fixture-owner/repository-1", Latest: "latest-commit", Requested: "latest-commit", State: "failed", Available: true, Failure: "The app did not become ready.", FailureCode: "unhealthy",
+							Revision: 2, Attention: "attention"},
+						{RepoID: 1, Number: 5, Name: "fixture-owner/repository-1", Latest: "old-commit", Requested: "old-commit", State: "failed", Available: true, Failure: "The image build failed.", FailureCode: "build_failed",
+							Revision: 1, Attention: "older", AttentionNote: "Over 7 days old"},
 					}
-					if activity.Environments {
+					if activity.Previews {
+						// #3 is live on an earlier commit; #4's newer build failed while
+						// its earlier version keeps serving.
 						activity.Rows[0].Waiting = ""
+						activity.Rows[1].Deployed, activity.Rows[1].Attention, activity.Rows[1].PreviewURL = "old-commit", "", "https://pr-4-1-fixture.preview.example.com"
+						activity.Rows = activity.Rows[:2]
+						activity.Total = 2
 					}
 				}
 				templ.Handler(prpages.ActivityIndex("design-review", handler.CSRFToken(r.Context()), activity)).ServeHTTP(w, r)
@@ -157,7 +211,7 @@ func TestBrowserRegression(t *testing.T) {
 		outbound.NewHandler(outboundService, handler, logger).Mount(r, auth.RequireUser)
 		// Real workspace templates; database ownership is verified in pullrequests.
 		panel := func(r *http.Request, repoID int64) prpages.Page {
-			p := prpages.Page{RepoID: repoID, Name: "fixture-owner/repository-" + strconv.FormatInt(repoID, 10), Mode: sessions.GetString(r.Context(), "fixture-mode"), Available: repoID%2 == 1, DiscoveryEnabled: true, SyncState: "complete", Fetched: 25, LastRefresh: "2026-10-04T10:00:00Z", Number: 1, Pages: 3, Total: 25, State: r.URL.Query().Get("pr_state"), Search: r.URL.Query().Get("pr_q"), WorkspaceQuery: r.URL.RawQuery}
+			p := prpages.Page{RepoID: repoID, Name: "fixture-owner/repository-" + strconv.FormatInt(repoID, 10), Mode: sessions.GetString(r.Context(), "fixture-mode"), Available: repoID%2 == 1, PrivatePreviewsReady: repoID != 101 && repoID != 103, PrivatePreviews: repoID == 103, DiscoveryEnabled: true, SyncState: "complete", Fetched: 25, LastRefresh: "2026-10-04T10:00:00Z", Number: 1, Pages: 3, Total: 25, State: r.URL.Query().Get("pr_state"), Search: r.URL.Query().Get("pr_q"), WorkspaceQuery: r.URL.RawQuery}
 			if p.Mode == "" {
 				p.Mode = "manual"
 			}
@@ -178,7 +232,17 @@ func TestBrowserRegression(t *testing.T) {
 					if p.Search != "" && !strings.Contains(title, p.Search) {
 						continue
 					}
-					p.Rows = append(p.Rows, prpages.PR{Number: n, Title: title, Author: "design-review", Branch: "feature/preview", SHA: "1234567890abcdef", State: "open", Build: "Not requested"})
+					row := prpages.PR{Number: n, Title: title, Author: "design-review", Branch: "feature/preview", SHA: "1234567890abcdef", State: "open", Build: "Not requested",
+						URL: "https://github.com/fixture-owner/repository/pull/" + strconv.Itoa(int(n)), UpdatedAt: "2026-10-04T09:00:00Z", RequestCurrent: true}
+					switch n { // the states the detail fixture shows for these PRs
+					case 3:
+						row.Build, row.PreviewURL, row.OlderPreview = "succeeded", "https://pr-3-1-fixture.preview.example.com", true
+					case 4:
+						row.Build = "failed"
+					case 6:
+						row.Build = "running"
+					}
+					p.Rows = append(p.Rows, row)
 				}
 			}
 			p.Total = int64(len(p.Rows))
@@ -188,6 +252,26 @@ func TestBrowserRegression(t *testing.T) {
 			p.Rows = p.Rows[offset:min(offset+10, p.Total)]
 			if n, err := strconv.ParseInt(r.URL.Query().Get("pr"), 10, 32); err == nil && n > 0 {
 				p.SelectedPR = fixturePR(r, sessions, int32(n), p.Available)
+				if n == 7 {
+					syncMu.Lock()
+					state := buildState
+					syncMu.Unlock()
+					if state != "" {
+						selected := p.SelectedPR
+						selected.Build, selected.RequestSource, selected.RequestCurrent = state, "automatic", true
+						selected.Actions = prpages.Actions{Teardown: true, CancelOnly: true}
+						switch state {
+						case "pending":
+							selected.Actions.BuildNow = true
+						case "queued":
+							selected.Actions.InProgress = "Build queued"
+						case "running":
+							selected.Actions.InProgress = "Building preview"
+						case "succeeded":
+							selected.Actions.Rebuild = true
+						}
+					}
+				}
 			}
 			return p
 		}
@@ -214,8 +298,8 @@ func TestBrowserRegression(t *testing.T) {
 				} else {
 					sessions.Put(r.Context(), key, "removing")
 				}
-				if r.Form.Get("return") == "environments" {
-					http.Redirect(w, r, "/environments?page=1", http.StatusSeeOther)
+				if r.Form.Get("return") == "previews" {
+					http.Redirect(w, r, "/previews?page=1", http.StatusSeeOther)
 					return
 				}
 				query, _ := url.ParseQuery(r.Form.Get("workspace_query"))
@@ -375,6 +459,7 @@ func (fixtureProvider) Authenticate(_ context.Context, code string) (auth.Identi
 type fixtureSecrets struct {
 	mu    sync.Mutex
 	names map[int64]map[string]time.Time
+	build map[int64]map[string]bool
 }
 
 func (f *fixtureSecrets) Repository(_ context.Context, _ int64, repoID int64) (secrets.RepositoryView, error) {
@@ -392,7 +477,7 @@ func (f *fixtureSecrets) List(ctx context.Context, user, repoID int64) ([]secret
 	defer f.mu.Unlock()
 	var out []secrets.Summary
 	for name, at := range f.names[repoID] {
-		out = append(out, secrets.Summary{Name: name, UpdatedAt: at})
+		out = append(out, secrets.Summary{Name: name, UpdatedAt: at, Build: f.build[repoID][name]})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -437,9 +522,31 @@ func (f *fixtureSecrets) DeleteMany(ctx context.Context, user, repoID int64, nam
 		if _, exists := f.names[repoID][name]; exists {
 			deleted++
 			delete(f.names[repoID], name)
+			delete(f.build[repoID], name)
 		}
 	}
 	return deleted, nil
+}
+
+func (f *fixtureSecrets) SetBuild(ctx context.Context, user, repoID int64, name string, build bool) (bool, error) {
+	repo, err := f.Repository(ctx, user, repoID)
+	if err != nil || (build && !repo.Available) {
+		return false, secrets.ErrUnavailable
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.names[repoID][name]; !ok {
+		return false, nil
+	}
+	if f.build == nil {
+		f.build = map[int64]map[string]bool{}
+	}
+	if f.build[repoID] == nil {
+		f.build[repoID] = map[string]bool{}
+	}
+	changed := f.build[repoID][name] != build
+	f.build[repoID][name] = build
+	return changed, nil
 }
 
 type fixturePings struct{}
@@ -470,8 +577,15 @@ func (f *fixtureLogs) add(texts ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, text := range texts {
-		f.lines = append(f.lines, buildlogs.Line{Sequence: int64(len(f.lines)), Text: text})
+		f.lines = append(f.lines, buildlogs.Line{Sequence: int64(len(f.lines)), Text: text, At: time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)})
 	}
+}
+
+// addSystem appends one of the runtime's own progress lines.
+func (f *fixtureLogs) addSystem(text string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lines = append(f.lines, buildlogs.Line{Sequence: int64(len(f.lines)), System: true, Text: text, At: time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)})
 }
 
 func (f *fixtureLogs) restart(text string) {
@@ -483,12 +597,13 @@ func (f *fixtureLogs) restart(text string) {
 }
 
 func (f *fixtureLogs) Target(_ context.Context, userID, repoID int64, number int32) (buildlogs.Target, error) {
-	if userID <= 0 || repoID != 1 || number != 3 {
+	// PR 3's logs, also streamed as running PR 6's so its tracker can follow them.
+	if userID <= 0 || repoID != 1 || (number != 3 && number != 6) {
 		return buildlogs.Target{}, buildlogs.ErrUnavailable
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return buildlogs.Target{PullRequestID: 3, RepoID: 1, Number: 3, Title: "A careful change to preview 3", Repository: "fixture-owner/repository-1", Available: true,
+	return buildlogs.Target{PullRequestID: int64(number), RepoID: 1, Number: number, Title: "A careful change to preview " + strconv.Itoa(int(number)), Repository: "fixture-owner/repository-1", Available: true,
 		EnvironmentID: fixtureLogEnvironment, Intent: &buildlogs.Intent{Generation: 1, Revision: f.epoch, HeadSHA: "1234567890abcdef", State: "running"}}, nil
 }
 
@@ -501,6 +616,40 @@ func (f *fixtureLogs) Stream(_ context.Context, environmentID int64) (buildlogs.
 	return buildlogs.Stream{EnvironmentID: environmentID, Epoch: f.epoch, Generation: 1, Revision: f.epoch, HeadSHA: "1234567890abcdef", Lines: int64(len(f.lines))}, nil
 }
 
+func (f *fixtureLogs) SearchFrom(_ context.Context, _, epoch, from int64, limit int, filter buildlogs.Filter) ([]buildlogs.Line, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := []buildlogs.Line{}
+	if epoch != f.epoch {
+		return result, nil
+	}
+	for _, line := range f.lines {
+		if line.Sequence >= from && filter.Matches(line) {
+			result = append(result, line)
+			if len(result) == limit {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+func (f *fixtureLogs) SearchBefore(_ context.Context, _, epoch, before int64, limit int, filter buildlogs.Filter) ([]buildlogs.Line, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := []buildlogs.Line{}
+	if epoch != f.epoch {
+		return result, nil
+	}
+	for _, line := range f.lines {
+		if line.Sequence < before && filter.Matches(line) {
+			result = append(result, line)
+		}
+	}
+	if len(result) > limit {
+		result = result[len(result)-limit:]
+	}
+	return result, nil
+}
 func (f *fixtureLogs) LinesFrom(_ context.Context, _, epoch, from int64, limit int) ([]buildlogs.Line, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -509,6 +658,9 @@ func (f *fixtureLogs) LinesFrom(_ context.Context, _, epoch, from int64, limit i
 	}
 	return append([]buildlogs.Line(nil), f.lines[from:min(int(from)+limit, len(f.lines))]...), nil
 }
+
+// Delete refuses: the fixture's attempt is always running.
+func (f *fixtureLogs) Delete(context.Context, int64, int64) error { return buildlogs.ErrNotDeletable }
 
 func (f *fixtureLogs) LinesBefore(_ context.Context, _, epoch, before int64, limit int) ([]buildlogs.Line, error) {
 	f.mu.Lock()
@@ -529,16 +681,33 @@ func fixturePR(r *http.Request, sessions *scs.SessionManager, number int32, avai
 		Headline: prpages.Headline{Tone: "tone-neutral", Title: "No preview yet", Detail: "Build the latest commit to get a preview address for this pull request."}}
 	if !available {
 		pr.Actions = prpages.Actions{Unavailable: "GitHub access to this repository is unavailable.",
-			Hint: "Restore access with Manage connections on the Repositories page.", Blocked: "Build latest commit"}
+			Hint: "Restore access on the Repositories page: choose repositories on GitHub and select this one again.", Blocked: "Build latest commit"}
 		pr.Headline = prpages.Headline{Tone: "tone-neutral", Title: "GitHub access to this repository is unavailable"}
 		return pr
 	}
 	switch number {
 	case 3:
+		pr.ExecutionWorker = true
+		pr.ServicesOffered = []string{"mysql 8.4", "postgres 17, 16", "redis 8, 7"}
 		pr.Build, pr.RequestedSHA, pr.Environment, pr.DeployedSHA = "succeeded", "older-commit", "running", "older-commit"
 		pr.PreviewURL, pr.ExpiresAt, pr.OlderPreview = "https://pr-3-1-fixture.preview.example.com", "2026-10-07T10:00:00Z", true
 		pr.Actions = prpages.Actions{Build: true, Teardown: true, ExpectedRevision: 1, RequestKey: "fixture-request-key-0003"}
 		pr.Headline = prpages.Headline{Tone: "tone-warn", Title: "Preview live on an earlier commit"}
+	case 4:
+		// The commit could not be downloaded: the page explains it and offers a retry.
+		pr.Build, pr.RequestedSHA, pr.RequestCurrent = "failed", "latest-commit", true
+		pr.Failure, pr.FailureCode = "The commit could not be prepared.", "source_failed"
+		pr.FailureLog = []string{"Preparing commit 1234567 from fixture-owner/repository-1.",
+			"Source preparation failed: GitHub denied access to this commit's files. Give the GitHub App Contents: read, then retry."}
+		pr.StartedAt, pr.CompletedAt = "2026-10-04T09:58:00Z", "2026-10-04T09:58:04Z"
+		pr.Actions = prpages.Actions{Retry: true, RequestKey: "fixture-request-key-0004"}
+		pr.Headline = prpages.Headline{Tone: "tone-danger", Title: "Build failed", Detail: pr.Failure}
+	case 6:
+		// A build is running; the tracker follows its live log.
+		pr.Build, pr.RequestedSHA, pr.RequestCurrent = "running", "latest-commit", true
+		pr.StartedAt = time.Now().Add(-75 * time.Second).UTC().Format(time.RFC3339)
+		pr.Actions = prpages.Actions{Teardown: true, CancelOnly: true}
+		pr.Headline = prpages.Headline{Tone: "tone-info", Title: "Building latest-commi", Detail: "The preview address appears here when it is live."}
 	case 9:
 		// A worker runs but has no preview domain: the action is shown disabled.
 		pr.Actions = prpages.Actions{Unavailable: "The running worker cannot build previews: it has no preview domain.",
@@ -549,6 +718,7 @@ func fixturePR(r *http.Request, sessions *scs.SessionManager, number int32, avai
 	switch sessions.GetString(r.Context(), "fixture-pr-"+strconv.Itoa(int(number))) {
 	case "queued":
 		pr.Build, pr.RequestedSHA, pr.RequestCurrent = "queued", "latest-commit", true
+		pr.Failure, pr.FailureCode, pr.FailureLog = "", "", nil // the handler explains only a failed current request
 		pr.Actions = prpages.Actions{Teardown: true, CancelOnly: pr.DeployedSHA == ""}
 		pr.Headline = prpages.Headline{Tone: "tone-info", Title: "Queued to build latest-commi"}
 	case "removing":
@@ -566,14 +736,17 @@ func fixturePR(r *http.Request, sessions *scs.SessionManager, number int32, avai
 func fixtureOverview(now time.Time) dashboardpages.Summary {
 	at := func(d time.Duration) string { return now.Add(d).UTC().Format(time.RFC3339) }
 	return dashboardpages.Summary{
-		Installations: 2, Repositories: 6, Available: 5, OpenPRs: 12, Waiting: 2, Building: 1, Failed: 1, Live: 4,
+		Installations: 2, Repositories: 6, Available: 5, OpenPRs: 12, Waiting: 2, Building: 1, Failed: 1, FailedOlder: 2, Live: 4, AttentionDays: 7,
 		Workers: dashboardpages.Workers{Discovery: true, Execution: true, Reporting: true, Housekeeping: true},
 		Builds: []prpages.ActivityRow{
 			{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Title: "Fixture pull request 3", Latest: "latest-commit", Requested: "latest-commit",
 				State: "running", RequestCurrent: true, RequestSource: "manual", Available: true, Deadline: at(-3 * time.Minute), StartedAt: at(-2 * time.Minute)},
 			{RepoID: 1, Number: 4, Name: "fixture-owner/repository-1", Title: "Fixture pull request 4", Latest: "latest-commit", Requested: "latest-commit",
-				State: "failed", Failure: "The app did not become ready.", RequestCurrent: true, RequestSource: "automatic", Available: true,
-				StartedAt: at(-50 * time.Minute), CompletedAt: at(-47 * time.Minute)},
+				State: "failed", Failure: "The app did not become ready.", FailureCode: "unhealthy", RequestCurrent: true, RequestSource: "automatic", Available: true,
+				StartedAt: at(-50 * time.Minute), CompletedAt: at(-47 * time.Minute), Revision: 3, Attention: "attention"},
+			{RepoID: 1, Number: 5, Name: "fixture-owner/repository-1", Title: "Fixture pull request 5", Latest: "old-commit", Requested: "old-commit",
+				State: "failed", Failure: "The image build failed.", FailureCode: "build_failed", RequestCurrent: true, RequestSource: "manual", Available: true,
+				StartedAt: at(-9 * 24 * time.Hour), CompletedAt: at(-9*24*time.Hour + 2*time.Minute), Revision: 1, Attention: "older", AttentionNote: "Over 7 days old"},
 		},
 		Previews: []prpages.ActivityRow{
 			{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Title: "Fixture pull request 3", Latest: "latest-commit", Deployed: "older-commit",
@@ -632,4 +805,27 @@ func (f *fixtureOutbound) Remove(_ context.Context, _ int64, repoID, id int64) (
 		}
 	}
 	return egress.Destination{}, outbound.ErrUnavailable
+}
+
+// fixtureKitCheck checks a starter kit's .previewrc.yaml with the parser a
+// build uses, as internal/app wires it in production.
+func fixtureKitCheck(config []byte, offer starterkits.Offer) []starterkits.Problem {
+	catalog := fixtureCatalog{"postgres": offer.Postgres, "redis": offer.Redis, "mysql": offer.MySQL}
+	_, err := repoconfig.ParseFor(config, repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: catalog, BuildTimeout: offer.BuildTimeout})
+	var invalid *repoconfig.ValidationError
+	if !errors.As(err, &invalid) {
+		return nil
+	}
+	problems := make([]starterkits.Problem, 0, len(invalid.Issues))
+	for _, issue := range invalid.Issues {
+		problems = append(problems, starterkits.Problem{Field: issue.Field, Message: issue.Message, Line: issue.Line})
+	}
+	return problems
+}
+
+type fixtureCatalog map[string][]string
+
+func (c fixtureCatalog) Versions(kind string) []string { return c[kind] }
+func (c fixtureCatalog) Image(kind, version string) (string, bool) {
+	return kind + ":" + version, slices.Contains(c[kind], version)
 }

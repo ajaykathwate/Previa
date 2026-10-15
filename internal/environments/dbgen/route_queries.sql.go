@@ -280,10 +280,14 @@ func (q *Queries) ReadRoute(ctx context.Context, pullRequestID int64) (Environme
 
 const readRouteTable = `-- name: ReadRouteTable :many
 SELECT t.version AS table_version, r.environment_id, e.subdomain,
-       r.generation, r.revision, r.backend, r.port
+       r.generation, r.revision, r.backend, r.port, r.network_id,
+       coalesce(e.asleep_at IS NOT NULL, false)::boolean AS asleep,
+       coalesce(rp.private_previews, false)::boolean AS private
 FROM route_table t
 LEFT JOIN environment_routes r ON r.state = 'active'
 LEFT JOIN environments e ON e.id = r.environment_id
+LEFT JOIN pull_requests p ON p.id = r.pull_request_id
+LEFT JOIN repos rp ON rp.id = p.repo_id
 ORDER BY r.environment_id NULLS FIRST
 `
 
@@ -295,6 +299,9 @@ type ReadRouteTableRow struct {
 	Revision      pgtype.Int8
 	Backend       pgtype.Text
 	Port          pgtype.Int4
+	NetworkID     pgtype.Text
+	Asleep        bool
+	Private       bool
 }
 
 // One statement, one snapshot: the version and every active route at it. The
@@ -316,6 +323,9 @@ func (q *Queries) ReadRouteTable(ctx context.Context) ([]ReadRouteTableRow, erro
 			&i.Revision,
 			&i.Backend,
 			&i.Port,
+			&i.NetworkID,
+			&i.Asleep,
+			&i.Private,
 		); err != nil {
 			return nil, err
 		}
@@ -456,4 +466,15 @@ func (q *Queries) SaveRemovedRoute(ctx context.Context, arg SaveRemovedRoutePara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const wakeForNewRoute = `-- name: WakeForNewRoute :exec
+UPDATE environments SET asleep_at = NULL, wake_requested_at = NULL, wake_error = ''
+WHERE id = $1 AND asleep_at IS NOT NULL
+`
+
+// A newly accepted version serves running containers: the preview is awake.
+func (q *Queries) WakeForNewRoute(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, wakeForNewRoute, id)
+	return err
 }

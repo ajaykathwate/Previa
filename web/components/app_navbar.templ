@@ -7,7 +7,9 @@ func Initial(username string) string {
 	return strings.ToUpper(string([]rune(username + "u")[0]))
 }
 
-templ AppNavbar(username string, title string, active NavItem) {
+// AppNavbar is the workspace header. Its trail names only the previous level
+// (a link back, keeping that page's filters) and the current page.
+templ AppNavbar(username string, current string, parent Crumb, active NavItem) {
 	<header class="app-header">
 		<details class="mobile-workspace-nav" data-mobile-nav>
 			<summary aria-label="Workspace navigation">
@@ -22,7 +24,20 @@ templ AppNavbar(username string, title string, active NavItem) {
 			</div>
 			<span class="mobile-drawer-backdrop" data-mobile-nav-close aria-hidden="true"></span>
 		</details>
-		<div class="app-breadcrumb"><span class="app-breadcrumb-root">Workspace</span><span class="app-breadcrumb-sep" aria-hidden="true">/</span><strong>{ title }</strong></div>
+		<nav class="app-breadcrumb" aria-label="Breadcrumb">
+			if parent.Href != "" {
+				<a class="app-breadcrumb-parent" href={ templ.SafeURL(parent.Href) } title={ "Back to " + parent.Label } data-trail-parent>
+					<span class="app-breadcrumb-back" aria-hidden="true">
+						@ArrowLeft()
+					</span>
+					<span class="app-breadcrumb-label">{ parent.Label }</span>
+				</a>
+			} else {
+				<span class="app-breadcrumb-root">{ parent.Label }</span>
+			}
+			<span class="app-breadcrumb-sep" aria-hidden="true">/</span>
+			<span class="app-breadcrumb-current" title={ current }>{ current }</span>
+		</nav>
 		<div class="app-header-actions">
 			<button type="button" class="command-trigger" data-command-open aria-haspopup="dialog" aria-controls="command-palette">
 				@SearchIcon()

@@ -22,6 +22,7 @@ type Housekeeper struct {
 	PullRequests *PullRequests
 	Expiry       *Expiry
 	Prune        *Prune
+	Records      *Records
 
 	pool   *pgxpool.Pool
 	logger *slog.Logger
@@ -44,6 +45,7 @@ type (
 	ResourcesArgs    struct{}
 	PullRequestsArgs struct{}
 	ExpiryArgs       struct{}
+	RecordsArgs      struct{}
 	PruneArgs        struct {
 		Emergency bool `json:"emergency"`
 	}
@@ -54,6 +56,7 @@ func (ResourcesArgs) Kind() string    { return "housekeeping_resources" }
 func (PullRequestsArgs) Kind() string { return "housekeeping_pull_requests" }
 func (ExpiryArgs) Kind() string       { return "housekeeping_expiry" }
 func (PruneArgs) Kind() string        { return "housekeeping_prune" }
+func (RecordsArgs) Kind() string      { return "housekeeping_records" }
 
 // insertOpts keeps at most one unfinished job of each kind: a slow pass is
 // never joined by a pile of later ones. A failed pass is not retried; the
@@ -107,6 +110,10 @@ func (h *Housekeeper) Register(cfg *river.Config) {
 	if h.Prune != nil {
 		river.AddWorker(cfg.Workers, &pruneWorker{h: h})
 		add(PruneInterval, PruneArgs{})
+	}
+	if h.Records != nil {
+		river.AddWorker(cfg.Workers, &recordsWorker{h: h})
+		add(RecordsInterval, RecordsArgs{})
 	}
 }
 
@@ -204,5 +211,21 @@ func (*pruneWorker) Timeout(*river.Job[PruneArgs]) time.Duration { return 15 * t
 func (w *pruneWorker) Work(ctx context.Context, job *river.Job[PruneArgs]) error {
 	pass, err := w.h.Prune.RunOnce(ctx, job.Args.Emergency)
 	w.h.Prune.count(pass)
+	return err
+}
+
+type recordsWorker struct {
+	river.WorkerDefaults[RecordsArgs]
+	h *Housekeeper
+}
+
+func (*recordsWorker) Timeout(*river.Job[RecordsArgs]) time.Duration { return 10 * time.Minute }
+func (w *recordsWorker) Work(ctx context.Context, _ *river.Job[RecordsArgs]) error {
+	pass, err := w.h.Records.RunOnce(ctx)
+	if !w.h.Records.dryRun {
+		metrics.Housekeeping("records", "webhook_deliveries", int(pass.Deliveries))
+		metrics.Housekeeping("records", "operations", int(pass.Operations))
+		metrics.Housekeeping("records", "pull_requests", pass.PullRequests)
+	}
 	return err
 }

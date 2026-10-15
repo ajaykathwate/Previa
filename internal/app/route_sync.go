@@ -33,6 +33,8 @@ func RunRouteSync(ctx context.Context, out io.Writer) error {
 	settings := routing.Settings{
 		BaseDomain: cfg.PreviewBaseDomain, EntryPoint: cfg.RouterEntryPoint,
 		UnavailableURL: strings.TrimSuffix(cfg.AppBaseURL, "/") + routing.UnavailablePath,
+		WakeURL:        strings.TrimSuffix(cfg.AppBaseURL, "/") + routing.WakePath,
+		AccessURL:      cfg.PreviewAccessURL,
 	}
 	if err := routing.Sync(ctx, environments.NewRepository(pool), file, settings); err != nil {
 		return fmt.Errorf("sync route table: %w", err)

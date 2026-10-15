@@ -12,6 +12,10 @@ func WaitingTitle(reason string) string {
 		return "Waiting for disk space"
 	case WaitPaused:
 		return "Builds paused"
+	case WaitAccount:
+		return "Waiting for your other build"
+	case WaitQuota:
+		return "Daily build minutes used"
 	}
 	return "Waiting for capacity"
 }
@@ -22,6 +26,10 @@ func WaitingMessage(reason string) string {
 		return "The build host is short of disk space. Previa frees space and starts this build automatically once there is enough."
 	case WaitPaused:
 		return "The operator paused new builds on this server. This build starts automatically when builds resume."
+	case WaitAccount:
+		return "Your account already has a build running on this server. This build starts automatically when it finishes, so every account gets a turn."
+	case WaitQuota:
+		return "Your account used today's build minutes on this server. This build starts automatically after midnight UTC."
 	}
 	return "Builds or previews already use this host's capacity. This build starts automatically once some frees up."
 }
@@ -60,6 +68,8 @@ func FailureMessage(code string) string {
 		return "GitHub access to this repository was removed."
 	case "runtime_unavailable":
 		return "The preview infrastructure was unavailable."
+	case "private_preview_unconfigured":
+		return "Private previews need a configured authentication endpoint on every routing worker. Ask the operator to set PREVIEW_ACCESS_URL, restart the workers, and retry the build."
 	case "missing", "not_owned", "route_not_converged", "router_unavailable", "route_store_unavailable", "route_config_unwritable":
 		return "The preview could not be published."
 	default:

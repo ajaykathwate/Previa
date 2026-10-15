@@ -37,10 +37,11 @@ owner-approved outbound connections; those parts and their isolation are in
    (none are even decrypted); a same-repository PR gets them, overriding YAML entries.
    Any decryption failure stops the start: no container runs with partial secrets.
 4. **Admit.** Under a PostgreSQL advisory lock held until the container exists,
-   refuse (retryable `capacity`) if 10 other PRs of the repository already have
-   previews, or the new limits plus every running, restarting or created preview
-   (the active one and its candidate both count during a swap) would exceed the host
-   budget. The request then waits for capacity instead of failing
+   refuse (retryable `capacity`) if 10 other PRs of the repository (or
+   `PREVIEW_MAX_PER_ACCOUNT` of the account) already have previews, or the new
+   limits plus every running, restarting or created preview (the active one and its
+   candidate both count during a swap) would exceed the host budget. A sleeping
+   preview uses no memory or CPU but still counts as a preview. The request then waits for capacity instead of failing
    ([15](15-housekeeping-and-capacity.md)); before admission, `Admit` refuses early
    when not even the smallest preview would fit.
 5. **Network.** The PR's lifetime network `previa-<instance>-pr-<id>` (internal,
@@ -48,7 +49,10 @@ owner-approved outbound connections; those parts and their isolation are in
    did not create is refused.
 6. **Create and start** the hardened container, then **wait for readiness**.
 7. **Capture** the app's last 200 lines (64 KiB) of output into the log, redacted.
-   On any failure, also remove the candidate.
+   On any failure, also remove the candidate. The app and its processes carry
+   `io.previa.redact-env`, the names (never values) of the variables holding
+   repository secrets and Previa's service credentials, so output read later (a
+   stop report, live app output) is redacted like the startup log.
 
 The result is `environments.Artifact{ContainerID, ImageTag}`; publication
 ([12](12-routing-and-https.md)) decides whether it becomes active.
@@ -63,7 +67,7 @@ The result is `environments.Artifact{ContainerID, ImageTag}`; publication
 | Host access | No host paths, Docker socket, devices or published ports. |
 | Network | Only `previa-pr-<id>`, an internal network shared with nothing but the egress proxy and, once a version is published, the router. No gateway, no route to the host, Docker's other networks, other previews or metadata. IPv6 disabled in the container. |
 | Egress | `HTTP_PROXY`/`HTTPS_PROXY` (and `NODE_USE_ENV_PROXY=1`) point at the proxy; Previa's values override YAML and secrets. The proxy resolves names itself and refuses private, loopback, link-local, metadata and other special ranges, so DNS tricks fail too. |
-| Resources | The repository's tier, clamped to platform ceilings (small 0.5 CPU/512 MiB, standard 1/1 GiB, large 2/2 GiB); no swap; 512 processes; CPU weight 512 (half the default); OOM score adjustment 500; logs capped at 2 × 10 MB. |
+| Resources | The repository's tier, clamped to platform ceilings (small 0.5 CPU/512 MiB, standard 1/1 GiB, large 2/2 GiB); no swap; 512 processes; CPU weight 512 (half the default); OOM score adjustment 500; Docker keeps at most 2 × 5 MB of output per container (the app, each process and each service), removed with the container. |
 | Crashes | Restart on failure at most 3 times; then it stays stopped and counts as a crash loop. |
 
 **Verified** on Docker Desktop 29.8 (WSL2) by `make test-runtime`, from inside a running preview:
@@ -133,6 +137,63 @@ the budget by at most the number of concurrent builds.
   without force after their container (`in_use` otherwise, retried); networks once no
   preview or builder uses them, after the router and egress proxy are disconnected.
 
+## Stops of a live preview
+
+The worker follows Docker's `die` events for this instance's preview apps and
+processes. When a container of a live preview stops (the environment serves that
+generation and revision, is not asleep, and no teardown was requested), it records
+the stop once in `preview_crashes` (keyed by the event's time, so workers sharing a
+Docker host write one report) and adds to the build log of the attempt that built
+it ([08](08-build-logs.md#after-the-attempt-a-stopped-live-preview)):
+
+```text
+› The app stopped at 12 Oct 2026, 09:30:00 UTC with exit code 1. Docker is restarting it (restart 1 of 3).
+› App output (last 200 lines at most):
+…
+```
+
+Out-of-memory kills, a clean exit (not restarted) and the third restart (no more)
+are said as such. A preview being replaced, torn down or put to sleep is not
+reported. Lost events (a worker restart) are not replayed; the reconciler still
+notices a vanished preview.
+
+## Visits ("Last opened")
+
+Every minute the worker reads the router's Prometheus counter
+`traefik_service_requests_total` for each preview service inside the router
+container (`ROUTER_METRICS_ADDRESS`). Busybox `awk` there sums codes and methods,
+so only one line per preview leaves the router, and only counts: never paths,
+addresses or other request details. Each read adds what is new to
+`environments.visits` and notes `last_visited_at` (to the minute). A new version's
+service, or a restarted router's smaller counter, counts from zero again. The pull
+request page shows **Last opened 5 min ago · 37 requests**; the Previews list shows
+**Opened 5 min ago**. Requests include a page's assets, so they are not visits by
+people.
+
+## Idle previews sleep
+
+With `PREVIEW_IDLE_SLEEP` (for example `3h`; `0`, the default, keeps previews
+running), every 5 minutes the River leader looks for live previews with no visit,
+publication or wake within that time and no build of their pull request on the way.
+It does so only while visit counts were read within the last 3 minutes, so a visit
+that could not be counted never puts a preview to sleep. For each one:
+
+1. Under a lock per preview, mark it asleep (`asleep_at`) and advance the route
+   table: the router now sends its host to the dashboard's wake page
+   (`/previews/wake/<host>/<path>`) instead of the container.
+2. Stop its app and processes (their memory and CPU are freed). Managed services
+   keep running, so their data survives; the address, route record and image stay.
+
+The next visitor sees **Waking the preview…** (the page reloads every 3 seconds). It
+queues `preview_wake`. The worker starts the processes, then the app, and waits for
+its readiness check, provided the host's preview budget has room. It then clears
+the sleep and routes the host back to the container, and the visitor is sent to the
+address they opened (after 3 seconds, while the router reloads). A wake that fails
+leaves the preview asleep: the page says why (for example **The server has no room to
+wake this preview right now**) and offers **Try again**. A new build of a sleeping
+preview wakes it when its route is accepted. The pull request page shows **Asleep
+since …**.
+
 ## The router's path
 
 The router joins each `previa-pr-<id>` network when the PR's first version is
@@ -154,6 +215,9 @@ previews stays blocked ([12](12-routing-and-https.md)).
 | `PREVIEW_STARTUP_TIMEOUT` | `120s` | Readiness deadline. |
 | `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET` | empty | All previews together; empty = 60% of Docker memory, 75% of its CPUs. |
 | `PREVIEW_MAX_PER_REPOSITORY` | `10` | Running previews per repository. |
+| `PREVIEW_MAX_PER_ACCOUNT` | `0` (no limit) | Previews per account (installation owner). |
+| `PREVIEW_IDLE_SLEEP` | `0` (never) | Time without a visit before a preview sleeps, 15m–168h. |
+| `ROUTER_METRICS_ADDRESS` | the API address | Where the worker reads request counts inside the router. |
 | `PREVIEW_OCI_RUNTIME` | empty | Docker runtime for previews, for example `runsc`. |
 
 The worker validates these at start. Repository secrets need the same keyring on
@@ -167,7 +231,9 @@ make test-runtime   # real previews: hardening, readiness, secrets, network, cap
 ```
 
 **Expected:** every `TestRealRuntime…` test passes and the network test logs the probe
-table above.
+table above. `TestRealRuntimeFollowsSleepsWakesAndReportsStops` follows a real app's
+output (redacted), puts it to sleep and wakes it healthy, then kills it and checks
+the stop report.
 
 ## Code and tests
 

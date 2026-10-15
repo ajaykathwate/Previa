@@ -93,8 +93,8 @@ func (w *OperationWorker) Work(ctx context.Context, job *river.Job[OperationArgs
 }
 
 // Process is also used by deterministic integration tests. The owner value is
-// River's stable job ID, allowing a rescued attempt of that same job to reclaim
-// its own lease while preventing a different job from stealing a live claim.
+// the job ID and attempt, preventing a rescued attempt from stealing a live
+// claim from its predecessor before that lease expires.
 func (w *OperationWorker) Process(ctx context.Context, operationID int64, owner string, attempt, maxAttempts int) error {
 	if operationID <= 0 || owner == "" {
 		return errors.New("invalid environment operation claim")
@@ -109,7 +109,13 @@ func (w *OperationWorker) Process(ctx context.Context, operationID int64, owner 
 		case OperationSucceeded, OperationSuperseded, OperationFailed:
 			return nil
 		default:
-			return errors.New("environment operation is already leased")
+			// The durable operation and River have independent backoffs. Waiting
+			// for a due time or a live lease is not a failed execution attempt.
+			until := current.AvailableAt
+			if current.State == OperationRunning && current.LeaseExpiresAt.After(until) {
+				until = current.LeaseExpiresAt
+			}
+			return river.JobSnooze(max(time.Until(until), time.Second))
 		}
 	}
 	if err != nil {

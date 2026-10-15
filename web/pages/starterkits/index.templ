@@ -1,0 +1,493 @@
+package starterkits
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+// Index is the Starter kits page: the choices beside an editor holding the
+// files. The choices are a plain GET form: without JavaScript, Update files
+// reloads the page; with it, HTMX swaps the kit in place on every change and
+// keeps the address shareable.
+templ Index(username string, p Page) {
+	@layouts.App("Starter kits", username, p.CSRF, components.NavStarterKits) {
+		<div class="kit-page">
+			<header class="page-hero">
+				<div class="page-hero-main">
+					<span class="page-hero-icon" aria-hidden="true">
+						@components.KitIcon()
+					</span>
+					<div class="page-hero-text">
+						<p class="page-hero-kicker">Set up a repository</p>
+						<h1>Starter kits</h1>
+						<p class="page-hero-sub">Pick your stack and what it uses. Previa writes the <code>Dockerfile</code> and <code>.previewrc.yaml</code> your repository needs; edit them here, then copy or download.</p>
+					</div>
+				</div>
+			</header>
+			@Kit(p)
+			<p id="kit-status" class="sr-only" role="status" aria-live="polite">{ p.Status }</p>
+		</div>
+	}
+}
+
+// Kit is the choices, the editor and the guidance; HTMX replaces it whole.
+templ Kit(p Page) {
+	<div id="kit" class="kit">
+		// The editor is sticky within this wrapper only, so it stops before
+		// the guidance below instead of sliding over it.
+		<div class="kit-main">
+			<form
+				class="kit-form"
+				method="get"
+				action="/starter-kits"
+				hx-get="/starter-kits"
+				hx-trigger="change, input changed delay:500ms from:.kit-text"
+				hx-target="#kit"
+				hx-select="#kit"
+				hx-select-oob="#kit-status:innerHTML"
+				hx-swap="outerHTML"
+				hx-replace-url="true"
+				hx-sync="this:replace"
+				aria-label="Your starter kit"
+			>
+				<input type="hidden" name="from" value={ p.Form.Stack }/>
+				@stackSection(p)
+				if p.Form.Static {
+					<section class="kit-section" aria-labelledby="kit-uses-title">
+						<h2 class="kit-section-title" id="kit-uses-title">What it uses</h2>
+						<p class="kit-quiet">A static site is served as files, so it needs no database, setup or worker. Previa builds it and serves it at the pull request's link.</p>
+					</section>
+				} else {
+					@servicesSection(p)
+					@extrasSection(p)
+				}
+				@advanced(p)
+				<div class="kit-submit">
+					<button type="submit" class="kit-update">Update files</button>
+				</div>
+			</form>
+			@editor(p)
+		</div>
+		@guide(p)
+	</div>
+}
+
+templ stackSection(p Page) {
+	<fieldset class="kit-section">
+		<legend class="kit-section-title">Stack</legend>
+		<div class="kit-stacks">
+			for _, s := range p.Stacks {
+				<label class={ "kit-stack", templ.KV("is-selected", s.Selected) } title={ s.Kind + " · " + s.Language }>
+					<input class="sr-only" type="radio" name="stack" value={ s.ID } checked?={ s.Selected }/>
+					<span class={ "kit-mono", "is-" + s.ID } aria-hidden="true">{ Monogram(s.ID) }</span>
+					{ s.Name }
+				</label>
+			}
+		</div>
+		if s := p.Selected(); s.ID != "" {
+			<p class="kit-stack-about"><strong>{ s.Name }</strong> · { s.Kind } · { s.Language }</p>
+		}
+	</fieldset>
+}
+
+templ servicesSection(p Page) {
+	<fieldset class="kit-section">
+		<legend class="kit-section-title">Services</legend>
+		<div class="kit-rows">
+			@service("postgres", "PostgreSQL", "Sets DATABASE_URL", p.Form.Postgres, components.DatabaseIcon(), p.ProblemFor("postgres"))
+			@service("redis", "Redis", "Sets REDIS_URL", p.Form.Redis, components.ServerIcon(), p.ProblemFor("redis"))
+			@service("mysql", "MySQL", "Sets MYSQL_URL", p.Form.MySQL, components.DatabaseIcon(), p.ProblemFor("mysql"))
+		</div>
+		<p class="kit-hint">
+			@components.InfoIcon()
+			Each preview gets its own, empty. { p.Offer }
+		</p>
+	</fieldset>
+}
+
+templ service(id, name, hint string, s Service, icon templ.Component, problem string) {
+	<div class={ "kit-row", templ.KV("is-on", s.On) }>
+		<label class="kit-row-main" for={ "kit-" + id }>
+			<span class="kit-row-icon" aria-hidden="true">
+				@icon
+			</span>
+			<span class="kit-row-text"><strong>{ name }</strong><small>{ hint }</small></span>
+		</label>
+		if s.On && len(s.Versions) > 0 {
+			<div class="kit-seg" role="radiogroup" aria-label={ name + " version" }>
+				for _, v := range s.Versions {
+					<label class={ "kit-seg-item", templ.KV("is-selected", v == s.Version) }>
+						<input class="sr-only" type="radio" name={ id + "_version" } value={ v } checked?={ v == s.Version }/>
+						{ v }
+					</label>
+				}
+			</div>
+		}
+		<input class="kit-switch" type="checkbox" role="switch" id={ "kit-" + id } name={ id } value="on" checked?={ s.On } disabled?={ len(s.Versions) == 0 }/>
+		if problem != "" {
+			<p class="kit-field-problem">{ problem }</p>
+		}
+	</div>
+}
+
+templ extrasSection(p Page) {
+	<fieldset class="kit-section">
+		<legend class="kit-section-title">Before and beside your app</legend>
+		<div class="kit-rows">
+			@commandRow("setup", "Migrations", "Run once before the app starts", p.Form.Setup, components.RestartIcon(), p.ProblemFor("setup"))
+			@commandRow("worker", "Background worker", "A queue worker next to your app", p.Form.Worker, components.BuildIcon(), p.ProblemFor("worker"))
+			<div class={ "kit-row", templ.KV("is-on", p.Form.Docs) }>
+				<label class="kit-row-main" for="kit-docs">
+					<span class="kit-row-icon" aria-hidden="true">
+						@components.LinkIcon()
+					</span>
+					<span class="kit-row-text"><strong>API docs link</strong><small>On the pull request and the dashboard</small></span>
+				</label>
+				<input class="kit-switch" type="checkbox" role="switch" id="kit-docs" name="docs" value="on" checked?={ p.Form.Docs }/>
+				if p.Form.Docs {
+					<div class="kit-row-body">
+						<input class="kit-input kit-text kit-mono-input" id="kit-docs-path" name="docs_path" value={ p.Form.DocsPath } aria-label="Docs path" spellcheck="false" autocomplete="off"/>
+						if problem := p.ProblemFor("docs"); problem != "" {
+							<p class="kit-field-problem">{ problem }</p>
+						}
+					</div>
+				} else {
+					<input type="hidden" name="docs_path" value={ p.Form.DocsPath }/>
+				}
+			</div>
+		</div>
+	</fieldset>
+}
+
+templ commandRow(id, title, hint string, c Command, icon templ.Component, problem string) {
+	<div class={ "kit-row", templ.KV("is-on", c.On) }>
+		<label class="kit-row-main" for={ "kit-" + id }>
+			<span class="kit-row-icon" aria-hidden="true">
+				@icon
+			</span>
+			<span class="kit-row-text"><strong>{ title }</strong><small>{ hint }</small></span>
+		</label>
+		<input class="kit-switch" type="checkbox" role="switch" id={ "kit-" + id } name={ id } value="on" checked?={ c.On }/>
+		if c.On {
+			<div class="kit-row-body">
+				<select class="kit-input" id={ "kit-" + id + "-with" } name={ id + "_with" } aria-label={ title + " command" }>
+					for _, o := range c.Options {
+						<option value={ o.Value } selected?={ o.Value == c.With }>{ o.Label }</option>
+					}
+					<option value="custom" selected?={ c.Custom() }>My own command…</option>
+				</select>
+				if c.Custom() {
+					<input class="kit-input kit-text kit-mono-input" id={ "kit-" + id + "-cmd" } name={ id + "_cmd" } value={ c.Text } placeholder={ c.Placeholder } aria-label={ "Your " + strings.ToLower(title) + " command" } spellcheck="false" autocomplete="off"/>
+				}
+				if problem != "" {
+					<p class="kit-field-problem">{ problem }</p>
+				}
+			</div>
+		} else {
+			<input type="hidden" name={ id + "_with" } value={ c.With }/>
+		}
+		if !c.On || !c.Custom() {
+			<input type="hidden" name={ id + "_cmd" } value={ c.Text }/>
+		}
+	</div>
+}
+
+templ advanced(p Page) {
+	<details class="kit-section kit-advanced" open?={ p.ProblemFor("port") != "" || p.ProblemFor("health") != "" || p.ProblemFor("detail") != "" }>
+		<summary>
+			@components.ChevronDownIcon()
+			Advanced
+			<span class="kit-advanced-sum">port { strconv.Itoa(p.Form.Port) } · { p.Form.Tier }</span>
+		</summary>
+		<div class="kit-advanced-grid">
+			if d := p.Form.Detail; d != nil {
+				<div class="kit-field kit-field-wide">
+					<label class="kit-label" for="kit-detail">{ d.Label }</label>
+					if len(d.Options) > 0 {
+						<select class="kit-input" id="kit-detail" name="detail">
+							for _, o := range d.Options {
+								<option value={ o } selected?={ o == d.Value }>{ o }</option>
+							}
+						</select>
+					} else {
+						<input class="kit-input kit-text kit-mono-input" id="kit-detail" name="detail" value={ d.Value } spellcheck="false" autocomplete="off" aria-describedby="kit-detail-hint"/>
+					}
+					<p class="kit-field-hint" id="kit-detail-hint">{ d.Hint }</p>
+					if problem := p.ProblemFor("detail"); problem != "" {
+						<p class="kit-field-problem">{ problem }</p>
+					}
+				</div>
+			}
+			<div class="kit-field">
+				<label class="kit-label" for="kit-port">Port</label>
+				<input class="kit-input kit-text kit-mono-input" id="kit-port" name="port" inputmode="numeric" value={ strconv.Itoa(p.Form.Port) } autocomplete="off"/>
+				if problem := p.ProblemFor("port"); problem != "" {
+					<p class="kit-field-problem">{ problem }</p>
+				}
+			</div>
+			<div class="kit-field">
+				<label class="kit-label" for="kit-health">Health check path</label>
+				<input class="kit-input kit-text kit-mono-input" id="kit-health" name="health" value={ p.Form.Health } placeholder="Port only" spellcheck="false" autocomplete="off"/>
+				if problem := p.ProblemFor("health"); problem != "" {
+					<p class="kit-field-problem">{ problem }</p>
+				}
+			</div>
+			<fieldset class="kit-field kit-field-wide">
+				<legend class="kit-label">Preview size</legend>
+				<div class="kit-seg kit-tiers">
+					for _, t := range p.Form.Tiers {
+						<label class={ "kit-seg-item", templ.KV("is-selected", t == p.Form.Tier) }>
+							<input class="sr-only" type="radio" name="tier" value={ t } checked?={ t == p.Form.Tier }/>
+							<span>{ t }</span>
+							<small>{ tierSize(t) }</small>
+						</label>
+					}
+				</div>
+			</fieldset>
+		</div>
+	</details>
+}
+
+// editor shows the files as tabs. Each file is a form whose text area is the
+// file: Download posts what is there, edits included. Without JavaScript the
+// tabs stay hidden and both files show one under the other.
+templ editor(p Page) {
+	<section class="kit-workbench" aria-labelledby="kit-files-title">
+		<h2 class="sr-only" id="kit-files-title">Your files</h2>
+		<div class="kit-editor" data-kit-editor>
+			<div class="kit-tabs" role="tablist" aria-label="Files" data-kit-tabs hidden>
+				for i, f := range p.Files {
+					<button
+						type="button"
+						class="kit-tab"
+						role="tab"
+						id={ "kit-tab-" + f.ID }
+						aria-controls={ "kit-panel-" + f.ID }
+						aria-selected={ strconv.FormatBool(i == 0) }
+						if i > 0 {
+							tabindex="-1"
+						}
+					>
+						<span class={ "kit-file-icon", "is-" + f.Kind } aria-hidden="true">
+							@components.KitIcon()
+						</span>
+						{ f.Name }
+						<span class="kit-tab-dot" title="Edited"><span class="sr-only">, edited</span></span>
+					</button>
+				}
+			</div>
+			for _, f := range p.Files {
+				<form class="kit-panel" id={ "kit-panel-" + f.ID } data-kit-file={ f.ID } data-lang={ f.Kind } method="post" action={ templ.SafeURL("/starter-kits/download/" + f.ID) }>
+					<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+					<div class="kit-panel-bar">
+						<p class="kit-crumb"><code>{ f.Name }</code><span aria-hidden="true">›</span>{ f.Purpose }</p>
+						<span class="kit-edited" data-kit-edited hidden>Edited</span>
+						<span class="kit-actions">
+							<button type="button" class="kit-action" data-kit-reset hidden>
+								@components.RestartIcon()
+								Reset
+							</button>
+							<button type="button" class="kit-action kit-copy" data-copy-from={ "#kit-code-" + f.ID } aria-label={ "Copy " + f.Name } title={ "Copy " + f.Name }>
+								@components.CopyIcon()
+								<span data-copy-status aria-live="polite">Copy</span>
+							</button>
+							<button type="submit" class="kit-action" aria-label={ "Download " + f.Name } title={ "Download " + f.Name }>
+								@components.DownloadIcon()
+								<span>Download</span>
+							</button>
+						</span>
+					</div>
+					<div class="kit-code">
+						<span class="kit-gutter" aria-hidden="true" data-kit-gutter>{ gutter(f.Lines()) }</span>
+						<div class="kit-area">
+							if f.Kind == "yaml" {
+								<textarea id={ "kit-code-" + f.ID } class="kit-textarea" name="content" rows={ strconv.Itoa(f.Lines()) } wrap="off" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label={ f.Name } hx-post="/starter-kits/check" hx-trigger="kit-check" hx-target="#kit-checks" hx-swap="innerHTML" hx-sync="this:replace">{ f.Content }</textarea>
+							} else {
+								<textarea id={ "kit-code-" + f.ID } class="kit-textarea" name="content" rows={ strconv.Itoa(f.Lines()) } wrap="off" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label={ f.Name }>{ f.Content }</textarea>
+							}
+						</div>
+					</div>
+				</form>
+			}
+			<div id="kit-checks" class="kit-checks">
+				@Checks(p.Problems, false)
+			</div>
+		</div>
+	</section>
+}
+
+// Checks is the editor's status bar, with any problems listed above it.
+// Edited is true when the problems are from an edited .previewrc.yaml.
+templ Checks(problems []Problem, edited bool) {
+	if len(problems) > 0 {
+		<ul class="kit-problems" aria-label="Problems">
+			for _, problem := range problems {
+				<li>
+					@components.AlertIcon()
+					<span>
+						if problem.Line > 0 {
+							<span class="kit-problem-line">Line { strconv.Itoa(problem.Line) }</span>
+						}
+						if problem.Label != "" {
+							<strong>{ problem.Label }:</strong>
+						}
+						{ problem.Message }
+					</span>
+				</li>
+			}
+		</ul>
+	}
+	<div class="kit-statusbar">
+		if len(problems) == 0 {
+			<span class="kit-check is-ok">
+				@components.CheckIcon()
+				{ checkSummary(problems, edited) }
+			</span>
+		} else {
+			<span class="kit-check is-warn">
+				@components.AlertIcon()
+				{ checkSummary(problems, edited) }
+			</span>
+		}
+		<span class="kit-status-meta">Checked with the rules a build uses</span>
+	</div>
+}
+
+// CheckResult answers a check of an edited .previewrc.yaml: the status bar,
+// and the same summary for screen readers.
+templ CheckResult(problems []Problem) {
+	@Checks(problems, true)
+	<p id="kit-status" hx-swap-oob="innerHTML">{ checkSummary(problems, true) + "." }</p>
+}
+
+templ guide(p Page) {
+	<div class="kit-guide">
+		<section class="kit-card" aria-labelledby="kit-next-title">
+			<h3 id="kit-next-title">
+				@components.CheckIcon()
+				Next steps
+			</h3>
+			<ol class="kit-next">
+				if p.Form.OwnFile {
+					<li>Save <code>.previewrc.yaml</code> at the root of your repository, next to your project files.</li>
+				} else {
+					<li>Save both files at the root of your repository, next to <code>package.json</code>, <code>requirements.txt</code> or your project's equivalent.</li>
+				}
+				<li>Downloaded files may lose their leading dot: rename <code>previewrc.yaml</code> to <code>.previewrc.yaml</code>.</li>
+				<li>Commit them on a branch and open a pull request.</li>
+				<li>On the pull request's page, choose <strong>Build latest commit</strong>, or let Automatic builds start it.</li>
+			</ol>
+			<a class="text-link kit-repos-link" href="/repositories">
+				Open your repositories
+				@components.Arrow()
+			</a>
+		</section>
+		if len(p.Notes) > 0 {
+			<section class="kit-card kit-notes" aria-labelledby="kit-notes-title">
+				<h3 id="kit-notes-title">
+					@components.InfoIcon()
+					Check in your app
+				</h3>
+				<ul>
+					for _, n := range p.Notes {
+						<li>{ n }</li>
+					}
+				</ul>
+			</section>
+		}
+		@more()
+	</div>
+}
+
+// more answers what the kit does not cover.
+templ more() {
+	<section class="kit-card kit-more" aria-labelledby="kit-more-title">
+		<h3 id="kit-more-title">
+			@components.QuestionIcon()
+			Need something else?
+		</h3>
+		<details>
+			<summary>API keys, passwords and tokens</summary>
+			<p>Never put them in these files. Add them on the repository's <strong>Secrets</strong> tab: your preview gets them as environment variables when it starts, and pull requests from forks never do.</p>
+		</details>
+		<details>
+			<summary>Another database, such as MongoDB, Elasticsearch or Kafka</summary>
+			<p>Previa can run PostgreSQL, Redis and MySQL from this server's catalog. For other services, use a test instance you host, approve its address on the repository's <strong>Outbound</strong> tab, and pass its details as secrets.</p>
+		</details>
+		<details>
+			<summary>Plain settings and feature flags</summary>
+			<p>List them under <code>env</code> in <code>.previewrc.yaml</code>, one <code>NAME=value</code> per line. Values the browser needs at build time belong in a committed file such as <code>.env.production</code>.</p>
+		</details>
+		<details>
+			<summary>More than one worker</summary>
+			<p>Add up to three entries under <code>processes</code>, each with its own <code>name</code> and <code>command</code>, and optionally a <code>resource_tier</code>. Edit the file here and Previa checks it as you type.</p>
+		</details>
+		<details>
+			<summary>Writing files at runtime</summary>
+			<p>Previews keep the file system read-only except <code>/tmp</code>, and an image that runs as root runs as an unprivileged user. Point caches, uploads and temporary files at <code>/tmp</code>. Use port 8080 for nginx, with <code>nginxinc/nginx-unprivileged</code>; update both the app and <code>port</code> in the config.</p>
+		</details>
+		<details>
+			<summary>Private packages and private base images</summary>
+			<p>Add a test credential on the repository's <strong>Secrets</strong> tab and explicitly allow Builds. Read it with a BuildKit secret mount such as <code>RUN --mount=type=secret,id=NPM_TOKEN,env=NPM_TOKEN npm ci</code>; never use a build argument or copy it into the image. For base images, allow a secret named <code>REGISTRY_AUTH</code> with one <code>ghcr.io username token</code> line per registry. Forks receive neither kind of credential.</p>
+		</details>
+		<details>
+			<summary>Git submodules and Git LFS</summary>
+			<p>Previa downloads a GitHub archive. Submodules are not fetched and LFS files may be pointers. Previa detects these in the build context and stops with guidance. Vendor the files into Git, or choose a context that does not need them. Automatic fetching is not available.</p>
+		</details>
+		<details>
+			<summary>Monorepos and large repositories</summary>
+			<p>Set <code>context: apps/web</code> in the root <code>.previewrc.yaml</code> to send only that directory to the builder. The <code>dockerfile</code> path and COPY sources are relative to that context. The full archive still must fit the safety limits: 256 MiB download, 1 GiB unpacked and 100,000 entries. Images are limited to 4 GiB by default. A subfolder cannot bypass the archive limits.</p>
+		</details>
+		<details>
+			<summary>Docker Compose and several app images</summary>
+			<p>Multi-image previews and Docker Compose are not available. A preview runs one app image, up to three processes from that image, and managed databases or caches. Separate frontend and API images need separate repositories or a single combined image for now.</p>
+		</details>
+		<details>
+			<summary>Long builds</summary>
+			<p>The default overall build limit is 12 minutes. Set <code>build_timeout: 20m</code> to give the image build more time when the operator has raised <code>BUILD_TIMEOUT</code> to allow it. Source preparation and startup also consume the overall deadline. Repeat builds can reuse cached layers; keep dependencies in early layers and trim the context with <code>.dockerignore</code>.</p>
+		</details>
+		<details>
+			<summary>ARM-only, GPU and Windows images</summary>
+			<p>Build and run a Linux image for the worker's CPU architecture (usually amd64). ARM-only images on an amd64 worker, GPU workloads and Windows containers are not supported. Use a compatible or multi-platform base image.</p>
+		</details>
+		<details>
+			<summary>Seed data for reviewers</summary>
+			<p>Every preview starts with empty services. Under migrations, choose <strong>My own command…</strong> and chain your seed step, such as <code>npm run migrate &amp;&amp; npm run seed</code>.</p>
+		</details>
+	</section>
+}
+
+func checkSummary(problems []Problem, edited bool) string {
+	switch {
+	case len(problems) == 0 && edited:
+		return "Your edited .previewrc.yaml passes Previa's checks"
+	case len(problems) == 0:
+		return "Passes Previa's checks"
+	}
+	return strconv.Itoa(len(problems)) + " to fix"
+}
+
+// gutter numbers n lines, one per line.
+func gutter(n int) string {
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		if i > 1 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(strconv.Itoa(i))
+	}
+	return b.String()
+}
+
+func tierSize(t string) string {
+	switch t {
+	case "small":
+		return "0.5 vCPU · 512 MiB"
+	case "large":
+		return "2 vCPU · 2 GiB"
+	}
+	return "1 vCPU · 1 GiB"
+}

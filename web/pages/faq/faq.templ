@@ -104,124 +104,116 @@ templ item(q Question, asker Asker) {
 // Answers, in Previa's voice. Keep them true to the current release: update an
 // answer in the same change that alters the behaviour it describes.
 templ whatIsPrevia() {
-	<p>I give every GitHub pull request its own live preview: the exact commit, built from its own <code>Dockerfile</code>, running in an isolated container at a stable HTTPS address, and announced right on the pull request.</p>
-	<p>I'm self-hosted, so all of it happens on a server you control.</p>
+	<p>I turn every GitHub pull request into its own live preview: the exact commit, built from your own <code>Dockerfile</code>, running at a private HTTPS link that I post right on the pull request.</p>
+	<p>Reviewers click the link, try the change and approve with confidence, without checking out the branch.</p>
 }
 
-templ whatYouNeed() {
-	<p>One Linux server with Docker. Four CPUs and 8 GiB of memory is a comfortable start. Then:</p>
-	<ul>
-		<li>a GitHub OAuth App for sign-in and a GitHub App for repository access;</li>
-		<li>a domain with a wildcard DNS record for preview addresses, plus a DNS provider token so I can get their HTTPS certificate;</li>
-		<li>PostgreSQL 17, which my Docker Compose setup runs for you.</li>
-	</ul>
-	<p>Every setting is explained step by step in <code>technical-docs/config-setup.md</code>.</p>
+templ isItFree() {
+	<p>Yes. I'm free while I'm in early access, so you can try me on your own pull requests.</p>
 }
 
 templ repositoryFiles() {
 	<p>Two files at its root: a <code>Dockerfile</code> and a <code>.previewrc.yaml</code>. The config can be as short as <code>{ "{}" }</code>; by default I expect your app on port 3000.</p>
-	<p>When you need more, it sets the Dockerfile path, the port, an HTTP health check path, non-secret environment variables and a size: <code>small</code>, <code>standard</code> or <code>large</code>.</p>
+	<p>When you need more, it sets the Dockerfile path, the port, a health check path, plain environment variables and a size: <code>small</code>, <code>standard</code> or <code>large</code>.</p>
+	<p>Don't have them yet? Open <strong>Starter kits</strong>, pick your stack and what it uses, and I'll write both files, already checked, for you to edit and copy.</p>
+}
+
+templ languages() {
+	<p>Anything that runs in a Docker container and answers HTTP: Node.js, Python, Ruby, Go, Java, PHP, static sites and more. APIs work too.</p>
 }
 
 templ signInAccess() {
-	<p>No. Signing in only tells me who you are, and asks GitHub for no extra permissions.</p>
-	<p>I can read code only in repositories where you install my GitHub App, and only with what it asks for: reading contents, plus writing pull request comments and checks.</p>
+	<p>No. Signing in only tells me who you are.</p>
+	<p>I read code only in the repositories where you install my GitHub App, and only to build previews and post a comment and a check on the pull request.</p>
 }
 
 templ connectRepository() {
-	<p>Open <strong>Repositories</strong> and choose <strong>Install on a repo</strong>. Pick repositories on GitHub, then authorize as the same account you signed in with. I check that the installation really is yours before linking anything.</p>
+	<p>Open <strong>Repositories</strong> and choose <strong>Install on GitHub</strong>. Pick the repositories there, then authorize as the same account you signed in with. I make sure the installation is really yours before linking anything.</p>
 	<p>New repositories start in Manual mode, so nothing builds until you ask.</p>
 }
 
 templ whenItBuilds() {
-	<p>In <strong>Manual</strong> mode, the default, when you press <strong>Build latest commit</strong> on a pull request. In <strong>Automatic</strong> mode, five minutes after your latest push settles, so a burst of pushes becomes one build.</p>
-	<p>Either way I read the pull request from GitHub again first, and I only build a commit that can merge.</p>
+	<p>In <strong>Manual</strong> mode, the default, when you press <strong>Build latest commit</strong> on a pull request. In <strong>Automatic</strong> mode, five minutes after your last push, so a burst of pushes becomes one build.</p>
+	<p>Either way I check with GitHub right before building, and I only build a pull request that can merge.</p>
 }
 
 templ previewLink() {
-	<p>On the pull request's page in Previa, under <strong>Environments</strong>, and in the comment I keep up to date on the GitHub pull request.</p>
-	<p>It looks like <code>pr-42-….preview.your-domain</code> and stays the same for the life of the pull request, through every rebuild.</p>
+	<p>In the comment I keep up to date on the pull request, and on the pull request's page in your Previa dashboard.</p>
+	<p>The link stays the same for the life of the pull request, through every rebuild.</p>
 }
 
 templ newCommit() {
 	<p>Your current preview keeps serving while the new commit builds: on its own in Automatic mode, or when you press <strong>Build latest commit</strong> in Manual mode.</p>
-	<p>Once the new version passes its health check, I switch the address over and then remove the old container. If the build fails, the previous preview stays up and my comment says what went wrong.</p>
+	<p>The new version takes over the same link only once it passes its health check, so reviewers never land on a broken page. If the build fails, the previous preview stays up and my comment says what went wrong.</p>
 }
 
 templ previewLifetime() {
-	<p>Until its pull request is closed or merged, which removes it right away, or until it expires: 48 hours after it was last published, by default.</p>
-	<p>You can also tear it down yourself. Building again brings it back at the same address.</p>
+	<p>Until its pull request is closed or merged, which removes it right away, or until 48 hours after it was last published.</p>
+	<p>You can also tear it down yourself. Building again brings it back at the same link.</p>
 }
 
 templ backendApps() {
-	<p>Yes, as long as it serves HTTP: an API's preview address answers requests just like a website's does, and it can call public services over HTTPS through my proxy.</p>
-	<p>It can also ask for a fresh PostgreSQL and Redis for every build, run a setup command for migrations and seed data, keep a queue worker running and link its API docs, all declared in <code>.previewrc.yaml</code>. Data does not survive a rebuild.</p>
-	<p>To reach an external test database or broker, the repository's owner approves its host and port on the Outbound tab; pull requests from forks never get those connections.</p>
+	<p>Yes. An API's preview link answers requests just like a website's does.</p>
+	<p>In <code>.previewrc.yaml</code> you can ask for PostgreSQL, Redis or MySQL from the server's catalog, run a setup command for migrations and seed data, keep up to three background processes running and link your API docs. Each preview gets its own fresh copy of its data. Docker Compose and separate app images are not available; processes use the same image as the app.</p>
+	<p>If a preview needs an outside test database or service, approve it on the repository's <strong>Outbound</strong> tab.</p>
+}
+
+templ buildFailed() {
+	<p>The comment and the check on the pull request say it failed, and your dashboard says what went wrong in plain words, with the next steps and the full build log one click away.</p>
+	<p>When it's fixed, push again or choose <strong>Retry build</strong>.</p>
 }
 
 templ buildDisabled() {
-	<p>Because the build would be refused right now, and the note beside the button says why and what fixes it. The usual reasons:</p>
+	<p>Because I couldn't build it right now, and the note beside the button says why and what fixes it. The usual reasons:</p>
 	<ul>
-		<li>GitHub is still checking whether the branch can merge, or it has conflicts;</li>
-		<li>no worker that can build is running;</li>
-		<li>the operator has paused builds.</li>
+		<li>GitHub is still checking whether the pull request can merge, or it has conflicts;</li>
+		<li>the pull request is closed or merged;</li>
+		<li>I no longer have access to the repository.</li>
 	</ul>
 }
 
 templ waitingForCapacity() {
-	<p>The server is busy, so the request waits its turn instead of failing, and starts on its own once there is room.</p>
-	<p>I cap how many builds run at once, and all previews together may use at most 60% of the server's memory and 75% of its CPUs, with up to 10 previews per repository by default.</p>
-}
-
-templ buildHistory() {
-	<p>No, on purpose: previews are disposable. I keep the log of the current attempt for 14 days and one living comment per pull request.</p>
-	<p>The check runs I add to each commit stay on GitHub, so that history lives where your team already looks.</p>
+	<p>I'm busy right now, so your build waits its turn instead of failing. It starts on its own as soon as there's room.</p>
 }
 
 templ forkPullRequests() {
-	<p>That's what I'm built for. Every build runs in its own rootless BuildKit container on a private network, and every preview runs as an unprivileged user with a read-only filesystem, no capabilities and hard limits.</p>
-	<p>Forks never receive repository secrets, and they get their own build cache so they can't tamper with yours. One honest caveat: containers share the server's kernel, so keep that server dedicated to me.</p>
+	<p>Yes. Every build and every preview runs on its own, without admin rights and with firm limits.</p>
+	<p>Pull requests from forks never receive your secrets or your approved connections, and they can't affect your other builds.</p>
 }
 
 templ secretsProtected() {
 	<ul>
-		<li>Encrypted at rest with AES-256-GCM, and never shown again once saved.</li>
-		<li>Decrypted only on the worker, moments before a preview starts.</li>
-		<li>Never baked into images or given to builds, and redacted from logs.</li>
+		<li>Encrypted as soon as you save them, and never shown again.</li>
+		<li>Added when a preview starts by default. Builds receive a value only when you explicitly allow it, through a BuildKit secret mount. REGISTRY_AUTH is reserved for private base image pulls and never reaches the app.</li>
+		<li>Masked in build and preview logs.</li>
 		<li>Never given to pull requests from forks.</li>
 	</ul>
+	<p>Use sandbox keys and test databases, never production credentials. Review branch code before allowing build access: it can copy a mounted secret into an image or send it elsewhere. Previa never uses secret build arguments.</p>
 }
 
 templ internalNetwork() {
-	<p>No. Each preview sits on a private network it shares only with my proxy and the router.</p>
-	<p>The proxy reaches public addresses on ports 80 and 443 and refuses private, loopback and cloud metadata addresses, even when a domain name tries to point there.</p>
+	<p>No. A preview can reach public websites and services, plus the destinations you approve on the <strong>Outbound</strong> tab. Private networks stay out of reach.</p>
 }
 
 templ whoCanOpen() {
-	<p>Anyone who has its address. Each address includes a random part, so previews can't be guessed, but they are not behind a login.</p>
+	<p>Anyone who has its link. Each link has a random part, so previews can't be guessed, but they aren't behind a login.</p>
 	<p>Use test data and sandbox credentials in previews, never production ones.</p>
 }
 
 templ dashboardSafety() {
-	<p>I keep them apart. Previews never run on the dashboard's own address, its session cookie is host-only and <code>__Host-</code> prefixed so a preview can't read or plant it, and every change here needs a CSRF token.</p>
-}
-
-templ workerCrash() {
-	<p>Nothing is lost. Every request and every step is recorded in PostgreSQL before it runs, so when a worker comes back the interrupted build runs again, reusing an image that was already finished.</p>
-	<p>Anything a crash leaves behind, like a stray container, is cleaned up after a 15-minute grace period.</p>
-}
-
-templ pauseBuilds() {
-	<p>Yes. Set <code>BUILDS_PAUSED=true</code> on the worker and restart it: no new build starts, and requests wait instead of failing.</p>
-	<p>Teardown, cleanup, routing and pull request comments keep working, so nothing is left stranded.</p>
+	<p>No. Previews never run on my own address, so a preview can't read or use your Previa sign-in, and every change in the dashboard is protected.</p>
 }
 
 templ whereCodeGoes() {
-	<p>Only to your server. I download each commit from GitHub, then build and run it on your Docker host; builds can fetch packages from public registries through my proxy.</p>
-	<p>Beyond that I talk to GitHub, your DNS provider and the certificate authority for HTTPS. There is no Previa cloud.</p>
+	<p>It's used only to build and run your preview. I download each commit from GitHub when it's time to build it.</p>
+	<p>When the pull request closes or the preview expires, the preview and its data are removed. Build logs stay for 14 days so you can read them, then they're deleted too.</p>
 }
 
-templ monitoring() {
-	<p>Each process serves <code>/livez</code>, <code>/readyz</code> and Prometheus <code>/metrics</code> on an internal address, and my production setup includes a Grafana dashboard and 24 alert rules.</p>
-	<p>The headline number is the time from a build request to a serving preview.</p>
+templ interruptedBuild() {
+	<p>Nothing is lost. Every request is saved before it runs, so an interrupted build simply starts again on its own, and anything left half-done is cleaned up automatically.</p>
+}
+
+templ buildHistory() {
+	<p>Not a long one, on purpose: previews are meant to be disposable. I keep the log of the latest attempt for 14 days and one living comment per pull request.</p>
+	<p>The checks I add to each commit stay on GitHub, so that history lives where your team already looks.</p>
 }

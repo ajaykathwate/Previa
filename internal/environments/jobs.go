@@ -12,6 +12,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver"
@@ -168,7 +169,13 @@ func finishJob[T river.JobArgs](ctx context.Context, broker *Broker, request Req
 				return err
 			}
 		}
-		return broker.handOffTx(ctx, tx, scope)
+		if err := broker.handOffTx(ctx, tx, scope); err != nil {
+			return err
+		}
+		if request.State == StateOpen {
+			return wakeNextWaitingTx(ctx, broker, tx)
+		}
+		return nil
 	})
 	return errors.Join(workErr, err)
 }
@@ -191,10 +198,38 @@ func finishBuildIntentTx(ctx context.Context, broker *Broker, tx pgx.Tx, request
 	if workErr != nil {
 		next = string(IntentFailed)
 	}
-	if _, err := dbgen.New(tx).FinishBuildIntent(ctx, dbgen.FinishBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, NextState: next}); err != nil {
+	q := dbgen.New(tx)
+	finished, err := q.FinishBuildIntent(ctx, dbgen.FinishBuildIntentParams{PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, NextState: next})
+	if err != nil {
 		return fmt.Errorf("finish build intent: %w", err)
 	}
+	if finished == 1 {
+		// The account's build time, for its daily budget (BUILD_MINUTES_PER_ACCOUNT_DAY).
+		if err := q.RecordFinishedBuildTime(ctx, dbgen.RecordFinishedBuildTimeParams{PrID: request.PullRequestID, Revision: request.Revision}); err != nil {
+			return fmt.Errorf("record the account's build time: %w", err)
+		}
+	}
 	return broker.reportTx(ctx, tx, request.PullRequestID)
+}
+
+// wakeNextWaitingTx hands a freed build slot to the request whose turn is
+// next (an account with nothing building first, then the longest wait):
+// its snoozed job runs now instead of at the end of its backoff, so a slot
+// never sits idle while others wait. Admission still decides; waking only
+// asks the next request to look again.
+func wakeNextWaitingTx(ctx context.Context, broker *Broker, tx pgx.Tx) error {
+	next, err := dbgen.New(tx).NextWaitingBuild(ctx, pgtype.Timestamptz{Time: broker.now().Add(-liveWait), Valid: true})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("find the next waiting build: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE river_job SET scheduled_at = clock_timestamp()
+		WHERE kind = 'build' AND state = 'scheduled' AND (args->>'pull_request_id')::bigint = $1`, next); err != nil {
+		return fmt.Errorf("wake the next waiting build: %w", err)
+	}
+	return nil
 }
 
 // handOffTx admits the PR's current eligible intent as the successor job, or

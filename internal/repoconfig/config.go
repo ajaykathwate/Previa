@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/go-playground/validator/v10"
@@ -49,6 +50,8 @@ type ServiceCatalog interface {
 // ceilings and the backend services on offer.
 type Platform struct {
 	Limits Resources
+	// BuildTimeout is the operator's overall build deadline. Zero uses 12m.
+	BuildTimeout time.Duration
 	// Services is nil when no catalog is configured: backend services are
 	// then refused with a message that says so.
 	Services ServiceCatalog
@@ -65,23 +68,25 @@ const (
 )
 
 // ServiceKinds are the backend services a commit may declare.
-var ServiceKinds = []string{"postgres", "redis"}
+var ServiceKinds = []string{"postgres", "redis", "mysql"}
 
 var (
 	processName          = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
-	reservedProcessNames = []string{"app", "setup", "postgres", "redis"}
+	reservedProcessNames = []string{"app", "setup", "postgres", "redis", "mysql"}
 	versionText          = regexp.MustCompile(`^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$`)
 )
 
 // Config contains normalized, effective values. Env may contain sensitive values;
 // callers must not log Config or Result, and the YAML is intended for non-secrets.
 type Config struct {
-	Dockerfile      string    `yaml:"dockerfile" json:"dockerfile"`
-	Port            int       `yaml:"port" json:"port"`
-	Env             []string  `yaml:"env" json:"env"`
-	HealthCheckPath string    `yaml:"health_check_path" json:"health_check_path"`
-	ResourceTier    string    `yaml:"resource_tier" json:"resource_tier"`
-	Resources       Resources `yaml:"-" json:"resources"`
+	Context         string        `yaml:"context" json:"context"`
+	BuildTimeout    time.Duration `yaml:"-" json:"build_timeout"`
+	Dockerfile      string        `yaml:"dockerfile" json:"dockerfile"`
+	Port            int           `yaml:"port" json:"port"`
+	Env             []string      `yaml:"env" json:"env"`
+	HealthCheckPath string        `yaml:"health_check_path" json:"health_check_path"`
+	ResourceTier    string        `yaml:"resource_tier" json:"resource_tier"`
+	Resources       Resources     `yaml:"-" json:"resources"`
 	// Services are the platform-managed backend services the commit declared,
 	// sorted by kind, each resolved to the catalog's pinned image.
 	Services []BackendService `yaml:"-" json:"services,omitempty"`
@@ -97,7 +102,7 @@ type Config struct {
 
 // BackendService is one declared backend service.
 type BackendService struct {
-	Kind    string `json:"kind"`    // postgres or redis
+	Kind    string `json:"kind"`    // postgres, redis or mysql
 	Version string `json:"version"` // a version the catalog offers
 	Image   string `json:"image"`   // the catalog's image, pinned by digest
 }
@@ -112,6 +117,8 @@ type Process struct {
 
 // document is the YAML as written; Parse turns it into Config.
 type document struct {
+	Context         string            `yaml:"context"`
+	BuildTimeout    string            `yaml:"build_timeout"`
 	Dockerfile      string            `yaml:"dockerfile"`
 	Port            int               `yaml:"port"`
 	Env             []string          `yaml:"env"`
@@ -165,15 +172,17 @@ func ParseFor(data []byte, platform Platform) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	doc := document{Dockerfile: "Dockerfile", Port: 3000, Env: []string{}, ResourceTier: "standard"}
+	doc := document{Context: ".", Dockerfile: "Dockerfile", Port: 3000, Env: []string{}, ResourceTier: "standard"}
 	if err := yaml.UnmarshalWithOptions(data, &doc, yaml.Strict()); err != nil {
 		return Result{}, safeYAMLError(err)
 	}
 	cfg := Config{
+		Context:    doc.Context,
 		Dockerfile: doc.Dockerfile, Port: doc.Port, Env: doc.Env, HealthCheckPath: doc.HealthCheckPath,
 		ResourceTier: doc.ResourceTier, Setup: doc.Setup, DocsPath: doc.DocsPath,
 	}
 	var issues []Issue
+	cfg.Context, cfg.BuildTimeout, issues = resolveBuildSettings(doc.Context, doc.BuildTimeout, platform.BuildTimeout)
 	if !validDockerfile(cfg.Dockerfile) {
 		issues = append(issues, Issue{Field: "dockerfile", Code: "invalid_path", Message: "Use a relative file path inside the repository, without '..', backslashes or an absolute path."})
 	} else {
@@ -265,7 +274,7 @@ func resolveServices(requested []requestedService, catalog ServiceCatalog) ([]Ba
 		issue := Issue{Field: "services", Line: r.Line, Column: r.Column}
 		switch {
 		case !slices.Contains(ServiceKinds, r.Kind):
-			issue.Code, issue.Message = "unknown_service", "Unknown service; Previa runs postgres and redis."
+			issue.Code, issue.Message = "unknown_service", "Unknown service; Previa runs postgres, redis and mysql."
 		case catalog == nil || len(catalog.Versions(r.Kind)) == 0:
 			issue.Field = "services." + r.Kind
 			issue.Code, issue.Message = "service_unavailable", fmt.Sprintf("This server offers no %s service: its operator has not configured one (PREVIEW_SERVICE_CATALOG).", r.Kind)
@@ -321,7 +330,7 @@ func validateProcesses(docs []processDocument) ([]Process, []Issue) {
 		case !processName.MatchString(doc.Name):
 			issues = append(issues, Issue{Field: field + ".name", Code: "invalid_process_name", Message: "Use a lowercase name of letters, digits and hyphens, starting with a letter, such as worker."})
 		case slices.Contains(reservedProcessNames, doc.Name):
-			issues = append(issues, Issue{Field: field + ".name", Code: "reserved_process_name", Message: "app, setup, postgres and redis are reserved; choose another name."})
+			issues = append(issues, Issue{Field: field + ".name", Code: "reserved_process_name", Message: "app, setup, postgres, redis and mysql are reserved; choose another name."})
 		case seen[doc.Name]:
 			issues = append(issues, Issue{Field: field + ".name", Code: "duplicate_process", Message: "Each process needs its own name."})
 		}

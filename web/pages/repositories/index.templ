@@ -10,9 +10,9 @@ templ Index(username string, csrfToken string, page Page) {
 		<div class="repository-workspace repository-catalog">
 			<header class="page-header workspace-page-heading">
 				<div class="page-header-text">
-					<span class="eyebrow">Sources</span>
+					<span class="eyebrow">Workspace</span>
 					<h1>Repositories</h1>
-					<p>Repositories your GitHub App installations can reach. Open one to browse its pull requests and build policy.</p>
+					<p>Repositories your GitHub App installations can reach. Open one to browse its pull requests, previews and build policy.</p>
 				</div>
 				<div class="repository-action">
 					if page.Enabled {
@@ -21,9 +21,9 @@ templ Index(username string, csrfToken string, page Page) {
 							@button.Button(button.Props{Type: button.TypeSubmit}) {
 								@components.GitHubMark()
 								if page.Installations > 0 {
-									Manage connections
+									Choose repositories on GitHub
 								} else {
-									Install on a repo
+									Install on GitHub
 								}
 								<span aria-hidden="true">
 									@components.ArrowUpRight()
@@ -109,59 +109,60 @@ templ Results(page Page) {
 					for _, row := range page.Rows {
 						<li class="repository-row">
 							<a
-								class="repository-select"
+								class={ "repository-select", templ.KV("is-unavailable", !row.Accessible) }
 								href={ templ.SafeURL(page.SelectURL(row.ID)) }
 								data-repo-link={ strconv.FormatInt(row.ID, 10) }
 							>
 								<div class="repository-card-top">
 									<span class="repository-card-icon" aria-hidden="true">
-										@components.BranchIcon()
+										@components.RepositoryIcon()
 									</span>
+									<div class="repository-card-name"><p>{ row.Owner() }</p><h2 title={ row.FullName }>{ row.Name() }</h2></div>
 									if row.Accessible {
 										<span class="repository-status available badge tone-ok"><span class="badge-dot" aria-hidden="true"></span>Available</span>
 									} else {
-										<span class="repository-status unavailable badge tone-neutral"><span class="badge-dot" aria-hidden="true"></span>Unavailable</span>
+										<span class="repository-status unavailable badge tone-warn"><span class="badge-dot" aria-hidden="true"></span>Unavailable</span>
 									}
 								</div>
-								<div class="repository-card-name"><h2>{ row.Name() }</h2><p>{ row.Owner() }</p></div>
 								if row.Status!="active" {
 									<span class="repository-status-detail">Installation { row.Status }</span>
 								}
-								<ul class="repository-card-facts" aria-label="Repository activity">
-									<li>
-										@components.PullRequestIcon()
-										{ Count(row.OpenPRs, "open pull request", "open pull requests") }
-									</li>
-									<li
-										if row.LivePreviews > 0 {
-											class="is-live"
-										}
-									>
-										@components.EnvironmentIcon()
-										{ Count(row.LivePreviews, "live preview", "live previews") }
-									</li>
-									<li>
-										@components.BuildIcon()
+								<dl class="repository-card-stats" aria-label="Repository activity">
+									<div>
+										<dt>{ plural(row.OpenPRs, "Open pull request", "Open pull requests") }</dt>
+										<dd>{ strconv.FormatInt(row.OpenPRs, 10) }</dd>
+									</div>
+									<div class={ templ.KV("is-live", row.LivePreviews > 0) }>
+										<dt>{ plural(row.LivePreviews, "Live preview", "Live previews") }</dt>
+										<dd>
+											if row.LivePreviews > 0 {
+												<span class="pulse-dot" aria-hidden="true"></span>
+											}
+											{ strconv.FormatInt(row.LivePreviews, 10) }
+										</dd>
+									</div>
+								</dl>
+								<div class="repository-card-foot">
+									<span class={ "mode-chip", templ.KV("is-on", row.BuildMode == "automatic") }>
+										<span class="mode-chip-track" aria-hidden="true"></span>
 										if row.BuildMode=="automatic" {
 											Automatic builds
 										} else {
 											Manual builds
 										}
-									</li>
-									<li>
-										@components.ClockIcon()
+									</span>
+									<span class="repository-card-sync">
 										if row.LastSynced!="" {
 											Synced { " " }
 											@components.Time(row.LastSynced, row.SyncedLabel())
 										} else {
 											Not synced yet
 										}
-									</li>
-								</ul>
-								<span class="repository-card-link">
-									View pull requests
-									@components.Arrow()
-								</span>
+									</span>
+									<span class="repository-card-go" aria-hidden="true">
+										@components.Arrow()
+									</span>
+								</div>
 							</a>
 						</li>
 					}
@@ -239,7 +240,7 @@ templ Results(page Page) {
 						<p>Use the connection button above to select repositories on GitHub and verify your account. Connecting does not start a build.</p>
 					} else {
 						<h2>No repositories are linked yet.</h2>
-						<p>Manage connections above to select repositories and refresh their access.</p>
+						<p>Use <strong>Choose repositories on GitHub</strong> above to select repositories and refresh their access.</p>
 					}
 				</div>
 			</div>

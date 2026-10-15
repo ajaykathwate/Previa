@@ -33,7 +33,7 @@ func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Val
 	if err != nil {
 		return pages.Page{}, panelError(err)
 	}
-	page := pages.Page{RepoID: repoID, Name: data.Repo.FullName, Mode: data.Repo.BuildMode,
+	page := pages.Page{RepoID: repoID, Name: data.Repo.FullName, Mode: data.Repo.BuildMode, PrivatePreviews: data.Repo.PrivatePreviews,
 		Available: data.Repo.Accessible && data.Repo.Status == "active", DiscoveryEnabled: h.enabled,
 		SyncState: data.Sync.State, SyncMessage: data.Sync.Message, LastRefresh: timestamp(data.Sync.LastSuccessAt),
 		Fetched: data.Sync.Fetched, Number: data.Page, Pages: data.Pages, Total: data.Total,
@@ -44,7 +44,9 @@ func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Val
 			return pages.Page{}, err
 		}
 		page.WorkerMissing = !caps.Discovery
+		page.PrivatePreviewsReady = caps.PrivatePreviews
 	}
+	page.PrivatePreviewUnavailable = params.Get("preview_access") == "unavailable"
 	if page.Syncing() && data.Sync.RequestedAt.Valid {
 		page.SyncStale = syncStale(data.Sync, time.Now())
 		page.SyncStaleAt = data.Sync.RequestedAt.Time.Add(SyncStaleAfter).UTC().Format(time.RFC3339)
@@ -99,7 +101,8 @@ func (h *Handler) listPR(row dbgen.ListPRsRow, noWorker bool) pages.PR {
 	pr := pages.PR{Number: row.Number, Title: row.Title, Author: row.Author,
 		Branch: row.HeadBranch, SHA: row.HeadSha, State: DisplayStatus(row.State, row.BuildStatus), Build: row.BuildState,
 		Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh, RequestCurrent: row.RequestCurrent,
-		DeployedSHA: row.DeployedSha, Environment: row.EnvironmentStatus, NoWorker: noWorker}
+		DeployedSHA: row.DeployedSha, Environment: row.EnvironmentStatus, NoWorker: noWorker,
+		URL: row.HtmlUrl, UpdatedAt: timestamp(row.SourceUpdatedAt)}
 	if url := h.previewURL(row.Hostname); url != "" && previewDeployed(row.DeployedSha, row.EnvironmentStatus) {
 		pr.PreviewURL, pr.OlderPreview = url, row.DeployedSha != row.HeadSha
 	}

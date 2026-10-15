@@ -120,6 +120,7 @@ func (r *Runtime) admitCandidate(ctx context.Context, id requestIdentity, t Targ
 	}
 	l.labels = previewLabels(r.instance, t, id, image.Ref, settings.Port, settings.HealthCheckPath, settings.Resources.CPUMillis, settings.Resources.MemoryBytes, r.now())
 	l.labels[dockerx.LabelCandidate] = plan.key
+	l.labels[dockerx.LabelRedactEnv] = strings.Join(plan.redactEnv, ",")
 	hosts := make([]string, len(destinations))
 	for i, d := range destinations {
 		hosts[i] = d.Host + ":" + egressAddr.String()

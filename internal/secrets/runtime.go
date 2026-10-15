@@ -26,6 +26,7 @@ type SealedSecret struct {
 	Name    string
 	Value   []byte
 	Version int32
+	Build   bool // the owner let Dockerfile steps of trusted builds read it
 }
 
 // SealedStore reads a repository's ciphertext without owner checks; callers have
@@ -62,12 +63,17 @@ func NewProvider(store SealedStore, keys *Keyring) (*Provider, error) {
 type ContainerEnv struct {
 	vars     []string
 	secrets  [][]byte
+	names    []string // of the decrypted secrets
 	Notices  []string // safe messages that mention names only
 	Withheld bool     // secrets existed or may exist but the source was untrusted
 }
 
 // Environ returns NAME=value entries sorted by name.
 func (e *ContainerEnv) Environ() []string { return append([]string(nil), e.vars...) }
+
+// SecretNames are the names of the variables that hold repository secrets.
+// Names are not secret; values are.
+func (e *ContainerEnv) SecretNames() []string { return append([]string(nil), e.names...) }
 
 // Redactor redacts this environment's secret values plus extra platform
 // credentials (for example the installation token used to fetch source).
@@ -114,10 +120,13 @@ func (p *Provider) ForContainer(ctx context.Context, repoID int64, source Source
 	if err != nil {
 		return nil, fmt.Errorf("read repository secrets: %w", err)
 	}
-	if len(sealed) > 0 && p.keys == nil {
-		return nil, fmt.Errorf("%w (no keyring is configured on this worker)", ErrSecretsUnavailable)
-	}
 	for _, s := range sealed {
+		if s.Name == RegistryAuthName {
+			continue // Pull-only credentials never reach the application.
+		}
+		if p.keys == nil {
+			return nil, fmt.Errorf("%w (no keyring is configured on this worker)", ErrSecretsUnavailable)
+		}
 		plain, err := p.keys.Open(repoID, s.Name, s.Version, s.Value)
 		if err != nil {
 			env.Wipe()
@@ -128,6 +137,7 @@ func (p *Provider) ForContainer(ctx context.Context, repoID int64, source Source
 		}
 		merged[s.Name] = string(plain)
 		env.secrets = append(env.secrets, plain)
+		env.names = append(env.names, s.Name)
 	}
 	env.vars = sortedEnv(merged)
 	return env, nil

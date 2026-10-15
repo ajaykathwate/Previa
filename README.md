@@ -81,7 +81,7 @@ Steps:
    - Events to subscribe to: `pull_request`.
    - A webhook URL: `https://yourdomain.com/webhooks/github`.
 2. Repo Owner, from your dashboard (after logging in via A), clicks
-   "Install on a repo" — this sends them to GitHub's App installation flow.
+   "Install on GitHub" — this sends them to GitHub's App installation flow.
 3. GitHub asks the Repo Owner to pick which repo(s) to install it on, and shows
    them exactly what permissions it's requesting.
 4. Repo Owner approves. GitHub creates an "installation" record and redirects
@@ -123,8 +123,8 @@ even if the person who installed it changes their password or leaves the team.
    the dashboard; this policy is stored by the platform, not in PR-controlled YAML.
    Connecting a repository or enabling Automatic does not bulk-build existing PRs.
 
-Backend and API repositories can also declare platform-managed PostgreSQL and
-Redis (`services`), a setup command for migrations and seed data (`setup`), up to
+Backend and API repositories can also declare platform-managed PostgreSQL, Redis
+and MySQL (`services`), a setup command for migrations and seed data (`setup`), up to
 three unrouted processes such as a queue worker (`processes`) and a docs path
 (`docs_path`); see [backend previews](docs/11-backend-previews.md).
 
@@ -142,6 +142,15 @@ Every build fetches and validates the exact commit's configuration first.
 See [repository configuration](docs/06-source-and-configuration.md) for strict validation,
 safe error categories, fixtures and effective config hashing. Build mode remains
 platform-owned and cannot be set through this YAML.
+
+Monorepos may set `context: apps/web`; the Dockerfile path is relative to that
+directory, while `.previewrc.yaml` stays at the repository root. The full archive
+still must fit the source limits (256 MiB download, 1 GiB unpacked, 100,000
+entries). Git submodule manifests and LFS pointers needed by the context are
+detected and refused with guidance; fetching them is not implemented.
+`build_timeout: 20m` bounds the image stage when the operator's `BUILD_TIMEOUT`
+allows it (12m overall by default, including source and startup). Linux images
+must match the worker's architecture; Windows and GPU workloads are unsupported.
 
 **Step 1 — PR opened**
 1. Contributor opens a PR on GitHub.
@@ -218,7 +227,7 @@ The dashboard supports login, installation linking and the accepted manual build
 workflow. Owners need repository mode controls and a way to select a PR and request
 its latest commit. GitHub comments/checks remain the review-facing feedback channel.
 
-Current pages are Overview, Repositories, Builds, Environments and Developer Tools.
+Current pages are Overview, Repositories, Builds, Previews and Developer Tools.
 The workspace uses a "signal" theme (graphite neutrals, a lime accent, light and
 dark modes that follow the OS with a manual toggle, system sans plus monospace for
 commits and branches). A grouped sidebar collapses to an icon rail on medium screens
@@ -227,20 +236,22 @@ items. Ctrl/⌘ K opens a command palette over the same links. Same-origin page
 changes use cross-document view transitions, and workspace links are prefetched
 on hover where the browser supports speculation rules.
 Overview shows real installation/repository/access counts, a setup checklist
-derived from those counts and a pipeline view marking which stages are connected.
+derived from those counts, where open pull requests are in the delivery pipeline
+and the latest build requests and previews.
 Repositories shows a responsive repository card grid (up to three columns, one on
 phones) inside a 1240px content column. Cards show the repository name, owner,
 access state, open pull requests, live previews, build mode and last sync; search
 and access filters share a sticky toolbar.
 Pagination appears only when more than one page is needed.
 Selecting a source opens its dedicated repository page; selecting a PR opens its
-dedicated detail page. Clickable owner/repository/PR breadcrumbs and Back links
-preserve list filters. Search and filters share a row on desktop and stack on
+dedicated detail page. The header trail names the previous page (a link that
+preserves its list filters) and the current one. Search and filters share a row on desktop and stack on
 narrow screens. The PR list page shows **Sync Pull Requests** and an **Automatic
 builds** switch with a subtle background, plus each PR's preview link. These
 controls are absent from individual PR detail pages, which open with one status
-panel: a headline, the preview address with Copy, every action, and the last lines
-of a failed build. The switch is off in Manual mode; enabling
+card (a headline, a live step tracker while a build runs, the preview address with
+Copy and every action; a failed build gets a plain-language cause, next steps and
+collapsible technical details) beside a details panel. The switch is off in Manual mode; enabling
 requires an owner-controlled, CSRF-protected confirmation modal. Search, sync
 progress and policy saves update in place through HTMX, and committed changes
 (sync progress, webhook and mergeability updates) are pushed to open repository
@@ -252,10 +263,13 @@ and navigation works without JavaScript.
 
 PR discovery, latest/requested/deployed commit views and the owner's Build,
 Build now, Retry, Rebuild and Tear down controls are implemented. Builds and
-Environments show actual saved state (queued and running work, failure reasons,
+Previews show actual saved state (queued and running work, failure reasons,
 preview URL, health and expiry) and link to each PR's **Build logs** page, which
 shows the current attempt's output live over Server-Sent Events (bounded, redacted,
-readable without JavaScript, with Copy and Download). When no worker that can build
+readable without JavaScript, with Copy and Download). On PR details, log links
+open the latest 300 events below the main card, with a link to the full page.
+Log viewers include copyable inline dates and Previa/application source filters
+(both shown by default), plus literal text search. When no worker that can build
 is running, the build action is shown disabled with the reason and the fix (for
 example a worker without a preview domain), and the endpoints refuse with 503
 instead of recording work.
@@ -263,15 +277,17 @@ See the [user guide](technical-docs/user-guide.md) for the current browser workf
 
 - **Builds** describes current/latest execution work and its commit/logs, not a
   permanent historical build archive (see 4.5).
-- **Environments** describes the preview deployment: URL, deployed SHA, health,
-  expiry and teardown. A preview can serve an older commit while a newer build runs.
+- **Previews** (formerly Environments) describes what is live: each preview's URL,
+  the commit it serves, health, expiry and teardown. A preview can serve an older
+  commit while a newer build runs. A build that never went live is not a preview:
+  it is on Builds only.
 - All lists/actions are scoped to the logged-in installation owner. Mutations
   require CSRF protection; destructive confirmation uses a modal.
 
 ### 2.5 Explicit MVP boundaries (what's out of scope for v1)
 
 - Arbitrary multi-service apps (`docker-compose.yml` support). *Narrowed by
-  Prompt 13:* a Dockerfile app may add platform-managed PostgreSQL and Redis from
+  Prompt 13:* a Dockerfile app may add platform-managed PostgreSQL, Redis and MySQL from
   the operator's pinned catalog, a setup command and a few processes from its own
   image ([docs/11](docs/11-backend-previews.md)); Compose files, service images
   chosen in a PR, data that survives a rebuild and non-HTTP ingress stay out.
@@ -539,16 +555,18 @@ This system runs other people's code on your machine, so isolation is a core req
 - Per container: memory and CPU caps, `pids-limit`, read-only root filesystem where possible, `no-new-privileges`, all Linux capabilities dropped
 - Network: previews live on an isolated Docker network with no route to the host, your control plane, Postgres, or cloud metadata endpoints (169.254.169.254)
 - Runtime: gVisor (`runsc`) as the Docker runtime for a large isolation upgrade at low cost (optional `PREVIEW_OCI_RUNTIME`; Docker's runc by default)
-- Never run builds for fork PRs with secrets available; consider requiring maintainer approval for PRs from forks
+- Never run builds for fork PRs with secrets available. Implemented: forks get no secrets or outbound connections, and they never build automatically; they wait until the owner clicks **Build** (see [docs/16-build-policy-and-intents.md](docs/16-build-policy-and-intents.md#behaviour-rules))
+- Build traffic: every build's download and upload totals are logged and measured (with alerts on heavy uploads); `BUILD_EGRESS=registries` limits builds to package and image registries (see [docs/09-image-builds.md](docs/09-image-builds.md#build-traffic-and-the-registries-only-mode))
+- Private previews: an owner can require visitors to sign in with GitHub and be able to see the repository; the router checks every request with the server. Enabling requires all live routing workers to advertise a configured `PREVIEW_ACCESS_URL`; existing private previews deny access without it (see [docs/12-routing-and-https.md](docs/12-routing-and-https.md#private-previews)).
 - Current implementation: previews run as an unprivileged user with a read-only root, no capabilities and `no-new-privileges` on their own internal network; outbound traffic reaches public addresses only through the egress proxy; probes from a running preview confirm Postgres, the host, metadata and other previews are unreachable. They share the host kernel (see [docs/10-preview-runtime.md](docs/10-preview-runtime.md))
 - Docker socket: only the worker touches it; never mount it into a preview container. The router (Traefik) has no socket either: its routes come from the worker's file and the worker attaches it to preview networks
-- Managed services (PostgreSQL, Redis): the operator's digest-pinned images as their own unprivileged user, read-only root with data on a size-capped tmpfs, no capabilities, on a per-PR services network with no egress and no route; owner-approved outbound connections go only through the egress proxy, which resolves names itself and refuses non-public addresses; forks get none (see [docs/11-backend-previews.md](docs/11-backend-previews.md))
+- Managed services (PostgreSQL, Redis, MySQL): the operator's digest-pinned images as their own unprivileged user, read-only root with data on a size-capped tmpfs, no capabilities, on a per-PR services network with no egress and no route; owner-approved outbound connections go only through the egress proxy, which resolves names itself and refuses non-public addresses; forks get none (see [docs/11-backend-previews.md](docs/11-backend-previews.md))
 - Builds: each runs in a fresh rootless BuildKit container with CPU/memory/PID limits on a private network whose only exit is an egress proxy that reaches public addresses only (see [docs/09-image-builds.md](docs/09-image-builds.md))
 
 ### 4.7 Secrets handling
 
 - Users' env vars for their previewed apps are stored encrypted (AES-GCM, key from server environment) in `env_secrets`, and injected at container start
-- They are never read from the repo's `.previewrc.yaml` and never printed to build logs
+- They are never read from the repo's `.previewrc.yaml`; known values are redacted from logs. Owners may explicitly allow BuildKit secret mounts for trusted branch builds and registry logins for private base images. Forks receive none. `REGISTRY_AUTH` is pull-only; see [repository secrets](docs/07-repository-secrets.md).
 - GitHub App private key and webhook secret come from environment or a secrets file on the host, never committed
 
 ### 4.8 Configuration (environment variables)
@@ -563,13 +581,13 @@ each one turns on, and what happens without it, is in
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
 - `APP_BASE_URL` (server; also the worker once previews are routed: unknown preview hosts redirect to it)
-- `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`; server and worker), `ROUTER_DYNAMIC_DIR`, `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS` (worker; route controller)
+- `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`; server and worker), `ROUTER_DYNAMIC_DIR`, `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS`, `ROUTER_METRICS_ADDRESS` (preview request counts), `PREVIEW_ACCESS_URL` (private previews) (worker; route controller)
 - `SESSION_SECRET` (server); `SECRETS_ENCRYPTION_KEYS`, `SECRETS_ACTIVE_KEY_VERSION` (server and worker; versioned keyring for repository secrets, optional for the worker, which then fails repositories with secrets closed)
-- `MAX_CONCURRENT_BUILDS` (builds at once across all workers), `ENV_TTL_HOURS` (preview lifetime after its latest publication), `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE`, `BUILD_CACHE_BUDGET` (worker; housekeeping and capacity, see [docs/15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md))
-- `BUILD_TIMEOUT`, `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS`, `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK`, `BUILDKIT_IMAGE`, `SOURCE_WORKSPACE_ROOT` (worker; isolated image builds and exact-commit source workspaces)
+- `MAX_CONCURRENT_BUILDS` (builds at once across all workers), `BUILDS_PER_ACCOUNT`, `BUILD_MINUTES_PER_ACCOUNT_DAY`, `PREVIEW_MAX_PER_ACCOUNT` (fair sharing between accounts), `ENV_TTL_HOURS` (preview lifetime after its latest publication), `PREVIEW_IDLE_SLEEP` (idle previews sleep until the next visit), `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE`, `BUILD_CACHE_BUDGET` (worker; housekeeping and capacity, see [docs/15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md)), `BUILD_LOG_RETENTION_DAYS` (server and worker; days finished build logs are kept)
+- `BUILD_TIMEOUT`, `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS`, `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK`, `BUILD_EGRESS`, `BUILD_EGRESS_HOSTS`, `BUILDKIT_IMAGE`, `SOURCE_WORKSPACE_ROOT` (worker; isolated image builds and exact-commit source workspaces)
 - `EGRESS_IMAGE`, `PREVIEW_ALLOW_ROOT`, `PREVIEW_WRITABLE_ROOTFS`, `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT`, `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY`, `PREVIEW_OCI_RUNTIME` (worker; hardened previews and the shared egress proxy)
 - `PREVIEW_SERVICE_CATALOG`, `PREVIEW_SETUP_TIMEOUT` (worker; managed services and the setup command), `PREVIEW_OUTBOUND_PORTS` (server and worker; owner-approved outbound connections), see [docs/11-backend-previews.md](docs/11-backend-previews.md)
-- `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE`, `ACME_CA_SERVER` (router; Traefik's wildcard certificate over DNS-01, staging by default, the DNS token read from a protected file instead of the originally planned `DNS_PROVIDER_API_TOKEN` variable)
+- `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE`, `ACME_CA_SERVER` (router; Traefik's wildcard certificate over DNS-01, staging by default, the DNS token read from a protected file instead of the originally planned `DNS_PROVIDER_API_TOKEN` variable); `ACME_STORAGE_FILE` selects certificate storage in the local/staging router's persistent volume when switching to trusted issuance (see [docs/12-routing-and-https.md](docs/12-routing-and-https.md#tls-and-dns)).
 
 ### 4.9 Infrastructure and deployment
 
@@ -593,8 +611,9 @@ object storage through rclone, with a scripted, rehearsed restore.
 - Automatic builds become eligible after a five-minute trailing quiet period;
   manual requests bypass this delay but still wait for worker capacity.
 - Disk pruning job for old images and build cache (disk exhaustion is the most likely real-world failure)
-- Per-repo cap on concurrent active previews
+- Per-repo cap on concurrent active previews, optional per-account caps on builds, previews and daily build minutes, with turns between accounts
 - Build timeout and image size limit
+- Data retention: build logs 14 days (configurable to 90, deletable by the owner), webhook receipts and finished operations 30 days, closed pull requests 90 days; backups keep deleted data at most 30 more days
 
 ### 4.11 Upgrade paths (post-MVP)
 
@@ -602,4 +621,4 @@ object storage through rclone, with a scripted, rehearsed restore.
 - More capacity: run workers on multiple hosts, add a scheduler, or move to Kubernetes via the `Runtime` interface
 - Stronger isolation: Firecracker microVMs
 - Bigger logs: move build logs to S3/MinIO or Loki
-- Multi-service previews: more managed service kinds, or `docker-compose.yml` support beyond the managed PostgreSQL and Redis of [docs/11](docs/11-backend-previews.md)
+- Multi-service previews: more managed service kinds, or `docker-compose.yml` support beyond the managed PostgreSQL, Redis and MySQL of [docs/11](docs/11-backend-previews.md)

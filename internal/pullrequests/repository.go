@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
@@ -75,35 +76,70 @@ type ActivityPage struct {
 	Total, Page, Pages int64
 }
 
-func (r *Repository) Activity(ctx context.Context, userID, repoID, page int64, environments bool) (result ActivityPage, err error) {
+// ActivityQuery selects a page of Builds or Previews. Failures narrows
+// Builds to FailuresAttention, FailuresOlder or FailuresDismissed; a failure
+// needs attention when it finished at or after Since.
+type ActivityQuery struct {
+	RepoID, Page int64
+	Previews     bool
+	Failures     string
+	Since        time.Time
+}
+
+func (r *Repository) Activity(ctx context.Context, userID int64, aq ActivityQuery) (result ActivityPage, err error) {
 	err = database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"); err != nil {
 			return err
 		}
 		q := dbgen.New(tx)
-		if repoID > 0 {
-			if _, err := q.OwnedRepository(ctx, dbgen.OwnedRepositoryParams{ID: repoID, OwnerUserID: owner(userID)}); err != nil {
+		if aq.RepoID > 0 {
+			if _, err := q.OwnedRepository(ctx, dbgen.OwnedRepositoryParams{ID: aq.RepoID, OwnerUserID: owner(userID)}); err != nil {
 				return scopeError(err)
 			}
 		}
+		since := pgtype.Timestamptz{Time: aq.Since, Valid: true}
 		var err error
-		result.Total, err = q.CountActivity(ctx, dbgen.CountActivityParams{OwnerUserID: owner(userID), Column2: repoID, Column3: environments})
+		result.Total, err = q.CountActivity(ctx, dbgen.CountActivityParams{OwnerUserID: userID, RepoID: aq.RepoID, Previews: aq.Previews, Failures: aq.Failures, AttentionSince: since})
 		if err != nil {
 			return err
 		}
 		result.Pages = max(int64(1), (result.Total+9)/10)
-		result.Page = min(max(int64(1), page), result.Pages)
-		result.Rows, err = q.Activity(ctx, dbgen.ActivityParams{OwnerUserID: owner(userID), Column2: repoID, Column3: environments, Offset: int32((result.Page - 1) * 10)})
+		result.Page = min(max(int64(1), aq.Page), result.Pages)
+		result.Rows, err = q.Activity(ctx, dbgen.ActivityParams{OwnerUserID: userID, RepoID: aq.RepoID, Previews: aq.Previews, Failures: aq.Failures,
+			AttentionSince: since, RowOffset: int32((result.Page - 1) * 10)})
 		return err
 	})
 	return
 }
 
-// Delivery counts the owner's current requests and live previews on open PRs.
-func (r *Repository) Delivery(ctx context.Context, userID int64) (dbgen.DeliverySummaryRow, error) {
-	row, err := dbgen.New(r.pool).DeliverySummary(ctx, owner(userID))
+// Delivery counts the owner's current requests and live previews on open PRs;
+// failures that finished before since and were not dismissed count as older.
+func (r *Repository) Delivery(ctx context.Context, userID int64, since time.Time) (dbgen.DeliverySummaryRow, error) {
+	row, err := dbgen.New(r.pool).DeliverySummary(ctx, dbgen.DeliverySummaryParams{OwnerUserID: userID, AttentionSince: pgtype.Timestamptz{Time: since, Valid: true}})
 	if err != nil {
 		return row, fmt.Errorf("count delivery: %w", err)
 	}
 	return row, nil
+}
+
+// DismissFailure records that userID dismissed the PR's failed request at
+// revision. It refuses (ErrUnavailable) when that is no longer the PR's
+// current, failed request: a newer request replaced it.
+func (r *Repository) DismissFailure(ctx context.Context, userID, pullRequestID, revision int64) error {
+	n, err := dbgen.New(r.pool).DismissFailure(ctx, dbgen.DismissFailureParams{UserID: userID, PullRequestID: pullRequestID, Revision: revision})
+	if err != nil {
+		return fmt.Errorf("dismiss failure: %w", err)
+	}
+	if n == 0 {
+		return ErrFailureChanged
+	}
+	return nil
+}
+
+// RestoreFailure undoes userID's dismissal of the PR's failed request.
+func (r *Repository) RestoreFailure(ctx context.Context, userID, pullRequestID int64) error {
+	if err := dbgen.New(r.pool).RestoreFailure(ctx, dbgen.RestoreFailureParams{UserID: userID, PullRequestID: pullRequestID}); err != nil {
+		return fmt.Errorf("restore failure: %w", err)
+	}
+	return nil
 }

@@ -111,7 +111,7 @@ func TestWorkspaceHTTPAuthorizationCSRFActions(t *testing.T) {
 			t.Fatal("missing CSRF accepted", path, w.Code)
 		}
 	}
-	for _, path := range []string{"/repositories?repo_id=999", "/repositories?repo_id=999&pr=7", "/repositories/999", "/repositories/999/pull-requests/7", "/builds?repo_id=999", "/environments?repo_id=999"} {
+	for _, path := range []string{"/repositories?repo_id=999", "/repositories?repo_id=999&pr=7", "/repositories/999", "/repositories/999/pull-requests/7", "/builds?repo_id=999", "/previews?repo_id=999"} {
 		if w := request("GET", path, ""); w.Code != 404 {
 			t.Fatal("unowned query", path, w.Code)
 		}

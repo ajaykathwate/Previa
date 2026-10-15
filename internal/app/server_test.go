@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -114,14 +115,15 @@ func TestServerRoutesRegression(t *testing.T) {
 	})
 
 	t.Run("protected pages send anonymous visitors to sign in", func(t *testing.T) {
-		for _, path := range []string{"/dashboard", "/repositories", "/builds", "/environments", "/repositories/1",
+		for _, path := range []string{"/dashboard", "/repositories", "/builds", "/previews", "/environments", "/repositories/1",
 			"/repositories/1/pull-requests/1", "/repositories/1/secrets", "/repositories/1/outbound", "/repositories/1/pull-requests/1/logs", "/auth/logout"} {
+			login := "/auth/github/login?" + url.Values{"next": {path}}.Encode()
 			response := send(http.MethodGet, path, nil, nil)
-			if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/auth/github/login" {
+			if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != login {
 				t.Errorf("%s: %d to %q", path, response.StatusCode, response.Header.Get("Location"))
 			}
 			partial := send(http.MethodGet, path, nil, func(r *http.Request) { r.Header.Set("HX-Request", "true") })
-			if partial.StatusCode != http.StatusUnauthorized || partial.Header.Get("HX-Redirect") != "/auth/github/login" {
+			if partial.StatusCode != http.StatusUnauthorized || partial.Header.Get("HX-Redirect") != login {
 				t.Errorf("%s (htmx): %d, HX-Redirect %q", path, partial.StatusCode, partial.Header.Get("HX-Redirect"))
 			}
 		}

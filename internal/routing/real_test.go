@@ -146,6 +146,10 @@ type response struct {
 // get requests https://host/path through the router's published port, with
 // the certificate verified against Pebble's root.
 func (h *harness) get(host, path string) (response, error) {
+	return h.getWithCookie(host, path, "")
+}
+
+func (h *harness) getWithCookie(host, path, cookie string) (response, error) {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", h.httpsAddr)
@@ -155,7 +159,14 @@ func (h *harness) get(host, path string) (response, error) {
 	}
 	defer transport.CloseIdleConnections()
 	httpClient := &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	r, err := httpClient.Get("https://" + host + path)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://"+host+path, nil)
+	if err != nil {
+		return response{}, err
+	}
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	r, err := httpClient.Do(req)
 	if err != nil {
 		return response{}, err
 	}
@@ -573,6 +584,25 @@ func TestRealRoutingRecoversAfterControllerAndRouterRestarts(t *testing.T) {
 	if logs := h.routerLogs(t, restartedAt); strings.Contains(logs, "Server responded with a certificate") {
 		t.Fatal("the router obtained a new certificate after restarting")
 	}
+	// Recreating the router also loses dynamically attached preview networks.
+	// Disconnect one without changing the accepted table or file to reproduce it.
+	if _, err := h.docker.NetworkDisconnect(ctx, endpoint.NetworkID, client.NetworkDisconnectOptions{Container: h.routerName}); err != nil {
+		t.Fatal(err)
+	}
+	h.eventually(t, "detached preview returns Bad Gateway", func() error {
+		r, err := h.get(host, "/")
+		if err != nil {
+			return err
+		}
+		if r.status != http.StatusBadGateway {
+			return fmt.Errorf("detached preview returned %d", r.status)
+		}
+		return nil
+	})
+	if err := restarted.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.serves(t, host, want)
 	// Losing the file drops every route until the controller writes it again.
 	if err := os.Remove(h.file.Path()); err != nil {
 		t.Fatal(err)

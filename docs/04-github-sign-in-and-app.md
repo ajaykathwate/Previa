@@ -111,7 +111,7 @@ and key path. Keys, secrets and tokens never reach templates, records or logs.
 
 ### Linking flow
 
-1. **Repositories → Install on a repo** submits a CSRF-protected
+1. **Repositories → Install on GitHub** submits a CSRF-protected
    `POST /installations/start`, which opens
    `github.com/apps/<slug>/installations/new?state=<random>`.
 2. Choose repositories. If an organization owner must approve, Previa reports a

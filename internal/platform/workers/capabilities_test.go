@@ -72,11 +72,11 @@ func TestCapabilitiesComeFromLiveWorkersOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor, err := Start(t.Context(), p, Capabilities{Execution: true, Routing: true, Reporting: true, Housekeeping: true}, logger)
+	executor, err := Start(t.Context(), p, Capabilities{Execution: true, Routing: true, Reporting: true, Housekeeping: true, BuildTimeout: 30 * time.Minute}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c, err := reader.Current(t.Context()); err != nil || !c.Execution || !c.Discovery || !c.Reporting {
+	if c, err := reader.Current(t.Context()); err != nil || !c.Execution || !c.Discovery || !c.Reporting || c.BuildTimeout != 30*time.Minute {
 		t.Fatalf("two workers: %+v %v", c, err)
 	}
 	// A worker that stopped answering no longer counts.
@@ -122,5 +122,65 @@ func TestPausedWorkersSayWhyNothingBuilds(t *testing.T) {
 	}
 	if err := paused.Stop(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBuildTimeoutUsesLowestLiveExecutionCeiling(t *testing.T) {
+	p := pool(t)
+	if _, err := p.Exec(t.Context(), `INSERT INTO worker_capabilities
+		(worker_id, execution, routing, reporting, housekeeping, discovery, build_timeout_ns) VALUES
+		('1111111111111111', true, false, false, false, false, $1),
+		('2222222222222222', true, false, false, false, false, $2),
+		('3333333333333333', false, false, false, false, true, $3)`, int64(20*time.Minute), int64(30*time.Minute), int64(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	reader := NewReader(p)
+	if c, err := reader.Current(t.Context()); err != nil || c.BuildTimeout != 20*time.Minute {
+		t.Fatalf("lowest executor ceiling: %s %v", c.BuildTimeout, err)
+	}
+	if _, err := p.Exec(t.Context(), "UPDATE worker_capabilities SET seen_at = now() - interval '10 minutes' WHERE worker_id = '1111111111111111'"); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := reader.Current(t.Context()); err != nil || c.BuildTimeout != 30*time.Minute {
+		t.Fatalf("stale executor must not narrow the limit: %s %v", c.BuildTimeout, err)
+	}
+}
+
+func TestPrivatePreviewsRequireEveryLiveRoutingWorker(t *testing.T) {
+	p := pool(t)
+	ctx := t.Context()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reader := NewReader(p)
+	for _, caps := range []Capabilities{{Discovery: true}, {Routing: true, PrivatePreviews: true}} {
+		h, err := Start(ctx, p, caps, logger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = h.Stop(context.Background()) })
+	}
+	if c, err := reader.Current(ctx); err != nil || !c.PrivatePreviews {
+		t.Fatalf("configured router plus discovery: %+v %v", c, err)
+	}
+	// Legacy and paused routing workers can also write the route file. The
+	// migration's default must keep them from claiming private-preview support.
+	if _, err := p.Exec(ctx, `INSERT INTO worker_capabilities
+		(worker_id, execution, routing, reporting, housekeeping, discovery, paused)
+		VALUES ('legacyworker000000', false, true, false, true, false, true)`); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := reader.Current(ctx); err != nil || c.PrivatePreviews {
+		t.Fatalf("mixed worker configuration advertised auth: %+v %v", c, err)
+	}
+	if _, err := p.Exec(ctx, "UPDATE worker_capabilities SET seen_at=now()-interval '10 minutes' WHERE worker_id='legacyworker000000'"); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := reader.Current(ctx); err != nil || !c.PrivatePreviews {
+		t.Fatalf("stale unconfigured router blocked auth: %+v %v", c, err)
+	}
+	if _, err := p.Exec(ctx, "UPDATE worker_capabilities SET seen_at=now()-interval '10 minutes' WHERE routing"); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := reader.Current(ctx); err != nil || c.PrivatePreviews {
+		t.Fatalf("no live router advertised auth: %+v %v", c, err)
 	}
 }

@@ -1,4 +1,4 @@
-package buildlogs
+package textlines
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 func strip(t *testing.T, chunks ...string) string {
 	t.Helper()
 	var out bytes.Buffer
-	s := &controlStripper{dst: &out}
+	s := &Stripper{Dst: &out}
 	for _, c := range chunks {
 		if _, err := s.Write([]byte(c)); err != nil {
 			t.Fatal(err)
@@ -46,12 +46,12 @@ func TestControlStripperRemovesTerminalSequences(t *testing.T) {
 }
 
 func split(maxBytes int, chunks ...string) (lines []string, partial func() []string) {
-	s := &lineSplitter{maxBytes: maxBytes}
-	s.emit = func(text string) { lines = append(lines, text) }
+	s := &Splitter{MaxBytes: maxBytes}
+	s.Emit = func(text string) { lines = append(lines, text) }
 	for _, c := range chunks {
 		_, _ = s.Write([]byte(c))
 	}
-	return lines, func() []string { s.flush(); return lines }
+	return lines, func() []string { s.Flush(); return lines }
 }
 
 func TestLineSplitterBoundsAndNormalizesLines(t *testing.T) {

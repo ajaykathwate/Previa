@@ -54,7 +54,7 @@ func validateShape(data []byte) (shape, error) {
 		valid, fieldIssues, known := fieldShape(field, entry.Value, &found)
 		issues = append(issues, fieldIssues...)
 		if !known {
-			issues = append(issues, shapeIssue("$", "unknown_field", "Unknown key; supported keys are dockerfile, port, env, health_check_path, resource_tier, services, setup, processes and docs_path.", entry.Key))
+			issues = append(issues, shapeIssue("$", "unknown_field", "Unknown key; supported keys are context, build_timeout, dockerfile, port, env, health_check_path, resource_tier, services, setup, processes and docs_path.", entry.Key))
 			continue
 		}
 		if !valid {
@@ -72,8 +72,11 @@ func validateShape(data []byte) (shape, error) {
 // key the contract does not have. Requested services are collected in found.
 func fieldShape(field string, value ast.Node, found *shape) (valid bool, issues []Issue, known bool) {
 	switch field {
-	case "dockerfile", "health_check_path", "resource_tier", "docs_path":
+	case "context", "build_timeout", "dockerfile", "health_check_path", "resource_tier", "docs_path":
 		_, valid = value.(*ast.StringNode)
+		if field == "build_timeout" && valid {
+			valid = value.(*ast.StringNode).Value != ""
+		}
 	case "port":
 		_, valid = value.(*ast.IntegerNode)
 	case "env":
@@ -118,7 +121,7 @@ func servicesShape(mapping *ast.MappingNode) ([]requestedService, []Issue) {
 	for _, entry := range mapping.Values {
 		key, ok := entry.Key.(*ast.StringNode)
 		if !ok {
-			issues = append(issues, shapeIssue("services", "invalid_key", "Name each service with a plain key, such as postgres or redis.", entry.Key))
+			issues = append(issues, shapeIssue("services", "invalid_key", "Name each service with a plain key: postgres, redis or mysql.", entry.Key))
 			continue
 		}
 		if seen[key.Value] {

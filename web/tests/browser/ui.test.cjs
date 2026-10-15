@@ -41,6 +41,42 @@ async function login() {
   await page.waitForURL(`${origin}/dashboard`);
   assert.match(await page.locator('.dashboard-heading').innerText(), /design-review/);
 }
+
+test('signed-out PR build logs return to the same logs after GitHub login', async () => {
+  await context.request.post(`${origin}/__fixture/logs/seed`);
+  const path = '/repositories/1/pull-requests/3/logs';
+  await page.goto(`${origin}${path}`);
+  await page.waitForURL(`${origin}${path}`);
+  assert.match(await page.locator('.app-breadcrumb').innerText(), /#3[\s\S]*Build logs/);
+  assert.equal(new URL(page.url()).pathname, path);
+});
+
+test('automatic build disables its action live and refreshes after a confirmation closes', async () => {
+  const change = state => context.request.post(`${origin}/__fixture/build-state`, {form: {state}});
+  await change('pending');
+  try {
+    await login();
+    await page.goto(`${origin}/repositories/1/pull-requests/7`);
+    assert(await page.getByRole('button', {name: 'Build now', exact: true}).isEnabled());
+    await page.waitForFunction(() => document.documentElement.dataset.liveState === 'live');
+    await change('queued');
+    const queued = page.getByRole('button', {name: 'Build queued', exact: true});
+    await queued.waitFor();
+    assert(await queued.isDisabled());
+    await change('running');
+    const running = page.getByRole('button', {name: 'Building preview', exact: true});
+    await running.waitFor();
+    assert(await running.isDisabled());
+    await page.getByRole('button', {name: 'Cancel build', exact: true}).click();
+    await page.waitForFunction(() => document.querySelector('#teardown-preview').matches(':modal'));
+    await change('succeeded');
+    // The live signal is deferred while this dialog is open.
+    await page.waitForTimeout(200);
+    assert(await running.isDisabled());
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', {name: 'Rebuild preview', exact: true}).waitFor();
+  } finally { await change(''); }
+});
 async function readyPanel(id) {
   await page.locator(`[data-selected-repo="${id}"]`).waitFor();
   await page.waitForFunction(()=>!document.getElementById('repository-detail').hasAttribute('aria-busy'));
@@ -59,14 +95,17 @@ async function assertNoOverflow() {
 }
 
 test('public home and protected dashboard access', async () => {
-  for (const route of ['/dashboard','/repositories','/builds','/environments','/developer-tools']) {
+  for (const route of ['/dashboard','/repositories','/builds','/previews','/environments','/developer-tools']) {
     assert.equal((await context.request.get(`${origin}${route}`, {maxRedirects:0})).status(),303);
   }
   await page.goto(origin);
   assert.match(await page.locator('h1').innerText(), /Review the branch/);
   assert.equal(await page.locator('[data-queue-form]').count(), 0);
-  await page.getByRole('link', {name: 'The workflow', exact: true}).click();
-  assert.equal(new URL(page.url()).hash, '#workflow');
+  await page.getByRole('link', {name: 'Why Previa', exact: true}).click();
+  assert.equal(new URL(page.url()).hash, '#why');
+  // The home page states only what works today, without the internal stack.
+  const home = await page.locator('main').innerText();
+  assert.doesNotMatch(home, /coming next|coming soon|self-hosted|PostgreSQL 17, which|River|Traefik|BuildKit/i);
   // The FAQ is public: signed out, /faq is the home page's FAQ section.
   const faq = await context.request.get(`${origin}/faq`, {maxRedirects: 0});
   assert.equal(faq.status(), 303);
@@ -115,7 +154,7 @@ test('Overview places open PRs along the pipeline and its activity tabs and rows
   assert(await page.locator('.ov-alert').isVisible());
   assert.match(await page.locator('.ov-setup-progress').innerText(), /1 of 5\s+done/);
   assert.deepEqual(await page.locator('.ov-flow-count').allInnerTexts(), ['0', '0', '0', '0']);
-  assert.match(await page.locator('.ov-platform .badge').innerText(), /0 of 7 connected/);
+  assert.match(await page.locator('.ov-status').innerText(), /No worker running/);
   // A busy workspace.
   await page.goto(`${origin}/__fixture/overview?state=busy`);
   await page.waitForURL(`${origin}/dashboard`);
@@ -127,7 +166,9 @@ test('Overview places open PRs along the pipeline and its activity tabs and rows
   assert.deepEqual(await page.locator('.ov-flow-share small').allInnerTexts(), ['All tracked', '16% of open PRs', '8% of open PRs', '33% of open PRs']);
   assert.match(await page.locator('.ov-flow-failed').innerText(), /1 failed request/);
   assert.equal(await page.locator('.ov-ring').getAttribute('aria-label'), '33% of open pull requests have a live preview');
-  assert.match(await page.locator('.ov-platform .badge').innerText(), /7 of 7 connected/);
+  // Activity reads as a table: commit, status and when, with the failure in plain words.
+  assert.deepEqual(await page.locator('#ov-panel-builds .ov-table-head span').allTextContents(), ['Pull request', 'Commit', 'Status', 'Updated']);
+  assert.match(await page.locator('#ov-panel-builds .ov-row', {hasText: 'Fixture pull request 4'}).locator('.ov-col-reason').innerText(), /Your app didn't become ready/);
   // Tabs switch by click or arrow keys, and the choice is kept for the session.
   const builds = page.locator('#ov-panel-builds');
   const previews = page.locator('#ov-panel-previews');
@@ -277,6 +318,29 @@ test('queue feedback handles pending duplicate failures and expired session', as
   assert.match(await result.innerText(), /session check failed/);
 });
 
+test('the home page story video loads nothing until played and has a transcript', async () => {
+  await page.goto(origin);
+  await page.getByRole('link', {name: /^Watch the story/}).click();
+  assert.equal(new URL(page.url()).hash, '#watch');
+  const video = page.locator('[data-film-video]');
+  assert.equal(await video.getAttribute('preload'), 'none');
+  assert.equal(await video.evaluate(v => v.readyState), 0, 'nothing downloads before play');
+  assert.equal((await context.request.get(`${origin}/static/video/previa-story-poster.jpg`)).status(), 200);
+  const play = page.getByRole('button', {name: /Play the story/});
+  assert(await play.isVisible());
+  assert.equal(await video.evaluate(v => v.controls), false, 'one play button at a time');
+  await play.click();
+  await page.waitForFunction(() => document.querySelector('[data-film]').classList.contains('is-playing'));
+  assert.equal(await play.isVisible(), false);
+  assert.equal(await video.evaluate(v => v.controls), true, 'native controls take over while it plays');
+  await page.locator('.film-transcript summary').click();
+  assert.match(await page.locator('.film-transcript ol').innerText(), /Minutes, not an afternoon/);
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+});
+
 test('home reveals once pauses offscreen and respects reduced motion', async () => {
   await page.goto(origin);
   for (const width of [320, 390, 768, 1024, 1440]) {
@@ -284,12 +348,12 @@ test('home reveals once pauses offscreen and respects reduced motion', async () 
     await assertNoOverflow();
   }
   assert(await page.locator('.scroll-pending').count() > 0);
-  await page.locator('#principles').scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelector('#principles [data-scroll-reveal]').classList.contains('is-visible'));
+  await page.locator('#features').scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelector('#features [data-scroll-reveal]').classList.contains('is-visible'));
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.preview-window')).animationPlayState === 'paused');
   await page.evaluate(() => scrollTo({top: 0, behavior: 'instant'}));
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.preview-window')).animationPlayState === 'running');
-  assert(await page.locator('#principles .is-visible').count() > 0);
+  assert(await page.locator('#features .is-visible').count() > 0);
   await page.emulateMedia({reducedMotion: 'reduce'});
   assert.equal(await page.locator('.preview-window').evaluate(e => getComputedStyle(e).animationName), 'none');
   assert.equal(await page.locator('.scroll-pending').count(), 0);
@@ -309,12 +373,12 @@ test('how it works asks one question at a time and jumps to any stage', async ()
   assert.equal(await next.getAttribute('aria-disabled'), 'true');
   await page.waitForFunction(() => !document.querySelector('[data-story-next]').hasAttribute('aria-disabled'));
   assert(await story.locator('#story-discover [data-story-answer]').isVisible());
-  assert.match(await story.locator('#story-discover').innerText(), /signed webhook/);
-  assert.match(await story.locator('[data-story-stage][aria-current="step"]').innerText(), /^Discover/);
+  assert.match(await story.locator('#story-discover').innerText(), /I pick it up/);
+  assert.match(await story.locator('[data-story-stage][aria-current="step"]').innerText(), /^01\s*Notice/);
   assert.match(await next.innerText(), /when does it actually build/);
   assert(await page.evaluate(() => document.activeElement.matches('[data-story-next]')));
   // A stage reveals every turn up to it and moves focus there.
-  await story.locator('[data-story-stage]', {hasText: 'Route'}).click();
+  await story.locator('[data-story-stage]', {hasText: 'Share'}).click();
   assert.equal(await turns.count(), 5);
   await page.waitForFunction(() => document.activeElement?.id === 'story-route');
   assert.equal(await story.locator('[data-story-count]').innerText(), '5 / 7');
@@ -350,14 +414,14 @@ test('the FAQ answers as a conversation on the home page, from a link and in the
   await item.locator('summary').click();
   assert.equal(await item.evaluate(e => e.classList.contains('is-typing')), true);
   await page.waitForFunction(() => !document.querySelector('#faq-fork-pull-requests').classList.contains('is-typing'));
-  assert.match(await item.locator('.faq-answer .chat-bubble').innerText(), /rootless BuildKit/);
+  assert.match(await item.locator('.faq-answer .chat-bubble').innerText(), /never receive your secrets/);
   // Topics and search narrow the questions; a status line counts them.
   const visible = faq.locator('[data-faq-item]:not([hidden])');
   await faq.getByRole('button', {name: /^Security/}).click();
   assert.equal(await visible.count(), 5);
   assert.deepEqual([...new Set(await visible.evaluateAll(items => items.map(i => i.dataset.topic)))], ['security']);
   await faq.getByRole('button', {name: /^All topics/}).click();
-  await faq.locator('[data-faq-search]').fill('kernel');
+  await faq.locator('[data-faq-search]').fill('frameworks');
   assert.equal(await visible.count(), 1);
   assert.equal(await faq.locator('[data-faq-status]').innerText(), '1 of 22 questions shown.');
   await faq.locator('[data-faq-search]').fill('zzz-nothing');
@@ -395,14 +459,16 @@ test('content and native confirmation remain usable without JavaScript', async (
   try {
     const nativePage = await noJS.newPage();
     await nativePage.goto(origin);
-    assert.equal(await nativePage.locator('#principles .principles-grid').evaluate(e => getComputedStyle(e).opacity), '1');
+    assert.equal(await nativePage.locator('#security .security-grid').evaluate(e => getComputedStyle(e).opacity), '1');
     // How it works is a full transcript, and FAQ questions open natively.
     assert.equal(await nativePage.locator('[data-story-turn]').count(), 7);
     assert.equal(await nativePage.locator('[data-story-outro]').isVisible(), true);
     assert.equal(await nativePage.locator('[data-story-composer]').isVisible(), false);
     assert.equal(await nativePage.locator('[data-faq-tools]').isVisible(), false);
+    assert.equal(await nativePage.locator('[data-film-play]').isVisible(), false);
+    assert.equal(await nativePage.locator('[data-film-video]').getAttribute('controls'), '');
     await nativePage.locator('#faq-secrets summary').click();
-    assert.match(await nativePage.locator('#faq-secrets .faq-answer').innerText(), /AES-256-GCM/);
+    assert.match(await nativePage.locator('#faq-secrets .faq-answer').innerText(), /Encrypted as soon as you save them/);
     await nativePage.goto(`${origin}/auth/github/login`);
     await nativePage.waitForURL(`${origin}/dashboard`);
     await nativePage.goto(`${origin}/repositories?page=2`);
@@ -509,7 +575,7 @@ test('owners approve outbound destinations and remove them only after confirming
 test('unavailable repository PRs offer no actions and say why', async () => {
   await login();
   await page.goto(`${origin}/repositories/2/pull-requests/1`);
-  assert.match(await page.locator('[data-build-unavailable]').innerText(), /GitHub access to this repository is unavailable[\s\S]*Manage connections/);
+  assert.match(await page.locator('[data-build-unavailable]').innerText(), /GitHub access to this repository is unavailable[\s\S]*choose repositories on GitHub/);
   assert(await page.getByRole('button', {name: 'Build latest commit', exact: true}).isDisabled(), 'the action is shown, disabled');
   assert.equal(await page.getByRole('button', {name: /Retry|Rebuild|Tear down|Cancel build/}).count(), 0);
   assert.equal(await page.locator('form[action$="/build"]').count(), 0, 'nothing can be submitted');
@@ -530,13 +596,128 @@ test('a blocked build stays visible, disabled, with the reason and the fix', asy
   }
 });
 
-test('Environments and Builds show addresses, waits and failures, and teardown confirms per row', async () => {
+test('a failed build says what went wrong and what to do, with the technical details one click away', async () => {
   await login();
+  await page.goto(`${origin}/repositories/1/pull-requests/4`);
+  const status = page.locator('[data-pr-status]');
+  assert.equal(await status.locator('h2').innerText(), "GitHub didn't let Previa download your code");
+  assert.match(await status.locator('.pr-status-kicker').innerText(), /Build failed/);
+  assert.equal(await status.locator('.tracker-step.is-failed').getAttribute('data-stage'), 'code');
+  assert.deepEqual(await status.locator('.tracker-step.is-done').evaluateAll(steps => steps.map(step => step.dataset.stage)), ['queue']);
+  const steps = await status.locator('.diagnosis-steps li').allInnerTexts();
+  assert.match(steps[0], /Contents to Read-only/);
+  assert.equal(steps.at(-1), 'Choose Retry build.');
+  const details = status.locator('.diagnosis-details');
+  assert.equal(await details.evaluate(element => element.open), false, 'technical details start collapsed');
+  await details.locator('summary').click();
+  assert.match(await details.locator('.diagnosis-reason').innerText(), /GitHub denied access to this commit's files/);
+  assert.match(await details.innerText(), /source_failed/);
+  assert.equal(await details.getByRole('link', {name: 'Show recent logs'}).getAttribute('href'), '/repositories/1/pull-requests/4/logs');
+  assert.match(await page.locator('[data-failure]').innerText(), /GitHub didn't let Previa download your code/);
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+  // Retry says it is starting while the request is on its way, then shows the queued step.
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route('**/repositories/1/pull-requests/4/build', async route => { await held; await route.continue(); });
+  await page.getByRole('button', {name: 'Retry build', exact: true}).click();
+  const starting = page.getByRole('button', {name: 'Starting…', exact: true});
+  await starting.waitFor();
+  assert(await starting.isDisabled(), 'a starting build cannot be sent twice');
+  assert(await starting.locator('.spinner').isVisible());
+  release();
+  await page.waitForFunction(() => document.querySelector('.build-tracker .is-current')?.dataset.stage === 'queue');
+  await page.unroute('**/repositories/1/pull-requests/4/build');
+  assert.equal(await page.locator('[data-diagnosis]').count(), 0, 'a new request replaces the old explanation');
+});
+
+test('a running build follows its log to the current step, with a clock and the latest line', async () => {
+  await context.request.post(`${origin}/__fixture/logs/seed`);
+  await login();
+  await page.goto(`${origin}/repositories/1/pull-requests/6`);
+  const tracker = page.locator('[data-pr-status] .build-tracker');
+  // Output from the image build means the code is in and the image is building.
+  await page.waitForFunction(() => document.querySelector('.build-tracker .is-current')?.dataset.stage === 'image');
+  assert.deepEqual(await tracker.locator('.is-done').evaluateAll(steps => steps.map(step => step.dataset.stage)), ['queue', 'code']);
+  assert.equal(await tracker.locator('[data-progress-text]').innerText(), 'indented output');
+  await context.request.post(`${origin}/__fixture/logs/append`, {form: {text: 'Pulling the postgres:17 image.', system: '1'}});
+  await page.waitForFunction(() => document.querySelector('.build-tracker .is-current')?.dataset.stage === 'start');
+  assert.equal(await tracker.locator('[data-progress-text]').innerText(), 'Pulling the postgres:17 image.');
+  assert.match(await tracker.locator('.is-current .sr-only').innerText(), /in progress/);
+  const clock = page.locator('time[data-elapsed]');
+  const first = await clock.innerText();
+  assert.match(first, /^\d+m \d+s$/);
+  await page.waitForFunction(text => document.querySelector('time[data-elapsed]').textContent !== text, first);
+  assert(await page.getByRole('link', {name: 'Follow the build log', exact: true}).isVisible());
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+});
+
+test('failures need attention for a week, then stay on Builds quietly, and can be dismissed or undone', async () => {
+  await login();
+  // Overview: the recent failure is red and can be dismissed; older ones are counted apart, not in red.
+  await page.goto(`${origin}/__fixture/overview?state=busy`);
+  await page.waitForURL(`${origin}/dashboard`);
+  const kpi = page.locator('.ov-kpi', {hasText: 'Needs attention'});
+  assert.match(await kpi.innerText(), /1\s+failed build in the last 7 days/);
+  assert.equal(await kpi.getAttribute('href'), '/builds?failures=attention');
+  const older = page.locator('#ov-panel-builds .ov-row', {hasText: 'Fixture pull request 5'});
+  assert.match(await older.locator('.ov-col-status .badge').getAttribute('class'), /tone-neutral/);
+  assert.match(await older.locator('.ov-col-when').innerText(), /Over 7 days old/);
+  assert.match(await older.locator('.ov-col-reason').getAttribute('class'), /is-quiet/);
+  const recent = page.locator('#ov-panel-builds .ov-row', {hasText: 'Fixture pull request 4'});
+  await recent.locator('summary').click();
+  const dismiss = recent.locator('form.ov-row-dismiss');
+  assert.equal(await dismiss.getAttribute('action'), '/repositories/1/pull-requests/4/failure/dismiss');
+  assert.equal(await dismiss.locator('input[name="revision"]').inputValue(), '3');
+  assert.equal(await dismiss.locator('input[name="return"]').inputValue(), 'overview');
+  assert(await dismiss.getByRole('button', {name: 'Dismiss this failure'}).isVisible());
+  // Builds: filters, a quiet older row, Dismiss per row, and Undo after a dismissal.
+  await page.goto(`${origin}/builds?fixture=rows&failures=older`);
+  assert.equal(await page.locator('.activity-filters a[aria-current="page"]').innerText(), 'Older failures');
+  assert.equal(await page.locator('.activity-filters a', {hasText: 'Needs attention'}).getAttribute('href'), '/builds?failures=attention&page=1');
+  const oldRow = page.locator('.activity-table tr', {hasText: '#5'});
+  assert.match(await oldRow.locator('.badge').getAttribute('class'), /tone-neutral/);
+  assert.match(await oldRow.innerText(), /Over 7 days old/);
+  const rowDismiss = page.getByRole('button', {name: 'Dismiss the failure of fixture-owner/repository-1 #5'});
+  assert.equal(await rowDismiss.locator('xpath=ancestor::form').getAttribute('action'), '/repositories/1/pull-requests/5/failure/dismiss');
+  assert.equal(await rowDismiss.locator('xpath=ancestor::form').locator('input[name="failures"]').inputValue(), 'older');
+  await page.goto(`${origin}/builds?fixture=rows&dismissed=1-4`);
+  assert.match(await page.locator('.activity-notice').innerText(), /Failure dismissed/);
+  assert.equal(await page.locator('.activity-notice form').getAttribute('action'), '/repositories/1/pull-requests/4/failure/restore');
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({width, height: 844});
+    await assertNoOverflow();
+  }
+  // An empty filter says so and leads back to every build.
+  await page.goto(`${origin}/builds?failures=dismissed`);
+  assert.match(await page.locator('.activity-empty h2').innerText(), /Nothing dismissed/);
+});
+
+test('Previews show what is live with its link, Builds show attempts, and teardown confirms per row', async () => {
+  await login();
+  // The page's former address still works.
   await page.goto(`${origin}/environments?fixture=rows`);
-  const preview = page.getByRole('link', {name: 'Open preview'});
+  await page.waitForURL(url => url.pathname === '/previews' && url.searchParams.get('fixture') === 'rows');
+  assert.equal(await page.locator('h1').innerText(), 'Previews');
+  assert.equal(await page.locator('.app-sidebar a[href="/previews"]').getAttribute('aria-current'), 'page');
+  assert.match(await page.locator('.page-header-text p').innerText(), /What is live now/);
+  const preview = page.getByRole('link', {name: 'Open the preview of fixture-owner/repository-1 #3 in a new tab'});
   assert.equal(await preview.getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
+  assert.equal(await preview.getAttribute('target'), '_blank');
+  // Status is what reviewers care about: live, even while a newer build failed.
+  assert.deepEqual(await page.locator('.activity-table .pr-cell-state .badge').allInnerTexts(), ['Live', 'Live · update failed']);
+  assert.match(await page.locator('.activity-table').innerText(), /Newer build failed: Your app didn't become ready/);
+  // A row is not one big link: clicking it stays here; the title opens the pull request.
+  await page.locator('.activity-table tr', {hasText: '#3'}).locator('.pr-cell-sha').click();
+  assert.equal(new URL(page.url()).pathname, '/previews');
   assert.match(await page.locator('.activity-table').innerText(), /Earlier than the latest commit/);
-  assert.match(await page.locator('.activity-table').innerText(), /The app did not become ready/);
+  assert.match(await page.locator('.activity-table').innerText(), /Your app didn't become ready/);
+  assert.equal(await page.locator('.activity-table [title="The app did not become ready."]').count(), 1, 'the recorded sentence stays one hover away');
   for (const width of [320, 390, 768, 1440]) {
     await page.setViewportSize({width, height: 844});
     await assertNoOverflow();
@@ -545,8 +726,9 @@ test('Environments and Builds show addresses, waits and failures, and teardown c
   await page.getByRole('button', {name: 'Tear down the preview of fixture-owner/repository-1 #3'}).click();
   await page.waitForFunction(() => document.querySelector('#teardown-1-3').matches(':modal'));
   await page.locator('#teardown-1-3').getByRole('button', {name: 'Tear down preview', exact: true}).click();
-  await page.waitForURL(url => url.pathname === '/environments' && url.searchParams.get('page') === '1');
+  await page.waitForURL(url => url.pathname === '/previews' && url.searchParams.get('page') === '1');
   await page.goto(`${origin}/builds?fixture=rows`);
+  assert.match(await page.locator('.page-header-text p').innerText(), /latest attempt to build/);
   assert.match(await page.locator('.activity-table').innerText(), /Waiting for capacity/);
   // Row controls stay clickable above the row's whole-row link.
   await page.getByRole('link', {name: 'Build logs for fixture-owner/repository-1 #4'}).click();
@@ -561,7 +743,7 @@ test('repository pagination preserves filters and connection action is in the he
   const form = page.locator('form[action="/installations/start"]');
   assert.equal(await form.getAttribute('method'), 'post');
   assert(await form.locator('[name="csrf_token"]').inputValue());
-  const manage = page.getByRole('button', {name: 'Manage connections'});
+  const manage = page.getByRole('button', {name: 'Choose repositories on GitHub'});
   assert(await manage.isEnabled());
   assert.equal(await manage.evaluate(e => getComputedStyle(e).cursor), 'pointer');
   assert.equal(await page.locator('.workspace-page-heading form').count(), 1);
@@ -634,7 +816,7 @@ test('PR workspace live search pagination modal and build control', async () => 
     assert.equal(await page.locator('.app-header').evaluate(e=>Math.round(e.getBoundingClientRect().top)),0);
     assert(await page.locator('#pull-request-results .repository-table-scroll').evaluate(e=>e.clientHeight>60),'table must remain usable');
   }
-  await page.locator('.pr-table tbody a').first().click();
+  await page.locator('.pr-table tbody .pr-cell-text a').first().click();
   await page.waitForURL(url=>url.pathname.includes('/pull-requests/'));
   assert(await page.getByRole('button',{name:'Build latest commit'}).isEnabled());
   assert.match(await page.locator('.pr-detail-grid').innerText(),/No build requested yet/);
@@ -651,8 +833,8 @@ test('PR search and pagination work without JavaScript', async () => {
     await p.getByRole('button',{name:'Apply filters',exact:true}).click();
     assert.equal(await p.locator('.pr-table tbody tr').count(),1);
     assert.match(await p.locator('.pr-table').innerText(),/#25/);
-    await p.locator('.pr-table tbody a').click();assert.equal(new URL(p.url()).pathname,'/repositories/1/pull-requests/25');
-    await p.locator('.pr-directory-link').click();assert.equal(await p.locator('#pull-request-search').inputValue(),'preview 25');
+    await p.locator('.pr-table tbody .pr-cell-text a').click();assert.equal(new URL(p.url()).pathname,'/repositories/1/pull-requests/25');
+    await p.locator('[data-trail-parent]').click();assert.equal(await p.locator('#pull-request-search').inputValue(),'preview 25');
     await p.getByRole('switch',{name:'Automatic builds',exact:true}).click();
     assert(await p.locator('#build-policy').evaluate(e=>e.matches(':modal')));
     await p.locator('#build-policy').getByRole('button',{name:'Enable automatic',exact:true}).click();
@@ -713,12 +895,12 @@ test('unavailable repositories and empty PR states remain clear and cannot reque
  assert.equal(await page.locator('#repository-filters').count(),0);
 });
 
-test('expired sessions during panel selection navigate the whole document to sign-in',async()=>{
+test('expired sessions navigate through sign-in and return to the requested page',async()=>{
  await login();await page.goto(`${origin}/repositories/1`);
  const token=await page.locator('#logout-confirmation input[name=csrf_token]').inputValue();
  assert.equal((await context.request.post(`${origin}/auth/logout`,{form:{csrf_token:token},maxRedirects:0})).status(),303);
- await page.getByRole('link',{name:'Repositories',exact:true}).last().click();await page.waitForURL(`${origin}/dashboard`);
- assert.equal(await page.locator('#repository-detail').count(),0);assert.match(await page.locator('.dashboard-heading').innerText(),/design-review/);
+ await page.getByRole('link',{name:'Repositories',exact:true}).last().click();await page.waitForURL(`${origin}/repositories`);
+ assert.equal(await page.locator('#repository-detail').count(),0);await page.locator('#repository-filters').waitFor();
 });
 
 
@@ -734,17 +916,19 @@ test('dedicated repository and PR pages preserve filters through breadcrumbs and
  await page.locator('[data-repo-link="25"]').click();await page.waitForURL(url=>url.pathname==='/repositories/25');
  assert.equal(await page.locator('#repository-filters').count(),0);
  assert.equal(await page.evaluate(()=>document===window.directoryDocument),false);
- assert.match(await page.locator('.pr-breadcrumb').innerText(),/fixture-owner.*repository-25/s);
+ assert.match(await page.locator('.pr-panel-heading').innerText(),/fixture-owner[\s\S]*repository-25/);
+ assert.equal(await page.locator('[data-trail-parent]').innerText(),'Repositories','the header trail is the previous page and this one');
  const synced=page.locator('.pr-summary time');
  assert.equal(await synced.getAttribute('title'),'4 Oct 2026, 10:00 UTC');
  assert.notEqual(await synced.innerText(),'4 Oct 2026, 10:00 UTC','shown relative, with the exact time as its title');
  await page.locator('#pull-request-search').fill('preview 25');await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
- await page.locator('.pr-table tbody a').click();await page.waitForURL(url=>url.pathname==='/repositories/25/pull-requests/25');
- assert.match(await page.locator('.pr-breadcrumb [aria-current=page]').innerText(),/#25.*A careful change to preview 25/);
+ await page.locator('.pr-table tbody .pr-cell-text a').click();await page.waitForURL(url=>url.pathname==='/repositories/25/pull-requests/25');
+ assert.match(await page.locator('.app-breadcrumb-current').innerText(),/#25.*A careful change to preview 25/);
  assert.equal(await page.locator('#pull-request-search').count(),0);
- await page.locator('.pr-breadcrumb').getByRole('link',{name:'repository-25',exact:true}).click();await page.waitForURL(url=>url.pathname==='/repositories/25');
+ assert.equal(await page.locator('.app-breadcrumb a').count(),1,'only the previous page is a link');
+ await page.locator('.app-breadcrumb').getByRole('link',{name:'repository-25',exact:true}).click();await page.waitForURL(url=>url.pathname==='/repositories/25');
  assert.equal(await page.locator('#pull-request-search').inputValue(),'preview 25');assert.equal(await page.locator('.pr-table tbody tr').count(),1);
- await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories');
+ await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories');
  assert.equal(await page.locator('#repository-search').inputValue(),'fixture');assert.equal(new URL(page.url()).searchParams.get('page'),'2');
  await page.goBack();await page.waitForURL(url=>url.pathname==='/repositories/25');
  assert.equal(await page.locator('#pull-request-search').inputValue(),'preview 25');
@@ -770,14 +954,16 @@ test('full pages align desktop filters and remain usable on short mobile and tab
  assert(await page.getByRole('button',{name:'Build latest commit'}).isEnabled());
  const github=page.getByRole('link',{name:'View on GitHub',exact:true});
  assert(await github.locator('svg').count()>=1);assert.equal(await github.getAttribute('target'),'_blank');
- await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+ await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
 });
 
 test('failed PR searches preserve records and query bookmarks redirect to dedicated pages',async()=>{
  await login();await page.goto(`${origin}/repositories?repo_id=1&pr=7&pr_q=preview`);
  await page.waitForURL(url=>url.pathname==='/repositories/1/pull-requests/7');
  assert.match(await page.locator('.pr-detail-grid').innerText(),/No build requested yet/);
- await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+ await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+ // Intercept the owner's search after the initial live refetch settles.
+ await page.waitForFunction(()=>document.documentElement.dataset.liveState==='live' && !document.getElementById('repository-detail').hasAttribute('aria-busy'));
  await page.route('**/repositories/1?*',route=>route.fulfill({status:503,body:'fixture unavailable'}));
  await page.locator('#pull-request-search').fill('preview 25');
  await page.locator('#pull-request-filters [data-repository-feedback][data-error]').waitFor();
@@ -791,20 +977,43 @@ test('sync and automatic controls appear only on the PR list and breadcrumbs use
  await login();await page.goto(`${origin}/repositories/1?pr_q=preview&q=fixture&page=2`);
  await page.getByRole('switch',{name:'Automatic builds'}).click();await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
  await page.getByRole('button',{name:'Enable automatic',exact:true}).click();await readyPanel('1');
- assert.equal(await page.locator('.automatic-switch').getAttribute('aria-checked'),'true');
- assert.notEqual(await page.locator('.automatic-switch').evaluate(e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)');
+ const automatic=page.getByRole('switch',{name:'Automatic builds'});
+ assert.equal(await automatic.getAttribute('aria-checked'),'true');
+ assert.notEqual(await automatic.evaluate(e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)');
+ // Private previews confirm in their own modal; Escape changes nothing.
+ const privacy=page.getByRole('switch',{name:'Private previews'});
+ assert.equal(await privacy.getAttribute('aria-checked'),'false');
+ await privacy.click();await page.waitForFunction(()=>document.querySelector('#preview-access').matches(':modal'));
+ assert.equal(await page.locator('#preview-access-title').textContent(),'Make previews private?');
+ await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('#preview-access').open);
  await page.getByRole('button',{name:'Sync Pull Requests'}).click();await page.locator('.sync-state').filter({hasText:'Syncing'}).waitFor();
  await page.waitForFunction(()=>!document.querySelector('.pr-summary').textContent.includes('Syncing'));await readyPanel('1');
- await page.locator('.pr-table tbody a').first().click();await page.waitForURL(url=>url.pathname.includes('/pull-requests/'));
+ await page.locator('.pr-table tbody .pr-cell-text a').first().click();await page.waitForURL(url=>url.pathname.includes('/pull-requests/'));
  assert.equal(await page.getByRole('switch',{name:'Automatic builds'}).count(),0);
  assert.equal(await page.getByRole('button',{name:'Sync Pull Requests'}).count(),0);assert.equal(await page.locator('#build-policy').count(),0);
- const sizes=await page.locator('.pr-breadcrumb').evaluate(e=>Array.from(e.children).map(child=>getComputedStyle(child).fontSize));
+ const sizes=await page.locator('.app-breadcrumb').evaluate(e=>Array.from(e.children).map(child=>getComputedStyle(child).fontSize));
  assert(sizes.length>2 && sizes.every(size=>size===sizes[0]), 'breadcrumb text and separators share one size');
- await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
- assert.equal(await page.locator('.automatic-switch').getAttribute('aria-checked'),'true');
+ await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories/1');
+ assert.equal(await page.getByRole('switch',{name:'Automatic builds'}).getAttribute('aria-checked'),'true');
  assert.equal(new URL(page.url()).searchParams.get('page'),'2');
- await page.locator('.pr-directory-link').click();await page.waitForURL(url=>url.pathname==='/repositories');
+ await page.locator('[data-trail-parent]').click();await page.waitForURL(url=>url.pathname==='/repositories');
  assert.equal(await page.getByRole('switch',{name:'Automatic builds'}).count(),0);assert.equal(await page.getByRole('button',{name:'Sync Pull Requests'}).count(),0);
+});
+
+test('private previews explain missing auth and preserve the owner public toggle',async()=>{
+ await login();await page.goto(`${origin}/repositories/101`);
+ const privacy=page.getByRole('switch',{name:'Private previews'});
+ assert.equal(await privacy.isDisabled(),true);
+ assert.match(await page.locator('#private-preview-setup').textContent(),/PREVIEW_ACCESS_URL/);
+ assert.equal(await page.locator('#preview-access').count(),0);
+ await page.goto(`${origin}/repositories/103`);
+ assert.equal(await privacy.getAttribute('aria-checked'),'true');
+ assert.equal(await privacy.isDisabled(),false);
+ assert.match(await page.locator('#private-preview-setup').textContent(),/remain private/);
+ await privacy.click();await page.waitForFunction(()=>document.querySelector('#preview-access').matches(':modal'));
+ assert.equal(await page.locator('#preview-access-title').textContent(),'Make previews public?');
+ assert.equal(await page.getByRole('button',{name:'Make public',exact:true}).isEnabled(),true);
+ await page.keyboard.press('Escape');
 });
 
 test('small repository collections use compact cards with natural height and no pagination',async()=>{
@@ -814,8 +1023,9 @@ test('small repository collections use compact cards with natural height and no 
   assert.equal(await page.locator('.repository-row').count(),count);
   assert.equal(await page.getByRole('navigation',{name:'Repository pages'}).count(),0);
   assert.match(await page.locator('.repository-count').innerText(),new RegExp(`${count} repositor`));
-  assert.equal(await page.locator('.repository-select').first().locator(':scope > :not(.repository-card-facts) svg').count(),2);
-  assert.equal(await page.locator('.repository-select').first().locator('.repository-card-facts li').count(),4,'open PRs, live previews, build mode and last sync');
+  assert.equal(await page.locator('.repository-select').first().locator('svg').count(),2,'the repository icon and the arrow');
+  assert.deepEqual(await page.locator('.repository-select').first().locator('.repository-card-stats dt').allInnerTexts(),['Open pull requests','Live previews']);
+  assert.match(await page.locator('.repository-select').first().locator('.repository-card-foot').innerText(),/(Manual|Automatic) builds[\s\S]*(Synced|Not synced yet)/);
   assert.equal(await page.locator('.repository-card-name p').first().innerText(),'fixture-owner');
   assert.equal(await page.locator('.repository-card-name h2').first().innerText().then(v=>v.includes('fixture-owner/')),false);
   for(const width of [320,390,768,1440,1917]) {
@@ -826,7 +1036,7 @@ test('small repository collections use compact cards with natural height and no 
    assert(cards.every(c=>c.height<280), 'long repository names fit compact cards');
    if(count<=2 && width>700) {
     const catalog=await page.locator('.repository-catalog').boundingBox();
-    // Cards include a facts row (open PRs, previews, mode, sync); a 960px screen leaves room to spare.
+    // Cards include two stats and a footer (mode, sync); a 960px screen leaves room to spare.
     assert(catalog.height<560, 'small collections do not stretch toward the footer: '+catalog.height+' at '+width);
     assert(catalog.width<=1241,'catalog stays within the content column');
    }
@@ -846,9 +1056,9 @@ test('command palette filters destinations, navigates and restores focus',async(
  await page.keyboard.press('Control+k');await page.waitForFunction(()=>document.querySelector('#command-palette').open);
  await page.locator('#command-input').fill('environ');
  assert.equal(await page.locator('[data-command-item]:not([hidden])').count(),1);
- assert.match(await page.locator('[data-command-item][aria-selected=true]').innerText(),/Environments/);
- await page.keyboard.press('Enter');await page.waitForURL(`${origin}/environments`);
- assert.equal(await page.locator('h1').innerText(),'Environments');
+ assert.match(await page.locator('[data-command-item][aria-selected=true]').innerText(),/Previews/);
+ await page.keyboard.press('Enter');await page.waitForURL(`${origin}/previews`);
+ assert.equal(await page.locator('h1').innerText(),'Previews');
  await page.keyboard.press('Control+k');await page.waitForFunction(()=>document.querySelector('#command-palette').open);
  await page.locator('#command-input').fill('zzz-no-match');
  assert.equal(await page.locator('[data-command-empty]').isVisible(),true);
@@ -897,7 +1107,7 @@ test('repository secrets editor saves several at once, never shows values, and d
  await login();await page.goto(`${origin}/repositories/1`);await readyPanel('1');
  await page.locator('.repo-tabs').getByRole('link',{name:'Secrets',exact:true}).click();
  await page.waitForURL(`${origin}/repositories/1/secrets`);
- assert.match(await page.locator('.pr-breadcrumb').innerText(),/repository-1/);
+ assert.match(await page.locator('.app-breadcrumb').innerText(),/repository-1[\s\S]*Secrets/);
  assert.equal(await page.locator('.repo-tabs a[aria-current=page]').innerText(),'Secrets');
  const name=n=>page.getByRole('textbox',{name:`Name, line ${n}`,exact:true});
  const value=n=>page.getByRole('textbox',{name:`Value, line ${n}`,exact:true});
@@ -915,6 +1125,19 @@ test('repository secrets editor saves several at once, never shows values, and d
  assert.match(await page.locator('.connection-notice').innerText(),/Saved 2 secrets \(2 new, 0 replaced\)/);
  assert.match(await page.locator('.secrets-table').innerText(),/API_KEY[\s\S]*WEBHOOK_SECRET/);
  assert(!(await page.content()).includes('sk_test_never_shown_123'),'the value must never be rendered');
+ // Build credentials require a modal opt-in and can be revoked in place.
+ await page.getByRole('button',{name:'Let builds read API_KEY',exact:true}).click();
+ const allow=page.locator('#allow-build-secret-0');
+ assert(await allow.evaluate(e=>e.matches(':modal')));
+ assert.equal(await page.evaluate(()=>document.activeElement.textContent.trim()),'Cancel');
+ await page.keyboard.press('Escape');
+ assert.equal(await allow.evaluate(e=>e.open),false);
+ await page.getByRole('button',{name:'Let builds read API_KEY',exact:true}).click();
+ await allow.getByRole('button',{name:'Allow builds',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('build_on')==='API_KEY');
+ assert.match(await page.locator('.secrets-table tbody tr').first().innerText(),/Allowed/);
+ await page.getByRole('button',{name:'Stop giving API_KEY to builds',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('build_off')==='API_KEY');
  // Pasting NAME=value lines into a name splits them into lines.
  await name(1).evaluate(input=>{const data=new DataTransfer();data.setData('text/plain','API_KEY=replaced\nFEATURE_FLAG=on');input.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));});
  assert.equal(await name(2).inputValue(),'FEATURE_FLAG');
@@ -960,6 +1183,13 @@ test('the secrets editor works without JavaScript and pasted .env text is saved'
   await plain.locator('[data-secret-submit]').click();
   await plain.waitForURL(url=>url.searchParams.get('saved_count')==='2');
   assert.match(await plain.locator('.secrets-table').innerText(),/DB_URL[\s\S]*PRIVATE_KEY/);
+  await plain.getByRole('button',{name:'Let builds read DB_URL',exact:true}).click();
+  const allow=plain.locator('#allow-build-secret-0');
+  assert(await allow.evaluate(e=>e.matches(':modal')),'build opt-in is a native modal without JavaScript');
+  await allow.getByRole('button',{name:'Allow builds',exact:true}).click();
+  await plain.waitForURL(url=>url.searchParams.get('build_on')==='DB_URL');
+  await plain.getByRole('button',{name:'Stop giving DB_URL to builds',exact:true}).click();
+  await plain.waitForURL(url=>url.searchParams.get('build_off')==='DB_URL');
   await plain.locator('summary').filter({hasText:'Paste or import a .env file'}).click();
   await plain.locator('#secret-dotenv').fill('NOT A LINE');
   await plain.locator('[data-secret-submit]').click();
@@ -972,18 +1202,23 @@ test('build logs stream live, reset for a new attempt and render output as text'
  await context.request.post(`${origin}/__fixture/logs/seed`);
  await login();await page.goto(`${origin}/repositories/1/pull-requests/3`);
  await page.getByRole('link',{name:'Build logs',exact:true}).click();
+ await page.locator('.log-panel-inline .log-line').first().waitFor();
+ assert.equal(new URL(page.url()).pathname, '/repositories/1/pull-requests/3');
+ assert.equal(await page.locator('.log-panel-inline .log-line').count(),300);
+ await page.getByRole('link',{name:'View full build logs',exact:true}).click();
  await page.waitForURL(`${origin}/repositories/1/pull-requests/3/logs`);
- assert.match(await page.locator('.pr-breadcrumb').innerText(),/repository-1[\s\S]*#3[\s\S]*Build logs/);
+ assert.match(await page.locator('.app-breadcrumb').innerText(),/#3[\s\S]*Build logs/);
+ assert.match(await page.locator('.page-hero-kicker').innerText(),/repository-1[\s\S]*#3/);
  await page.waitForFunction(()=>document.querySelector('[data-log-connection]')?.dataset.state==='live');
  assert.equal(await page.locator('.log-line').count(),500,'the newest 500 lines render first');
  assert.equal(await page.evaluate(()=>window.__pwned),undefined,'script-looking output must stay inert');
  assert.equal(await page.locator('.log-lines script, .log-lines img').count(),0);
- assert.equal(await page.locator('#L519 .log-text').innerText(),'<img src=x onerror="window.__pwned = true">');
+ assert.equal(await page.locator('#L519 .log-text').innerText(),'2026-10-13T12:00:00.000Z <img src=x onerror="window.__pwned = true">');
  assert(await page.locator('.log-lines').evaluate(e=>e.scrollHeight-e.scrollTop-e.clientHeight<24),'the newest output is in view');
  let documents=0;page.on('request',request=>{if(request.resourceType()==='document') documents++;});
  await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'Step 3/3 : RUN <b>npm test</b>'}});
  await page.locator('#L521').waitFor();
- assert.equal(await page.locator('#L521 .log-text').innerText(),'Step 3/3 : RUN <b>npm test</b>');
+ assert.equal(await page.locator('#L521 .log-text').innerText(),'2026-10-13T12:00:00.000Z Step 3/3 : RUN <b>npm test</b>');
  assert(await page.locator('.log-lines').evaluate(e=>e.scrollHeight-e.scrollTop-e.clientHeight<24),'following keeps new output in view');
  // Scrolling up pauses following; new output must not pull the reader down.
  await page.locator('.log-lines').evaluate(e=>{e.scrollTop=0;e.dispatchEvent(new Event('scroll'));});
@@ -995,8 +1230,107 @@ test('build logs stream live, reset for a new attempt and render output as text'
  await context.request.post(`${origin}/__fixture/logs/restart`,{form:{text:'Retry attempt output'}});
  await page.locator('.log-line').filter({hasText:'Retry attempt output'}).waitFor();
  assert.equal(await page.locator('.log-line').count(),1);
- assert.equal(await page.locator('#L1 .log-text').innerText(),'Retry attempt output');
+ assert.equal(await page.locator('#L1 .log-text').innerText(),'2026-10-13T12:00:00.000Z Retry attempt output');
+ // The step tracker follows the runtime's own progress lines as they arrive.
+ assert.equal(await page.locator('.build-tracker .is-current').getAttribute('data-stage'),'image');
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'The preview is healthy. It is not routed yet.',system:'1'}});
+ await page.waitForFunction(()=>document.querySelector('.build-tracker .is-current')?.dataset.stage==='publish');
+ assert(await page.locator('.log-line.log-system').filter({hasText:'The preview is healthy'}).isVisible());
  assert.equal(documents,0,'live logs never reload the page');
+ for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
+});
+
+test('PR logs stay inline, filter both sources, copy dates and release closed streams',async()=>{
+ await context.request.post(`${origin}/__fixture/logs/seed`);
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'Previa downloaded source',system:'1'}});
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'Previa waiting for health',system:'1'}});
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'2026/10/12 15:22:34 [notice] native application date'}});
+ await context.addInitScript(()=>{
+  const Original=window.EventSource;window.__logStreams=0;
+  window.EventSource=class extends Original {
+   constructor(url,...args){super(url,...args);this.counted=String(url).includes('/logs/events');if(this.counted) window.__logStreams++;}
+   close(){if(this.counted){window.__logStreams--;this.counted=false;}super.close();}
+  };
+ });
+ await context.grantPermissions(['clipboard-read','clipboard-write'],{origin});
+ await login();await page.goto(`${origin}/repositories/1/pull-requests/3`);
+ await page.getByRole('link',{name:'Build logs',exact:true}).click();
+ const panel=page.locator('.log-panel-inline');
+ await panel.locator('.log-line').first().waitFor();
+ assert.equal(new URL(page.url()).pathname,'/repositories/1/pull-requests/3');
+ assert.equal(await panel.locator('.log-line').count(),300);
+ assert.equal(await panel.locator('.log-time, time[data-log-time]').count(),0);
+ assert.equal(await panel.locator('.log-timestamp').count(),300);
+ assert.equal(await panel.getByLabel('Log source',{exact:true}).inputValue(),'all');
+ assert.equal(await panel.locator('.log-line').last().locator('.log-text').innerText(),'2026/10/12 15:22:34 [notice] native application date');
+ const previaColour=await panel.locator('.log-system .log-text').first().evaluate(e=>getComputedStyle(e).color);
+ const appColour=await panel.locator('[data-log-source="application"] .log-text').first().evaluate(e=>getComputedStyle(e).color);
+ assert.notEqual(previaColour,appColour);
+ await panel.getByLabel('Log source',{exact:true}).selectOption('previa');
+ await panel.getByRole('button',{name:'Apply filters'}).click();
+ await page.waitForFunction(()=>document.querySelector('.log-panel-inline')?.dataset.logSource==='previa');
+ assert.equal(await panel.locator('.log-line').count(),2);
+ await panel.getByRole('button',{name:'Copy the lines shown'}).click();
+ await panel.locator('[data-copy-status]').filter({hasText:'Copied'}).waitFor();
+ assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'2026-10-13T12:00:00.000Z Previa downloaded source\n2026-10-13T12:00:00.000Z Previa waiting for health');
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'excluded application output'}});
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'Previa matched live notice',system:'1'}});
+ await panel.locator('.log-line').filter({hasText:'Previa matched live notice'}).waitFor();
+ assert.equal(await panel.locator('.log-line').count(),3);
+ // A repository refresh replaces the detail DOM, preserving this open viewer and filter.
+ await page.evaluate(()=>htmx.ajax('GET',location.pathname,{target:'#repository-detail',swap:'innerHTML'}));
+ await page.waitForFunction(()=>document.querySelector('.log-panel-inline')?.dataset.logSource==='previa' && document.querySelectorAll('.log-panel-inline .log-line').length===3);
+ assert(await page.locator('[data-pr-logs]').evaluate(e=>e.open));
+ await page.locator('[data-pr-logs] > summary').click();
+ await page.waitForFunction(()=>window.__logStreams===0);
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'Previa while closed',system:'1'}});
+ await page.getByRole('link',{name:'Build logs',exact:true}).click();
+ await panel.locator('.log-line').filter({hasText:'Previa while closed'}).waitFor();
+ assert.equal(await panel.locator('.log-line').count(),4);
+ await panel.getByLabel('Log source',{exact:true}).selectOption('application');
+ await panel.getByLabel('Find in logs').fill('native application');
+ await panel.getByRole('button',{name:'Apply filters'}).click();
+ await page.waitForFunction(()=>document.querySelector('.log-panel-inline')?.dataset.logSource==='application' && document.querySelectorAll('.log-panel-inline .log-line').length===1);
+ const full=panel.getByRole('link',{name:'View full build logs',exact:true});
+ assert.match(await full.getAttribute('href'),/source=application/);
+ await full.click();await page.waitForURL(url=>url.pathname.endsWith('/logs') && url.searchParams.get('q')==='native application');
+ assert.equal(await page.locator('.log-line').count(),1);
+ for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
+});
+
+test('recent log live tail keeps only 300 matching events and reports failed loads',async()=>{
+ await context.request.post(`${origin}/__fixture/logs/seed`);
+ await login();await page.goto(`${origin}/repositories/1/pull-requests/3`);
+ await page.getByRole('link',{name:'Build logs',exact:true}).click();
+ const panel=page.locator('.log-panel-inline');await panel.locator('.log-line').first().waitFor();
+ for(let i=0;i<12;i++) await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'bounded tail '+i}});
+ await panel.locator('.log-line').filter({hasText:'bounded tail 11'}).waitFor();
+ assert.equal(await panel.locator('.log-line').count(),300);
+ assert.equal(await panel.locator('.log-line').first().getAttribute('id'),'L233');
+ assert.equal(await panel.locator('[data-log-count]').innerText(),'300 events shown');
+ for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
+ if(process.env.UI_BROWSER_SCREENSHOTS==='1') await page.screenshot({path:path.join(__dirname,'artifacts','pr-recent-build-logs.png'),fullPage:true});
+ await page.route('**/logs/recent*',route=>route.fulfill({status:503,body:'Unavailable'}));
+ await panel.getByRole('link',{name:'Refresh',exact:true}).click();
+ await page.locator('#pr-recent-log-content').filter({hasText:'Recent logs are temporarily unavailable'}).waitFor();
+});
+
+test('App output retains live status, inline dates, copying and attempt resets',async()=>{
+ await context.request.post(`${origin}/__fixture/logs/restart`,{form:{text:'Application initial output'}});
+ await context.grantPermissions(['clipboard-read','clipboard-write'],{origin});
+ await login();await page.goto(`${origin}/repositories/1/pull-requests/3/output`);
+ await page.waitForFunction(()=>document.querySelector('[data-log-connection]')?.dataset.state==='live');
+ assert.equal(await page.locator('.log-time').count(),0);
+ assert.equal(await page.locator('#L1 .log-text').innerText(),'2026-10-13T12:00:00.000Z Application initial output');
+ await context.request.post(`${origin}/__fixture/logs/append`,{form:{text:'2026/10/12 15:22:34 [notice] application native date'}});
+ await page.locator('#L2').waitFor();
+ assert.equal(await page.locator('#L2 .log-text').innerText(),'2026/10/12 15:22:34 [notice] application native date');
+ await page.getByRole('button',{name:'Copy the lines shown'}).click();
+ await page.locator('[data-copy-status]').filter({hasText:'Copied'}).waitFor();
+ assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'2026-10-13T12:00:00.000Z Application initial output\n2026/10/12 15:22:34 [notice] application native date');
+ await context.request.post(`${origin}/__fixture/logs/restart`,{form:{text:'New app output'}});
+ await page.locator('.log-line').filter({hasText:'New app output'}).waitFor();
+ assert.equal(await page.locator('.log-line').count(),1);
  for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
 });
 
@@ -1006,7 +1340,9 @@ test('build logs paginate and stay readable without JavaScript',async()=>{
  try {
   const plain=await noJS.newPage();
   await plain.goto(`${origin}/auth/github/login`);await plain.waitForURL(`${origin}/dashboard`);
-  await plain.goto(`${origin}/repositories/1/pull-requests/3/logs`);
+  await plain.goto(`${origin}/repositories/1/pull-requests/3`);
+  await plain.getByRole('link',{name:'Build logs',exact:true}).click();
+  await plain.waitForURL(`${origin}/repositories/1/pull-requests/3/logs`);
   assert.equal(await plain.locator('.log-line').count(),500);
   assert.equal(await plain.locator('.log-line').first().getAttribute('id'),'L21');
   assert.equal(await plain.locator('[data-log-connection]').innerText(),'Live updates off');
@@ -1018,6 +1354,12 @@ test('build logs paginate and stay readable without JavaScript',async()=>{
   await plain.waitForURL(url=>url.searchParams.get('after')==='20');
   assert.equal(await plain.locator('.log-line').first().getAttribute('id'),'L21');
   await plain.getByRole('link',{name:'Refresh',exact:true}).waitFor();
+  await plain.getByLabel('Log source',{exact:true}).selectOption('application');
+  await plain.getByLabel('Find in logs').fill('step output line 50');
+  await plain.getByRole('button',{name:'Apply filters'}).click();
+  await plain.waitForURL(url=>url.searchParams.get('source')==='application');
+  assert.equal(await plain.locator('.log-line').count(),11);
+  assert.match(await plain.getByRole('link',{name:'Download',exact:true}).getAttribute('href'),/source=application/);
  } finally {await noJS.close();}
 });
 
@@ -1147,7 +1489,7 @@ test('the workspace loads within its page weight and stays usable on a slow netw
   assert(loadMs < 15000, `slow-network load took ${loadMs} ms`);
   await page.locator('#pull-request-search').fill('preview 25');
   await page.waitForFunction(() => document.querySelectorAll('.pr-table tbody tr').length === 1, null, {timeout: 15000});
-  await page.locator('.pr-table tbody a').first().click();
+  await page.locator('.pr-table tbody .pr-cell-text a').first().click();
   await page.waitForURL(url => url.pathname === '/repositories/1/pull-requests/25', {timeout: 15000});
   assert(await page.getByRole('button', {name: 'Build latest commit', exact: true}).isEnabled());
   console.log(`# slow network: ${Math.round(bytes / 1024)} KiB in ${loadMs} ms`);
@@ -1179,8 +1521,132 @@ test('every page passes basic accessibility checks', async () => {
   assert.deepEqual(await page.evaluate(audit), [], 'home');
   await login();
   for (const path of ['/dashboard', '/repositories', '/repositories/1', '/repositories/1/pull-requests/3', '/repositories/1/pull-requests/9',
-    '/repositories/1/secrets', '/repositories/1/outbound', '/repositories/1/pull-requests/3/logs', '/builds?fixture=rows', '/environments?fixture=rows', '/faq', '/developer-tools']) {
+    '/repositories/1/secrets', '/repositories/1/outbound', '/repositories/1/pull-requests/3/logs', '/builds?fixture=rows', '/previews?fixture=rows', '/faq', '/developer-tools']) {
     await page.goto(`${origin}${path}`);
     assert.deepEqual(await page.evaluate(audit), [], path);
   }
+});
+
+// What a Download button posts: the file's text from the editor. The server
+// echoes it back as an attachment (unit tested); browsers send CRLF breaks.
+function postedContent(request) {
+  return new URLSearchParams(request.postData()).get('content').replace(/\r\n/g, '\n');
+}
+// The kit is idle: no request in flight and the last swap has settled.
+const kitIdle = target => target.waitForFunction(() => !document.querySelector('.htmx-request, .htmx-settling, .htmx-added'));
+
+test('starter kits write both files for the chosen stack as editable tabs, and edits survive until reset',async()=>{
+ await login();
+ await page.locator('.app-sidebar a[href="/starter-kits"]').click();await page.waitForURL(`${origin}/starter-kits`);
+ assert.equal(await page.locator('.app-sidebar a[href="/starter-kits"]').getAttribute('aria-current'),'page');
+ assert.equal(await page.locator('h1').innerText(),'Starter kits');
+ const file=id=>page.locator(`#kit-code-${id}`);
+ const tab=name=>page.getByRole('tab',{name,exact:false});
+ const status=()=>page.locator('.kit-check').innerText();
+ // Two tabs; the Dockerfile shows first, highlighted, and the other panel is hidden.
+ assert.equal(await page.getByRole('tab').count(),2);
+ assert.equal(await tab('Dockerfile').getAttribute('aria-selected'),'true');
+ assert(await page.locator('#kit-panel-previewrc').isHidden());
+ assert.match(await file('dockerfile').inputValue(),/^FROM node:/m);
+ assert(await page.locator('#kit-panel-dockerfile .kit-highlight .tk-kw').count()>3,'the Dockerfile is highlighted');
+ assert.match(await status(),/Passes Previa's checks/);
+ await tab('.previewrc.yaml').click();
+ assert(await page.locator('#kit-panel-dockerfile').isHidden());
+ assert.match(await file('previewrc').inputValue(),/^port: 3000/m);
+ await tab('.previewrc.yaml').press('ArrowLeft');
+ assert.equal(await tab('Dockerfile').getAttribute('aria-selected'),'true');
+ await tab('Dockerfile').press('ArrowRight');
+ // Choosing a stack swaps in its defaults, keeps the open tab and the address shareable.
+ await page.locator('.kit-stack',{hasText:'Django'}).click();
+ await page.waitForURL(url=>url.searchParams.get('stack')==='django');
+ await page.waitForFunction(()=>/^port: 8000/m.test(document.querySelector('#kit-code-previewrc').value));
+ assert.equal(await tab('.previewrc.yaml').getAttribute('aria-selected'),'true','the open tab stays open');
+ assert.match(await page.locator('.kit-stack-about').innerText(),/Django · Full-stack · Python/);
+ await kitIdle(page);await page.getByRole('switch',{name:/^Redis/}).check();
+ await page.waitForFunction(()=>/^\s+redis:/m.test(document.querySelector('#kit-code-previewrc').value));
+ assert.match(await page.locator('#kit-status').innerText(),/updated/i);
+ await kitIdle(page);await page.getByRole('switch',{name:/^MySQL/}).check();
+ await page.waitForFunction(()=>/^\s+mysql: 8\.4/m.test(document.querySelector('#kit-code-previewrc').value));
+ assert.match(await status(),/Passes Previa's checks/);
+ // A custom worker command with shell syntax runs through sh -c; typing keeps focus.
+ await kitIdle(page);await page.getByRole('switch',{name:/^Background worker/}).check();
+ await page.locator('#kit-worker-with').waitFor();await kitIdle(page);
+ await page.locator('#kit-worker-with').selectOption('custom');
+ const custom=page.locator('#kit-worker-cmd');await custom.waitFor();await kitIdle(page);
+ await custom.fill('celery -A mysite worker && echo done');
+ await page.waitForFunction(()=>/"sh", "-c", "celery -A mysite worker && echo done"/.test(document.querySelector('#kit-code-previewrc').value));
+ assert(await page.locator('#kit-worker-cmd').evaluate(e=>e===document.activeElement),'typing keeps focus in the command');
+ // Out-of-range choices are reported, never written.
+ await kitIdle(page);await page.locator('.kit-advanced summary').click();
+ await page.locator('#kit-port').fill('70000');
+ await page.waitForFunction(()=>/1 to fix/.test(document.querySelector('.kit-check').innerText));
+ assert.match(await page.locator('.kit-problems').innerText(),/Port: Use a port/);
+ assert.match(await file('previewrc').inputValue(),/^port: 8000/m);
+ await page.locator('#kit-port').fill('8001');
+ await page.waitForFunction(()=>/^port: 8001/m.test(document.querySelector('#kit-code-previewrc').value));
+ // Editing marks the tab, is checked by the server as you type, and survives a change of choices.
+ await kitIdle(page);const yaml=file('previewrc');
+ await yaml.click();await page.keyboard.press('Control+End');
+ await page.keyboard.type('\nenv:\n  - FEATURE_FLAGS=preview');
+ assert(await page.locator('#kit-tab-previewrc[data-edited]').count()===1,'the tab shows the file was edited');
+ assert(await page.locator('#kit-panel-previewrc [data-kit-edited]').isVisible());
+ await page.waitForFunction(()=>/Your edited .previewrc.yaml passes/.test(document.querySelector('.kit-check').innerText));
+ await yaml.evaluate(e=>{e.value=e.value.replace('port: 8001','port: eighty');e.dispatchEvent(new Event('input',{bubbles:true}));});
+ await page.waitForFunction(()=>/1 to fix/.test(document.querySelector('.kit-check').innerText));
+ assert.match(await page.locator('.kit-problems').innerText(),/Line 4 port:/);
+ assert(await page.locator('#kit-panel-previewrc .kit-highlight').evaluate(e=>e.textContent.includes('FEATURE_FLAGS=preview')),'the highlight follows the text');
+ await kitIdle(page);await page.getByRole('switch',{name:/^PostgreSQL/}).check();
+ await page.waitForFunction(()=>document.querySelector('#kit-postgres').closest('.kit-row').classList.contains('is-on'));await kitIdle(page);
+ assert(await page.locator('#kit-tab-previewrc[data-edited]').count()===1,'the new editor keeps the edit');
+ assert.match(await yaml.inputValue(),/FEATURE_FLAGS=preview/,'edits survive a change of choices');
+ assert.doesNotMatch(await yaml.inputValue(),/postgres:/,'an edited file no longer follows the choices');
+ await page.waitForFunction(()=>/1 to fix/.test(document.querySelector('.kit-check').innerText));
+ // Copy and Download use the editor's text.
+ await context.grantPermissions(['clipboard-read','clipboard-write'],{origin});
+ await page.getByRole('button',{name:'Copy .previewrc.yaml',exact:true}).click();
+ assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),await yaml.inputValue());
+ const [request,download]=await Promise.all([page.waitForRequest(r=>r.url().endsWith('/starter-kits/download/previewrc')),page.waitForEvent('download'),page.getByRole('button',{name:'Download .previewrc.yaml',exact:true}).click()]);
+ assert.match(download.suggestedFilename(),/^\.?previewrc\.yaml$/,'browsers may drop the leading dot');
+ assert.equal(postedContent(request),await yaml.inputValue(),'Download sends the edited file');
+ // Reset brings back the newest generated file and its checks.
+ await page.locator('#kit-panel-previewrc [data-kit-reset]').click();
+ assert.match(await yaml.inputValue(),/postgres: 17/);
+ assert.equal(await page.locator('#kit-tab-previewrc[data-edited]').count(),0);
+ assert.match(await status(),/Passes Previa's checks/);
+ // The sticky editor stays beside the choices: it never covers the guidance below.
+ await page.setViewportSize({width:1280,height:640});
+ for(const card of await page.locator('.kit-guide .kit-card').all()){
+  await card.scrollIntoViewIfNeeded();
+  assert(await card.evaluate(e=>{const r=e.getBoundingClientRect();return e.contains(document.elementFromPoint(r.left+r.width/2,r.top+24));}),'a guidance card is covered by the editor');
+ }
+ await page.setViewportSize({width:1440,height:900});
+ // A static site needs no services, setup or worker.
+ await kitIdle(page);await page.locator('.kit-stack',{hasText:'React + Vite'}).click();
+ await page.waitForFunction(()=>document.querySelector('.kit-quiet'));
+ assert.doesNotMatch(await yaml.inputValue(),/services:|setup:|processes:/);
+ for(const width of [390,820]){await page.setViewportSize({width,height:900});await assertNoOverflow();}
+});
+
+test('starter kits work without JavaScript and need a signed-in user',async()=>{
+ assert.equal((await context.request.get(`${origin}/starter-kits`,{maxRedirects:0})).status(),303);
+ const noJS=await browser.newContext({javaScriptEnabled:false,acceptDownloads:true});
+ try {
+  const plain=await noJS.newPage();
+  await plain.goto(`${origin}/auth/github/login`);await plain.waitForURL(`${origin}/dashboard`);
+  await plain.goto(`${origin}/starter-kits`);
+  await plain.locator('.kit-stack',{hasText:'Ruby on Rails'}).click();
+  await plain.getByRole('switch',{name:/^PostgreSQL/}).check();
+  await plain.getByRole('button',{name:'Update files',exact:true}).click();
+  await plain.waitForURL(url=>url.searchParams.get('stack')==='rails');
+  // Without tabs, both files show as text areas, one under the other.
+  assert(await plain.locator('[data-kit-tabs]').isHidden());
+  assert(await plain.locator('#kit-code-dockerfile').isVisible()&&await plain.locator('#kit-code-previewrc').isVisible());
+  const config=await plain.locator('#kit-code-previewrc').inputValue();
+  assert.match(config,/^port: 3000/m);assert.match(config,/postgres: 17 /);assert.match(config,/health_check_path: \/up/);
+  assert.match(await plain.locator('#kit-code-dockerfile').inputValue(),/libpq-dev/);
+  await plain.locator('#kit-code-previewrc').fill(config.replace('resource_tier: standard','resource_tier: large'));
+  const [request,download]=await Promise.all([plain.waitForRequest(r=>r.url().endsWith('/starter-kits/download/previewrc')),plain.waitForEvent('download'),plain.getByRole('button',{name:'Download .previewrc.yaml',exact:true}).click()]);
+  assert.match(download.suggestedFilename(),/^\.?previewrc\.yaml$/,'browsers may drop the leading dot');
+  assert.match(postedContent(request),/resource_tier: large/,'Download posts the edited text');
+ } finally {await noJS.close();}
 });

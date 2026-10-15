@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,6 +57,40 @@ func (f *fakeLogs) Stream(_ context.Context, environmentID int64) (Stream, error
 	return s, nil
 }
 
+func (f *fakeLogs) SearchFrom(_ context.Context, _, epoch, from int64, limit int, filter Filter) ([]Line, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := []Line{}
+	if epoch != f.stream.Epoch {
+		return result, nil
+	}
+	for _, line := range f.lines {
+		if line.Sequence >= from && filter.Matches(line) {
+			result = append(result, line)
+			if len(result) == limit {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+func (f *fakeLogs) SearchBefore(_ context.Context, _, epoch, before int64, limit int, filter Filter) ([]Line, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := []Line{}
+	if epoch != f.stream.Epoch {
+		return result, nil
+	}
+	for _, line := range f.lines {
+		if line.Sequence < before && filter.Matches(line) {
+			result = append(result, line)
+		}
+	}
+	if len(result) > limit {
+		result = result[len(result)-limit:]
+	}
+	return result, nil
+}
 func (f *fakeLogs) LinesFrom(_ context.Context, _, epoch, from int64, limit int) ([]Line, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -75,6 +110,18 @@ func (f *fakeLogs) LinesBefore(_ context.Context, _, epoch, before int64, limit 
 	before = min(before, int64(len(f.lines)))
 	start := max(int(before)-limit, 0)
 	return append([]Line(nil), f.lines[start:before]...), nil
+}
+
+// Delete deletes a finished attempt's lines, as Store.Delete does.
+func (f *fakeLogs) Delete(_ context.Context, environmentID, epoch int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stream == nil || environmentID != f.stream.EnvironmentID || epoch != f.stream.Epoch || !f.stream.Finished || !f.stream.PrunedAt.IsZero() {
+		return ErrNotDeletable
+	}
+	f.lines = nil
+	f.stream.PrunedAt, f.stream.DeletedAt = time.Now(), time.Now()
+	return nil
 }
 
 func (f *fakeLogs) add(texts ...string) {
@@ -492,4 +539,141 @@ func TestLiveLogsDropClientsThatStopReading(t *testing.T) {
 	}
 	waitForStatus(http.StatusServiceUnavailable, 3*time.Second, "the stalled client never held a stream slot")
 	waitForStatus(http.StatusOK, 10*time.Second, "a stalled client kept its stream slot")
+}
+
+func post(t *testing.T, url string, user int64, form url.Values) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set(ownerHeader, strconv.FormatInt(user, 10))
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	body, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(body)
+}
+
+// The owner deletes a finished attempt's logs from its page; a running
+// attempt, a newer attempt or another user's logs cannot be deleted.
+func TestOwnerDeletesAFinishedAttemptsLogs(t *testing.T) {
+	logs := newFakeLogs(3)
+	server, _ := testServer(t, logs)
+	deleteURL := server.URL + testPRPath + "/delete"
+	if _, page := get(t, server.URL+testPRPath, testOwner); strings.Contains(page, "Delete logs") {
+		t.Fatal("a running attempt's logs must not offer deletion")
+	}
+	if status, _ := post(t, deleteURL, testOwner, url.Values{"epoch": {"4"}}); status != http.StatusConflict {
+		t.Fatalf("deleting a running attempt: %d", status)
+	}
+	logs.mu.Lock()
+	logs.stream.Finished, logs.target.Intent.State = true, "failed"
+	logs.mu.Unlock()
+	if _, page := get(t, server.URL+testPRPath, testOwner); !strings.Contains(page, "Delete logs") || !strings.Contains(page, `name="epoch" value="4"`) {
+		t.Fatal("a finished attempt offers Delete logs with its epoch")
+	}
+	if status, _ := post(t, deleteURL, 99, url.Values{"epoch": {"4"}}); status != http.StatusNotFound {
+		t.Fatalf("another user deleting: %d", status)
+	}
+	if status, _ := post(t, deleteURL, testOwner, url.Values{"epoch": {"3"}}); status != http.StatusConflict {
+		t.Fatalf("deleting an attempt the owner did not see: %d", status)
+	}
+	if status, _ := post(t, deleteURL, testOwner, url.Values{"epoch": {"x"}}); status != http.StatusBadRequest {
+		t.Fatalf("an invalid epoch: %d", status)
+	}
+	if status, _ := post(t, deleteURL, testOwner, url.Values{"epoch": {"4"}}); status != http.StatusSeeOther {
+		t.Fatalf("delete: %d", status)
+	}
+	_, page := get(t, server.URL+testPRPath, testOwner)
+	for _, want := range []string{"You deleted this attempt", "Logs deleted."} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("page after deletion lacks %q", want)
+		}
+	}
+	if strings.Contains(page, "Delete logs") || strings.Contains(page, "/logs/download") {
+		t.Fatal("deleted logs offer neither deletion nor a download")
+	}
+}
+
+// Received timestamps are inline and copyable; live events keep their protocol.
+func TestLogLinesCarryTheirTime(t *testing.T) {
+	logs := newFakeLogs(0)
+	at := time.Date(2026, 10, 12, 14, 3, 7, 250e6, time.UTC)
+	logs.lines = []Line{{Sequence: 0, Text: "step one", At: at}, {Sequence: 1, Text: "untimed"}}
+	server, _ := testServer(t, logs)
+	_, page := get(t, server.URL+testPRPath, testOwner)
+	if !strings.Contains(page, `>2026-10-12T14:03:07.250Z</span> step one`) || strings.Contains(page, `class="log-time"`) {
+		t.Fatal("the page shows each line's time")
+	}
+	_, download := get(t, server.URL+testPRPath+"/download", testOwner)
+	if download != "2026-10-12T14:03:07.250Z step one\nuntimed\n" {
+		t.Fatalf("download: %q", download)
+	}
+	if got := newLiveLine(logs.lines[0]); got.At != "2026-10-12T14:03:07.25Z" {
+		t.Fatalf("live line time: %q", got.At)
+	}
+}
+
+func TestRecentLogsAreBoundedFilteredAndOwnerScoped(t *testing.T) {
+	logs := newFakeLogs(1200)
+	for i := range logs.lines {
+		logs.lines[i].System = i%2 == 0
+		logs.lines[i].At = time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	}
+	server, _ := testServer(t, logs)
+	status, body := get(t, server.URL+testPRPath+"/recent?after=0", testOwner)
+	if status != 200 || strings.Count(body, `class="log-number"`) != 300 || !strings.Contains(body, `id="L901"`) || !strings.Contains(body, `id="L1200"`) || strings.Contains(body, "<html") {
+		t.Fatalf("recent view: status %d", status)
+	}
+	status, body = get(t, server.URL+testPRPath+"/recent?source=previa", testOwner)
+	if status != 200 || strings.Count(body, `class="log-number"`) != 300 || strings.Contains(body, `data-log-source="application"`) || !strings.Contains(body, `id="L601"`) || !strings.Contains(body, `data-log-cursor="4.1200"`) {
+		t.Fatal("source filtering or live cursor lost matching tail")
+	}
+	if !strings.Contains(body, `href="/repositories/10/pull-requests/7/logs?source=previa"`) {
+		t.Fatal("full page link loses source filter")
+	}
+	if status, _ := get(t, server.URL+testPRPath+"/recent", 99); status != 404 {
+		t.Fatalf("other owner: %d", status)
+	}
+	for _, query := range []string{"source=other", "q=" + strings.Repeat("x", 201), "q=%00"} {
+		if status, _ := get(t, server.URL+testPRPath+"/recent?"+query, testOwner); status != 400 {
+			t.Fatalf("invalid %s: %d", query, status)
+		}
+	}
+}
+
+func TestFilteredPaginationAndDownloadKeepSparseSequences(t *testing.T) {
+	logs := newFakeLogs(2500)
+	for i := range logs.lines {
+		logs.lines[i].System = i%2 == 0
+	}
+	logs.lines[2498].Text = "2026/10/12 15:22:34 [notice] native date"
+	server, _ := testServer(t, logs)
+	_, body := get(t, server.URL+testPRPath+"?source=previa", testOwner)
+	if !strings.Contains(body, `id="L1501"`) || !strings.Contains(body, `id="L2499"`) || !strings.Contains(body, `before=1500&amp;source=previa`) || !strings.Contains(body, `data-log-cursor="4.2500"`) {
+		t.Fatal("sparse matching tail or cursor incorrect")
+	}
+	_, body = get(t, server.URL+testPRPath+"?before=1500&source=previa", testOwner)
+	if !strings.Contains(body, `id="L501"`) || !strings.Contains(body, `after=1499&amp;source=previa`) || strings.Contains(body, "data-log-events") {
+		t.Fatal("filtered historical page incorrect")
+	}
+	_, body = get(t, server.URL+testPRPath+"?after=1499&source=previa", testOwner)
+	if !strings.Contains(body, `id="L1501"`) || !strings.Contains(body, `data-log-cursor="4.2500"`) {
+		t.Fatal("filtered forward page lost tail")
+	}
+	_, download := get(t, server.URL+testPRPath+"/download?source=previa", testOwner)
+	events := strings.Split(strings.TrimSuffix(download, "\n"), "\n")
+	if len(events) != 1250 || events[0] != "line 0" || events[1249] != "2026/10/12 15:22:34 [notice] native date" {
+		t.Fatalf("filtered download omitted sparse events or duplicated timestamps (%d)", len(events))
+	}
+	_, body = get(t, server.URL+testPRPath+"?source=application&q=LINE%202499", testOwner)
+	if strings.Count(body, `class="log-number"`) != 1 || !strings.Contains(body, `id="L2500"`) {
+		t.Fatal("case-insensitive literal search failed")
+	}
+	_, body = get(t, server.URL+testPRPath+"?q=%25", testOwner)
+	if strings.Count(body, `class="log-number"`) != 0 || !strings.Contains(body, "No log events match") {
+		t.Fatal("search treated percent as a wildcard")
+	}
 }

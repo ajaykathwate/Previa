@@ -31,24 +31,42 @@ WHERE environment_id = sqlc.arg(environment_id) AND epoch = sqlc.arg(epoch) AND 
 RETURNING (next_sequence - sqlc.arg(lines)::bigint)::bigint AS first_sequence;
 
 -- name: InsertLines :exec
-INSERT INTO build_logs (environment_id, epoch, sequence, kind, line)
-SELECT sqlc.arg(environment_id)::bigint, sqlc.arg(epoch)::bigint, sqlc.arg(first_sequence)::bigint + k.ord - 1, k.kind, t.line
+-- created_at is when the writer received each line, not the batch's time.
+INSERT INTO build_logs (environment_id, epoch, sequence, kind, line, created_at)
+SELECT sqlc.arg(environment_id)::bigint, sqlc.arg(epoch)::bigint, sqlc.arg(first_sequence)::bigint + k.ord - 1, k.kind, t.line, a.at
 FROM unnest(sqlc.arg(kinds)::text[]) WITH ORDINALITY AS k(kind, ord)
-JOIN unnest(sqlc.arg(texts)::text[]) WITH ORDINALITY AS t(line, ord) ON t.ord = k.ord;
+JOIN unnest(sqlc.arg(texts)::text[]) WITH ORDINALITY AS t(line, ord) ON t.ord = k.ord
+JOIN unnest(sqlc.arg(times)::timestamptz[]) WITH ORDINALITY AS a(at, ord) ON a.ord = k.ord;
 
 -- name: FinishStream :execrows
 UPDATE build_log_streams SET state = 'finished', finished_at = clock_timestamp(), updated_at = clock_timestamp()
 WHERE environment_id = $1 AND epoch = $2 AND state = 'open';
 
 -- name: LinesFrom :many
-SELECT sequence, kind, line FROM build_logs
+SELECT sequence, kind, line, created_at FROM build_logs
 WHERE environment_id = $1 AND epoch = $2 AND sequence >= $3
 ORDER BY sequence LIMIT $4;
 
 -- name: LinesBefore :many
-SELECT sequence, kind, line FROM build_logs
+SELECT sequence, kind, line, created_at FROM build_logs
 WHERE environment_id = $1 AND epoch = $2 AND sequence < $3
 ORDER BY sequence DESC LIMIT $4;
+
+-- name: SearchFrom :many
+SELECT sequence, kind, line, created_at FROM build_logs
+WHERE environment_id = sqlc.arg(environment_id) AND epoch = sqlc.arg(epoch)
+  AND sequence >= sqlc.arg(position)::bigint
+  AND (sqlc.arg(kind)::text = '' OR kind = sqlc.arg(kind)::text)
+  AND strpos(lower(line), lower(sqlc.arg(query)::text)) > 0
+ORDER BY sequence LIMIT sqlc.arg(max_lines)::int;
+
+-- name: SearchBefore :many
+SELECT sequence, kind, line, created_at FROM build_logs
+WHERE environment_id = sqlc.arg(environment_id) AND epoch = sqlc.arg(epoch)
+  AND sequence < sqlc.arg(position)::bigint
+  AND (sqlc.arg(kind)::text = '' OR kind = sqlc.arg(kind)::text)
+  AND strpos(lower(line), lower(sqlc.arg(query)::text)) > 0
+ORDER BY sequence DESC LIMIT sqlc.arg(max_lines)::int;
 
 -- name: ExpiredStreams :many
 SELECT environment_id, epoch FROM build_log_streams
@@ -63,3 +81,42 @@ DELETE FROM build_logs d WHERE d.id IN (
 -- name: MarkStreamPruned :execrows
 UPDATE build_log_streams SET pruned_at = clock_timestamp(), updated_at = clock_timestamp()
 WHERE environment_id = $1 AND epoch = $2 AND pruned_at IS NULL;
+
+-- name: LockDeletableStream :one
+-- An attempt's logs can be deleted once it finished, or once it can no
+-- longer write: it is not the PR's running request (a crashed attempt).
+SELECT s.epoch FROM build_log_streams s
+JOIN environments e ON e.id = s.environment_id
+LEFT JOIN build_intents b ON b.pull_request_id = e.pull_request_id
+WHERE s.environment_id = sqlc.arg(environment_id) AND s.epoch = sqlc.arg(epoch) AND s.pruned_at IS NULL
+  AND (s.state = 'finished' OR b.pull_request_id IS NULL OR b.state NOT IN ('pending', 'queued', 'running')
+       OR b.generation <> s.generation OR b.revision <> s.revision)
+FOR UPDATE OF s;
+
+-- name: DeleteAttemptLines :execrows
+DELETE FROM build_logs WHERE environment_id = $1 AND epoch = $2;
+
+-- name: MarkStreamDeleted :exec
+-- Finishing the stream fences any late writer of the attempt.
+UPDATE build_log_streams SET state = 'finished', finished_at = coalesce(finished_at, clock_timestamp()),
+    pruned_at = clock_timestamp(), deleted_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE environment_id = $1 AND epoch = $2;
+
+-- name: ReadFinishedStream :one
+-- A published attempt's finished stream, still readable, for a section
+-- added after the attempt (a live preview's crash).
+SELECT epoch, next_sequence, stored_bytes, truncated FROM build_log_streams
+WHERE environment_id = sqlc.arg(environment_id) AND generation = sqlc.arg(generation) AND revision = sqlc.arg(revision)
+  AND state = 'finished' AND pruned_at IS NULL;
+
+-- name: AllocateFinishedLines :one
+-- AllocateLines for a section added to a finished stream: a newer attempt
+-- (epoch), an expiry or a deletion fences it.
+UPDATE build_log_streams SET next_sequence = next_sequence + sqlc.arg(lines)::bigint,
+    stored_bytes = stored_bytes + sqlc.arg(bytes)::bigint,
+    truncated = truncated OR sqlc.arg(truncated)::boolean,
+    omitted_lines = omitted_lines + sqlc.arg(omitted)::bigint,
+    lost_lines = lost_lines + sqlc.arg(lost)::bigint,
+    updated_at = clock_timestamp()
+WHERE environment_id = sqlc.arg(environment_id) AND epoch = sqlc.arg(epoch) AND state = 'finished' AND pruned_at IS NULL
+RETURNING (next_sequence - sqlc.arg(lines)::bigint)::bigint AS first_sequence;

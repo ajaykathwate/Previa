@@ -85,8 +85,11 @@ func newIntentFixture(t *testing.T) *intentFixture {
 	applyIntentMigration(t, pool, "0007_intent_dispatch.sql")
 	applyIntentMigration(t, pool, "0008_pr_workspace.sql")
 	applyIntentMigration(t, pool, "0010_pr_mergeability.sql")
-	applyIntentMigration(t, pool, "0016_housekeeping.sql") // build requests that wait for capacity
-	if _, err := pool.Exec(ctx, "UPDATE pull_requests SET mergeable=true, mergeable_state='clean', build_status='open'"); err != nil {
+	applyIntentMigration(t, pool, "0014_routes_and_teardown.sql") // local teardown markers cleared by a new owner build
+	applyIntentMigration(t, pool, "0016_housekeeping.sql")        // build requests that wait for capacity
+	applyIntentMigration(t, pool, "0022_account_fairness.sql")    // waits that take turns between accounts
+	applyIntentMigration(t, pool, "0027_private_previews.sql")    // publication reads privacy under the repository lock
+	if _, err := pool.Exec(ctx, "UPDATE pull_requests SET mergeable=true, mergeable_state='clean', build_status='open', head_repo_id=501"); err != nil {
 		t.Fatal(err)
 	}
 	f.repo = env.NewIntentRepository(pool)
@@ -115,6 +118,32 @@ func applyIntentMigration(t *testing.T, pool *pgxpool.Pool, name string) {
 
 func (f *intentFixture) command(key string, revision int64, action env.IntentAction) env.IntentCommand {
 	return env.IntentCommand{UserID: f.owner, PullRequestID: f.prID, ExpectedRevision: revision, IdempotencyKey: key, Action: action}
+}
+
+func TestManualBuildClearsPreviousTeardownRequest(t *testing.T) {
+	f := newIntentFixture(t)
+	if _, err := f.pool.Exec(t.Context(), `UPDATE pull_requests SET teardown_requested_generation=generation,
+		teardown_completed_generation=generation, teardown_reason='requested' WHERE id=$1`, f.prID); err != nil {
+		t.Fatal(err)
+	}
+	check := func(want bool) {
+		t.Helper()
+		var requested bool
+		if err := f.pool.QueryRow(t.Context(), `SELECT teardown_requested_generation=generation
+			FROM pull_requests WHERE id=$1`, f.prID).Scan(&requested); err != nil {
+			t.Fatal(err)
+		}
+		if requested != want {
+			t.Fatalf("teardown requested=%v, want %v", requested, want)
+		}
+	}
+	// A rejected command must keep the existing teardown decision.
+	if _, err := f.service.Request(t.Context(), f.command("stale-rebuild-request", 99, env.BuildLatest)); !errors.Is(err, env.ErrIntentConflict) {
+		t.Fatalf("stale request: %v", err)
+	}
+	check(true)
+	f.request(t, "restore-after-teardown", 0, env.BuildLatest)
+	check(false)
 }
 
 func (f *intentFixture) request(t *testing.T, key string, revision int64, action env.IntentAction) env.IntentOutcome {
@@ -615,5 +644,31 @@ func TestIntentMigrationRollbackAndReapplyInIsolatedSchema(t *testing.T) {
 	view, err := f.service.Get(t.Context(), f.owner, f.prID)
 	if err != nil || view.HeadSHA != strings.Repeat("a", 40) || view.BuildMode != "manual" || view.Current != nil {
 		t.Fatal("rollback/reapply damaged existing repository/PR")
+	}
+}
+
+// Automatic mode never builds a fork's code by itself: the commit is
+// observed like Manual and waits for the owner, whose Build latest commit
+// approves it. A deleted head repository counts as a fork.
+func TestIntentAutomaticNeverBuildsAFork(t *testing.T) {
+	f := newIntentFixture(t)
+	if _, err := f.policy.Set(t.Context(), f.owner, f.repoID, installations.AutomaticBuilds); err != nil {
+		t.Fatal(err)
+	}
+	for _, untrusted := range []string{"head_repo_id=999, is_fork=true", "head_repo_id=NULL, is_fork=false"} {
+		if _, err := f.pool.Exec(t.Context(), "UPDATE pull_requests SET "+untrusted+", generation=generation+1 WHERE id=$1", f.prID); err != nil {
+			t.Fatal(err)
+		}
+		if result := f.observe(t, time.Now().Add(5*time.Minute)); result.Intent != nil {
+			t.Fatalf("Automatic mode authorized a fork's commit (%s)", untrusted)
+		}
+	}
+	view, err := f.service.Get(t.Context(), f.owner, f.prID)
+	if err != nil || view.Current != nil {
+		t.Fatal("a fork's observation left a build request")
+	}
+	approved := f.request(t, "owner-approves-fork", 0, env.BuildLatest)
+	if approved.Intent.Source != "manual" || approved.Intent.RequestedBy != f.owner {
+		t.Fatal("the owner's Build latest commit must still build a fork")
 	}
 }

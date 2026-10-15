@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status
+.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status river-ui
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -78,8 +78,8 @@ test-source:
 	$(GO) test -count=1 -v -run '^TestRealSourcePrepare$$' ./internal/source
 
 # Opt-in live PR feedback proof on an authorized disposable PR: writes one
-# living comment and check runs named "Previa preview (live proof)" to that PR,
-# then deletes the comment and completes open runs. Uses a throwaway schema.
+# uniquely marked comment and check runs named "Previa preview (live proof)",
+# then deletes only test comments and completes open runs. Uses a throwaway schema.
 test-reporting:
 	@$(load_run_env) if [ -z "$${TEST_GITHUB_INSTALLATION_ID:-}" ] || [ -z "$${TEST_GITHUB_REPO_ID:-}" ] || [ -z "$${TEST_GITHUB_PR_NUMBER:-}" ]; then \
 		echo 'Set TEST_GITHUB_INSTALLATION_ID, TEST_GITHUB_REPO_ID and TEST_GITHUB_PR_NUMBER to a disposable PR you may write to' >&2; exit 1; \
@@ -117,7 +117,7 @@ test-runtime: egress-image
 # swaps, removals, revocation and cleanup against a throwaway database schema.
 test-routing: egress-image
 	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
-	TEST_ROUTING=1 $(GO) test -count=1 -v -timeout 30m -run '^TestRealRouting' ./internal/routing
+	TEST_ROUTING=1 $(GO) test -count=1 -v -timeout 30m -run '^TestReal(Routing|PrivateRouting)' ./internal/routing
 
 # Opt-in real end-to-end proof of the worker's own pipeline on the local
 # Docker Engine: a fake GitHub (TLS), real BuildKit builds, hardened previews,
@@ -146,7 +146,14 @@ router-up:
 	[ "$$(stat -c %a "$$ACME_DNS_CREDENTIAL_FILE")" = 600 ] || { echo 'chmod 600 the DNS credential file first' >&2; exit 1; }; \
 	mkdir -p "$$ROUTER_DYNAMIC_DIR"; chmod 750 "$$ROUTER_DYNAMIC_DIR"; \
 	$(GO) run ./cmd/route-sync; \
-	docker compose -f deploy/traefik/compose.yml up -d
+	previa_router_name="$${ROUTER_CONTAINER:-previa-router}"; \
+	previa_router_networks=$$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}}' "$$previa_router_name" 2>/dev/null || true); \
+	docker compose -f deploy/traefik/compose.yml up -d; \
+	previa_current_networks=$$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}}' "$$previa_router_name"); \
+	for previa_network in $$previa_router_networks; do \
+		case " $$previa_current_networks " in *" $$previa_network "*) ;; \
+		*) docker network connect "$$previa_network" "$$previa_router_name" ;; esac; \
+	done
 
 # Writes the accepted route table from PostgreSQL to ROUTER_DYNAMIC_DIR (the
 # worker's route controller does this too once execution is wired).
@@ -228,6 +235,18 @@ river-migrate-up river-status:
 	: "$${DATABASE_URL:?DATABASE_URL must be set}"; \
 	export DATABASE_URL; \
 	$(GO) run ./cmd/river-migrate $(if $(filter river-status,$@),status,up)
+
+# River UI: a web view of every queued, running, retried and finished job, at
+# http://localhost:$RIVER_UI_PORT (default 8090), reading the app's DATABASE_URL
+# (environment, then the env file, then .env.example). It listens on loopback
+# only; Ctrl+C stops it. It can also cancel, retry and delete jobs.
+river-ui:
+	@$(load_run_env) \
+	if [ -z "$${DATABASE_URL:-}" ] && [ ! -f "$(ENV_FILE)" ]; then set -a; . ./.env.example; set +a; fi; \
+	: "$${DATABASE_URL:?DATABASE_URL must be set}"; \
+	previa_port="$${RIVER_UI_PORT:-8090}"; \
+	echo "River UI: http://localhost:$$previa_port (Ctrl+C stops it)"; \
+	RIVER_HOST=127.0.0.1 PORT="$$previa_port" exec $(TOOLS) riverui
 
 # Signs a local fixture in memory; secret is never a command argument.
 .PHONY: test-webhook

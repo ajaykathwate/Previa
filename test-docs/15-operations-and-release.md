@@ -124,4 +124,4 @@ credentials, metrics and alerts, CI, the release images and the production stack
   Type: Positive · Priority: P1 · Level: Acceptance  
   Steps: Follow [25 · Production deployment](../docs/25-production-deployment.md) on a real host with real domains, Let's Encrypt and a hosted GitHub App; back up to object storage and restore.  
   Expected: As documented in [26 · Release report](../docs/26-release-report.md).  
-  **Not run in this cycle:** needs infrastructure this environment does not have (see [README](README.md#not-run-in-this-cycle)).
+  **Not run on 2026-10-13:** needs a production host and object-storage backup destination. Local production Compose backup/restore passed; see the [current report](2026-10-13-regression-report.md#live-state-and-remaining-limits).

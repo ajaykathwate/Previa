@@ -52,6 +52,7 @@ type Repository struct {
 	reports    bool
 	lifetime   time.Duration
 	buildSlots int
+	accounts   AccountLimits
 }
 
 // WithLifetime makes each publication set the preview's expiry to now plus

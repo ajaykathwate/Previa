@@ -22,6 +22,9 @@ type Capabilities struct {
 	Reporting    bool `json:"reporting"`    // PR comments and check runs
 	Housekeeping bool `json:"housekeeping"` // recovery, expiry, cleanup, pruning
 	Discovery    bool `json:"discovery"`    // PR discovery and mergeability
+	// PrivatePreviews means the worker has an auth URL configured. A Reader
+	// requires it on every live routing worker; it is not a reachability check.
+	PrivatePreviews bool `json:"private_previews"`
 	// Paused: the operator stopped new builds (BUILDS_PAUSED). A paused
 	// worker reports Execution false; together, Paused is true only when no
 	// live worker can build.
@@ -29,6 +32,8 @@ type Capabilities struct {
 	// Services are the managed services an execution worker offers, one entry
 	// per kind ("postgres 17, 16"); none when no catalog is configured.
 	Services []string `json:"services,omitempty"`
+	// BuildTimeout is the overall operator deadline of execution workers.
+	BuildTimeout time.Duration `json:"build_timeout,omitempty"`
 }
 
 const (
@@ -69,10 +74,14 @@ func Start(ctx context.Context, pool *pgxpool.Pool, caps Capabilities, logger *s
 func (h *Heartbeat) beat(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if _, err := h.pool.Exec(ctx, `INSERT INTO worker_capabilities (worker_id, execution, routing, reporting, housekeeping, discovery, paused, services)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	duration := h.caps.BuildTimeout
+	if duration <= 0 {
+		duration = 12 * time.Minute
+	}
+	if _, err := h.pool.Exec(ctx, `INSERT INTO worker_capabilities (worker_id, execution, routing, reporting, housekeeping, discovery, paused, services, build_timeout_ns, private_previews)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (worker_id) DO UPDATE SET seen_at = clock_timestamp()`,
-		h.id, h.caps.Execution, h.caps.Routing, h.caps.Reporting, h.caps.Housekeeping, h.caps.Discovery, h.caps.Paused, append([]string{}, h.caps.Services...)); err != nil {
+		h.id, h.caps.Execution, h.caps.Routing, h.caps.Reporting, h.caps.Housekeeping, h.caps.Discovery, h.caps.Paused, append([]string{}, h.caps.Services...), int64(duration), h.caps.PrivatePreviews); err != nil {
 		return fmt.Errorf("record worker capabilities: %w", err)
 	}
 	if _, err := h.pool.Exec(ctx, "DELETE FROM worker_capabilities WHERE seen_at < clock_timestamp() - $1::bigint * interval '1 second'", int64(forget/time.Second)); err != nil {
@@ -140,11 +149,12 @@ func (r *Reader) Live(ctx context.Context) (Capabilities, int64, error) {
 	var live int64
 	err := r.pool.QueryRow(ctx, `SELECT COALESCE(bool_or(execution), false), COALESCE(bool_or(routing), false),
 		COALESCE(bool_or(reporting), false), COALESCE(bool_or(housekeeping), false), COALESCE(bool_or(discovery), false),
-		COALESCE(bool_or(paused), false), count(*),
+		COALESCE(bool_or(paused), false), count(*), COALESCE(min(build_timeout_ns) FILTER (WHERE execution), 0),
+		COALESCE(bool_and(private_previews) FILTER (WHERE routing), false),
 		COALESCE((SELECT array_agg(DISTINCT s ORDER BY s) FROM worker_capabilities w, unnest(w.services) s
 		          WHERE w.execution AND w.seen_at >= clock_timestamp() - $1::bigint * interval '1 second'), '{}')
 		FROM worker_capabilities WHERE seen_at >= clock_timestamp() - $1::bigint * interval '1 second'`, int64(Stale/time.Second)).
-		Scan(&c.Execution, &c.Routing, &c.Reporting, &c.Housekeeping, &c.Discovery, &c.Paused, &live, &c.Services)
+		Scan(&c.Execution, &c.Routing, &c.Reporting, &c.Housekeeping, &c.Discovery, &c.Paused, &live, &c.BuildTimeout, &c.PrivatePreviews, &c.Services)
 	if err != nil {
 		return Capabilities{}, 0, fmt.Errorf("read worker capabilities: %w", err)
 	}

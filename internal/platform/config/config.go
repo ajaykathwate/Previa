@@ -63,12 +63,32 @@ func LoadSecretsMaintenance() (SecretsMaintenanceConfig, error) {
 	return cfg, nil
 }
 
+// RetentionConfig is how long history is kept. The server states it on log
+// pages; the worker deletes what expired.
+type RetentionConfig struct {
+	// BuildLogRetentionDays keeps a finished attempt's logs this many days.
+	BuildLogRetentionDays int `envconfig:"BUILD_LOG_RETENTION_DAYS" default:"14"`
+}
+
+// BuildLogRetention is BuildLogRetentionDays as a duration.
+func (c RetentionConfig) BuildLogRetention() time.Duration {
+	return time.Duration(c.BuildLogRetentionDays) * 24 * time.Hour
+}
+
+func (c RetentionConfig) checkRetention() error {
+	if c.BuildLogRetentionDays < 1 || c.BuildLogRetentionDays > 90 {
+		return errors.New("BUILD_LOG_RETENTION_DAYS must be between 1 and 90")
+	}
+	return nil
+}
+
 // ServerConfig contains only settings used by the HTTP server.
 type ServerConfig struct {
 	SharedConfig
 	SecretsConfig
 	EnvironmentConfig
 	OutboundConfig
+	RetentionConfig
 	// InternalAddr serves /livez, /readyz and /metrics; never publish it.
 	InternalAddr string `envconfig:"INTERNAL_ADDR" default:"127.0.0.1:9090"`
 	// TrustedProxies may set X-Forwarded-For/-Host (the router, in production).
@@ -97,6 +117,7 @@ type WorkerConfig struct {
 	SecretsConfig
 	EnvironmentConfig
 	OutboundConfig
+	RetentionConfig
 	ExecutionConfig
 	RoutingConfig
 	HousekeepingConfig
@@ -104,6 +125,10 @@ type WorkerConfig struct {
 	GitHubAppPrivateKeyPath string        `envconfig:"GITHUB_APP_PRIVATE_KEY_PATH"`
 	MaxConcurrentBuilds     int           `envconfig:"MAX_CONCURRENT_BUILDS" required:"true"`
 	BuildTimeout            time.Duration `envconfig:"BUILD_TIMEOUT" default:"12m"`
+	// Fair sharing between accounts (installation owners) on one server;
+	// zero turns a limit off. Waiting builds always take turns by account.
+	BuildsPerAccount          int `envconfig:"BUILDS_PER_ACCOUNT" default:"0"`
+	BuildMinutesPerAccountDay int `envconfig:"BUILD_MINUTES_PER_ACCOUNT_DAY" default:"0"`
 	// InternalAddr serves /livez, /readyz and /metrics; never publish it.
 	InternalAddr string `envconfig:"WORKER_INTERNAL_ADDR" default:"127.0.0.1:9091"`
 	// BuildsPaused is the execution kill switch: no new build starts, while
@@ -169,8 +194,17 @@ func LoadWorker() (WorkerConfig, error) {
 	if cfg.BuildTimeout <= 0 || cfg.BuildTimeout > 24*time.Hour {
 		return WorkerConfig{}, errors.New("BUILD_TIMEOUT must be greater than zero and at most 24h")
 	}
+	if cfg.BuildsPerAccount < 0 || cfg.BuildsPerAccount > 1000 {
+		return WorkerConfig{}, errors.New("BUILDS_PER_ACCOUNT must be between 0 (no limit) and 1000")
+	}
+	if cfg.BuildMinutesPerAccountDay < 0 || cfg.BuildMinutesPerAccountDay > 1440 {
+		return WorkerConfig{}, errors.New("BUILD_MINUTES_PER_ACCOUNT_DAY must be between 0 (no limit) and 1440")
+	}
 	if err := cfg.ExecutionConfig.check(); err != nil {
 		return WorkerConfig{}, fmt.Errorf("validate execution configuration: %w", err)
+	}
+	if err := cfg.checkRetention(); err != nil {
+		return WorkerConfig{}, err
 	}
 	if err := cfg.HousekeepingConfig.check(); err != nil {
 		return WorkerConfig{}, fmt.Errorf("validate housekeeping configuration: %w", err)
@@ -209,6 +243,9 @@ func (c ServerConfig) validate() error {
 		return err
 	}
 	if err := c.check(); err != nil {
+		return err
+	}
+	if err := c.checkRetention(); err != nil {
 		return err
 	}
 	if err := checkListenAddress("INTERNAL_ADDR", c.InternalAddr); err != nil {

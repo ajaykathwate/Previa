@@ -88,7 +88,8 @@ Medium. The standard flow is well understood, but the security details (state pa
 4. The server exchanges the `code` plus client secret for an access token by calling GitHub server to server.
 5. It calls GitHub's user endpoint with that token to fetch the numeric GitHub user ID, username and avatar.
 6. It upserts the user row keyed by the numeric GitHub ID (never by username or email, which can change).
-7. It creates a session (feature 3) and redirects to the dashboard.
+7. It creates a session (feature 3) and returns to the requested local page
+   (including a PR's build logs); direct sign-in defaults to the dashboard.
 8. The OAuth access token is either discarded or stored encrypted; the MVP needs it only for the identity call, so discarding is preferred.
 
 ### Design decisions and edge cases
@@ -138,7 +139,7 @@ High. Two credential types, a private key to protect, short-lived tokens to mana
 - `ghinstallation` for minting installation tokens; `go-github` for API calls.
 
 ### Technical implementation
-1. From the dashboard, the user clicks "Install on a repo", which sends them to GitHub's installation page for the App.
+1. From the dashboard, the user clicks "Install on GitHub", which sends them to GitHub's installation page for the App.
 2. GitHub asks which repositories to grant access to and shows the permissions requested.
 3. On approval, GitHub redirects back with an installation ID and also sends an `installation` webhook.
 4. The server associates the installation ID with the logged-in user and records the selected repositories.
@@ -173,9 +174,10 @@ Low to Medium. Parsing is easy; useful validation and safe defaults take care.
 1. When a build job starts, fetch the config file from the repo at the exact PR head SHA (not the default branch), so config changes in a PR apply to that PR's preview.
 2. Parse one typed YAML mapping; reject unknown/duplicate keys, incorrect scalar types, explicit nulls, tags, anchors, aliases and merges so ambiguity does not silently change effective values.
 3. Validate: Dockerfile is a relative file path without traversal/absolute paths, port is an integer 1–65535, env is a list of unique `NAME=value` entries with well-formed names. Optional health path is a local absolute HTTP path without host/query/fragment/traversal. Resolve the named resource tier and clamp CPU/memory to platform ceilings with notices.
-4. Defaults apply to omitted fields: `Dockerfile`, port `3000`, empty env, no HTTP health path, and `resource_tier: standard`. Small = 0.5 vCPU/512 MiB, standard = 1 vCPU/1 GiB, large = 2 vCPU/2 GiB. Default platform ceilings are 2 vCPU/2 GiB per preview. No numeric resource YAML or build-policy field is supported.
-5. On validation failure, do not build; post a comment listing the specific problems.
-6. Store a hash of the effective config on the environment record to detect config changes between builds.
+4. Optional `context` selects a contained repository subfolder (default `.`); Dockerfile paths are relative to that context. The root config stays required. Optional `build_timeout` is a positive duration bounded by the operator's overall `BUILD_TIMEOUT`; it limits the image stage without extending the pipeline deadline. Both affect the effective config hash.
+5. Defaults apply to omitted fields: `Dockerfile`, port `3000`, empty env, no HTTP health path, and `resource_tier: standard`. Small = 0.5 vCPU/512 MiB, standard = 1 vCPU/1 GiB, large = 2 vCPU/2 GiB. Default platform ceilings are 2 vCPU/2 GiB per preview. No numeric resource YAML or build-policy field is supported.
+6. On validation failure, do not build; post a comment listing the specific problems.
+7. Store a hash of the effective config on the environment record to detect config changes between builds.
 
 ### Design decisions and edge cases
 - **Config from the PR's own commit** matches developer expectations and lets them iterate on the config inside the PR.
@@ -184,7 +186,8 @@ Low to Medium. Parsing is easy; useful validation and safe defaults take care.
 - **Approved contract:** the config file is required, but `{}` is valid when defaults match the app. Explicit invalid/null values do not become defaults. Omitting a health path does not require `/health`; runtime readiness still needs implementation.
 - **Safety:** 64 KiB config / 128 KiB API response envelope; 15-second overall fetch context plus existing HTTP timeouts. GitHub 404 is called missing-file only after the installation can verify the exact commit. Errors expose safe fields/codes/locations rather than YAML/env values or raw API bodies.
 - **Filesystem boundary:** validation is lexical; later source extraction/build adapters must reject unsafe symlinks and enforce actual repository containment.
-- **Backend previews (Prompt 13):** optional `services` (PostgreSQL/Redis versions from the worker's digest-pinned catalog, `PREVIEW_SERVICE_CATALOG`), `setup` (argv), `processes` (at most 3) and `docs_path`, validated against the catalog during preparation (`repoconfig.ParseFor` with a `Platform`) and part of the effective hash. See [11-backend-previews.md](docs/11-backend-previews.md).
+- **Backend previews (Prompt 13):** optional `services` (PostgreSQL/Redis/MySQL versions from the worker's digest-pinned catalog, `PREVIEW_SERVICE_CATALOG`), `setup` (argv), `processes` (at most 3) and `docs_path`, validated against the catalog during preparation (`repoconfig.ParseFor` with a `Platform`) and part of the effective hash. See [11-backend-previews.md](docs/11-backend-previews.md).
+- **Starter kits (an addition after Prompt 13):** a signed-in page writes a `Dockerfile` and `.previewrc.yaml` for one of nine stacks (or only the config, for an existing Dockerfile) from a few choices (services, migrations, a worker, docs link, port, health path, size). Files open in an editable two-tab editor; every generated config and every edit of `.previewrc.yaml` is checked with `repoconfig.ParseFor` against the versions the running worker offers, so the page never suggests a file a build would refuse. `internal/starterkits` owns generation and the handler; `web/pages/starterkits` the view. See [21-ui-architecture.md](docs/21-ui-architecture.md#starter-kits).
 - **Current implementation:** standalone `internal/repoconfig` fetch/parse/effective-limit/hash APIs and fixtures are implemented. Config hash excludes requested tier metadata and uses resolved resources plus sorted unique env entries. No database persistence, webhook/job/UI wiring, health execution or GitHub comments are implemented here. See [06-source-and-configuration.md](docs/06-source-and-configuration.md).
 
 ---
@@ -308,7 +311,7 @@ Medium.
 - **Archive over clone** because previews never need history.
 - **The token must never be baked into anything** that persists: not in the build context, not in image layers, not in logs.
 - **Fork PRs:** the head commit lives in the fork; the archive is fetched by SHA from the base repo's PR ref, and secrets are withheld (feature 16).
-- **Current implementation:** `internal/source` resolves the base repository by numeric ID, requests the tarball for the full SHA, and downloads it from an allowlisted HTTPS host with a credential-free client (the installation token never follows a redirect). The archive's git global header must declare exactly that SHA. Extraction allows only directories, regular files and in-tree relative symlinks (created after all files, writes through `os.Root`), with byte, entry, path and time limits, into a `0700` workspace whose marker makes crash leftovers discoverable. `.previewrc.yaml` and the Dockerfile are read from that same tree. Immediately before authorization or execution, `pullrequests.SyncService.VerifyUpstream` re-reads the PR (lifecycle, head SHA, fork identity, mergeability) under revision fences and fails closed. Both are tested, including a real GitHub check (`make test-source`); the Build action/worker connect them in a later phase. See [06-source-and-configuration.md](docs/06-source-and-configuration.md).
+- **Current implementation:** `internal/source` resolves the base repository by numeric ID, requests the tarball for the full SHA, and downloads it from an allowlisted HTTPS host with a credential-free client (the installation token never follows a redirect). The archive's git global header must declare exactly that SHA. Extraction allows only directories, regular files and in-tree relative symlinks (created after all files, writes through `os.Root`), with byte, entry, path and time limits, into a `0700` workspace whose marker makes crash leftovers discoverable. `.previewrc.yaml` and the Dockerfile are read from that same tree. `context` narrows the BuildKit filesystem boundary; the full archive safety limits still apply. Source preparation detects relevant `.gitmodules` manifests and LFS pointer files and refuses incomplete contexts before building; automatic fetching remains unavailable. Immediately before authorization or execution, `pullrequests.SyncService.VerifyUpstream` re-reads the PR (lifecycle, head SHA, fork identity, mergeability) under revision fences and fails closed. Both are tested, including a real GitHub check (`make test-source`); the Build action/worker connect them in a later phase. See [06-source-and-configuration.md](docs/06-source-and-configuration.md).
 
 ---
 
@@ -335,7 +338,7 @@ High. Build isolation, caching and resource control interact.
 - **Untrusted Dockerfiles:** a Dockerfile can run arbitrary commands at build time. The build runs with resource limits and no access to the control plane network.
 - **Cache poisoning risk:** cache is scoped per repo so one repo's builds cannot influence another's.
 - **Disk pressure:** builds are the main source of disk growth; pruning is handled by feature 15.
-- **Current implementation:** `internal/builds` runs every build in a fresh rootless BuildKit container (pinned `moby/buildkit:v0.33.1-rootless`) on its own internal Docker network whose only exit is `previa-egress`, a Go forward proxy (shared with previews) that reaches ports 80/443 on public addresses only and dials exactly the address it checked. The builder drops every capability except `SETUID`/`SETGID`, has a read-only root, no Docker socket or host paths, and CPU/memory/PID cgroup limits; disk usage is polled against a budget, free disk is checked before starting and the exported image is size-capped. Images are tagged `previa/pr-<id>:g<gen>-r<rev>-<sha12>` with identity labels; retries reuse a finished image; failures leave no builder or network. **Deviation (owner-approved):** the cache is scoped per base repository *and source repository*, not per repository, so fork builds cannot poison caches reused by trusted builds. Build-time secret mounts are not offered (secrets are runtime-only for the MVP). The worker does not call the builder yet. See [09-image-builds.md](docs/09-image-builds.md).
+- **Current implementation:** `internal/builds` runs every build in a fresh rootless BuildKit container (pinned `moby/buildkit:v0.33.1-rootless`) on its own internal Docker network whose only exit is `previa-egress`, a Go forward proxy (shared with previews) that reaches ports 80/443 on public addresses only and dials exactly the address it checked. The builder drops every capability except `SETUID`/`SETGID`, has a read-only root, no Docker socket or host paths, and CPU/memory/PID cgroup limits; disk usage is polled against a budget, free disk is checked before starting and the exported image is size-capped. Images are tagged `previa/pr-<id>:g<gen>-r<rev>-<sha12>` with identity labels; retries reuse a finished image; failures leave no builder or network. **Deviation (owner-approved):** the cache is scoped per base repository *and source repository*, not per repository, so fork builds cannot poison caches reused by trusted builds. Owners may opt individual encrypted repository secrets into trusted builds through BuildKit secret mounts; `REGISTRY_AUTH` is a pull-only registry login. Forks and unverified heads receive no providers, and output and returned failures are redacted. The worker calls the builder through the runtime pipeline. See [09-image-builds.md](docs/09-image-builds.md).
 
 ---
 
@@ -363,12 +366,13 @@ High. This is the security-critical feature.
 
 ### Design decisions and edge cases
 - **Docker socket is worker-only:** never mounted into a preview container.
-- **Fork PRs** run with no secrets and, if the owner enables approval, wait for a maintainer to approve before running.
+- **Fork PRs** run with no secrets and never build automatically: in an Automatic repository they wait until the owner clicks Build (implemented; [16-build-policy-and-intents.md](docs/16-build-policy-and-intents.md#behaviour-rules)).
 - **Crash loops:** a container that keeps restarting is stopped after a small number of restarts and marked failed.
 - **Noisy neighbours:** limits keep one preview from starving others; a per-repo cap on concurrent previews bounds total load.
 - **gVisor** raises the isolation bar substantially and is a low-cost upgrade path if kernel-level escape risk matters.
-- **Backend previews (Prompt 13):** a candidate may bring managed PostgreSQL/Redis (its own, per build revision, with generated credentials, on a per-PR internal services network with no egress or route, data on a size-capped tmpfs), a one-off setup container and up to three processes from the same image. Readiness runs services (protocol check), setup, processes, then the app; every container carries the candidate's key and is counted, inventoried and removed with the app's artifact through the existing cleanup contract. Owner-approved outbound connections reach external databases through the egress proxy, which identifies the repository by the preview's network; forks get none. See [11-backend-previews.md](docs/11-backend-previews.md).
-- **Current implementation:** `internal/runtime` implements `environments.Runtime`: it rechecks that the request is still current and accessible, builds through `internal/builds`, rechecks again, decides secrets (`secrets.Provider`; none for forks or unknown heads), and starts a candidate on the PR's own internal network `previa-pr-<id>`, shared only with the egress proxy and, once published, the router. Candidates run as UID 65532 when the image would run as root, with a read-only root and a bounded `/tmp` tmpfs (server-wide operator opt-outs only), no capabilities, `no-new-privileges`, IPv6 disabled, clamped tier CPU/memory, a PID limit, half CPU weight, a raised OOM score, capped logs and on-failure restarts (3, then a crash loop). Outbound traffic goes only through `previa-egress` (public addresses, ports 80/443). Readiness is probed from inside the egress container (HTTP 200-399 on `health_check_path`, else TCP), within `PREVIEW_STARTUP_TIMEOUT`. Admission keeps previews within 60% of Docker memory, 75% of CPUs and 10 per repository. Inventory and removal verify ownership labels, including the PR (`RemoveResource`, used by cleanup operations: graceful stop, then force; images never forced; idle networks); `Endpoint` re-checks a candidate right before it is routed. gVisor is optional via `PREVIEW_OCI_RUNTIME`. Maintainer approval for forks is not implemented (forks run without secrets). The worker does not dispatch it yet. See [10-preview-runtime.md](docs/10-preview-runtime.md).
+- **Backend previews (Prompt 13):** a candidate may bring managed PostgreSQL/Redis/MySQL (its own, per build revision, with generated credentials, on a per-PR internal services network with no egress or route, data on a size-capped tmpfs), a one-off setup container and up to three processes from the same image. Readiness runs services (protocol check), setup, processes, then the app; every container carries the candidate's key and is counted, inventoried and removed with the app's artifact through the existing cleanup contract. Owner-approved outbound connections reach external databases through the egress proxy, which identifies the repository by the preview's network; forks get none. See [11-backend-previews.md](docs/11-backend-previews.md).
+- **Current implementation:** `internal/runtime` implements `environments.Runtime`: it rechecks that the request is still current and accessible, builds through `internal/builds`, rechecks again, decides secrets (`secrets.Provider`; none for forks or unknown heads), and starts a candidate on the PR's own internal network `previa-pr-<id>`, shared only with the egress proxy and, once published, the router. Candidates run as UID 65532 when the image would run as root, with a read-only root and a bounded `/tmp` tmpfs (server-wide operator opt-outs only), no capabilities, `no-new-privileges`, IPv6 disabled, clamped tier CPU/memory, a PID limit, half CPU weight, a raised OOM score, capped logs and on-failure restarts (3, then a crash loop). Outbound traffic goes only through `previa-egress` (public addresses, ports 80/443). Readiness is probed from inside the egress container (HTTP 200-399 on `health_check_path`, else TCP), within `PREVIEW_STARTUP_TIMEOUT`. Admission keeps previews within 60% of Docker memory, 75% of CPUs and 10 per repository. Inventory and removal verify ownership labels, including the PR (`RemoveResource`, used by cleanup operations: graceful stop, then force; images never forced; idle networks); `Endpoint` re-checks a candidate right before it is routed. gVisor is optional via `PREVIEW_OCI_RUNTIME`. Docker keeps at most 2 × 5 MB of output per container. See [10-preview-runtime.md](docs/10-preview-runtime.md).
+- **After publication (an addition):** the worker follows Docker's `die` events and copies a live preview's last output into its build log when its app or a process stops (once per event, workers sharing a host included); reads the router's per-preview request counters every minute for "Last opened" (counts only, never request details); and, with `PREVIEW_IDLE_SLEEP`, stops an idle preview's app and processes while the router sends visitors to a public wake page, which starts it again (services keep running, so their data survives). Previews never sleep while visit counts cannot be read. Output read after startup is redacted from the container's `io.previa.redact-env` label (names of secret variables, never values). Per-account caps (`PREVIEW_MAX_PER_ACCOUNT`) join the per-repository one. Private previews (owner setting) put the router's forward authentication in front of a repository's previews: visitors sign in with GitHub and must be able to see the repository ([12-routing-and-https.md](docs/12-routing-and-https.md#private-previews)).
 
 ---
 
@@ -400,6 +404,7 @@ High. Correctness under churn and certificate handling are the hard parts.
 - **Origins:** the dashboard may not be the preview domain or below it; a separate registrable domain is recommended, and dashboard cookies are `__Host-` prefixed over HTTPS.
 - **Security headers and access:** MVP previews are public by URL obscurity (now real, through the random hostname part); optional access control (login required) is a documented upgrade.
 - **Current implementation:** `internal/routing` (controller, rendering, forward-only file, Traefik adapter, hostnames, unavailable page), the fence in `internal/environments`, `deploy/traefik/compose.yml` and `cmd/route-sync`, verified with real Traefik, Pebble-issued certificates and real previews by `make test-routing`. In production `deploy/production/compose.yml` runs the same router (still no Docker provider) with the dashboard's own route and a TLS-ALPN-01 certificate for it ([25-production-deployment.md](docs/25-production-deployment.md)). See [12-routing-and-https.md](docs/12-routing-and-https.md).
+- **Private-preview configuration:** enabling requires all live routing workers to advertise a configured authentication endpoint (migration 0029). Existing private routes deny access if an endpoint is missing; publication reports `private_preview_unconfigured` instead of waiting for convergence. Startup/recovery may refresh changed worker settings at the same table version, while older tables remain fenced out. An operation waiting for its durable backoff or another attempt's lease snoozes in River without spending an execution attempt.
 
 ---
 
@@ -428,7 +433,7 @@ Medium. Simple API calls, but rate limits, race conditions and idempotency matte
 - **Debouncing (changed from the original design):** no timer; collapsing queued reports and skipping unchanged content give the same effect, and the final state is always written.
 - **First report (owner decision):** once a PR has preview work, not on every observed PR.
 - **Rate limiting and permissions:** primary and secondary limits are retried after GitHub's own delay; 403/404 on the repository records `inaccessible` and writes nothing; a refused comment or check write is recorded and does not block the other.
-- **Current implementation:** `internal/reporting` (state, render, GitHub adapter, reporter) and `internal/environments/reports.go`, migration 0015, tested against PostgreSQL and a fake GitHub, with an opt-in live proof (`make test-reporting`, still to run on a real PR). The worker registers the reporter with builds; `make test-e2e` proves the comment and check runs through the whole pipeline. See [14-pr-feedback.md](docs/14-pr-feedback.md).
+- **Current implementation:** `internal/reporting` (state, render, GitHub adapter, reporter) and `internal/environments/reports.go`, migration 0015, tested against PostgreSQL and a fake GitHub, with an opt-in live proof (`make test-reporting`, verified on an authorized real PR on 2026-10-13). The proof uses a separate comment marker to preserve active preview feedback. The worker registers the reporter with builds; `make test-e2e` proves the comment and check runs through the whole pipeline. See [14-pr-feedback.md](docs/14-pr-feedback.md).
 
 ---
 
@@ -501,7 +506,7 @@ Medium.
 - **Never remove the replacement:** a late teardown after a reopen cannot remove the newer route (tombstone ordering) or its artifacts (reference checks).
 - **Missed webhook:** if the `closed` event is lost, the reconciler (feature 15) catches it by comparing with GitHub's actual PR state.
 - **Logs retention:** build logs may be kept for a short period after teardown for debugging, then deleted.
-- **Current implementation:** see [13-teardown-and-cleanup.md](docs/13-teardown-and-cleanup.md); verified with real Docker and Traefik by `make test-routing`. The worker registers the teardown, route, cleanup and sweep workers; the owner's **Tear down preview** (a CSRF-protected form in a confirmation dialog, on the PR page and per row on Environments) records a teardown with reason `requested` that supersedes unfinished work and runs when a worker does. `make test-e2e` proves it end to end.
+- **Current implementation:** see [13-teardown-and-cleanup.md](docs/13-teardown-and-cleanup.md); verified with real Docker and Traefik by `make test-routing`. The worker registers the teardown, route, cleanup and sweep workers; the owner's **Tear down preview** (a CSRF-protected form in a confirmation dialog, on the PR page and per row on Previews) records a teardown with reason `requested` that supersedes unfinished work and runs when a worker does. `make test-e2e` proves it end to end.
 
 ---
 
@@ -522,7 +527,7 @@ High. Reconciliation logic is subtle, and getting it wrong can delete live envir
    - Unreferenced objects older than the grace period: durable cleanup operations (containers, then images, then networks); objects of PRs the database no longer has are removed directly after verifying their labels.
    - An active preview whose container no longer exists: the environment is recorded as failed (`preview_missing`) without a deployed preview and the PR is reported; nothing is rebuilt without a new request.
 3. **PR reconciliation (every 15 minutes):** open PRs with live work are confirmed with GitHub through the fenced upstream verification, at most 10 per pass and each at most every 15 minutes; a recorded close leads to the usual teardown.
-4. **Recovery (every minute and at startup):** lost wake-ups for due, queued and running requests and for closed PRs awaiting teardown, lost operation wake-ups and expired leases, unstarted revocation teardowns, and route-file drift.
+4. **Recovery (every minute and at startup):** lost wake-ups for due, queued and running requests and for closed PRs awaiting teardown, lost operation wake-ups and expired leases, unstarted revocation teardowns, route-file drift, and router network attachments lost during container recreation (restored from accepted routes).
 5. **Prune job (hourly, and at once when a build waits for disk):** untagged images, source workspaces older than any build may run, caches of repositories that can no longer be built, then the oldest unused caches beyond `BUILD_CACHE_BUDGET` (half of it under disk pressure).
 6. **Capacity:** global build slots (`MAX_CONCURRENT_BUILDS`) counted atomically at admission; preview CPU, memory and per-repository limits checked under a PostgreSQL advisory lock until the candidate exists, counting the old active preview and the candidate during swaps and freeing capacity only when a container is removed; a disk check counting other running builds. A request that cannot run waits ("Waiting for capacity") and is retried with backoff instead of failing.
 7. All decisions are made from labels and database state, never from names alone.
@@ -534,6 +539,8 @@ High. Reconciliation logic is subtle, and getting it wrong can delete live envir
 - **Recovery never authorizes:** re-dispatched work passes the usual policy, deadline, generation and mergeability checks; an expired preview is never rebuilt by recovery.
 - **Disk exhaustion is the most likely real outage;** a build short of disk waits and triggers an emergency prune. Metrics and alerts are Prompt 11.
 - **Current implementation:** `internal/housekeeping` (recovery, resources, PR reconciliation, expiry, prune, River jobs) with capacity in `internal/environments` (build slots, waiting), `internal/runtime` (admission lock, headroom) and `internal/builds` (disk check, caches), migration 0016. The worker registers housekeeping with builds and applies build slots and preview headroom at admission. See [15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md).
+- **Retention of records (an addition):** an hourly job deletes webhook delivery records and finished operations after 30 days (keeping route operations that protect a live preview and failed cleanups), daily build-minute ledgers after 90 days, and closed or merged pull requests with everything recorded about them 90 days after closing, once their teardown finished and nothing is pending. Backups keep deleted rows until they expire. See [15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md#retention-of-records).
+- **Fair sharing (an addition):** optional per-account limits on running builds, daily build minutes and previews; waiting builds take turns by account, and a finished build wakes the next in turn. See [17-build-scheduling.md](docs/17-build-scheduling.md#fair-sharing-between-accounts).
 
 ---
 
@@ -560,6 +567,7 @@ High. Security-sensitive with subtle leakage paths.
 ### Design decisions and edge cases
 - **Not in the repo config file:** anything in the repo is visible to anyone with read access.
 - **Build-time vs run-time:** secrets are runtime by default; build-time use only through BuildKit secret mounts.
+- **Build permission:** migration 0028 defaults every secret's build permission to false. Owners allow or stop build use through a CSRF-protected modal flow; `Provider.ForBuild` decrypts only allowed secrets for verified same-repository heads, and the runtime rechecks trust before execution. `REGISTRY_AUTH` is reserved for pull authentication and excluded from Dockerfile mounts and runtime injection. Build output and returned failures redact credential values.
 - **Blast radius:** a preview-only credential (for example, a sandbox API key) should be recommended in docs; previews are not the place for production keys.
 - **Current implementation:** `internal/secrets` stores values as AES-256-GCM ciphertext with random nonces, authenticating repository, name and key version. Keys come from `SECRETS_ENCRYPTION_KEYS`/`SECRETS_ACTIVE_KEY_VERSION`; rotation uses an explicit, repeatable `make secrets-reencrypt` (not lazy re-encryption) and keeps old keys until it reports zero. Owners manage values on a repository Secrets tab (write-only, CSRF): several lines or pasted `.env` text are saved in one transaction, all or nothing, and deletion confirms in a modal for one name or the selected ones. At container creation the worker calls `Provider.ForContainer`: untrusted sources (forks, unknown heads) decrypt nothing; for trusted sources a stored secret overrides a same-named YAML entry. `Redactor` streams exact-value redaction across write boundaries; its limits are documented. The preview runtime injects them after a fresh access recheck. The worker's keyring is optional: without it, repositories without secrets build normally and a repository with secrets fails closed (`secrets_unavailable`). See [07-repository-secrets.md](docs/07-repository-secrets.md).
 
@@ -580,9 +588,18 @@ Medium.
 1. During builds and container startup, each output line is appended to the log table with a sequence number per environment.
 2. The logs page loads existing lines, then opens an SSE stream that pushes new lines as they arrive. Use `internal/platform/realtime`: the hub wakes the stream on a log notification and `realtime.SSE` frames lines whose ids are log sequence numbers.
 3. A reconnecting client resumes from the last sequence number it received, so nothing is duplicated or lost.
-4. The workspace has separate Overview, Repositories, Builds and Environments pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 records), search and Available/Unavailable/All access tabs (Available by default). Environments shows each preview's status, URL, deployed commit SHA (marked when earlier than the latest), expiry and a **Tear down** action confirmed in a modal; it shows the expiry rather than the age, because expiry is what an owner acts on. Builds shows queued and running work with latest and requested SHAs, wait and failure reasons and log links. Overview places the owner's open pull requests along the delivery pipeline (waiting, building, live, failed) with their shares and preview coverage, lists the newest build requests and previews (rows expand to their details) and shows which pipeline stages a running worker provides. Developer tools has its own local diagnostic page. An FAQ page, and the home page's How it works and FAQ sections, explain Previa as a conversation with it: static copy kept true to the current release, with examples labelled as examples.
+4. The workspace has separate Overview, Repositories, Builds and Previews pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 records), search and Available/Unavailable/All access tabs (Available by default). Environments shows each preview's status, URL, deployed commit SHA (marked when earlier than the latest), expiry and a **Tear down** action confirmed in a modal; it shows the expiry rather than the age, because expiry is what an owner acts on. Builds shows queued and running work with latest and requested SHAs, wait and failure reasons and log links. Overview places the owner's open pull requests along the delivery pipeline (waiting, building, live, failed) with their shares and preview coverage, lists the newest build requests and previews (rows expand to their details) and shows which pipeline stages a running worker provides. Developer tools has its own local diagnostic page. An FAQ page, and the home page's How it works and FAQ sections, explain Previa as a conversation with it: static copy kept true to the current release, with examples labelled as examples.
 5. Dashboard actions check both authentication and ownership: a user can only see and act on environments in installations they own.
 6. Log retention has a size and age cap; old logs are pruned.
+7. Build log viewers share a presentation component (`web/components/logviewer`):
+   full inline copyable timestamps, source colors and owner-scoped source/literal
+   text filters. The full page shows 500 matching events with sequence pagination;
+   PR detail links open a recent panel under the main card, bounded to 300 matching
+   events, with a full-page link. Closing releases SSE; PR invalidation refreshes
+   preserve the open panel and filters. No-JavaScript links retain full-page access.
+   Existing `kind=system/output` identifies Previa/application output. Filters do
+   not alter storage, build progress or the SSE replay protocol.
+
 
 The accepted manual build policy requires owner-controlled per-repository mode and
 an explicit per-PR build action. Repositories lists sources at `/repositories`;
@@ -613,8 +630,9 @@ detail shows the latest observed, requested and deployed commits separately, wit
 the owner's Build latest commit, Build now (an Automatic request still waiting),
 Retry build (after a failure) or Rebuild preview (after a success), and Tear down
 preview. Builds is
-a cross-repository view of current/latest work; Environments is a deployment view,
-not another name for Builds. Do not add historical build storage implicitly.
+a cross-repository view of current/latest work; Previews (formerly Environments) is
+the view of what is live, not another name for Builds: it lists only environments
+that serve a commit. Do not add historical build storage implicitly.
 Initial discovery and detail screens are implemented by a feature-owned
 `internal/pullrequests` package: explicit refresh, bounded River pagination,
 source/access snapshot fences and owned Templ pages. The build action checks
@@ -627,7 +645,9 @@ revision-checked request with its wake-up. There is no bulk build. See the
 - **Server-rendered UI** keeps everything in one binary and one deploy.
 - **Authorization at the query level:** every query is scoped by the user's installations, not just by an ID from the URL.
 - **Log volume:** large or runaway output is truncated with a marker to protect the database.
-- **Current implementation:** `internal/buildlogs` keeps one attempt per environment in `build_log_streams`; build admission bumps its `epoch` and clears old lines in one transaction, and the runtime receives an `environments.Attempt`. Writers strip control sequences, redact, split and cap lines (5 MiB / 20,000 lines / 8 KiB), batch in the background and append only while their epoch is current; storage loss is counted and marked, never silent. `/repositories/{id}/pull-requests/{n}/logs` shows the newest lines with paging, Copy and a whole-attempt Download (`…/logs/download`), the PR page quotes a failed attempt's last lines (`Store.Tail`, fenced by generation and revision), and its SSE stream uses `<epoch>.<next>` ids with `reset` for a replacement attempt, per-user and global stream caps and per-frame write timeouts. A River job deletes logs 14 days after an attempt finishes. See [08-build-logs.md](docs/08-build-logs.md).
+- **Failures that need attention (an addition after Prompt 13):** the dashboard highlights a failed build request only for 7 days after it finished (`pullrequests.FailureAttentionWindow`); older ones stay listed on Builds without highlighting and are counted apart. An owner can dismiss one failed attempt (`build_failure_dismissals`, keyed by user and pull request, holding the request revision), which stops it counting until the pull request fails again; Undo deletes it. Builds filters failures the same way the Overview counts them. See [21-ui-architecture.md](docs/21-ui-architecture.md#overview).
+- **Current implementation:** `internal/buildlogs` keeps one attempt per environment in `build_log_streams`; build admission bumps its `epoch` and clears old lines in one transaction, and the runtime receives an `environments.Attempt`. Writers strip control sequences, redact, split and cap lines (5 MiB / 20,000 lines / 8 KiB), batch in the background and append only while their epoch is current; storage loss is counted and marked, never silent. `/repositories/{id}/pull-requests/{n}/logs` shows the newest lines with paging, Copy and a whole-attempt Download (`…/logs/download`), the PR page quotes a failed attempt's last lines (`Store.Tail`, fenced by generation and revision), and its SSE stream uses `<epoch>.<next>` ids with `reset` for a replacement attempt, per-user and global stream caps and per-frame write timeouts. A River job deletes logs `BUILD_LOG_RETENTION_DAYS` (14 by default, at most 90) after an attempt finishes, and the owner can delete a finished attempt's logs from its page (confirmed in a modal). Every line keeps the time it was received (local time on the page, a UTC prefix in downloads). See [08-build-logs.md](docs/08-build-logs.md).
+- **Live app output (an addition):** a separate owner-only page follows a running preview's own output while someone watches it, redacted like the startup log and kept only while watched (at most 1,000 lines); no request is ever logged by Previa itself. See [08-build-logs.md](docs/08-build-logs.md#live-app-output).
 
 ---
 
@@ -700,7 +720,7 @@ sequenceDiagram
     GH-->>Web: GitHub user ID and username
     Web->>DB: Upsert user
     Web->>Owner: Create session and show dashboard
-    Owner->>Web: Click Install on a repo
+    Owner->>Web: Click Install on GitHub
     Web->>GH: Redirect to GitHub App install page
     Owner->>GH: Choose repos and approve
     GH->>Web: Installation webhook and redirect with installation ID
@@ -900,12 +920,15 @@ preview/
 │   │   ├── capacity.go  health.go  # admission; wait-until-healthy, observed health
 │   │   ├── docker.go  inventory.go # preview network, output, inventory
 │   │   ├── endpoint.go  cleanup.go # pre-publication check; owner-verified cleanup executor
+│   │   ├── crashes.go              # stops of live previews -> build log; following app output
+│   │   ├── sleep.go                # stop and start an idle preview's app and processes
 │   │
 │   ├── routing/                    # FEATURE: hostnames, route controller, Traefik
 │   │   ├── hostname.go             # stable DNS-safe labels per lifetime environment
 │   │   ├── controller.go           # verify, accept behind the fence, publish, confirm
 │   │   ├── render.go  file.go      # Traefik dynamic config; forward-only route table file
 │   │   ├── traefik.go              # router network attachment, loopback API via Docker
+│   │   ├── visits.go               # preview request counts from the router's metrics
 │   │   ├── unavailable.go          # page for unknown and removed preview hosts
 │   │
 │   ├── reporting/                  # FEATURE: PR comments + check runs
@@ -917,6 +940,11 @@ preview/
 │   ├── outbound/                   # FEATURE: owner-approved outbound connections
 │   │   ├── handler.go  outbound.go  repository.go  jobs.go
 │   │
+│   ├── starterkits/                # FEATURE: Dockerfile + .previewrc.yaml per stack
+│   │   ├── kits.go  stacks.go      # choices, the ten stacks, Dockerfile writers
+│   │   ├── config.go  view.go      # commented .previewrc.yaml; page view model
+│   │   ├── handler.go              # page, download and check of an edited file
+│   │
 │   ├── secrets/                    # FEATURE: encrypted env vars for previewed apps
 │   │   ├── handler.go  service.go  repository.go
 │   │   ├── crypto.go               # AES-GCM, key versioning
@@ -926,14 +954,29 @@ preview/
 │   │   ├── queries.sql  dbgen/
 │   │
 │   ├── buildlogs/                  # FEATURE: store + stream logs
-│   │   ├── store.go                # fenced appends, owner-scoped reads, finish, prune
-│   │   ├── writer.go  lines.go     # redacting, bounded, batched writer per attempt
+│   │   ├── store.go                # fenced appends, owner-scoped reads, finish, delete, prune
+│   │   ├── writer.go               # redacting, bounded, batched, timed writer per attempt
 │   │   ├── handler.go  status.go   # log page and SSE endpoint
 │   │   ├── prune.go                # retention River job
 │   │   ├── queries.sql  dbgen/
 │   │
+│   ├── appoutput/                  # FEATURE: a running preview's output, live, kept only while watched
+│   │   ├── handler.go  store.go    # page and SSE stream; watches and transient lines
+│   │   ├── follow.go               # worker job that follows Docker's output, redacted
+│   │   ├── queries.sql  dbgen/
+│   │
+│   ├── idle/                       # FEATURE: idle previews sleep, the next visit wakes them
+│   │   ├── idle.go                 # sleep pass and wake job (worker)
+│   │   ├── handler.go              # public wake page the router sends visitors to
+│   │   ├── queries.sql  dbgen/
+│   │
+│   ├── previewaccess/              # FEATURE: private previews (GitHub sign-in, repo access)
+│   │   ├── handler.go  sign.go     # router check, sign-in step, owner setting; signed cookie
+│   │   ├── queries.sql  dbgen/
+│   │
 │   ├── housekeeping/               # FEATURE: expiry, reconcile, prune
 │   │   ├── expiry.go
+│   │   ├── records.go              # retention: deliveries, operations, closed PRs
 │   │   ├── recovery.go             # lost wake-ups, leases, sweeps, route drift
 │   │   ├── resources.go            # Docker objects vs DB (with environments.Reconciler)
 │   │   ├── pullrequests.go         # live PRs vs actual GitHub PR state
@@ -951,7 +994,8 @@ preview/
 │       ├── workers/                # capability heartbeat: what running workers can do
 │       ├── githubapp/              # App JWT, installation-token cache, API client
 │       ├── dockerx/                # Docker client construction, shared labels
-│       ├── egress/                 # egress proxy, readiness probe, its container
+│       ├── egress/                 # egress proxy, build metering, readiness probe, its container
+│       ├── textlines/              # control-sequence stripping and bounded line splitting
 │       ├── httpx/                  # router, ingress controls, security headers, internal listener
 │       ├── logging/                # slog setup, correlation, secret redaction
 │       ├── metrics/                # Prometheus registry + bounded shared metrics
@@ -968,11 +1012,16 @@ preview/
 │   │   ├── auth/                   # error pages; logout uses a shared modal
 │   │   ├── home/                   # public landing page, How it works conversation
 │   │   ├── faq/                    # FAQ conversation (home page and workspace page)
+│   │   ├── opensource/             # Open Source Tests: apps Previa is tested against (public)
 │   │   ├── dashboard/              # overview, session, developer tools
 │   │   ├── repositories/           # paginated, filtered repository page
 │   │   ├── pullrequests/           # repository/PR detail and shared current activity
 │   │   ├── builds/                 # Builds page, current-attempt build log page
-│   │   ├── environments/           # Environments page (shares the activity view)
+│   │   ├── appoutput/              # live app output page
+│   │   ├── idle/                   # "Waking the preview…" page (public)
+│   │   ├── previewaccess/          # "You can't open this preview" (private previews)
+│   │   ├── previews/               # Previews page (shares the activity view)
+│   │   ├── starterkits/            # Starter kits: choices beside a two-tab editor
 │   │   └── routing/                # "preview not found or expired" (public)
 │   ├── components/                 # local, reusable UI; no backend imports
 │   ├── styles/                     # Tailwind entry CSS and theme tokens

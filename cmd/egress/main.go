@@ -7,11 +7,15 @@
 //	previa-egress allow -state DIR -address IP [-dest host:port]... [-ports 5432,6379|none]
 //	previa-egress sync -state DIR [-network IP=host:port[,host:port]]... [-ports 5432,6379|none]
 //	previa-egress stats -state DIR
+//	previa-egress meter -network IP -start [-hosts host,.domain]
+//	previa-egress meter -network IP -end
 //
 // serve also forwards raw TCP, on the ports the worker last recorded (-ports),
 // to the destinations it approved per preview network (allow, sync). probe
 // exits 0 when the target is ready, 1 when it is not (printing why) and 2 for
-// invalid arguments.
+// invalid arguments. meter asks the running proxy, over loopback, to count a
+// build network's traffic (optionally limited to hosts) and, at -end, prints
+// the totals as JSON.
 package main
 
 import (
@@ -46,6 +50,8 @@ func main() {
 			os.Exit(syncAllow(args[1:]))
 		case "stats":
 			os.Exit(stats(args[1:]))
+		case "meter":
+			os.Exit(meter(args[1:]))
 		}
 	}
 	if len(args) > 0 && args[0] == "serve" {
@@ -180,6 +186,45 @@ func stats(args []string) int {
 		return 1
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(counters); err != nil {
+		return 1
+	}
+	return 0
+}
+
+// meter starts or ends metering of one build network.
+func meter(args []string) int {
+	flags := flag.NewFlagSet("meter", flag.ContinueOnError)
+	address := flags.String("network", "", "the egress container's IPv4 address on the build network")
+	start := flags.Bool("start", false, "start metering, replacing an earlier registration")
+	end := flags.Bool("end", false, "print the totals as JSON and stop metering")
+	hosts := flags.String("hosts", "", "with -start: the only hosts the network may reach, comma-separated (.domain matches subdomains)")
+	if err := flags.Parse(args); err != nil || *start == *end {
+		return 2
+	}
+	network, err := netip.ParseAddr(*address)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "meter: -network must be an IP address")
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if *start {
+		var list []string
+		if *hosts != "" {
+			list = strings.Split(*hosts, ",")
+		}
+		if err := egress.StartMeter(ctx, network, list); err != nil {
+			fmt.Fprintln(os.Stderr, "meter:", err)
+			return 1
+		}
+		return 0
+	}
+	usage, err := egress.EndMeter(ctx, network)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "meter:", err)
+		return 1
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(usage); err != nil {
 		return 1
 	}
 	return 0

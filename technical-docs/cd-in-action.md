@@ -117,14 +117,15 @@ A pushed tag matching this pattern requests the Release workflow. A local
 | --- | --- |
 | Push `v0.2.0` | Yes |
 | Push `v0.2.0-rc.1` | Matches the pattern; GoReleaser handles prerelease status |
-| Push another commit to `main` | No |
+| Push a commit to `master`, `main` or another branch | No |
 | Open/update a PR | No |
 | Publish the draft release page | No new run; there is no `release: published` trigger |
 | Select a manual workflow dispatch | Not available in this YAML; no `workflow_dispatch` |
 
 The pattern is a glob, not complete semantic-version validation. Use a new,
-valid version and let packaging validate it. There is no restriction in this
-block saying the tag must point to `main` or a commit that passed CI.
+valid version and let packaging validate it. The `binaries` job refuses a tag
+whose commit is not on `master` ([4.2](#42-checkout-with-history)); nothing checks
+that the commit passed CI, so tag only a commit whose `master` run is green.
 
 ### 3.3 Default permissions and Go selection
 
@@ -189,6 +190,19 @@ needed by release versioning/changelog tooling. The CI checkout is shallow by
 default, whereas this binary release checkout explicitly requests history.
 `persist-credentials: false` avoids leaving checkout credentials in Git config.
 [Checkout inputs](https://github.com/actions/checkout/tree/v4).
+
+```yaml
+- name: Release only commits on master
+  run: |
+    git merge-base --is-ancestor "$GITHUB_SHA" origin/master || {
+      echo "::error::$GITHUB_REF_NAME points to a commit that is not on master; tag a commit on master."
+      exit 1
+    }
+```
+
+The full history also lets this step check that the tagged commit is on `master`,
+the release branch. A tag on any other commit fails here, before GoReleaser runs,
+and the images job (which needs this job) never starts.
 
 ### 4.3 Install Go and the SBOM tool
 
@@ -662,14 +676,14 @@ is consumed by these publication jobs. `GITHUB_TOKEN` is supplied automatically.
 On your workstation with a reviewed clean checkout:
 
 ```sh
-git switch main
-git pull --ff-only origin main
+git switch master
+git pull --ff-only origin master
 git status
 git rev-parse HEAD
 ```
 
-Confirm the exact commit passed CI/staging. A PR run may have tested a temporary
-merge SHA; inspect the final candidate's `main` run. Review migration/rollback
+Confirm the exact commit passed CI/staging. A PR run tested a temporary merge
+SHA; inspect the merge's own `master` run. Review migration/rollback
 compatibility and the smoke-test coverage in
 [CI in action](ci-in-action.md#75-production-stack-smoke-test).
 

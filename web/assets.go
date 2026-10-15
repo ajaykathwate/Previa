@@ -4,14 +4,23 @@ package web
 import (
 	"embed"
 	"net/http"
+	"strings"
 )
 
 //go:embed static
 var assets embed.FS
 
-// StaticHandler serves embedded assets beneath /static/.
+// StaticHandler serves embedded assets beneath /static/, with byte ranges
+// for video. Go's built-in type table has no .mp4, and the production image
+// has no system table, so the type is set here.
 func StaticHandler() http.Handler {
-	return http.FileServer(http.FS(assets))
+	files := http.FileServer(http.FS(assets))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".mp4") {
+			w.Header().Set("Content-Type", "video/mp4")
+		}
+		files.ServeHTTP(w, r)
+	})
 }
 
 // FaviconHandler answers /favicon.ico, which browsers and tools request

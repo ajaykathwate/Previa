@@ -372,7 +372,9 @@
       if (lastID) url.searchParams.set('since', lastID);
       source = new EventSource(url);
       const remember = (event) => { if (event.lastEventId) lastID = event.lastEventId; };
-      source.addEventListener('ready', (event) => { remember(event); failures = 0; setState('live'); });
+      // Refetch on connection too: a build may change between the page GET
+      // and subscribing, or while this tab releases its hidden connection.
+      source.addEventListener('ready', (event) => { remember(event); failures = 0; setState('live'); request(); });
       for (const name of ['change', 'resync']) {
         source.addEventListener(name, (event) => { remember(event); failures = 0; setState('live'); request(); });
       }
@@ -394,7 +396,7 @@
     window.addEventListener('pageshow', (event) => { if (event.persisted && !source && !document.hidden) connect(); });
     // Deferred refreshes run once the user finishes filtering or confirming.
     document.addEventListener('close', (event) => {
-      if (event.target.id === 'build-policy' && livePending) setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
+      if (event.target.matches?.('dialog[data-confirmation-dialog]') && livePending) setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
     }, true);
     document.addEventListener('focusout', (event) => {
       const form = event.target.closest?.('#pull-request-filters');
@@ -404,124 +406,337 @@
     if (!document.hidden) connect(); else setState('paused');
   }
 
+  // The home page film: a large play button over the poster. Playback starts
+  // only when the visitor asks; at the end the poster returns. Without
+  // JavaScript the native controls play it.
+  function initFilm() {
+    document.querySelectorAll('[data-film]').forEach((film) => {
+      const video = film.querySelector('[data-film-video]');
+      const play = film.querySelector('[data-film-play]');
+      if (!video || !play) return;
+      // The native controls return once it plays, so there is one play button at a time.
+      const idle = () => { film.classList.remove('is-playing'); video.controls = false; play.hidden = false; };
+      idle();
+      play.addEventListener('click', () => { video.play().catch(() => {}); video.focus({preventScroll: true}); });
+      video.addEventListener('play', () => { film.classList.add('is-playing'); video.controls = true; });
+      video.addEventListener('ended', () => { idle(); video.load(); });
+    });
+  }
+
+  // Build tracker: the runtime's own progress lines (system lines) say which
+  // step a build has reached; any other line is the image build's output.
+  // Same rules as DetectStage in web/pages/pullrequests/progress.go.
+  const stageMarks = /^(Pulling the |Waiting up to |Running the setup command|The setup command finished|Starting the process |The image runs as root)/;
+  const lineStage = (line, reached) => {
+    const text = line.text.trim();
+    if (!line.system) return reached === 1 ? 2 : -1;
+    if (text.startsWith('Preparing commit ') || text.startsWith('Source preparation failed: ')) return 1;
+    if (text.startsWith('The preview is healthy')) return 4;
+    if (stageMarks.test(text) || text.includes('approved outbound connection') || text.includes(' is ready at ')) return 3;
+    return -1;
+  };
+  const stageStatus = {done: '(done)', current: '(in progress)', failed: '(failed here)', pending: '(not started)'};
+
+  // trackBuild drives one rendered tracker from lines and state labels. It
+  // starts from the server's rendering, so it only ever moves forward.
+  function trackBuild(tracker) {
+    const steps = [...tracker.querySelectorAll('[data-stage]')];
+    const now = tracker.querySelector('[data-progress-line]');
+    const nowText = tracker.querySelector('[data-progress-text]');
+    let reached = steps.findIndex((step) => step.matches('.is-current, .is-failed'));
+    let output = false;
+    const paint = (at, state) => steps.forEach((step, i) => {
+      const next = i < at ? 'done' : i === at ? state : 'pending';
+      if (step.classList.contains('is-' + next)) return;
+      step.className = 'tracker-step is-' + next;
+      const label = step.querySelector('.sr-only');
+      if (label) label.textContent = stageStatus[next];
+    });
+    const at = () => (output && reached < 2 ? 2 : reached);
+    return {
+      lines(lines) {
+        let latest = '';
+        for (const line of lines) {
+          output = output || !line.system;
+          reached = Math.max(reached, lineStage(line, reached));
+          if (line.text.trim()) latest = line.text.trim();
+        }
+        if (!tracker.classList.contains('is-active')) return;
+        if (at() >= 0) paint(at(), 'current');
+        if (latest && now && nowText) { nowText.textContent = latest; now.hidden = false; }
+      },
+      reset() { reached = -1; output = false; },
+      state(label) {
+        const active = label === 'Running' || label === 'Queued' || label === 'Waiting';
+        tracker.classList.toggle('is-active', active);
+        tracker.classList.toggle('is-failed', label === 'Failed');
+        if (now && !active) now.hidden = true;
+        if (label === 'Queued' || label === 'Waiting') paint(0, 'current');
+        else if (label === 'Running') paint(Math.max(at(), 1), 'current');
+        else if (label === 'Failed') paint(Math.max(at(), 1), 'failed');
+        else if (label === 'Succeeded') paint(steps.length, 'done');
+      },
+    };
+  }
+
+  // On a pull request whose build is in flight, the tracker follows the
+  // attempt's log stream to name the exact step. Live panel refreshes replace
+  // the tracker, so each render gets its own stream; a stream that cannot
+  // open (limit reached, logs unavailable) leaves the server's rendering.
+  function initBuildProgress() {
+    if (!('EventSource' in window)) return;
+    let source = null;
+    let element = null;
+    const stop = () => { source?.close(); source = null; };
+    const start = () => {
+      const tracker = document.querySelector('[data-build-progress][data-progress-events]');
+      if (tracker === element && source) return;
+      stop();
+      element = tracker;
+      if (!tracker || document.hidden) return;
+      const progress = trackBuild(tracker);
+      source = new EventSource(new URL(tracker.dataset.progressEvents, window.location.href));
+      source.addEventListener('reset', progress.reset);
+      source.addEventListener('lines', (event) => progress.lines(JSON.parse(event.data).lines));
+      source.addEventListener('error', () => { if (source?.readyState === EventSource.CLOSED) source = null; });
+    };
+    document.addEventListener('htmx:afterSettle', start);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else start(); });
+    window.addEventListener('pagehide', stop);
+    window.addEventListener('pageshow', (event) => { if (event.persisted) start(); });
+    start();
+  }
+
+  // Elapsed clocks (time[data-elapsed]) count up from their datetime.
+  function initElapsed() {
+    const render = () => document.querySelectorAll('time[data-elapsed]').forEach((element) => {
+      const since = Date.parse(element.dateTime);
+      if (Number.isNaN(since)) return;
+      const seconds = Math.max(0, Math.floor((Date.now() - since) / 1000));
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor(seconds / 60) % 60;
+      const text = (hours ? hours + 'h ' : '') + (hours || minutes ? minutes + 'm ' : '') + (seconds % 60) + 's';
+      if (element.textContent !== text) element.textContent = text;
+    });
+    render();
+    setInterval(render, 1000);
+    document.addEventListener('htmx:afterSettle', render);
+  }
+
+  // Preserve native full timestamps; otherwise use the received UTC timestamp.
+  const logTimestampPrefix = /^\[?\d{4}[-/]\d{2}[-/]\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\]?/;
+  function logTimestamp(line) {
+    const prefix = line.text.match(logTimestampPrefix)?.[0];
+    const when = new Date(line.at || '');
+    return prefix || (Number.isNaN(when.getTime()) ? '[timestamp unavailable]' : when.toISOString());
+  }
+
   // Build logs: the server streams the current attempt's lines with ids
   // "<epoch>.<next>". A "reset" means a new attempt replaced the logs. Lines are
   // inserted as text, never markup. Hidden tabs release the connection.
   function initBuildLogs() {
-    const panel = document.querySelector('[data-log-events]');
-    const list = panel?.querySelector('[data-log-lines]');
-    if (!panel || !list || !('EventSource' in window)) return;
-    const base = new URL(panel.dataset.logEvents, window.location.href);
-    const empty = panel.querySelector('[data-log-empty]');
-    const follow = panel.querySelector('[data-log-follow]');
-    const connection = document.querySelector('[data-log-connection]');
-    const status = document.querySelector('.log-status');
-    let cursor = panel.dataset.logCursor || '';
-    let source = null;
-    let failures = 0;
-    let retry = 0;
-    panel.querySelector('[data-log-follow-control]')?.removeAttribute('hidden');
-    const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 24;
-    const stick = () => { if (follow?.checked) list.scrollTop = list.scrollHeight; };
-    list.addEventListener('scroll', () => { if (follow) follow.checked = nearBottom(); }, { passive: true });
-    follow?.addEventListener('change', stick);
-    const setState = (state, text) => {
-      if (!connection) return;
-      connection.dataset.state = state;
-      connection.textContent = text;
-    };
-    const append = (lines) => {
-      const fragment = document.createDocumentFragment();
-      for (const line of lines) {
-        const number = String(line.n + 1);
-        const item = document.createElement('li');
-        item.id = 'L' + number;
-        item.className = line.system ? 'log-line log-system' : 'log-line';
-        if (!line.system && /\b(error|failed|fatal|panic)\b/i.test(line.text)) item.classList.add('log-error');
-        const anchor = document.createElement('a');
-        anchor.className = 'log-number';
-        anchor.href = '#L' + number;
-        anchor.tabIndex = -1;
-        anchor.textContent = number;
-        const text = document.createElement('span');
-        text.className = 'log-text';
-        text.textContent = line.text;
-        item.append(anchor, text);
-        fragment.append(item);
+    const viewers = new Map();
+    const active = panel => panel.isConnected && !document.hidden && (!panel.closest('[data-pr-logs]') || panel.closest('[data-pr-logs]').open);
+    const scan = () => {
+      for (const [panel, viewer] of viewers) {
+        if (!panel.isConnected || (panel.closest('[data-pr-logs]') && !panel.closest('[data-pr-logs]').open)) { viewer.close(); viewers.delete(panel); }
       }
-      const wasAtBottom = nearBottom();
-      list.append(fragment);
-      if (empty) empty.hidden = list.childElementCount > 0;
-      if (follow?.checked || wasAtBottom) stick();
-    };
-    const showState = (state) => {
-      const badge = status?.querySelector('[data-log-badge]');
-      if (badge) {
-        badge.className = 'badge ' + state.tone;
-        badge.querySelector('[data-log-label]').textContent = state.label;
-      }
-      const summary = status?.querySelector('[data-log-summary]');
-      if (summary && summary.textContent !== state.summary) summary.textContent = state.summary;
-      let sha = status?.querySelector('[data-log-sha]');
-      if (state.sha && !sha && summary) {
-        sha = document.createElement('code');
-        sha.className = 'sha';
-        sha.dataset.logSha = '';
-        summary.after(sha);
-      }
-      if (sha) { sha.textContent = state.sha.slice(0, 12); sha.title = state.sha; sha.hidden = !state.sha; }
-      const notices = status?.querySelector('[data-log-notices]');
-      const template = status?.querySelector('[data-log-notice-template]');
-      if (notices && template) {
-        notices.replaceChildren(...state.notices.map((notice) => {
-          const item = template.content.firstElementChild.cloneNode(true);
-          item.classList.add(notice.tone);
-          item.querySelector('span').textContent = notice.text;
-          return item;
-        }));
-      }
-      if (empty && state.empty) empty.textContent = state.empty;
-    };
-    const remember = (event) => { if (event.lastEventId) cursor = event.lastEventId; };
-    const connect = () => {
-      clearTimeout(retry);
-      const url = new URL(base);
-      if (cursor) url.searchParams.set('since', cursor);
-      source = new EventSource(url);
-      source.addEventListener('reset', (event) => {
-        remember(event);
-        list.replaceChildren();
-        if (empty) empty.hidden = false;
-      });
-      source.addEventListener('lines', (event) => {
-        remember(event);
-        failures = 0;
-        setState('live', 'Live');
-        append(JSON.parse(event.data).lines);
-      });
-      source.addEventListener('state', (event) => {
-        remember(event);
-        failures = 0;
-        setState('live', 'Live');
-        showState(JSON.parse(event.data));
-      });
-      source.addEventListener('error', () => {
-        if (source?.readyState !== EventSource.CLOSED) { setState('reconnecting', 'Reconnecting…'); return; }
-        source = null;
-        failures++;
-        if (failures > 5) { setState('offline', 'Live updates unavailable — reload to retry'); return; }
-        setState('reconnecting', 'Reconnecting…');
-        retry = setTimeout(connect, Math.min(30000, 1000 * 2 ** failures));
+      document.querySelectorAll('[data-log-events]').forEach(panel => {
+        if (!viewers.has(panel) && active(panel)) { const viewer = start(panel); if (viewer) viewers.set(panel, viewer); }
       });
     };
-    const disconnect = () => { clearTimeout(retry); source?.close(); source = null; };
+    function start(panel) {
+      const list = panel?.querySelector('[data-log-lines]');
+      if (!panel || !list || !('EventSource' in window)) return;
+      const base = new URL(panel.dataset.logEvents, window.location.href);
+      const empty = panel.querySelector('[data-log-empty]');
+      const follow = panel.querySelector('[data-log-follow]');
+      const status = panel.closest('.build-logs-page')?.querySelector('.log-status');
+      const connection = panel.querySelector('[data-log-connection]') || status?.querySelector('[data-log-connection]');
+      const trackerElement = status?.querySelector('[data-build-progress]');
+      const tracker = trackerElement ? trackBuild(trackerElement) : null;
+      let cursor = panel.dataset.logCursor || '';
+      let source = null;
+      let failures = 0;
+      let retry = 0;
+      panel.querySelector('[data-log-follow-control]')?.removeAttribute('hidden');
+      const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 24;
+      const stick = () => { if (follow?.checked) list.scrollTop = list.scrollHeight; };
+      list.addEventListener('scroll', () => { if (follow) follow.checked = nearBottom(); }, { passive: true });
+      follow?.addEventListener('change', stick);
+      const setState = (state, text) => {
+        if (!connection) return;
+        connection.dataset.state = state;
+        connection.textContent = text;
+      };
+      const append = (lines) => {
+        const fragment = document.createDocumentFragment();
+        for (const line of lines) {
+          const category = line.system ? 'previa' : 'application';
+          const filter = panel.dataset.logSource || 'all';
+          if ((filter !== 'all' && filter !== '' && filter !== category) || !line.text.toLowerCase().includes((panel.dataset.logQuery || '').toLowerCase())) continue;
+          const number = String(line.n + 1);
+          const item = document.createElement('li');
+          item.id = 'L' + number;
+          item.dataset.logSource = category;
+          item.className = line.system ? 'log-line log-system' : 'log-line';
+          if (!line.system && /\b(error|failed|fatal|panic)\b/i.test(line.text)) item.classList.add('log-error');
+          const anchor = document.createElement('a');
+          anchor.className = 'log-number';
+          anchor.href = '#L' + number;
+          anchor.tabIndex = -1;
+          anchor.textContent = number;
+          const text = document.createElement('span');
+          text.className = 'log-text';
+          const timestamp = document.createElement('span');
+          timestamp.className = 'log-timestamp';
+          timestamp.textContent = logTimestamp(line);
+          timestamp.title = line.at ? 'Received at ' + line.at : 'Received timestamp unavailable';
+          const prefix = line.text.match(logTimestampPrefix)?.[0];
+          const message = prefix ? line.text.slice(prefix.length).replace(/^ /, '') : line.text;
+          text.append(timestamp, document.createTextNode(' ' + message));
+          item.append(anchor, text);
+          fragment.append(item);
+        }
+        const wasAtBottom = nearBottom();
+        list.append(fragment);
+        const limit = Number(panel.dataset.logLimit || 0);
+        const oldHeight = list.scrollHeight;
+        while (limit && list.childElementCount > limit) list.firstElementChild.remove();
+        if (!follow?.checked) list.scrollTop = Math.max(0, list.scrollTop - (oldHeight - list.scrollHeight));
+        const count = panel.querySelector('[data-log-count]');
+        if (count) count.textContent = list.childElementCount + ' events shown';
+        if (empty) empty.hidden = list.childElementCount > 0;
+        if (follow?.checked || wasAtBottom) stick();
+      };
+      const showState = (state) => {
+        const badge = status?.querySelector('[data-log-badge]');
+        if (badge) {
+          badge.className = 'badge ' + state.tone;
+          badge.querySelector('[data-log-label]').textContent = state.label;
+        }
+        const summary = status?.querySelector('[data-log-summary]');
+        if (summary && summary.textContent !== state.summary) summary.textContent = state.summary;
+        let sha = status?.querySelector('[data-log-sha]');
+        if (state.sha && !sha && summary) {
+          sha = document.createElement('code');
+          sha.className = 'sha';
+          sha.dataset.logSha = '';
+          summary.after(sha);
+        }
+        if (sha) { sha.textContent = state.sha.slice(0, 12); sha.title = state.sha; sha.hidden = !state.sha; }
+        const notices = status?.querySelector('[data-log-notices]');
+        const template = status?.querySelector('[data-log-notice-template]');
+        if (notices && template) {
+          notices.replaceChildren(...state.notices.map((notice) => {
+            const item = template.content.firstElementChild.cloneNode(true);
+            item.classList.add(notice.tone);
+            item.querySelector('span').textContent = notice.text;
+            return item;
+          }));
+        }
+        if (empty && state.empty) empty.textContent = (panel.dataset.logSource && panel.dataset.logSource !== "all") || panel.dataset.logQuery ? "No log events match these filters." : state.empty;
+      };
+      const remember = (event) => { if (event.lastEventId) cursor = event.lastEventId; };
+      const connect = () => {
+        clearTimeout(retry);
+        if (source || !active(panel)) return;
+        const url = new URL(base);
+        if (cursor) url.searchParams.set('since', cursor);
+        source = new EventSource(url);
+        source.addEventListener('reset', (event) => {
+          remember(event);
+          list.replaceChildren();
+          if (empty) empty.hidden = false;
+          const count = panel.querySelector('[data-log-count]');
+          if (count) count.textContent = '0 events shown';
+          tracker?.reset();
+        });
+        source.addEventListener('lines', (event) => {
+          remember(event);
+          failures = 0;
+          setState('live', 'Live');
+          const lines = JSON.parse(event.data).lines;
+          append(lines);
+          tracker?.lines(lines);
+        });
+        source.addEventListener('state', (event) => {
+          remember(event);
+          failures = 0;
+          setState('live', 'Live');
+          const state = JSON.parse(event.data);
+          showState(state);
+          tracker?.state(state.label);
+        });
+        source.addEventListener('error', () => {
+          if (source?.readyState !== EventSource.CLOSED) { setState('reconnecting', 'Reconnecting…'); return; }
+          source = null;
+          failures++;
+          if (failures > 5) { setState('offline', 'Live updates unavailable — reload to retry'); return; }
+          setState('reconnecting', 'Reconnecting…');
+          retry = setTimeout(connect, Math.min(30000, 1000 * 2 ** failures));
+        });
+      };
+      const disconnect = () => { clearTimeout(retry); source?.close(); source = null; };
+      if (!window.location.hash) stick();
+      connect();
+      return {close: disconnect, resume: () => { failures = 0; connect(); }, pause: () => { disconnect(); setState('paused', 'Paused while hidden'); }};
+    }
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) { disconnect(); setState('paused', 'Paused while hidden'); } else if (!source) { failures = 0; connect(); }
+      for (const [panel, viewer] of viewers) { if (active(panel)) viewer.resume(); else viewer.pause(); }
+      scan();
     });
-    window.addEventListener('pagehide', disconnect);
-    window.addEventListener('pageshow', (event) => { if (event.persisted && !source && !document.hidden) connect(); });
-    if (!window.location.hash) stick();
-    if (!document.hidden) connect(); else setState('paused', 'Paused while hidden');
+    window.addEventListener('pagehide', () => viewers.forEach(viewer => viewer.close()));
+    window.addEventListener('pageshow', () => { viewers.forEach(viewer => viewer.resume()); scan(); });
+    document.addEventListener('htmx:afterSwap', scan);
+    document.addEventListener('logs:panelchanged', scan);
+    scan();
+  }
+
+  // Inline log state survives PR live refreshes; closed panels release SSE.
+  function initPRLogs() {
+    const states = new Map();
+    const load = details => {
+      if (!window.htmx || !details.open || !details.isConnected) return;
+      const state = states.get(details.dataset.prLogsUrl) || {};
+      const url = new URL(details.dataset.prLogsUrl, location.href);
+      if (state.source) url.searchParams.set('source', state.source);
+      if (state.query) url.searchParams.set('q', state.query);
+      htmx.ajax('GET', url.pathname + url.search, {target: details.querySelector('#pr-recent-log-content'), swap: 'innerHTML'}).catch(() => {});
+    };
+    const setup = () => document.querySelectorAll('[data-pr-logs]').forEach(details => {
+      const key = details.dataset.prLogsUrl;
+      const panel = details.querySelector('[data-log-panel]');
+      if (panel) { const state = states.get(key) || {}; state.source = panel.dataset.logSource; state.query = panel.dataset.logQuery; states.set(key, state); }
+      if (details.hasAttribute("data-logs-initialized")) return;
+      details.dataset.logsInitialized = '';
+      details.addEventListener('toggle', () => {
+        const state = states.get(key) || {}; state.open = details.open; states.set(key, state);
+        document.dispatchEvent(new Event('logs:panelchanged'));
+        if (details.open) load(details);
+      });
+      if (states.get(key)?.open) details.open = true;
+    });
+    document.addEventListener('click', event => {
+      const opener = event.target.closest('[data-open-pr-logs]');
+      const refresh = event.target.closest('[data-refresh-pr-logs]');
+      if (!opener && !refresh) return;
+      const details = (opener?.closest('.pr-detail-content') || refresh?.closest('[data-pr-logs]'))?.querySelector('[data-pr-logs]') || refresh?.closest('[data-pr-logs]');
+      if (!details || !window.htmx || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+      event.preventDefault();
+      if (refresh) load(details);
+      else { details.open = true; details.scrollIntoView({block: 'nearest', behavior: 'smooth'}); details.querySelector('summary')?.focus(); }
+    });
+    document.addEventListener('htmx:afterSwap', setup);
+    document.addEventListener('htmx:responseError', event => {
+      const target = event.detail.target;
+      if (target?.id !== 'pr-recent-log-content') return;
+      const text = document.createElement('p'); text.className = 'log-empty';
+      text.textContent = 'Recent logs are temporarily unavailable. Close and reopen this panel to retry.';
+      target.replaceChildren(text);
+      document.dispatchEvent(new Event("logs:panelchanged"));
+    });
+    setup();
   }
 
   // Times are rendered as exact UTC; show them relative ("3 minutes ago") and
@@ -543,20 +758,25 @@
     document.addEventListener('htmx:afterSettle', render);
   }
 
-  // Copy buttons: data-copy holds the text, or data-copy-lines names a log
-  // list whose line texts are copied. The label confirms for two seconds.
+  // Copy buttons: data-copy holds the text, data-copy-lines names a log list
+  // whose line texts are copied, or data-copy-from names a field whose value
+  // is copied. The label confirms for two seconds.
   function initCopyButtons() {
     const timers = new WeakMap();
     document.addEventListener('click', async (event) => {
-      const button = event.target.closest('[data-copy], [data-copy-lines]');
+      const button = event.target.closest('[data-copy], [data-copy-lines], [data-copy-from], [data-copy-log-panel]');
       if (!button) return;
       const status = button.querySelector('[data-copy-status]');
       const label = status?.textContent;
       let text = button.dataset.copy ?? '';
+      if (button.hasAttribute('data-copy-log-panel')) {
+        text = [...button.closest('[data-log-panel]').querySelectorAll('.log-text')].map(line => line.textContent).join('\n');
+      }
       if (button.dataset.copyLines) {
         const list = document.querySelector(button.dataset.copyLines);
         text = [...(list?.querySelectorAll('.log-text') || [])].map(line => line.textContent).join('\n');
       }
+      if (button.dataset.copyFrom) text = document.querySelector(button.dataset.copyFrom)?.value ?? '';
       try {
         await navigator.clipboard.writeText(text);
         button.dataset.copied = '';
@@ -1191,6 +1411,160 @@
     setInterval(refresh, 30000);
   }
 
+  // Starter kits: the files become tabs of a small editor. Each text area
+  // sits over a highlighted copy of its text, so typing stays native. Edits
+  // survive a change of choices until Reset (the newest generated file is
+  // what Reset restores), and an edited .previewrc.yaml is checked by the
+  // server as you type. Without JavaScript both files show as plain text areas.
+  function initStarterKit() {
+    const edits = new Map();
+    let active = '';
+    const escape = text => text.replace(/[&<>]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]));
+    const html = tokens => tokens.map(([cls, text]) => (cls ? `<span class="${cls}">${escape(text)}</span>` : escape(text))).join('');
+    // The same colours as the generated files: instructions, keys, strings,
+    // numbers, comments and here-documents.
+    const quoted = (text) => {
+      const out = [];
+      while (text) {
+        const start = text.indexOf('"');
+        if (start < 0) { out.push(['', text]); break; }
+        let end = start + 1;
+        while (end < text.length && text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+        end = Math.min(end, text.length - 1);
+        if (start > 0) out.push(['', text.slice(0, start)]);
+        out.push(['tk-str', text.slice(start, end + 1)]);
+        text = text.slice(end + 1);
+      }
+      return out;
+    };
+    const instruction = /^(FROM|RUN|COPY|ADD|ENV|ARG|WORKDIR|EXPOSE|CMD|ENTRYPOINT|USER|LABEL|HEALTHCHECK|SHELL|VOLUME|STOPSIGNAL|ONBUILD)\b/;
+    const yamlKey = /^(\s*)(- )?([a-z_]+)(:)/;
+    const yamlLine = (line) => {
+      let body = line;
+      let comment = '';
+      const hash = line.indexOf('  # ');
+      if (hash >= 0 && !line.slice(0, hash).includes('"')) { body = line.slice(0, hash); comment = line.slice(hash); }
+      const out = [];
+      const key = body.match(yamlKey);
+      if (key) {
+        out.push(['', key[1]]);
+        if (key[2]) out.push(['tk-punct', key[2]]);
+        out.push(['tk-key', key[3]], ['tk-punct', key[4]]);
+        body = body.slice(key[0].length);
+      }
+      quoted(body).forEach(([cls, text]) => out.push([!cls && /^\s*[\d.]+\s*$/.test(text) ? 'tk-num' : cls, text]));
+      if (comment) out.push(['tk-cm', comment]);
+      return out;
+    };
+    const highlight = (lang, text) => {
+      let heredoc = false;
+      return text.split('\n').map((line) => {
+        if (line.trim().startsWith('#') && !heredoc) return html([['tk-cm', line]]);
+        if (lang === 'yaml') return html(yamlLine(line));
+        if (heredoc) { heredoc = line.trim() !== 'EOF'; return html([['tk-here', line]]); }
+        heredoc = line.includes("<<'EOF'");
+        const word = line.match(instruction);
+        return html(word ? [['tk-kw', word[0]], ...quoted(line.slice(word[0].length))] : quoted(line));
+      }).join('\n');
+    };
+
+    const setup = () => {
+      const editor = document.querySelector('[data-kit-editor]');
+      if (!editor || editor.dataset.ready === '1') return;
+      editor.dataset.ready = '1';
+      const status = document.getElementById('kit-status');
+      const checks = editor.querySelector('#kit-checks');
+      const generatedChecks = checks.innerHTML;
+      const panels = [...editor.querySelectorAll('[data-kit-file]')];
+      const tablist = editor.querySelector('[data-kit-tabs]');
+      const tabs = [...tablist.querySelectorAll('[role="tab"]')];
+
+      panels.forEach((panel, index) => {
+        const id = panel.dataset.kitFile;
+        const lang = panel.dataset.lang;
+        const input = panel.querySelector('textarea');
+        const gutter = panel.querySelector('[data-kit-gutter]');
+        const reset = panel.querySelector('[data-kit-reset]');
+        const marker = panel.querySelector('[data-kit-edited]');
+        const generated = input.value;
+        const layer = document.createElement('pre');
+        layer.className = 'kit-highlight';
+        layer.setAttribute('aria-hidden', 'true');
+        input.before(layer);
+        panel.dataset.enhanced = '';
+        let timer = 0;
+        const render = () => {
+          const text = input.value;
+          // A final newline opens an empty line in the text area; the space
+          // gives the highlighted copy the same line.
+          layer.innerHTML = highlight(lang, text) + (text.endsWith('\n') ? ' ' : '');
+          const lines = text.split('\n').length;
+          if (Number(input.rows) !== lines) {
+            input.rows = lines;
+            gutter.textContent = Array.from({length: lines}, (_, i) => i + 1).join('\n');
+          }
+        };
+        const mark = () => {
+          const edited = input.value !== generated;
+          if (edited) edits.set(id, input.value); else edits.delete(id);
+          reset.hidden = !edited;
+          marker.hidden = !edited;
+          tabs[index]?.toggleAttribute('data-edited', edited);
+        };
+        const check = () => {
+          if (lang !== 'yaml') return;
+          clearTimeout(timer);
+          if (input.value === generated) { checks.innerHTML = generatedChecks; return; }
+          timer = setTimeout(() => htmx.trigger(input, 'kit-check'), 400);
+        };
+        if (edits.has(id)) input.value = edits.get(id);
+        mark();
+        render();
+        if (edits.has(id)) check();
+        input.addEventListener('input', () => { mark(); render(); check(); });
+        reset.addEventListener('click', () => {
+          input.value = generated;
+          mark();
+          render();
+          check();
+          if (status) status.textContent = `${panel.querySelector('.kit-crumb code').textContent} is back to the generated file.`;
+          input.focus();
+        });
+      });
+
+      const select = (index, focus) => {
+        tabs.forEach((tab, i) => {
+          tab.setAttribute('aria-selected', String(i === index));
+          tab.tabIndex = i === index ? 0 : -1;
+          panels[i].hidden = i !== index;
+        });
+        active = panels[index].dataset.kitFile;
+        if (focus) tabs[index].focus();
+      };
+      panels.forEach((panel, i) => {
+        panel.setAttribute('role', 'tabpanel');
+        panel.setAttribute('aria-labelledby', tabs[i].id);
+      });
+      tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => select(index, false));
+        tab.addEventListener('keydown', (event) => {
+          const moves = {ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabs.length - 1};
+          if (!(event.key in moves)) return;
+          event.preventDefault();
+          select((moves[event.key] + tabs.length) % tabs.length, true);
+        });
+      });
+      tablist.hidden = false;
+      editor.classList.add('has-tabs');
+      select(Math.max(0, panels.findIndex(panel => panel.dataset.kitFile === active)), false);
+    };
+    setup();
+    // On swap, before the new kit is painted, so it never flashes both files
+    // or the generated text. State lives in data attributes: HTMX settles the
+    // class of elements with an id back to the server's after a swap.
+    document.addEventListener('htmx:afterSwap', setup);
+  }
+
   initMotion();
   initTheme();
   initNavigation();
@@ -1202,12 +1576,17 @@
   initRepositorySearch();
   initLiveUpdates();
   initBuildLogs();
+  initPRLogs();
+  initBuildProgress();
+  initElapsed();
   initRelativeTimes();
   initCopyButtons();
   initSecretEditor();
   initBulkDelete();
   initRefreshDeadlines();
   initStory();
+  initFilm();
   initFAQ();
   initOverview();
+  initStarterKit();
 })();

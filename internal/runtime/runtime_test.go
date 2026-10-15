@@ -51,8 +51,8 @@ type scriptedTargets struct {
 	calls   int
 }
 
-func (s *scriptedTargets) BaseRepository(context.Context, int64) (int64, error) {
-	return sameRepo.BaseRepoID, nil
+func (s *scriptedTargets) AdmissionScope(context.Context, int64) (Target, error) {
+	return sameRepo, nil
 }
 
 func (s *scriptedTargets) Current(context.Context, environments.Request) (Target, error) {
@@ -69,10 +69,11 @@ func refused(code string) func() (Target, error) {
 }
 
 type fakeSources struct {
-	err      error
-	dir      string
-	prepares int
-	released int
+	err          error
+	dir          string
+	prepares     int
+	released     int
+	buildTimeout time.Duration
 }
 
 func (f *fakeSources) Prepare(context.Context, source.Request) (*source.Prepared, error) {
@@ -80,18 +81,24 @@ func (f *fakeSources) Prepare(context.Context, source.Request) (*source.Prepared
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &source.Prepared{ContextDir: f.dir, Dockerfile: "Dockerfile", Config: repoconfig.Result{Config: repoconfig.Config{Port: 3000, Env: []string{"MODE=preview"}}}}, nil
+	return &source.Prepared{ContextDir: f.dir, Dockerfile: "Dockerfile", Config: repoconfig.Result{Config: repoconfig.Config{Port: 3000, Env: []string{"MODE=preview"}, BuildTimeout: f.buildTimeout}}}, nil
 }
 
 func (f *fakeSources) Release(*source.Prepared) error { f.released++; return nil }
 
 type fakeBuilder struct {
-	err  error
-	jobs []builds.Job
+	err      error
+	jobs     []builds.Job
+	deadline time.Time
+	observe  func(builds.Job)
 }
 
-func (f *fakeBuilder) Build(_ context.Context, job builds.Job) (builds.Image, error) {
+func (f *fakeBuilder) Build(ctx context.Context, job builds.Job) (builds.Image, error) {
+	f.deadline, _ = ctx.Deadline()
 	f.jobs = append(f.jobs, job)
+	if f.observe != nil {
+		f.observe(job)
+	}
 	if f.err != nil {
 		return builds.Image{}, f.err
 	}
@@ -102,6 +109,10 @@ type recordingSecrets struct {
 	sources []secrets.Source
 	yaml    [][]string
 	err     error
+}
+
+func (r *recordingSecrets) ForBuild(_ context.Context, _ int64, _ secrets.Source) (*secrets.BuildSecrets, error) {
+	return &secrets.BuildSecrets{}, nil
 }
 
 func (r *recordingSecrets) ForContainer(_ context.Context, _ int64, source secrets.Source, yamlEnv []string) (*secrets.ContainerEnv, error) {
@@ -129,6 +140,16 @@ func TestBuildRefusesStaleAttemptsBeforeAnyWork(t *testing.T) {
 	r, _ := orchestration(&scriptedTargets{answers: []func() (Target, error){refused(CodeNotCurrent)}}, sources, &fakeBuilder{}, &recordingSecrets{})
 	if _, err := r.Build(t.Context(), testRequest, environments.Attempt{}); CodeOf(err) != CodeNotCurrent || sources.prepares != 0 {
 		t.Fatalf("stale attempt: %v (prepares %d)", err, sources.prepares)
+	}
+}
+
+func TestRepositoryTimeoutBoundsImageBuild(t *testing.T) {
+	sources := &fakeSources{dir: t.TempDir(), buildTimeout: time.Minute}
+	builder := &fakeBuilder{err: &builds.Error{Code: builds.CodeImageTooLarge, Message: "image exceeded limit"}}
+	r, _ := orchestration(&scriptedTargets{answers: []func() (Target, error){current(sameRepo)}}, sources, builder, &recordingSecrets{})
+	_, err := r.Build(t.Context(), testRequest, environments.Attempt{})
+	if CodeOf(err) != CodeImageTooLarge || builder.deadline.IsZero() || time.Until(builder.deadline) > time.Minute {
+		t.Fatalf("repository deadline or image limit classification lost: %v", err)
 	}
 }
 

@@ -54,12 +54,12 @@
   tab-size: 4;
 }
 .log-lines:empty { display: none; }
-.log-line { display: grid; grid-template-columns: minmax(3.5em, max-content) 1fr; gap: 14px; padding: 0 18px; }
+.log-line { display: grid; grid-template-columns: 4.5em minmax(0, 1fr); gap: 14px; padding: 0 18px; }
 .log-line:target { background: var(--signal-soft); }
 .log-number { color: var(--text-faint); text-align: right; text-decoration: none; user-select: none; }
 .log-number:hover { color: var(--text-muted); }
-.log-text { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.log-system .log-text { color: var(--info-ink); font-style: italic; }
+.log-text { min-width: 0; white-space: pre; }
+.log-system .log-text { color: var(--info-ink); font-style: normal; }
 .log-error .log-text { color: var(--danger-ink); }
 .log-error { background: color-mix(in oklab, var(--danger-soft) 55%, transparent); }
 .log-pager .copy-button { height: 28px; }
@@ -71,7 +71,11 @@
 .pr-cell-logs .text-link { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
 
 @media (max-width: 640px) {
-  .log-line { grid-template-columns: minmax(2.5em, max-content) 1fr; gap: 10px; padding: 0 12px; }
+  .log-line { grid-template-columns: 3.5em minmax(0, 1fr); gap: 10px; padding: 0 12px; }
   .log-panel-header, .log-status { padding-inline: 14px; }
   .pr-cell-logs { text-align: left; }
+}
+
+@media (max-width: 480px) {
+  .log-line { grid-template-columns: 3.5em minmax(0, 1fr); }
 }

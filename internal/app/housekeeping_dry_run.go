@@ -76,16 +76,23 @@ func RunHousekeepingDryRun(ctx context.Context, out io.Writer, workspaceRoot str
 	if err != nil {
 		return err
 	}
+	records, err := housekeeping.NewRecords(pool, logger, settings)
+	if err != nil {
+		return err
+	}
 	inventoryPass, inventoryErr := resources.RunOnce(ctx)
 	expiryPass, expiryErr := expiry.RunOnce(ctx)
 	prunePass, pruneErr := prune.RunOnce(ctx, false)
+	recordsPass, recordsErr := records.RunOnce(ctx)
 	_, err = fmt.Fprintf(out, "Dry run for instance %s (nothing was changed):\n"+
 		"  orphans of known PRs: %d (%d objects younger than the %s grace period left alone)\n"+
 		"  objects of PRs the database does not know: %d from %d PRs\n"+
 		"  previews past their expiry: %d\n"+
-		"  untagged images: %d, leftover workspaces: %d, build caches: %d (%d bytes)\n",
+		"  untagged images: %d, leftover workspaces: %d, build caches: %d (%d bytes)\n"+
+		"  expired records (first batch): %d webhook deliveries, %d operations, %d closed pull requests\n",
 		instance, len(inventoryPass.Orphans), inventoryPass.Young, settings.Grace,
 		len(inventoryPass.Removed), inventoryPass.UnknownPRs, expiryPass.Due,
-		prunePass.Images, prunePass.Workspaces, prunePass.Caches, prunePass.CacheBytes)
-	return errors.Join(inventoryErr, expiryErr, pruneErr, err)
+		prunePass.Images, prunePass.Workspaces, prunePass.Caches, prunePass.CacheBytes,
+		recordsPass.Deliveries, recordsPass.Operations, recordsPass.PullRequests)
+	return errors.Join(inventoryErr, expiryErr, pruneErr, recordsErr, err)
 }

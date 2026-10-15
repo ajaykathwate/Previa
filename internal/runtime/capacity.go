@@ -27,16 +27,17 @@ type Locker interface {
 // removal: capacity is released only by verified cleanup.
 type usage struct {
 	cpuMillis, memory int64
-	// repoPRs are the repository's PRs that hold a preview or candidate on
-	// this instance. The per-repository limit counts PRs, so a PR's swap never
-	// competes with its own active preview.
-	repoPRs map[string]bool
+	// repoPRs and accountPRs are the repository's and the account's PRs that
+	// hold a preview or candidate on this instance. The limits count PRs, so a
+	// PR's swap never competes with its own active preview.
+	repoPRs, accountPRs map[string]bool
 }
 
 // budget is what previews may hold together.
 type budget struct {
 	cpuMillis, memory int64
 	perRepo           int
+	perAccount        int // 0: no limit
 }
 
 // smallestPreview is the least a preview can need (the small tier); the
@@ -46,7 +47,7 @@ const smallestCPUMillis, smallestMemory = 500, 512 << 20
 // budget derives the preview budget: the operator's values, or 60% of the
 // Docker host's memory and 75% of its CPUs, leaving the rest for the platform.
 func (r *Runtime) budget(ctx context.Context) (budget, error) {
-	b := budget{memory: r.policy.MemoryBudget, cpuMillis: int64(r.policy.CPUBudget * 1000), perRepo: r.policy.MaxPerRepo}
+	b := budget{memory: r.policy.MemoryBudget, cpuMillis: int64(r.policy.CPUBudget * 1000), perRepo: r.policy.MaxPerRepo, perAccount: r.policy.MaxPerAccount}
 	if b.memory > 0 && b.cpuMillis > 0 {
 		return b, nil
 	}
@@ -66,26 +67,35 @@ func (r *Runtime) budget(ctx context.Context) (budget, error) {
 // usage sums the limits recorded on candidate containers' labels: apps and
 // their managed services, setup and processes. The host budget counts every
 // Previa preview on the Docker host, whichever instance created it; the
-// repository count only this instance's.
-func (r *Runtime) usage(ctx context.Context, baseRepoID int64) (usage, error) {
+// repository count only this instance's. A stopped app (a sleeping or
+// crashed preview) uses no memory or CPU but is still a preview, so it
+// counts towards the repository and account limits.
+func (r *Runtime) usage(ctx context.Context, t Target) (usage, error) {
 	listed, err := r.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.Add("label", dockerx.LabelManaged+"=true")})
 	if err != nil {
 		return usage{}, fmt.Errorf("list running previews: %w", err)
 	}
-	u := usage{repoPRs: map[string]bool{}}
+	u := usage{repoPRs: map[string]bool{}, accountPRs: map[string]bool{}}
 	for _, c := range listed.Items {
 		if !slices.Contains(dockerx.CandidateKinds, c.Labels[dockerx.LabelKind]) {
 			continue
 		}
-		if c.State != container.StateRunning && c.State != container.StateRestarting && c.State != container.StateCreated {
+		running := c.State == container.StateRunning || c.State == container.StateRestarting || c.State == container.StateCreated
+		stoppedApp := c.State == container.StateExited && c.Labels[dockerx.LabelKind] == dockerx.KindPreview
+		if !running && !stoppedApp {
 			continue
 		}
-		cpu, _ := strconv.ParseInt(c.Labels[dockerx.LabelCPUMillis], 10, 64)
-		memory, _ := strconv.ParseInt(c.Labels[dockerx.LabelMemory], 10, 64)
-		u.cpuMillis += cpu
-		u.memory += memory
-		if c.Labels[dockerx.LabelInstance] == r.instance && c.Labels[dockerx.LabelBaseRepo] == strconv.FormatInt(baseRepoID, 10) {
+		if running {
+			cpu, _ := strconv.ParseInt(c.Labels[dockerx.LabelCPUMillis], 10, 64)
+			memory, _ := strconv.ParseInt(c.Labels[dockerx.LabelMemory], 10, 64)
+			u.cpuMillis += cpu
+			u.memory += memory
+		}
+		if c.Labels[dockerx.LabelInstance] == r.instance && c.Labels[dockerx.LabelBaseRepo] == strconv.FormatInt(t.BaseRepoID, 10) {
 			u.repoPRs[c.Labels[dockerx.LabelPR]] = true
+		}
+		if c.Labels[dockerx.LabelInstance] == r.instance && t.AccountID > 0 && c.Labels[dockerx.LabelAccount] == strconv.FormatInt(t.AccountID, 10) {
+			u.accountPRs[c.Labels[dockerx.LabelPR]] = true
 		}
 	}
 	return u, nil
@@ -94,13 +104,20 @@ func (r *Runtime) usage(ctx context.Context, baseRepoID int64) (usage, error) {
 // admit refuses a candidate that would exceed the per-repository count or the
 // host budget. The refusal is retryable: capacity frees up as previews end.
 func admit(u usage, b budget, pullRequestID, cpuMillis, memory int64) error {
+	pr := strconv.FormatInt(pullRequestID, 10)
 	others := len(u.repoPRs)
-	if u.repoPRs[strconv.FormatInt(pullRequestID, 10)] {
+	if u.repoPRs[pr] {
 		others--
+	}
+	accountOthers := len(u.accountPRs)
+	if u.accountPRs[pr] {
+		accountOthers--
 	}
 	switch {
 	case others >= b.perRepo:
 		return failure(CodeCapacity, fmt.Sprintf("This repository already has %d previews, its limit.", others), true, nil)
+	case b.perAccount > 0 && accountOthers >= b.perAccount:
+		return failure(CodeCapacity, fmt.Sprintf("Your account already has %d previews on this server, its limit. Tear one down, or this starts when one ends.", accountOthers), true, nil)
 	case u.memory+memory > b.memory:
 		return failure(CodeCapacity, fmt.Sprintf("Previews would need %s of memory together; the host allows %s.", humanBytes(u.memory+memory), humanBytes(b.memory)), true, nil)
 	case u.cpuMillis+cpuMillis > b.cpuMillis:
@@ -114,7 +131,7 @@ func (r *Runtime) checkCapacity(ctx context.Context, t Target, cpuMillis, memory
 	if err != nil {
 		return failure(CodeUnavailable, "Preview capacity could not be checked.", true, err)
 	}
-	u, err := r.usage(ctx, t.BaseRepoID)
+	u, err := r.usage(ctx, t)
 	if err != nil {
 		return failure(CodeUnavailable, "Preview capacity could not be checked.", true, err)
 	}
@@ -126,11 +143,11 @@ func (r *Runtime) checkCapacity(ctx context.Context, t Target, cpuMillis, memory
 // waits queued instead of building an image it cannot start. It takes no
 // lock; startCandidate checks again atomically.
 func (r *Runtime) Admit(ctx context.Context, request environments.Request) error {
-	baseRepoID, err := r.targets.BaseRepository(ctx, request.PullRequestID)
+	scope, err := r.targets.AdmissionScope(ctx, request.PullRequestID)
 	if err != nil {
 		return err
 	}
-	err = r.checkCapacity(ctx, Target{PullRequestID: request.PullRequestID, BaseRepoID: baseRepoID}, smallestCPUMillis, smallestMemory)
+	err = r.checkCapacity(ctx, scope, smallestCPUMillis, smallestMemory)
 	if CodeOf(err) == CodeCapacity {
 		return &environments.WaitingError{Reason: environments.WaitCapacity, Err: err}
 	}

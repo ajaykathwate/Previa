@@ -64,7 +64,7 @@ dc up -d worker      # the worker drains for 30 s, then cancels running builds
 
 Cancelled builds are not failures; they wait (reason `paused`) with every new
 request. To stop a specific preview as well, tear it down from its pull request
-page or the Environments page. To resume, remove the line (or set it to `false`)
+page or the Previews page. To resume, remove the line (or set it to `false`)
 and `dc up -d worker`.
 
 ## Database unavailable
@@ -162,11 +162,45 @@ Remove the dry-run line once explained.
 2. Builds already wait instead of failing and housekeeping prunes at once when they
    do (untagged images, old workspaces, caches over `BUILD_CACHE_BUDGET`). Lower
    `BUILD_CACHE_BUDGET` or `ENV_TTL_HOURS` for more room.
-3. Tear down previews nobody uses (Environments page), or pause builds.
+3. Tear down previews nobody uses (Previews page), or pause builds.
 4. Never `docker system prune -a` on a Previa host: it removes the egress image and
    serving previews. If space must be freed by hand, remove only images not used by
    a running container and labelled `io.previa.managed=true`.
 5. If PostgreSQL's volume filled, free space first; PostgreSQL recovers by itself.
+
+## Capacity outgrown
+
+**Alert:** PreviaCapacityOutgrown.
+
+Builds waited for a build slot, preview memory or disk over a quarter of the last
+day. It is a planning signal, not an outage.
+
+1. Grafana "Queues and requests": is it every day, or one busy day?
+2. Cheaper first: `PREVIEW_IDLE_SLEEP=3h` frees idle previews' memory; a lower
+   `ENV_TTL_HOURS` removes old ones sooner; `BUILDS_PER_ACCOUNT` and
+   `PREVIEW_MAX_PER_ACCOUNT` stop one account taking everything.
+3. If it persists, move to a larger server and raise the budgets together
+   ([25](25-production-deployment.md#when-to-upgrade-the-server)). The worker warns
+   at start when budgets exceed the host.
+
+## Unusual build traffic
+
+**Alerts:** PreviaBuildHeavyUpload, PreviaBuildHeavyDownload.
+
+Package installs download a lot but upload almost nothing; a build that uploads
+hundreds of megabytes is moving data out (exfiltration, abuse of the server's
+bandwidth).
+
+1. Find it: `dc logs worker | grep '"msg":"build traffic"'`. Each entry carries
+   `pr_id`, `bytes_up`, `bytes_down` and `refused`; the build log ends with the same
+   totals.
+2. Look at the pull request and its Dockerfile. If it is not legitimate, tear the
+   preview down, switch the repository to Manual builds, and remove the App from
+   that account if needed.
+3. To stop builds reaching anything but package registries, set
+   `BUILD_EGRESS=registries` (add needed hosts to `BUILD_EGRESS_HOSTS`) and restart
+   the worker. Forks never build without the owner's click
+   ([16](16-build-policy-and-intents.md#behaviour-rules)).
 
 ## Backup failed
 

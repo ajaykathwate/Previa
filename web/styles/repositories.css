@@ -116,21 +116,6 @@
 }
 .repository-card-name p { margin: 4px 0 0; overflow: hidden; color: var(--text-muted); font-family: var(--font-code); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .repository-status-detail { color: var(--warn-ink); font-size: 12px; font-weight: 550; }
-.repository-card-link {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: auto;
-  padding-top: 12px;
-  border-top: 1px dashed var(--line);
-  color: var(--text-muted);
-  font-size: 13px;
-  font-weight: 560;
-  transition: color .15s;
-}
-.repository-card-link svg { width: 16px; height: 16px; transition: transform .2s var(--ease-out); }
-.repository-select:hover .repository-card-link { color: var(--ink); }
-.repository-select:hover .repository-card-link svg { transform: translateX(3px); }
 
 /* Pagination */
 .repository-pagination {
@@ -225,46 +210,6 @@
   gap: 18px 24px;
   margin-bottom: 18px;
 }
-.pr-heading-text { flex: 1 1 420px; min-width: 0; }
-.pr-location { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.pr-directory-link { align-self: flex-start; color: var(--text-muted); font-size: 13px; }
-.pr-title-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.pr-repo-icon {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  background: var(--surface);
-  color: var(--ink-soft);
-  box-shadow: var(--shadow-sm);
-}
-.pr-repo-icon svg { width: 19px; height: 19px; }
-.pr-breadcrumb {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-  margin: 0;
-  font-size: 22px;
-  font-weight: 640;
-  letter-spacing: -.025em;
-  line-height: 1.3;
-  white-space: nowrap;
-  outline: none;
-}
-.pr-breadcrumb > * { min-width: 0; font-size: inherit; }
-.pr-breadcrumb a { overflow: hidden; flex-shrink: 1; color: var(--text-muted); text-decoration: none; text-overflow: ellipsis; transition: color .15s; }
-.pr-breadcrumb a:first-child { flex-shrink: 3; }
-.pr-breadcrumb a:hover { color: var(--ink); }
-.pr-breadcrumb a[aria-current="page"], .pr-current-crumb { color: var(--ink); }
-.pr-breadcrumb > span[aria-hidden="true"] { flex-shrink: 0; color: var(--line-strong); font-weight: 400; }
-.pr-current-crumb { overflow: hidden; text-overflow: ellipsis; }
-/* A PR title wraps rather than hiding behind an ellipsis. */
-.pr-breadcrumb:has(.pr-current-crumb) { flex-wrap: wrap; row-gap: 2px; white-space: normal; }
-.pr-breadcrumb .pr-current-crumb { overflow: visible; overflow-wrap: anywhere; }
 
 .pr-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 14px 0 0; color: var(--text-muted); font-size: 13px; }
 .pr-summary-item { display: inline-flex; align-items: center; gap: 6px; }
@@ -461,33 +406,18 @@
 .pr-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0; color: var(--ink-soft); font-size: 13px; }
 .pr-meta-item { display: inline-flex; align-items: center; gap: 7px; font-weight: 550; }
 
-.pr-detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
-.lifecycle-step { position: relative; display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 18px; }
-.lifecycle-step:not(:last-child)::after {
-  content: "";
-  position: absolute;
-  top: 34px;
-  right: -19px;
-  width: 20px;
-  height: 2px;
-  background: repeating-linear-gradient(90deg, var(--line-strong) 0 4px, transparent 4px 7px);
-}
-.lifecycle-step header { display: flex; align-items: center; justify-content: space-between; }
-.lifecycle-index { color: var(--text-faint); font-family: var(--font-code); font-size: 11px; }
-.lifecycle-icon {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--surface-muted);
-  color: var(--ink-soft);
-}
-.lifecycle-icon svg { width: 16px; height: 16px; }
-.lifecycle-step h2 { margin: 4px 0 0; font-size: 14px; font-weight: 630; }
+/* The status card beside one details panel: commit, request, preview, environment. */
+.pr-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); gap: 18px; align-items: start; }
+.pr-details { display: grid; padding: 4px 0; }
+.pr-details-title { margin: 0; padding: 14px 18px 2px; color: var(--text-muted); font-family: var(--font-code); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.pr-detail-grid { display: grid; }
+.lifecycle-step { display: grid; gap: 8px; min-width: 0; padding: 14px 18px; }
+.lifecycle-step + .lifecycle-step, .pr-detail-grid + .lifecycle-step { border-top: 1px solid var(--line); }
+.lifecycle-step h3 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--ink-soft); font-size: 12.5px; font-weight: 620; }
+.lifecycle-step h3 svg { width: 14px; height: 14px; color: var(--text-faint); }
+.lifecycle-step.is-current h3 svg { color: var(--info-dot); }
+.lifecycle-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .lifecycle-step p { margin: 0; }
-.lifecycle-step .sha { align-self: flex-start; }
 .sha-full { white-space: normal; word-break: break-all; }
 .lifecycle-note { color: var(--tone-ink, var(--text-muted)); font-size: 12.5px; line-height: 1.5; }
 
@@ -503,22 +433,19 @@
 .github-link svg { width: 15px; height: 15px; }
 
 /* PR status: one headline, the preview address and every action in one place. */
-.pr-status {
-  display: grid;
-  gap: 16px;
-  padding: 18px 20px;
-  border-left: 3px solid var(--tone-dot, var(--line-strong));
-}
+.pr-status { display: grid; gap: 18px; min-width: 0; padding: 22px; }
 .pr-status-main { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
-.pr-status-dot {
-  width: 10px;
-  height: 10px;
-  margin-top: 7px;
+.pr-status-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
-  border-radius: 50%;
-  background: var(--tone-dot, var(--neutral-dot));
-  box-shadow: 0 0 0 4px var(--tone-soft, var(--neutral-soft));
+  border-radius: 12px;
+  background: var(--tone-soft, var(--surface-muted));
+  color: var(--tone-ink, var(--ink-soft));
 }
+.pr-status-icon svg { width: 19px; height: 19px; }
 .pr-status-text { min-width: 0; }
 .pr-status-text h2 { margin: 0; color: var(--ink); font-size: 17px; font-weight: 650; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .pr-status-text p { margin: 4px 0 0; color: var(--text-muted); font-size: 13.5px; line-height: 1.5; }
@@ -644,16 +571,7 @@ a.sha-link:hover { border-color: var(--line-strong); color: var(--ink); }
 .activity-empty { padding-block: 48px; }
 
 @media (max-width: 1100px) {
-  .pr-detail-grid, .upcoming-grid { grid-template-columns: minmax(0, 1fr); }
-  .lifecycle-step:not(:last-child)::after {
-    top: auto;
-    right: auto;
-    bottom: -19px;
-    left: 34px;
-    width: 2px;
-    height: 20px;
-    background: repeating-linear-gradient(180deg, var(--line-strong) 0 4px, transparent 4px 7px);
-  }
+  .pr-layout, .upcoming-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 760px) {
@@ -666,7 +584,6 @@ a.sha-link:hover { border-color: var(--line-strong); color: var(--ink); }
   .pr-header-actions form, .pr-header-actions > .automatic-switch { flex: 1 1 auto; }
   .pr-header-actions button { width: 100%; justify-content: space-between; }
   .pr-header-actions .sync-button { justify-content: center; }
-  .pr-breadcrumb { font-size: 18px; }
   .empty-explainer { grid-template-columns: minmax(0, 1fr); }
   .segmented-nav { width: 100%; }
   .segmented-nav a { flex: 1; }
@@ -700,7 +617,6 @@ a.sha-link:hover { border-color: var(--line-strong); color: var(--ink); }
 }
 
 /* Repository sections and secrets */
-.repo-tabs { align-self: flex-start; margin: 0 0 16px; }
 .secrets-panel-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--line); }
 .secrets-panel-header h2, .secrets-form h2 { margin: 0; font-size: 16px; font-weight: 640; letter-spacing: -.01em; }
 .secrets-panel-header p { margin: 3px 0 0; color: var(--text-muted); font-size: 12.5px; }
@@ -715,6 +631,8 @@ a.sha-link:hover { border-color: var(--line-strong); color: var(--ink); }
 html:not(.js-enabled) .secret-select-all { display: none; }
 .secret-name code { color: var(--ink); font-family: var(--font-code); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .secret-updated { color: var(--text-muted); font-size: 12.5px; white-space: nowrap; }
+.secret-build { white-space: nowrap; }
+.secret-build-form { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
 .secret-actions { text-align: right; white-space: nowrap; }
 .secret-actions .text-link + .text-link { margin-left: 14px; }
 .secrets-table .text-link { font-size: 13px; }
@@ -776,18 +694,15 @@ html:not(.js-enabled) .secret-row-remove, html:not(.js-enabled) .secret-add-row,
 .field-error { margin: 0; color: var(--danger-ink); font-size: 12.5px; }
 .secret-form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; }
 .secret-form-actions button svg { width: 16px; height: 16px; }
-.secrets-guidance { display: block; margin-top: 18px; }
-.secrets-guidance summary { display: flex; align-items: center; gap: 10px; color: var(--ink-soft); font-weight: 580; cursor: pointer; }
-.secrets-guidance ul { display: grid; gap: 6px; margin: 10px 0 0 26px; padding: 0; list-style: none; }
-.secrets-guidance code { font-size: 12px; }
 
 /* Backend facts on the PR page: what the preview runs next to its app. */
-.pr-backend { display: grid; gap: 6px; margin: 0 0 14px; font-size: 13px; }
-.pr-backend > div { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 10px; }
-.pr-backend dt { color: var(--text-muted); }
+.pr-backend { display: grid; gap: 10px; margin: 0; font-size: 13px; }
+.pr-backend > div { display: grid; gap: 2px; }
+.pr-backend dt { color: var(--text-muted); font-size: 12px; }
 .pr-backend dd { margin: 0; color: var(--ink-soft); overflow-wrap: anywhere; }
 .pr-backend-note, .pr-backend-offer { color: var(--text-muted); }
-@media (max-width: 760px) { .pr-backend > div { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+.pr-service-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 0; padding: 0; list-style: none; }
+.pr-service-tags .badge { max-width: 100%; height: auto; min-height: 22px; padding: 3px 8px; white-space: normal; overflow-wrap: anywhere; font-weight: 500; line-height: 1.3; }
 
 /* Outbound connections: host and port side by side, the button after them. */
 .outbound-fields { display: grid; grid-template-columns: minmax(0, 3fr) minmax(150px, 1.4fr) auto; gap: 10px 12px; align-items: end; margin: 0; padding: 0; border: 0; min-width: 0; }
@@ -805,8 +720,6 @@ html:not(.js-enabled) .secret-row-remove, html:not(.js-enabled) .secret-add-row,
   .secret-row .secret-name-input { grid-column: 1; grid-row: 1; }
   .secret-row .secret-row-remove { grid-column: 2; grid-row: 1; }
   .secret-row .secret-value { grid-column: 1 / 2; }
-  .repo-tabs { width: 100%; }
-  .repo-tabs a { flex: 1; }
   /* A secret card: checkbox beside its name, update time and actions. */
   .secrets-table tbody tr { grid-template-columns: 24px minmax(0, 1fr); gap: 6px 10px; }
   .secrets-table td { grid-column: 2; }
@@ -815,9 +728,33 @@ html:not(.js-enabled) .secret-row-remove, html:not(.js-enabled) .secret-add-row,
   .secrets-table td.secret-actions { text-align: left; }
 }
 
-/* Repository card facts: open PRs, live previews, build mode, last sync. */
-.repository-card-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; margin: 0; padding: 0; color: var(--text-muted); font-size: 12px; list-style: none; }
-.repository-card-facts li { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
-.repository-card-facts svg { width: 13px; height: 13px; flex-shrink: 0; color: var(--text-faint); }
-.repository-card-facts .is-live { color: var(--ok-ink); font-weight: 580; }
-.repository-card-facts .is-live svg { color: var(--ok-dot); }
+/* Builds: failure filters, Undo after a dismissal, and failures that no
+   longer need attention (shown, but not in red). */
+.activity-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.activity-filters { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.activity-filters-hint { margin: 0; color: var(--text-muted); font-size: 12.5px; }
+.activity-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--signal-soft); color: var(--ink-soft); font-size: 13px; }
+.activity-notice svg { width: 15px; height: 15px; flex-shrink: 0; color: var(--signal-ink); }
+.activity-notice form { margin: 0 0 0 auto; }
+.row-action { display: inline-flex; margin: 0; }
+.pr-cell-logs .row-action { margin-left: 14px; }
+.pr-cell-logs .link-button { color: var(--text-muted); font-weight: 560; text-decoration: none; }
+.pr-cell-logs .link-button:hover { color: var(--ink); text-decoration: underline; }
+.attention-note { color: var(--text-muted); }
+.link-button { padding: 0; border: 0; background: none; color: var(--ink-soft); font: inherit; font-size: 13px; font-weight: 600; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; cursor: pointer; }
+.link-button:hover { color: var(--ink); text-decoration-color: currentColor; }
+.link-button:focus-visible { border-radius: 4px; outline: 2px solid var(--ring); outline-offset: 2px; }
+@media (max-width: 600px) {
+  .activity-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; height: auto; }
+  .activity-filters a { min-height: 32px; }
+}
+
+/* Previews: the row is not one big link to the pull request (only its title
+   is); Open preview is the row's main action. */
+.activity-table.is-previews .pr-cell-text a::after { content: none; }
+.activity-table.is-previews tbody tr:hover { background: transparent; }
+.activity-table.is-previews .pr-cell-text a:hover { text-decoration: underline; }
+.preview-open { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 11px; border: 1px solid var(--signal-line); border-radius: 8px; background: var(--signal-soft); color: var(--signal-ink); font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; transition: border-color .15s; }
+.preview-open:hover { border-color: var(--signal-strong); }
+.preview-open:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.preview-open svg { width: 13px; height: 13px; }

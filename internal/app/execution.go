@@ -38,6 +38,8 @@ type execution struct {
 	sweeper    *environments.TeardownSweeper
 	keeper     *housekeeping.Housekeeper
 	sync       *pullrequests.SyncService
+	logs       *buildlogs.Store
+	repo       *environments.Repository
 }
 
 func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.GitHubSource) (*execution, error) {
@@ -73,16 +75,18 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 	if err != nil {
 		return nil, err
 	}
-	logStore := buildlogs.NewStore(pool)
-	if x.runtime, err = newRuntime(in, instance, x.gateway, preparer, builder, provider, logStore); err != nil {
+	x.logs = buildlogs.NewStore(pool)
+	if x.runtime, err = newRuntime(in, instance, x.gateway, preparer, builder, provider, x.logs); err != nil {
 		return nil, err
 	}
 	operations, err := environments.NewOperationBroker(in.producer)
 	if err != nil {
 		return nil, err
 	}
-	repo := environments.NewRepository(pool, operations).WithHostnames(routing.NewLabel).WithReports().
-		WithLifetime(cfg.PreviewLifetime()).WithBuildSlots(cfg.MaxConcurrentBuilds)
+	x.repo = environments.NewRepository(pool, operations).WithHostnames(routing.NewLabel).WithReports().
+		WithLifetime(cfg.PreviewLifetime()).WithBuildSlots(cfg.MaxConcurrentBuilds).
+		WithAccountLimits(environments.AccountLimits{BuildsPerAccount: cfg.BuildsPerAccount, MinutesPerDay: cfg.BuildMinutesPerAccountDay})
+	repo := x.repo
 	if x.controller, err = newRouteController(in, repo, x.runtime); err != nil {
 		return nil, err
 	}
@@ -104,7 +108,7 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 		return nil, err
 	}
 	x.sync = pullrequests.NewSyncService(pool, in.producer, upstream, x.broker)
-	x.service.WithVerifier(x.sync).WithHeadroom(x.runtime).WithBuildLogs(logStore)
+	x.service.WithVerifier(x.sync).WithHeadroom(x.runtime).WithBuildLogs(x.logs)
 	if x.sweeper, err = environments.NewTeardownSweeper(repo, x.runtime, log, 50); err != nil {
 		return nil, err
 	}
@@ -117,9 +121,13 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 // newEgressGateway prepares the egress proxy. The worker owns its
 // owner-approved outbound forwarding and exports its connection metrics.
 func newEgressGateway(in pipelineInput) (*egress.Gateway, error) {
-	gateway, err := egress.NewGateway(in.docker, in.cfg.EgressImage)
-	if err != nil {
-		return nil, err
+	gateway := in.gateway
+	if gateway == nil {
+		var err error
+		gateway, err = egress.NewGateway(in.docker, in.cfg.EgressImage)
+		if err != nil {
+			return nil, err
+		}
 	}
 	outboundPorts, err := in.cfg.OutboundPorts()
 	if err != nil {
@@ -155,7 +163,7 @@ func newPreparer(in pipelineInput, workspaces *source.Workspaces, catalog config
 	if err != nil {
 		return nil, err
 	}
-	return source.NewPreparer(archives, workspaces, source.DefaultLimits(), repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: catalog})
+	return source.NewPreparer(archives, workspaces, source.DefaultLimits(), repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: catalog, BuildTimeout: in.cfg.BuildTimeout})
 }
 
 func newRuntime(in pipelineInput, instance string, gateway *egress.Gateway, preparer *source.Preparer, builder *builds.Builder, provider *secrets.Provider, logStore *buildlogs.Store) (*runtime.Runtime, error) {
@@ -176,6 +184,8 @@ func newRouteController(in pipelineInput, repo *environments.Repository, rt *run
 	settings := routing.Settings{
 		BaseDomain: cfg.PreviewBaseDomain, EntryPoint: cfg.RouterEntryPoint,
 		UnavailableURL: strings.TrimSuffix(cfg.AppBaseURL, "/") + routing.UnavailablePath,
+		WakeURL:        strings.TrimSuffix(cfg.AppBaseURL, "/") + routing.WakePath,
+		AccessURL:      cfg.PreviewAccessURL,
 	}
 	traefik, err := routing.NewTraefik(in.docker, cfg.RouterContainer, cfg.RouterAPIAddress)
 	if err != nil {

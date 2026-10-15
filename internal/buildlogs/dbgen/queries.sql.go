@@ -11,6 +11,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const allocateFinishedLines = `-- name: AllocateFinishedLines :one
+UPDATE build_log_streams SET next_sequence = next_sequence + $1::bigint,
+    stored_bytes = stored_bytes + $2::bigint,
+    truncated = truncated OR $3::boolean,
+    omitted_lines = omitted_lines + $4::bigint,
+    lost_lines = lost_lines + $5::bigint,
+    updated_at = clock_timestamp()
+WHERE environment_id = $6 AND epoch = $7 AND state = 'finished' AND pruned_at IS NULL
+RETURNING (next_sequence - $1::bigint)::bigint AS first_sequence
+`
+
+type AllocateFinishedLinesParams struct {
+	Lines         int64
+	Bytes         int64
+	Truncated     bool
+	Omitted       int64
+	Lost          int64
+	EnvironmentID int64
+	Epoch         int64
+}
+
+// AllocateLines for a section added to a finished stream: a newer attempt
+// (epoch), an expiry or a deletion fences it.
+func (q *Queries) AllocateFinishedLines(ctx context.Context, arg AllocateFinishedLinesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, allocateFinishedLines,
+		arg.Lines,
+		arg.Bytes,
+		arg.Truncated,
+		arg.Omitted,
+		arg.Lost,
+		arg.EnvironmentID,
+		arg.Epoch,
+	)
+	var first_sequence int64
+	err := row.Scan(&first_sequence)
+	return first_sequence, err
+}
+
 const allocateLines = `-- name: AllocateLines :one
 UPDATE build_log_streams SET next_sequence = next_sequence + $1::bigint,
     stored_bytes = stored_bytes + $2::bigint,
@@ -48,6 +86,23 @@ func (q *Queries) AllocateLines(ctx context.Context, arg AllocateLinesParams) (i
 	var first_sequence int64
 	err := row.Scan(&first_sequence)
 	return first_sequence, err
+}
+
+const deleteAttemptLines = `-- name: DeleteAttemptLines :execrows
+DELETE FROM build_logs WHERE environment_id = $1 AND epoch = $2
+`
+
+type DeleteAttemptLinesParams struct {
+	EnvironmentID int64
+	Epoch         int64
+}
+
+func (q *Queries) DeleteAttemptLines(ctx context.Context, arg DeleteAttemptLinesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAttemptLines, arg.EnvironmentID, arg.Epoch)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteStreamLines = `-- name: DeleteStreamLines :execrows
@@ -125,10 +180,11 @@ func (q *Queries) FinishStream(ctx context.Context, arg FinishStreamParams) (int
 }
 
 const insertLines = `-- name: InsertLines :exec
-INSERT INTO build_logs (environment_id, epoch, sequence, kind, line)
-SELECT $1::bigint, $2::bigint, $3::bigint + k.ord - 1, k.kind, t.line
+INSERT INTO build_logs (environment_id, epoch, sequence, kind, line, created_at)
+SELECT $1::bigint, $2::bigint, $3::bigint + k.ord - 1, k.kind, t.line, a.at
 FROM unnest($4::text[]) WITH ORDINALITY AS k(kind, ord)
 JOIN unnest($5::text[]) WITH ORDINALITY AS t(line, ord) ON t.ord = k.ord
+JOIN unnest($6::timestamptz[]) WITH ORDINALITY AS a(at, ord) ON a.ord = k.ord
 `
 
 type InsertLinesParams struct {
@@ -137,8 +193,10 @@ type InsertLinesParams struct {
 	FirstSequence int64
 	Kinds         []string
 	Texts         []string
+	Times         []pgtype.Timestamptz
 }
 
+// created_at is when the writer received each line, not the batch's time.
 func (q *Queries) InsertLines(ctx context.Context, arg InsertLinesParams) error {
 	_, err := q.db.Exec(ctx, insertLines,
 		arg.EnvironmentID,
@@ -146,12 +204,13 @@ func (q *Queries) InsertLines(ctx context.Context, arg InsertLinesParams) error 
 		arg.FirstSequence,
 		arg.Kinds,
 		arg.Texts,
+		arg.Times,
 	)
 	return err
 }
 
 const linesBefore = `-- name: LinesBefore :many
-SELECT sequence, kind, line FROM build_logs
+SELECT sequence, kind, line, created_at FROM build_logs
 WHERE environment_id = $1 AND epoch = $2 AND sequence < $3
 ORDER BY sequence DESC LIMIT $4
 `
@@ -164,9 +223,10 @@ type LinesBeforeParams struct {
 }
 
 type LinesBeforeRow struct {
-	Sequence int64
-	Kind     string
-	Line     string
+	Sequence  int64
+	Kind      string
+	Line      string
+	CreatedAt pgtype.Timestamptz
 }
 
 func (q *Queries) LinesBefore(ctx context.Context, arg LinesBeforeParams) ([]LinesBeforeRow, error) {
@@ -183,7 +243,12 @@ func (q *Queries) LinesBefore(ctx context.Context, arg LinesBeforeParams) ([]Lin
 	var items []LinesBeforeRow
 	for rows.Next() {
 		var i LinesBeforeRow
-		if err := rows.Scan(&i.Sequence, &i.Kind, &i.Line); err != nil {
+		if err := rows.Scan(
+			&i.Sequence,
+			&i.Kind,
+			&i.Line,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -195,7 +260,7 @@ func (q *Queries) LinesBefore(ctx context.Context, arg LinesBeforeParams) ([]Lin
 }
 
 const linesFrom = `-- name: LinesFrom :many
-SELECT sequence, kind, line FROM build_logs
+SELECT sequence, kind, line, created_at FROM build_logs
 WHERE environment_id = $1 AND epoch = $2 AND sequence >= $3
 ORDER BY sequence LIMIT $4
 `
@@ -208,9 +273,10 @@ type LinesFromParams struct {
 }
 
 type LinesFromRow struct {
-	Sequence int64
-	Kind     string
-	Line     string
+	Sequence  int64
+	Kind      string
+	Line      string
+	CreatedAt pgtype.Timestamptz
 }
 
 func (q *Queries) LinesFrom(ctx context.Context, arg LinesFromParams) ([]LinesFromRow, error) {
@@ -227,7 +293,12 @@ func (q *Queries) LinesFrom(ctx context.Context, arg LinesFromParams) ([]LinesFr
 	var items []LinesFromRow
 	for rows.Next() {
 		var i LinesFromRow
-		if err := rows.Scan(&i.Sequence, &i.Kind, &i.Line); err != nil {
+		if err := rows.Scan(
+			&i.Sequence,
+			&i.Kind,
+			&i.Line,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -236,6 +307,47 @@ func (q *Queries) LinesFrom(ctx context.Context, arg LinesFromParams) ([]LinesFr
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockDeletableStream = `-- name: LockDeletableStream :one
+SELECT s.epoch FROM build_log_streams s
+JOIN environments e ON e.id = s.environment_id
+LEFT JOIN build_intents b ON b.pull_request_id = e.pull_request_id
+WHERE s.environment_id = $1 AND s.epoch = $2 AND s.pruned_at IS NULL
+  AND (s.state = 'finished' OR b.pull_request_id IS NULL OR b.state NOT IN ('pending', 'queued', 'running')
+       OR b.generation <> s.generation OR b.revision <> s.revision)
+FOR UPDATE OF s
+`
+
+type LockDeletableStreamParams struct {
+	EnvironmentID int64
+	Epoch         int64
+}
+
+// An attempt's logs can be deleted once it finished, or once it can no
+// longer write: it is not the PR's running request (a crashed attempt).
+func (q *Queries) LockDeletableStream(ctx context.Context, arg LockDeletableStreamParams) (int64, error) {
+	row := q.db.QueryRow(ctx, lockDeletableStream, arg.EnvironmentID, arg.Epoch)
+	var epoch int64
+	err := row.Scan(&epoch)
+	return epoch, err
+}
+
+const markStreamDeleted = `-- name: MarkStreamDeleted :exec
+UPDATE build_log_streams SET state = 'finished', finished_at = coalesce(finished_at, clock_timestamp()),
+    pruned_at = clock_timestamp(), deleted_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE environment_id = $1 AND epoch = $2
+`
+
+type MarkStreamDeletedParams struct {
+	EnvironmentID int64
+	Epoch         int64
+}
+
+// Finishing the stream fences any late writer of the attempt.
+func (q *Queries) MarkStreamDeleted(ctx context.Context, arg MarkStreamDeletedParams) error {
+	_, err := q.db.Exec(ctx, markStreamDeleted, arg.EnvironmentID, arg.Epoch)
+	return err
 }
 
 const markStreamPruned = `-- name: MarkStreamPruned :execrows
@@ -337,8 +449,41 @@ func (q *Queries) OwnedTarget(ctx context.Context, arg OwnedTargetParams) (Owned
 	return i, err
 }
 
+const readFinishedStream = `-- name: ReadFinishedStream :one
+SELECT epoch, next_sequence, stored_bytes, truncated FROM build_log_streams
+WHERE environment_id = $1 AND generation = $2 AND revision = $3
+  AND state = 'finished' AND pruned_at IS NULL
+`
+
+type ReadFinishedStreamParams struct {
+	EnvironmentID int64
+	Generation    int64
+	Revision      int64
+}
+
+type ReadFinishedStreamRow struct {
+	Epoch        int64
+	NextSequence int64
+	StoredBytes  int64
+	Truncated    bool
+}
+
+// A published attempt's finished stream, still readable, for a section
+// added after the attempt (a live preview's crash).
+func (q *Queries) ReadFinishedStream(ctx context.Context, arg ReadFinishedStreamParams) (ReadFinishedStreamRow, error) {
+	row := q.db.QueryRow(ctx, readFinishedStream, arg.EnvironmentID, arg.Generation, arg.Revision)
+	var i ReadFinishedStreamRow
+	err := row.Scan(
+		&i.Epoch,
+		&i.NextSequence,
+		&i.StoredBytes,
+		&i.Truncated,
+	)
+	return i, err
+}
+
 const readStream = `-- name: ReadStream :one
-SELECT environment_id, epoch, generation, revision, head_sha, state, next_sequence, stored_bytes, truncated, omitted_lines, lost_lines, opened_at, finished_at, pruned_at, updated_at FROM build_log_streams WHERE environment_id = $1
+SELECT environment_id, epoch, generation, revision, head_sha, state, next_sequence, stored_bytes, truncated, omitted_lines, lost_lines, opened_at, finished_at, pruned_at, updated_at, deleted_at FROM build_log_streams WHERE environment_id = $1
 `
 
 func (q *Queries) ReadStream(ctx context.Context, environmentID int64) (BuildLogStream, error) {
@@ -360,6 +505,121 @@ func (q *Queries) ReadStream(ctx context.Context, environmentID int64) (BuildLog
 		&i.FinishedAt,
 		&i.PrunedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
+}
+
+const searchBefore = `-- name: SearchBefore :many
+SELECT sequence, kind, line, created_at FROM build_logs
+WHERE environment_id = $1 AND epoch = $2
+  AND sequence < $3::bigint
+  AND ($4::text = '' OR kind = $4::text)
+  AND strpos(lower(line), lower($5::text)) > 0
+ORDER BY sequence DESC LIMIT $6::int
+`
+
+type SearchBeforeParams struct {
+	EnvironmentID int64
+	Epoch         int64
+	Position      int64
+	Kind          string
+	Query         string
+	MaxLines      int32
+}
+
+type SearchBeforeRow struct {
+	Sequence  int64
+	Kind      string
+	Line      string
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) SearchBefore(ctx context.Context, arg SearchBeforeParams) ([]SearchBeforeRow, error) {
+	rows, err := q.db.Query(ctx, searchBefore,
+		arg.EnvironmentID,
+		arg.Epoch,
+		arg.Position,
+		arg.Kind,
+		arg.Query,
+		arg.MaxLines,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchBeforeRow
+	for rows.Next() {
+		var i SearchBeforeRow
+		if err := rows.Scan(
+			&i.Sequence,
+			&i.Kind,
+			&i.Line,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchFrom = `-- name: SearchFrom :many
+SELECT sequence, kind, line, created_at FROM build_logs
+WHERE environment_id = $1 AND epoch = $2
+  AND sequence >= $3::bigint
+  AND ($4::text = '' OR kind = $4::text)
+  AND strpos(lower(line), lower($5::text)) > 0
+ORDER BY sequence LIMIT $6::int
+`
+
+type SearchFromParams struct {
+	EnvironmentID int64
+	Epoch         int64
+	Position      int64
+	Kind          string
+	Query         string
+	MaxLines      int32
+}
+
+type SearchFromRow struct {
+	Sequence  int64
+	Kind      string
+	Line      string
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) SearchFrom(ctx context.Context, arg SearchFromParams) ([]SearchFromRow, error) {
+	rows, err := q.db.Query(ctx, searchFrom,
+		arg.EnvironmentID,
+		arg.Epoch,
+		arg.Position,
+		arg.Kind,
+		arg.Query,
+		arg.MaxLines,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchFromRow
+	for rows.Next() {
+		var i SearchFromRow
+		if err := rows.Scan(
+			&i.Sequence,
+			&i.Kind,
+			&i.Line,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

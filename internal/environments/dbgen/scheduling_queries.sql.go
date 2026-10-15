@@ -11,12 +11,32 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const accountBuildSeconds = `-- name: AccountBuildSeconds :one
+SELECT coalesce((SELECT build_seconds FROM account_build_usage WHERE user_id = $1 AND day = $2), 0)::bigint
+`
+
+type AccountBuildSecondsParams struct {
+	UserID int64
+	Day    pgtype.Date
+}
+
+func (q *Queries) AccountBuildSeconds(ctx context.Context, arg AccountBuildSecondsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, accountBuildSeconds, arg.UserID, arg.Day)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const claimBuildIntent = `-- name: ClaimBuildIntent :execrows
 UPDATE build_intents b SET state = 'running', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp(),
     waiting_revision = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_revision END,
-    waiting_reason = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_reason END
-FROM pull_requests pr
+    waiting_reason = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_reason END,
+    waiting_since = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_since END,
+    waiting_checked_at = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_checked_at END
+FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
 WHERE b.pull_request_id = pr.id AND pr.id = $1
+    AND (b.source = 'manual' OR b.state = 'running'
+         OR NOT (pr.is_fork OR pr.head_repo_id IS NULL OR pr.head_repo_id IS DISTINCT FROM r.github_repo_id))
     AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = $2 AND pr.head_sha = $3
     AND b.generation = pr.generation AND b.head_sha = pr.head_sha AND b.revision = $4
     AND b.state IN ('pending','queued','running') AND b.available_at <= $5
@@ -33,7 +53,8 @@ type ClaimBuildIntentParams struct {
 }
 
 // Admission ends a wait for a build slot; a running request that waits for
-// preview capacity or disk keeps its note until a result is applied.
+// preview capacity or disk keeps its note until a result is applied. An
+// automatic request never starts for a fork's code (see LockIntentPR).
 func (q *Queries) ClaimBuildIntent(ctx context.Context, arg ClaimBuildIntentParams) (int64, error) {
 	result, err := q.db.Exec(ctx, claimBuildIntent,
 		arg.PrID,
@@ -60,7 +81,7 @@ func (q *Queries) ClearBuildLogs(ctx context.Context, pullRequestID int64) error
 }
 
 const clearIntentWaiting = `-- name: ClearIntentWaiting :execrows
-UPDATE build_intents SET waiting_revision = NULL, waiting_reason = NULL, updated_at = clock_timestamp()
+UPDATE build_intents SET waiting_revision = NULL, waiting_reason = NULL, waiting_since = NULL, waiting_checked_at = NULL, updated_at = clock_timestamp()
 WHERE pull_request_id = $1 AND revision = $2 AND waiting_revision IS NOT NULL
 `
 
@@ -96,6 +117,26 @@ func (q *Queries) CompleteTeardownRequest(ctx context.Context, arg CompleteTeard
 	return result.RowsAffected(), nil
 }
 
+const countAccountRunningBuilds = `-- name: CountAccountRunningBuilds :one
+SELECT count(*) FROM build_intents b
+JOIN pull_requests p ON p.id = b.pull_request_id
+JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+WHERE b.state = 'running' AND b.pull_request_id <> $1 AND i.owner_user_id = $2::bigint
+`
+
+type CountAccountRunningBuildsParams struct {
+	PrID        int64
+	OwnerUserID int64
+}
+
+// Running builds of other PRs of one account (installation owner).
+func (q *Queries) CountAccountRunningBuilds(ctx context.Context, arg CountAccountRunningBuildsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAccountRunningBuilds, arg.PrID, arg.OwnerUserID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countRunningBuilds = `-- name: CountRunningBuilds :one
 SELECT count(*) FROM build_intents WHERE state = 'running' AND pull_request_id <> $1
 `
@@ -123,7 +164,7 @@ func (q *Queries) FindPROwner(ctx context.Context, id int64) (pgtype.Int8, error
 
 const finishBuildIntent = `-- name: FinishBuildIntent :execrows
 UPDATE build_intents b SET state = $1, completed_at = clock_timestamp(), updated_at = clock_timestamp(),
-    waiting_revision = NULL, waiting_reason = NULL
+    waiting_revision = NULL, waiting_reason = NULL, waiting_since = NULL, waiting_checked_at = NULL
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = $2
     AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = $3
@@ -221,7 +262,9 @@ func (q *Queries) LockSchedulingPR(ctx context.Context, id int64) (LockSchedulin
 }
 
 const markIntentWaiting = `-- name: MarkIntentWaiting :execrows
-UPDATE build_intents SET waiting_revision = $1::bigint, waiting_reason = $2::text, updated_at = clock_timestamp()
+UPDATE build_intents SET waiting_revision = $1::bigint, waiting_reason = $2::text, updated_at = clock_timestamp(),
+    waiting_since = CASE WHEN waiting_revision = $1::bigint AND waiting_since IS NOT NULL THEN waiting_since ELSE clock_timestamp() END,
+    waiting_checked_at = clock_timestamp()
 WHERE pull_request_id = $3 AND generation = $4::bigint AND revision = $1::bigint
   AND state IN ('pending', 'queued', 'running')
   AND (waiting_revision IS DISTINCT FROM $1::bigint OR waiting_reason IS DISTINCT FROM $2::text)
@@ -235,7 +278,8 @@ type MarkIntentWaitingParams struct {
 }
 
 // Notes that the current request waits for capacity or disk space. Reports
-// follow only when the note changes.
+// follow only when the note changes. waiting_since keeps the start of the
+// wait while the same revision keeps waiting, whatever the reason.
 func (q *Queries) MarkIntentWaiting(ctx context.Context, arg MarkIntentWaitingParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markIntentWaiting,
 		arg.Revision,
@@ -247,6 +291,61 @@ func (q *Queries) MarkIntentWaiting(ctx context.Context, arg MarkIntentWaitingPa
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const nextWaitingBuild = `-- name: NextWaitingBuild :one
+SELECT b.pull_request_id FROM build_intents b
+JOIN pull_requests p ON p.id = b.pull_request_id
+JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+WHERE b.state IN ('pending', 'queued') AND b.waiting_reason IN ('capacity', 'account') AND b.waiting_revision = b.revision
+  AND b.waiting_checked_at > $1
+ORDER BY EXISTS (
+    SELECT 1 FROM build_intents rb
+    JOIN pull_requests rp ON rp.id = rb.pull_request_id
+    JOIN repos rr ON rr.id = rp.repo_id JOIN installations ri ON ri.id = rr.installation_id
+    WHERE rb.state = 'running' AND ri.owner_user_id = i.owner_user_id), b.waiting_since, b.pull_request_id
+LIMIT 1
+`
+
+// The waiting request whose turn is next when a slot frees: accounts with
+// nothing building first, then the longest wait.
+func (q *Queries) NextWaitingBuild(ctx context.Context, liveAfter pgtype.Timestamptz) (int64, error) {
+	row := q.db.QueryRow(ctx, nextWaitingBuild, liveAfter)
+	var pull_request_id int64
+	err := row.Scan(&pull_request_id)
+	return pull_request_id, err
+}
+
+const olderWaiterFromIdleAccount = `-- name: OlderWaiterFromIdleAccount :one
+SELECT EXISTS (
+    SELECT 1 FROM build_intents b
+    JOIN pull_requests p ON p.id = b.pull_request_id
+    JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+    WHERE b.state IN ('pending', 'queued') AND b.waiting_reason = 'capacity' AND b.waiting_revision = b.revision
+      AND b.waiting_since < $1 AND b.waiting_checked_at > $2
+      AND i.owner_user_id IS DISTINCT FROM $3::bigint
+      AND NOT EXISTS (
+          SELECT 1 FROM build_intents rb
+          JOIN pull_requests rp ON rp.id = rb.pull_request_id
+          JOIN repos rr ON rr.id = rp.repo_id JOIN installations ri ON ri.id = rr.installation_id
+          WHERE rb.state = 'running' AND ri.owner_user_id = i.owner_user_id)
+)::boolean
+`
+
+type OlderWaiterFromIdleAccountParams struct {
+	Since       pgtype.Timestamptz
+	LiveAfter   pgtype.Timestamptz
+	OwnerUserID int64
+}
+
+// Whether another account with nothing building has waited longer for a
+// build slot: then the last free slot is its turn. Only waits that looked
+// again since live_after count, so an abandoned wait never holds a turn.
+func (q *Queries) OlderWaiterFromIdleAccount(ctx context.Context, arg OlderWaiterFromIdleAccountParams) (bool, error) {
+	row := q.db.QueryRow(ctx, olderWaiterFromIdleAccount, arg.Since, arg.LiveAfter, arg.OwnerUserID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const queueCurrentIntent = `-- name: QueueCurrentIntent :execrows
@@ -267,6 +366,46 @@ func (q *Queries) QueueCurrentIntent(ctx context.Context, arg QueueCurrentIntent
 	return result.RowsAffected(), nil
 }
 
+const readIntentWait = `-- name: ReadIntentWait :one
+SELECT state, waiting_since FROM build_intents WHERE pull_request_id = $1
+`
+
+type ReadIntentWaitRow struct {
+	State        string
+	WaitingSince pgtype.Timestamptz
+}
+
+func (q *Queries) ReadIntentWait(ctx context.Context, pullRequestID int64) (ReadIntentWaitRow, error) {
+	row := q.db.QueryRow(ctx, readIntentWait, pullRequestID)
+	var i ReadIntentWaitRow
+	err := row.Scan(&i.State, &i.WaitingSince)
+	return i, err
+}
+
+const recordFinishedBuildTime = `-- name: RecordFinishedBuildTime :exec
+INSERT INTO account_build_usage (user_id, day, build_seconds, builds)
+SELECT i.owner_user_id, (b.completed_at AT TIME ZONE 'UTC')::date,
+       GREATEST(0, floor(extract(epoch FROM b.completed_at - b.started_at)))::bigint, 1
+FROM build_intents b
+JOIN pull_requests p ON p.id = b.pull_request_id
+JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+WHERE b.pull_request_id = $1 AND b.revision = $2
+  AND b.completed_at IS NOT NULL AND b.started_at IS NOT NULL AND i.owner_user_id IS NOT NULL
+ON CONFLICT (user_id, day) DO UPDATE SET build_seconds = account_build_usage.build_seconds + EXCLUDED.build_seconds,
+    builds = account_build_usage.builds + 1
+`
+
+type RecordFinishedBuildTimeParams struct {
+	PrID     int64
+	Revision int64
+}
+
+// Adds a finished build's time to its account's day (UTC).
+func (q *Queries) RecordFinishedBuildTime(ctx context.Context, arg RecordFinishedBuildTimeParams) error {
+	_, err := q.db.Exec(ctx, recordFinishedBuildTime, arg.PrID, arg.Revision)
+	return err
+}
+
 const resetBuildLogStream = `-- name: ResetBuildLogStream :one
 INSERT INTO build_log_streams (environment_id, epoch, generation, revision, head_sha)
 SELECT e.id, 1, $1::bigint, $2::bigint, $3::text
@@ -274,7 +413,7 @@ FROM environments e WHERE e.pull_request_id = $4
 ON CONFLICT (environment_id) DO UPDATE SET epoch = build_log_streams.epoch + 1,
     generation = EXCLUDED.generation, revision = EXCLUDED.revision, head_sha = EXCLUDED.head_sha,
     state = 'open', next_sequence = 0, stored_bytes = 0, truncated = false, omitted_lines = 0,
-    lost_lines = 0, opened_at = clock_timestamp(), finished_at = NULL, pruned_at = NULL,
+    lost_lines = 0, opened_at = clock_timestamp(), finished_at = NULL, pruned_at = NULL, deleted_at = NULL,
     updated_at = clock_timestamp()
 RETURNING environment_id, epoch
 `
@@ -305,4 +444,20 @@ func (q *Queries) ResetBuildLogStream(ctx context.Context, arg ResetBuildLogStre
 	var i ResetBuildLogStreamRow
 	err := row.Scan(&i.EnvironmentID, &i.Epoch)
 	return i, err
+}
+
+const touchIntentWaiting = `-- name: TouchIntentWaiting :exec
+UPDATE build_intents SET waiting_checked_at = clock_timestamp()
+WHERE pull_request_id = $1 AND waiting_revision = $2::bigint
+`
+
+type TouchIntentWaitingParams struct {
+	PrID     int64
+	Revision int64
+}
+
+// A waiting request looked again: it still holds its turn.
+func (q *Queries) TouchIntentWaiting(ctx context.Context, arg TouchIntentWaitingParams) error {
+	_, err := q.db.Exec(ctx, touchIntentWaiting, arg.PrID, arg.Revision)
+	return err
 }

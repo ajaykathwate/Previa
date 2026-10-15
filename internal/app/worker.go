@@ -71,6 +71,9 @@ func RunWorker(ctx context.Context, logger *slog.Logger) error {
 	for _, reason := range p.unavailable {
 		logger.Warn("capability unavailable", "reason", reason)
 	}
+	for _, loop := range p.background {
+		go loop(ctx) // Ends with the process context.
+	}
 	checks := append(databaseChecks(pool),
 		httpx.Check{Name: "river", Run: func(context.Context) error {
 			select {

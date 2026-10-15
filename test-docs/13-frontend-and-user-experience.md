@@ -24,7 +24,7 @@ Content-Security-Policy, and any JavaScript error or CSP violation fails it.
 
 - [x] **TC-UI-NAV-001 · Public pages are open; the workspace needs sign-in**  
   Type: Positive · Priority: P1 · Level: Browser  
-  Steps: Visit the home page, its anchors and `/faq` signed out; request the dashboard, repositories, Builds, Environments and developer tools.  
+  Steps: Visit the home page, its anchors and `/faq` signed out; request the dashboard, repositories, Builds, Previews and developer tools.  
   Expected: The home page and FAQ are public; every workspace page redirects to sign-in; the public home offers no workspace actions.  
   Evidence: browser › *public home and protected dashboard access*; `internal/dashboard` › `TestHomeUsesLayout`; `internal/dashboard` › `TestFAQIsPublicOnHomeAndAPageInTheWorkspace`
 
@@ -114,13 +114,13 @@ Content-Security-Policy, and any JavaScript error or CSP violation fails it.
   Type: Resilience · Priority: P2 · Level: Browser  
   Steps: Expire the session, then select a repository panel.  
   Expected: The whole document navigates to sign-in instead of a broken panel.  
-  Evidence: browser › *expired sessions during panel selection navigate the whole document to sign-in*
+  Evidence: browser › *expired sessions navigate through sign-in and return to the requested page*
 
 ## 4. Accessibility (TC-UI-A11Y)
 
 - [x] **TC-UI-A11Y-001 · Every page passes the basic accessibility checks**  
   Type: Accessibility · Priority: P1 · Level: Browser  
-  Steps: Audit the home page and 12 workspace pages (dashboard, repositories, workspace, two PRs, Secrets, Outbound, logs, Builds, Environments, FAQ, developer tools).  
+  Steps: Audit the home page and 12 workspace pages (dashboard, repositories, workspace, two PRs, Secrets, Outbound, logs, Builds, Previews, FAQ, developer tools).  
   Expected: A page language, a title, exactly one `h1`, a `main` landmark, an accessible name on every visible link, button, switch and summary, a label on every field, `alt` on every image, and no duplicate IDs.  
   Evidence: browser › *every page passes basic accessibility checks*
 
@@ -170,11 +170,11 @@ Content-Security-Policy, and any JavaScript error or CSP violation fails it.
   Expected: No actions are offered, the reason is stated, and forced mutations are refused.  
   Evidence: browser › *unavailable repository PRs offer no actions and say why*; browser › *unavailable repositories and empty PR states remain clear and cannot request mutations*; `internal/pullrequests` › `TestWorkspaceHTTPAuthorizationCSRFActions`
 
-- [x] **TC-UI-STATE-003 · Builds and Environments show addresses, waits and failures**  
+- [x] **TC-UI-STATE-003 · Previews show what is live, Builds show attempts, waits and failures**  
   Type: Positive · Priority: P2 · Level: Browser + Integration  
-  Steps: Open both lists with a live preview on an older commit, a waiting request and a failed one; tear one down from its row.  
-  Expected: Addresses link out, waits and failures are explained, teardown confirms per row.  
-  Evidence: browser › *Environments and Builds show addresses, waits and failures, and teardown confirms per row*; `internal/pullrequests` › `TestEnvironmentsAndBuildsShowRealDeliveryState`
+  Steps: Open both lists with a live preview on an older commit, a preview whose newer build failed, a waiting request, and a first build that failed before going live; click a Previews row outside its title; open `/environments`; tear one down from its row.  
+  Expected: Previews lists only what serves a commit (Live, Live · updating, Live · update failed, Removing) with **Open preview** as the row's action; the never-live failure is on Builds only; clicking a Previews row stays on the page; `/environments` moves to `/previews`; waits and failures are explained; teardown confirms per row.  
+  Evidence: browser › *Previews show what is live with its link, Builds show attempts, and teardown confirms per row*; `internal/pullrequests` › `TestPreviewsAndBuildsShowRealDeliveryState`, `TestPreviewsListOnlyWhatServes`
 
 - [x] **TC-UI-STATE-004 · The Overview reflects real state only**  
   Type: Positive · Priority: P2 · Level: Browser + Unit  

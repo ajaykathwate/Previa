@@ -75,7 +75,7 @@ CSRF rules every page and action depends on.
   Type: Usability · Priority: P2 · Level: Integration + Browser  
   Steps: Let the session expire, then select a repository panel (an in-page request).  
   Expected: The server answers 401 with `HX-Redirect`; the browser navigates the whole document to sign-in instead of showing a broken panel.  
-  Evidence: `internal/auth` › `TestExpiredSessionHTMXRedirectsWholeDocument`; browser › *expired sessions during panel selection navigate the whole document to sign-in*
+  Evidence: `internal/auth` › `TestExpiredSessionHTMXRedirectsWholeDocument`; browser › *expired sessions navigate through sign-in and return to the requested page*
 
 ## 3. Sign-out (TC-AUTH-OUT)
 
@@ -95,7 +95,7 @@ CSRF rules every page and action depends on.
 
 - [x] **TC-AUTH-ACC-001 · Every protected page sends anonymous visitors to sign in**  
   Type: Negative · Priority: P1 · Level: Integration (assembled server) + Browser  
-  Steps: Request the dashboard, repositories, a workspace, a PR, its logs, Secrets, Outbound, Builds, Environments and sign-out signed out; repeat as in-page (htmx) requests.  
+  Steps: Request the dashboard, repositories, a workspace, a PR, its logs, Secrets, Outbound, Builds, Previews (and its former `/environments` address) and sign-out signed out; repeat as in-page (htmx) requests.  
   Expected: Page requests get 303 to `/auth/github/login`; in-page requests get 401 with `HX-Redirect`.  
   Evidence: `internal/app` › `TestServerRoutesRegression/protected_pages_send_anonymous_visitors_to_sign_in`; browser › *public home and protected dashboard access*
 

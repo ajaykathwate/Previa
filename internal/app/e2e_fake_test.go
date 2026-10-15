@@ -32,16 +32,17 @@ const (
 // repository and PR (verification), exact-commit tarballs (source), and issue
 // comments and check runs (reports).
 type fakeGitHub struct {
-	t        *testing.T
-	server   *httptest.Server
-	mu       sync.Mutex
-	head     string
-	updated  time.Time
-	archives map[string][]byte // commit -> tar.gz
-	fetched  map[string]int    // commit -> archive downloads (builds)
-	comments map[int64]string
-	checks   map[int64]*fakeRun
-	nextID   int64
+	t          *testing.T
+	server     *httptest.Server
+	mu         sync.Mutex
+	head       string
+	updated    time.Time
+	archives   map[string][]byte // commit -> tar.gz
+	fetched    map[string]int    // commit -> archive downloads (builds)
+	comments   map[int64]string
+	commentPRs map[int64]int
+	checks     map[int64]*fakeRun
+	nextID     int64
 	// reportsDown makes comment and check-run calls fail with 502 (a partial
 	// GitHub outage); rejected counts them.
 	reportsDown bool
@@ -60,7 +61,7 @@ type fakeRun struct {
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
-	f := &fakeGitHub{t: t, archives: map[string][]byte{}, fetched: map[string]int{}, comments: map[int64]string{}, checks: map[int64]*fakeRun{}, nextID: 5000}
+	f := &fakeGitHub{t: t, archives: map[string][]byte{}, fetched: map[string]int{}, comments: map[int64]string{}, commentPRs: map[int64]int{}, checks: map[int64]*fakeRun{}, nextID: 5000}
 	f.server = httptest.NewTLSServer(f)
 	t.Cleanup(f.server.Close)
 	return f
@@ -140,8 +141,10 @@ func (f *fakeGitHub) rejectedReports() int {
 func (f *fakeGitHub) livingComment() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, body := range f.comments {
-		return body
+	for id, body := range f.comments {
+		if f.commentPRs[id] == e2ePRNumber {
+			return body
+		}
 	}
 	return ""
 }
@@ -149,7 +152,25 @@ func (f *fakeGitHub) livingComment() string {
 func (f *fakeGitHub) commentCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return len(f.comments)
+	n := 0
+	for _, number := range f.commentPRs {
+		if number == e2ePRNumber {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *fakeGitHub) commentPR(path, repoPath string) int {
+	prefix := repoPath + "/issues/"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, "/comments") {
+		return 0
+	}
+	number, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, prefix), "/comments"))
+	if err == nil && (number == e2ePRNumber || f.forks[number] != "") {
+		return number
+	}
+	return 0
 }
 
 func (f *fakeGitHub) run(commit string, revision int64) *fakeRun {
@@ -231,18 +252,22 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.fetched[commit]++
 		w.Header().Set("Content-Type", "application/gzip")
 		_, _ = w.Write(data)
-	case path == repoPath+"/issues/"+strconv.Itoa(e2ePRNumber)+"/comments":
+	case f.commentPR(path, repoPath) != 0:
+		number := f.commentPR(path, repoPath)
 		if r.Method == http.MethodPost {
 			var body struct{ Body string }
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.nextID++
 			f.comments[f.nextID] = body.Body
+			f.commentPRs[f.nextID] = number
 			write(201, comment(f.nextID))
 			return
 		}
 		var list []map[string]any
 		for id := range f.comments {
-			list = append(list, comment(id))
+			if f.commentPRs[id] == number {
+				list = append(list, comment(id))
+			}
 		}
 		write(200, list)
 	case strings.HasPrefix(path, repoPath+"/issues/comments/"):
@@ -258,6 +283,7 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.comments[id] = body.Body
 		case http.MethodDelete:
 			delete(f.comments, id)
+			delete(f.commentPRs, id)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

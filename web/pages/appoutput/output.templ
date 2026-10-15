@@ -1,0 +1,111 @@
+package appoutput
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/logviewer"
+	"github.com/ajaykathwatee/previa/web/layouts"
+	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
+	"strconv"
+)
+
+// Output renders what a running preview's app prints, live. It reuses the
+// build log page's panel and live script; lines are text nodes, never markup.
+templ Output(username, csrf string, p OutputPage) {
+	@layouts.AppTrail("App output · #"+strconv.Itoa(int(p.Number))+" "+p.Name(), p.TrailParent(), "App output", username, csrf, components.NavBuilds) {
+		<div class="repository-workspace build-logs-page">
+			<header class="page-hero">
+				<div class="page-hero-main">
+					<span class="page-hero-icon" aria-hidden="true">
+						@components.ServerIcon()
+					</span>
+					<div class="page-hero-text">
+						<p class="page-hero-kicker">
+							<span>{ p.Repository }</span>
+							<span class="page-hero-kicker-sep" aria-hidden="true">·</span>
+							<span>#{ strconv.Itoa(int(p.Number)) }</span>
+						</p>
+						<h1>App output</h1>
+						if p.Title != "" {
+							<p class="page-hero-sub log-pr-title">{ p.Title }</p>
+						}
+					</div>
+				</div>
+				<div class="page-hero-actions">
+					<a class="hero-link" href={ templ.SafeURL(p.LogsURL()) }>
+						@components.LogsIcon()
+						Build logs
+					</a>
+					<a class="hero-link" href={ templ.SafeURL(p.PRURL()) }>
+						@components.PullRequestIcon()
+						Pull request
+					</a>
+				</div>
+			</header>
+			<section class="workspace-panel log-status" aria-labelledby="output-status-title">
+				<div class="log-status-main">
+					<h2 id="output-status-title" class="sr-only">Output status</h2>
+					<span class={ "badge", p.StatusTone } data-log-badge><span class="badge-dot" aria-hidden="true"></span><span data-log-label>{ p.StatusLabel }</span></span>
+					<p class="log-summary" role="status" data-log-summary>{ p.Summary }</p>
+					if p.DeployedSHA != "" {
+						<code class="sha" title={ p.DeployedSHA } data-log-sha>{ pages.Short(p.DeployedSHA) }</code>
+					}
+					if p.EventsURL != "" {
+						<span class="log-live" data-log-connection aria-live="polite">Live updates off</span>
+					}
+				</div>
+				<ul class="log-notices" data-log-notices>
+					for _, n := range p.Notices {
+						<li class={ "connection-notice", n.Tone }>
+							@components.InfoIcon()
+							<span>{ n.Text }</span>
+						</li>
+					}
+				</ul>
+				<template data-log-notice-template>
+					<li class="connection-notice">
+						@components.InfoIcon()
+						<span></span>
+					</li>
+				</template>
+			</section>
+			<section
+				class="workspace-panel log-panel"
+				data-log-panel
+				aria-labelledby="output-title"
+				if p.EventsURL != "" {
+					data-log-events={ p.EventsURL }
+					data-log-cursor={ p.Cursor() }
+				}
+			>
+				<header class="log-panel-header">
+					<div class="log-panel-title">
+						<h2 id="output-title">Output</h2>
+						<span class="log-panel-note">Live · secrets are masked · not stored</span>
+					</div>
+					<nav class="log-pager" aria-label="Output tools">
+						<a class="log-tool" href={ templ.SafeURL(p.OutputURL()) }>
+							@components.RestartIcon()
+							Refresh
+						</a>
+						<button type="button" class="copy-button log-tool" data-copy-lines="[data-log-lines]" aria-label="Copy the lines shown">
+							@components.CopyIcon()
+							<span data-copy-status aria-live="polite">Copy</span>
+						</button>
+						if p.EventsURL != "" {
+							<label class="log-follow" hidden data-log-follow-control>
+								<input type="checkbox" checked data-log-follow/>
+								Follow output
+							</label>
+						}
+					</nav>
+				</header>
+				<p class="log-empty" data-log-empty hidden?={ len(p.Lines) > 0 }>{ p.Empty }</p>
+				<ol class="log-lines" aria-label="App output" data-log-lines>
+					for _, line := range p.Lines {
+						@logviewer.Event(line)
+					}
+				</ol>
+			</section>
+		</div>
+	}
+}

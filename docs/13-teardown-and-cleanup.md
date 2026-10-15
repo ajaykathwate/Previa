@@ -99,6 +99,9 @@ cleanup_artifact ──► runtime.RemoveResource: inspect, verify labels, stop,
 
 ## Reopening and newer work
 
+- A fresh owner build after a local teardown clears the teardown-request marker
+  in the same transaction as its new intent. The completed-generation fence stays
+  for old jobs; reports, expiry and another owner teardown apply to the new preview.
 - A teardown records a tombstone in the route row. A removal is relevant only while
   no newer route version exists: after a reopened PR's activation is accepted, the
   old removal is superseded and never touches the new route.
@@ -131,7 +134,7 @@ in [10](10-preview-runtime.md)). Build logs follow their retention ([08](08-buil
 ## Owner teardown from the dashboard
 
 **Tear down preview** appears on an open PR's page (and **Tear down** on its
-Environments row) while it has a preview or unfinished work. It opens a confirmation
+Previews row) while it has a preview or unfinished work. It opens a confirmation
 dialog; the confirmed form is a CSRF-protected POST to
 `/repositories/{id}/pull-requests/{n}/teardown`. The handler resolves the PR for the
 signed-in owner only (another user's PR is a 404), refuses a closed or merged PR

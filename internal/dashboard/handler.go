@@ -8,6 +8,7 @@ import (
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
 	faqpages "github.com/ajaykathwatee/previa/web/pages/faq"
 	homepages "github.com/ajaykathwatee/previa/web/pages/home"
+	opensourcepages "github.com/ajaykathwatee/previa/web/pages/opensource"
 )
 
 // UserSession supplies identity and CSRF data needed by the web pages.
@@ -29,6 +30,12 @@ type handler struct {
 func (h *handler) home(w http.ResponseWriter, r *http.Request) {
 	_, loggedIn := h.users.Username(r.Context())
 	templ.Handler(homepages.Index(loggedIn)).ServeHTTP(w, r)
+}
+
+// openSourceTests shows the public Open Source Tests to everyone, signed in or not.
+func (h *handler) openSourceTests(w http.ResponseWriter, r *http.Request) {
+	_, loggedIn := h.users.Username(r.Context())
+	templ.Handler(opensourcepages.Page(loggedIn)).ServeHTTP(w, r)
 }
 
 func (h *handler) dashboard(w http.ResponseWriter, r *http.Request) {

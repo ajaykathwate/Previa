@@ -104,3 +104,40 @@ tests:
             exp_annotations:
               summary: The Docker host has under 20 GiB free at the last build.
               runbook: docs/24-incident-runbook.md#disk-exhaustion
+
+  - interval: 5m
+    input_series:
+      # Builds waited for capacity for 8 of the last 24 hours.
+      - series: 'previa_build_requests{state="queued",waiting="capacity"}'
+        values: '1x95 0x191'
+    alert_rule_test:
+      - eval_time: 23h
+        alertname: PreviaCapacityOutgrown
+        exp_alerts:
+          - exp_labels: {severity: info}
+            exp_annotations:
+              summary: Builds waited for a build slot, preview memory or disk over a quarter of the last day; the server may be too small.
+              runbook: docs/24-incident-runbook.md#capacity-outgrown
+
+  - interval: 5m
+    input_series:
+      # Two builds; one sent 1 GiB (above the 256 MiB bucket).
+      - series: 'previa_build_egress_bytes_count{direction="up"}'
+        values: '0 1 2 2 2'
+      - series: 'previa_build_egress_bytes_bucket{direction="up",le="2.68435456e+08"}'
+        values: '0 1 1 1 1'
+      - series: 'previa_build_egress_bytes_count{direction="down"}'
+        values: '0 1 2 2 2'
+      - series: 'previa_build_egress_bytes_bucket{direction="down",le="4.294967296e+09"}'
+        values: '0 1 2 2 2'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PreviaBuildHeavyUpload
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: A build uploaded more than 256 MiB in the last hour, which package installs never need.
+              runbook: docs/24-incident-runbook.md#unusual-build-traffic
+      - eval_time: 20m
+        alertname: PreviaBuildHeavyDownload
+        exp_alerts: []

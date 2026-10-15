@@ -86,7 +86,7 @@ func TestBackendConfigProblems(t *testing.T) {
 		name, yaml, code, field string
 		platform                Platform
 	}{
-		{"unknown service", "services: {mysql: 8}", "unknown_service", "services", backendPlatform()},
+		{"unknown service", "services: {mongo: 8}", "unknown_service", "services", backendPlatform()},
 		{"version not offered", "services: {postgres: 15}", "unknown_service_version", "services.postgres", backendPlatform()},
 		{"no catalog", "services: {postgres: 17}", "service_unavailable", "services.postgres", Platform{Limits: DefaultLimits()}},
 		{"kind not in catalog", "services: {redis: 7}", "service_unavailable", "services.redis", Platform{Limits: DefaultLimits(), Services: catalog{"postgres": {"17": "p@sha256:1"}}}},

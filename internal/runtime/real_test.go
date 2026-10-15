@@ -156,8 +156,8 @@ func (f fixedTarget) Current(context.Context, environments.Request) (Target, err
 	return f.target, nil
 }
 
-func (f fixedTarget) BaseRepository(context.Context, int64) (int64, error) {
-	return f.target.BaseRepoID, nil
+func (f fixedTarget) AdmissionScope(context.Context, int64) (Target, error) {
+	return f.target, nil
 }
 
 // processLock serializes admissions within the test process, as
@@ -588,6 +588,15 @@ func TestRealRuntimeAdmitsConcurrentCandidatesAtomically(t *testing.T) {
 	second, secondLogs := f.runtime(t, f.target(21, false), settings, budget)
 	first.admission, second.admission = lock, lock
 	image := f.listeningImage(t)
+	// Host capacity includes previews from every instance. Keep existing
+	// previews running and leave room for exactly one test candidate above
+	// their reservations, rather than assuming an empty Docker host.
+	used, err := first.usage(t.Context(), f.target(20, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.policy.MemoryBudget += used.memory
+	second.policy.MemoryBudget += used.memory
 	results := make(chan error, 2)
 	for i, r := range []*Runtime{first, second} {
 		target := f.target(int64(20+i), false)
@@ -617,7 +626,7 @@ func TestRealRuntimeAdmitsConcurrentCandidatesAtomically(t *testing.T) {
 		}
 	}
 	if started != 1 || refused != 1 {
-		t.Fatalf("%d candidates started and %d were refused with room for one", started, refused)
+		t.Fatalf("%d candidates started and %d were refused with room for one\n%s\n%s", started, refused, firstLogs, secondLogs)
 	}
 }
 

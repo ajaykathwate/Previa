@@ -102,12 +102,13 @@ func (q *Queries) ExistingSecretNames(ctx context.Context, arg ExistingSecretNam
 }
 
 const listSecrets = `-- name: ListSecrets :many
-SELECT key, updated_at FROM env_secrets WHERE repo_id = $1 ORDER BY key
+SELECT key, updated_at, build FROM env_secrets WHERE repo_id = $1 ORDER BY key
 `
 
 type ListSecretsRow struct {
 	Key       string
 	UpdatedAt pgtype.Timestamptz
+	Build     bool
 }
 
 func (q *Queries) ListSecrets(ctx context.Context, repoID int64) ([]ListSecretsRow, error) {
@@ -119,7 +120,7 @@ func (q *Queries) ListSecrets(ctx context.Context, repoID int64) ([]ListSecretsR
 	var items []ListSecretsRow
 	for rows.Next() {
 		var i ListSecretsRow
-		if err := rows.Scan(&i.Key, &i.UpdatedAt); err != nil {
+		if err := rows.Scan(&i.Key, &i.UpdatedAt, &i.Build); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -206,13 +207,14 @@ func (q *Queries) RotateSecret(ctx context.Context, arg RotateSecretParams) (int
 }
 
 const sealedSecrets = `-- name: SealedSecrets :many
-SELECT key, encrypted_value, key_version FROM env_secrets WHERE repo_id = $1 ORDER BY key
+SELECT key, encrypted_value, key_version, build FROM env_secrets WHERE repo_id = $1 ORDER BY key
 `
 
 type SealedSecretsRow struct {
 	Key            string
 	EncryptedValue []byte
 	KeyVersion     int32
+	Build          bool
 }
 
 func (q *Queries) SealedSecrets(ctx context.Context, repoID int64) ([]SealedSecretsRow, error) {
@@ -224,7 +226,12 @@ func (q *Queries) SealedSecrets(ctx context.Context, repoID int64) ([]SealedSecr
 	var items []SealedSecretsRow
 	for rows.Next() {
 		var i SealedSecretsRow
-		if err := rows.Scan(&i.Key, &i.EncryptedValue, &i.KeyVersion); err != nil {
+		if err := rows.Scan(
+			&i.Key,
+			&i.EncryptedValue,
+			&i.KeyVersion,
+			&i.Build,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -279,6 +286,35 @@ func (q *Queries) SecretsNeedingRotation(ctx context.Context, arg SecretsNeeding
 		return nil, err
 	}
 	return items, nil
+}
+
+const setSecretBuild = `-- name: SetSecretBuild :execrows
+UPDATE env_secrets s SET build = $1::boolean, updated_at = now()
+FROM repos r JOIN installations i ON i.id = r.installation_id
+WHERE s.repo_id = r.id AND r.id = $2 AND i.owner_user_id = $3
+  AND s.key = $4 AND s.build IS DISTINCT FROM $1::boolean
+  AND (NOT $1::boolean OR (r.accessible AND i.status = 'active'))
+`
+
+type SetSecretBuildParams struct {
+	Build       bool
+	RepoID      int64
+	OwnerUserID pgtype.Int8
+	Key         string
+}
+
+// Whether Dockerfile steps of trusted builds may read the secret.
+func (q *Queries) SetSecretBuild(ctx context.Context, arg SetSecretBuildParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSecretBuild,
+		arg.Build,
+		arg.RepoID,
+		arg.OwnerUserID,
+		arg.Key,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertSecret = `-- name: UpsertSecret :exec

@@ -22,7 +22,8 @@ type PruneArgs struct{}
 
 func (PruneArgs) Kind() string { return "build_log_prune" }
 
-// PruneWorker deletes attempts' logs once they are older than Retention.
+// PruneWorker deletes attempts' logs once they are older than the store's
+// retention.
 type PruneWorker struct {
 	river.WorkerDefaults[PruneArgs]
 	Store  *Store
@@ -32,7 +33,7 @@ type PruneWorker struct {
 func (w *PruneWorker) Timeout(*river.Job[PruneArgs]) time.Duration { return pruneTimeout }
 
 func (w *PruneWorker) Work(ctx context.Context, _ *river.Job[PruneArgs]) error {
-	report, err := w.Store.Prune(ctx, w.Store.now().Add(-Retention))
+	report, err := w.Store.Prune(ctx, w.Store.now().Add(-w.Store.Retention()))
 	if report.Streams > 0 || report.Lines > 0 {
 		w.Logger.InfoContext(ctx, "expired build logs deleted", "streams", report.Streams, "lines", report.Lines)
 	}

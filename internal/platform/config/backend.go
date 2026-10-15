@@ -10,16 +10,17 @@ import (
 )
 
 // DefaultServiceCatalog is Previa's pinned backend services: the official
-// PostgreSQL and Redis images, each pinned by its multi-platform index
+// PostgreSQL, Redis and MySQL images, each pinned by its multi-platform index
 // digest. An empty PREVIEW_SERVICE_CATALOG uses it; operators replace it to
 // pin other digests, and "none" offers no services at all.
 const DefaultServiceCatalog = "postgres:17=docker.io/library/postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24," +
 	"postgres:16=docker.io/library/postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea," +
 	"redis:8=docker.io/library/redis:8-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0," +
-	"redis:7=docker.io/library/redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499"
+	"redis:7=docker.io/library/redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499," +
+	"mysql:8.4=docker.io/library/mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242"
 
 // ServiceKinds are the backend services Previa can run for a preview.
-var ServiceKinds = []string{"postgres", "redis"}
+var ServiceKinds = []string{"postgres", "redis", "mysql"}
 
 var (
 	serviceVersion = regexp.MustCompile(`^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$`)
@@ -54,7 +55,7 @@ func ParseServiceCatalog(value string) (ServiceCatalog, error) {
 		case !ok || !versioned:
 			return ServiceCatalog{}, errors.New("PREVIEW_SERVICE_CATALOG entries must look like postgres:17=image@sha256:digest")
 		case !slices.Contains(ServiceKinds, kind):
-			return ServiceCatalog{}, fmt.Errorf("PREVIEW_SERVICE_CATALOG offers %q; only postgres and redis are supported", kind)
+			return ServiceCatalog{}, fmt.Errorf("PREVIEW_SERVICE_CATALOG offers %q; only postgres, redis and mysql are supported", kind)
 		case !serviceVersion.MatchString(version):
 			return ServiceCatalog{}, fmt.Errorf("PREVIEW_SERVICE_CATALOG version %q of %s must be numeric, like 17 or 7.4", version, kind)
 		case !pinnedImage.MatchString(image):

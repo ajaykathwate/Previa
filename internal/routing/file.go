@@ -2,6 +2,7 @@ package routing
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -18,11 +19,10 @@ const (
 	versionPrefix = "# previa-route-table-version: "
 )
 
-// File is the router's dynamic configuration file. A write replaces it
-// atomically and only when it moves the route table version forward, so
-// concurrent or late writers can never make the router go back to an older
-// table. The directory belongs to Previa alone: Traefik loads every YAML file
-// in it.
+// File is the router's dynamic configuration file. Atomic writes never move
+// the table version backwards. Only explicit recovery refreshes may update
+// settings at the current version. The directory belongs to Previa alone:
+// Traefik loads every YAML file in it.
 type File struct {
 	dir string
 }
@@ -74,6 +74,16 @@ func (f *File) Version() (int64, error) {
 // host serialize on a lock file; the rename makes a reader see the old or the
 // new file, never part of one.
 func (f *File) Write(version int64, content []byte) (bool, error) {
+	return f.write(version, content, false)
+}
+
+// Refresh also replaces changed configuration at the current version. Only
+// startup/recovery syncs use it: older route tables remain fenced out.
+func (f *File) Refresh(version int64, content []byte) (bool, error) {
+	return f.write(version, content, true)
+}
+
+func (f *File) write(version int64, content []byte, refresh bool) (bool, error) {
 	if version < 0 {
 		return false, errors.New("route table version must not be negative")
 	}
@@ -91,8 +101,17 @@ func (f *File) Write(version int64, content []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if version < current || (exists && version == current) {
+	if version < current || (exists && version == current && !refresh) {
 		return false, nil
+	}
+	if exists && version == current {
+		data, err := os.ReadFile(f.Path())
+		if err != nil {
+			return false, fmt.Errorf("read route table configuration: %w", err)
+		}
+		if bytes.Equal(data, append([]byte(fmt.Sprintf("%s%d\n", versionPrefix, version)), content...)) {
+			return false, nil
+		}
 	}
 	// A dotted name with another extension is ignored by Traefik until renamed.
 	temporary := filepath.Join(f.dir, "."+FileName+".tmp")

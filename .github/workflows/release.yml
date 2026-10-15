@@ -1,5 +1,6 @@
 # Versioned releases (docs/25-production-deployment.md#ci-and-releases).
-# A pushed tag vX.Y.Z builds the binaries, checksums and SBOMs with GoReleaser
+# A pushed tag vX.Y.Z on a commit in master (the release branch; any other
+# commit stops before anything is built) builds the binaries, checksums and SBOMs with GoReleaser
 # into a draft GitHub release, and pushes multi-architecture images with
 # provenance and SBOM attestations to GitHub Container Registry. The jobs run
 # in the protected "release" environment, so a maintainer approves before
@@ -27,6 +28,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Release only commits on master
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master || {
+            echo "::error::$GITHUB_REF_NAME points to a commit that is not on master; tag a commit on master."
+            exit 1
+          }
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

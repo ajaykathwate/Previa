@@ -1,0 +1,20 @@
+package components
+
+// RepositoryHero heads a repository's section pages (Secrets, Outbound): the
+// owner above the repository's name and a sentence about the section.
+templ RepositoryHero(owner, name, summary string) {
+	<header class="page-hero">
+		<div class="page-hero-main">
+			<span class="page-hero-icon" aria-hidden="true">
+				@RepositoryIcon()
+			</span>
+			<div class="page-hero-text">
+				<p class="page-hero-kicker">{ owner }</p>
+				<h1 title={ owner + "/" + name }>{ name }</h1>
+				if summary != "" {
+					<p class="page-hero-sub">{ summary }</p>
+				}
+			</div>
+		</div>
+	</header>
+}

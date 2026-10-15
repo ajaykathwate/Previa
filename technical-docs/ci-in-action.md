@@ -49,7 +49,7 @@ availability. `real-docker` waits for `checks` and its fork condition:
 
 ```mermaid
 flowchart TD
-    Event["Push to main, PR event or manual CI run"] --> Checks["checks: generate, build, lint and tests"]
+    Event["PR into master, push to master or manual CI run"] --> Checks["checks: generate, build, lint and tests"]
     Event --> Browser["browser: UI regressions"]
     Event --> Images["images: build and scan"]
     Checks --> Gate{"Checks passed and event allowed?"}
@@ -113,17 +113,23 @@ at `.github/workflows/ci.yml` so GitHub can discover it.
 ```yaml
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
+    branches: [master]
   workflow_dispatch:
 ```
 
+`master` is the default and release branch, and changes reach it through pull
+requests. Day-to-day work happens on `main` (or other branches) and runs no CI
+until it is proposed for `master`.
+
 | Event | Behavior |
 | --- | --- |
-| Push directly to `main` | Runs CI on the pushed commit |
-| Merge a PR into `main` | The resulting push runs CI again |
-| Open, reopen or push new commits to a PR | Runs through the default `pull_request` activity types |
-| Push to a feature branch without an open PR | Does not match this workflow's `push` filter |
+| Open, reopen or push new commits to a PR into `master` | Runs CI on the PR's merge result (the default `pull_request` activity types) |
+| Merge a PR into `master` | The resulting push runs CI on `master` |
+| Push directly to `master` | Runs CI; `master` is meant to change only through PRs ([9.1](#91-first-github-setup)) |
+| Push to `main` or any other branch | Runs nothing; open a PR into `master`, or dispatch CI manually on that branch |
+| Open a PR into another branch | Runs nothing |
 | Push a version tag | Does not match this CI push filter; may trigger Release instead |
 | Change only documentation on a qualifying push/PR | Runs CI; there is no path filter |
 | Manually dispatch CI | Runs on the selected branch/ref through the Actions interface |
@@ -737,11 +743,14 @@ does not upgrade Actions or change configuration.
 1. Ensure the workflows and their supporting files are committed and pushed.
 2. Check **Repository → Settings → Actions → General** permits Actions and the
    referenced Actions under your organization/repository policy.
-3. Open a PR or push `main`, then open **Actions → CI**.
+3. Open a PR into `master` (or dispatch CI manually), then open **Actions → CI**.
 4. Confirm the event, branch/ref and commit match the change you wanted tested.
 5. Inspect all jobs, including skipped ones and fork restrictions.
-6. Configure branch protection/rulesets with the checks you require for merging.
-   Workflow YAML alone does not make green CI mandatory for a merge.
+6. Configure branch protection or a ruleset on `master`: require a pull request
+   and the CI checks, and block force pushes and deletion. Workflow YAML alone
+   does not make green CI mandatory for a merge. On a private repository GitHub
+   enforces these only on a paid plan (Pro, Team or Enterprise); without one,
+   "PRs only" is a team convention.
 
 No OVHcloud API credential, production SSH key, production GitHub App PEM,
 Cloudflare DNS token or R2 token is required by this CI workflow. Its temporary

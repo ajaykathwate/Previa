@@ -75,6 +75,16 @@ Product rules that follow:
    immediately, in either mode, with no quiet period.
 10. Mergeability gates every request: Checking or Conflicts refuses the build
     ([05](05-webhooks-and-pr-discovery.md#mergeability)).
+11. **Forks never build automatically.** A pull request whose head is not the base
+    repository (`is_fork`, an unknown or deleted head, or another head repository:
+    the same rule that withholds secrets) is treated as Manual even in an Automatic
+    repository: its events update tracking but create no automatic request, and the
+    worker's claim refuses an automatic request for one. The owner's **Build**
+    click is the approval, like GitHub Actions' approval for first-time
+    contributors. The pull request page marks it **Fork · waits for your
+    approval**. Without this, anyone could open a pull request on a public
+    repository and get build minutes with internet access and a public site under
+    the preview domain.
 
 ## Schema
 

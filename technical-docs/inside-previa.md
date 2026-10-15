@@ -59,13 +59,14 @@ Conventions used throughout:
 | **IX. The preview is live** | [28. A visitor's request, hop by hop](#chapter-28-a-visitors-request-hop-by-hop) | DNS, TLS, Traefik, Docker DNS, the container |
 | | [29. Telling GitHub](#chapter-29-telling-github) | The living comment and check runs |
 | | [30. Telling the dashboard](#chapter-30-telling-the-dashboard) | Triggers, NOTIFY, SSE, build log streaming |
-| **X. After the first preview** | [31. New commits, retries and rebuilds](#chapter-31-new-commits-retries-and-rebuilds) | Blue/green swaps and fencing in action |
-| | [32. Teardown](#chapter-32-teardown) | Close, merge, revocation, owner request, expiry |
-| | [33. Housekeeping and crash recovery](#chapter-33-housekeeping-and-crash-recovery) | Periodic jobs, orphans, recovery from every crash point |
-| **XI. Cross-cutting** | [34. The security model in one place](#chapter-34-the-security-model-in-one-place) | Trust boundaries, threats and controls |
-| | [35. Failures, retries and waiting](#chapter-35-failures-retries-and-waiting) | Retryable vs permanent, snoozes, kill switch |
-| | [36. Observability along the flow](#chapter-36-observability-along-the-flow) | Logs, metrics and readiness at each step |
-| | [37. Every timeout and limit](#chapter-37-every-timeout-and-limit) | One table for all of them |
+| | [31. Life after publication](#chapter-31-life-after-publication) | Visit counts, crash reports, live app output, idle sleep and wake |
+| **X. After the first preview** | [32. New commits, retries and rebuilds](#chapter-32-new-commits-retries-and-rebuilds) | Blue/green swaps and fencing in action |
+| | [33. Teardown](#chapter-33-teardown) | Close, merge, revocation, owner request, expiry |
+| | [34. Housekeeping and crash recovery](#chapter-34-housekeeping-and-crash-recovery) | Periodic jobs, orphans, recovery from every crash point |
+| **XI. Cross-cutting** | [35. The security model in one place](#chapter-35-the-security-model-in-one-place) | Trust boundaries, threats and controls |
+| | [36. Failures, retries and waiting](#chapter-36-failures-retries-and-waiting) | Retryable vs permanent, snoozes, kill switch |
+| | [37. Observability along the flow](#chapter-37-observability-along-the-flow) | Logs, metrics and readiness at each step |
+| | [38. Every timeout and limit](#chapter-38-every-timeout-and-limit) | One table for all of them |
 | **Appendices** | [A. Docker objects Previa creates](#appendix-a-docker-objects-previa-creates) | Names, labels, lifetimes |
 | | [B. River jobs and queues](#appendix-b-river-jobs-and-queues) | Kinds, queues, workers, timeouts |
 | | [C. Database tables, step by step](#appendix-c-database-tables-step-by-step) | Which step writes which table |
@@ -145,6 +146,9 @@ flowchart LR
     E -->|80 and 443, public addresses only| Internet
     V -->|HTTPS preview hostname| R
     R -->|HTTP on the PR network| P
+    R -.->|private previews: may this visitor in?| S
+    R -.->|sleeping previews: wake page| S
+    W -.->|request counts, docker exec| R
     R -->|DNS-01| LE
     DB -.->|NOTIFY| S
 ```
@@ -199,13 +203,16 @@ owns its handlers, services, SQL and jobs:
 | `.previewrc.yaml` | `internal/repoconfig` |
 | Archive download and extraction | `internal/source` |
 | Repository secrets | `internal/secrets` |
-| Build logs | `internal/buildlogs` |
+| Build logs (retention, deletion, sections added after a crash) | `internal/buildlogs` |
+| Live app output of a running preview | `internal/appoutput` |
 | BuildKit builds | `internal/builds` |
-| Preview containers | `internal/runtime` |
-| Hostnames, route controller, Traefik | `internal/routing` |
+| Preview containers, crash watch, sleep and wake of containers | `internal/runtime` |
+| Hostnames, route controller, Traefik, visit counts | `internal/routing` |
+| Idle previews: sleep pass, wake job, wake page | `internal/idle` |
+| Private previews: the router's check, sign-in step, owner setting | `internal/previewaccess` |
 | PR comment and check runs | `internal/reporting` |
-| Periodic recovery and cleanup | `internal/housekeeping` |
-| Config, DB, River, GitHub App auth, HTTP, SSE, Docker, egress, logs, metrics | `internal/platform/*` |
+| Periodic recovery and cleanup, record retention | `internal/housekeeping` |
+| Config, DB, River, GitHub App auth, HTTP, SSE, Docker, egress (with build metering), output line cleaning (`textlines`), logs, metrics | `internal/platform/*` |
 | HTML pages, components, CSS, browser script | `web/` |
 
 ## Chapter 2. The technology map
@@ -221,7 +228,7 @@ Every library and tool, and the step of the flow where it acts.
 | Tailwind CSS | v4.1.18 standalone | Build time only | Compiles `web/styles` into `web/static/css/app.css` |
 | [pgx](https://github.com/jackc/pgx) | v5.10.0 | Every database call | PostgreSQL driver and pool; dedicated `LISTEN` connection |
 | [sqlc](https://sqlc.dev) | pinned in `tools/go.mod` | Build time | Generates typed Go from each feature's `queries.sql` |
-| [Goose](https://github.com/pressly/goose) | v3.28.0 | `make migrate-up`, `previa-migrate` | Schema migrations 0001–0020, embedded in release images |
+| [Goose](https://github.com/pressly/goose) | v3.28.0 | `make migrate-up`, `previa-migrate` | Schema migrations 0001–0027, embedded in release images |
 | [River](https://riverqueue.com) | v0.47.0 | Every background step | PostgreSQL job queue: transactional inserts, retries, uniqueness, periodic jobs, leader election |
 | [SCS](https://github.com/alexedwards/scs) + pgxstore | v2.9.0 | Sign-in, every page | Server-side sessions stored in PostgreSQL |
 | [golang.org/x/oauth2](https://pkg.go.dev/golang.org/x/oauth2) | v0.37.0 | Sign-in, installation verification | OAuth code exchange with GitHub |
@@ -233,7 +240,7 @@ Every library and tool, and the step of the flow where it acts.
 | [BuildKit](https://github.com/moby/buildkit) | daemon v0.33.1 rootless (pinned digest), client v0.33.0 | Image builds | Executes the Dockerfile in user namespaces, exports the image |
 | [fsutil](https://github.com/tonistiigi/fsutil) | pinned | Image builds | Streams the build context from the worker's disk to BuildKit |
 | previa-egress | Previa's own (`cmd/egress`) | Builds and previews | Forward proxy to public addresses on 80/443; readiness prober |
-| [Traefik](https://doc.traefik.io/traefik/) | v3.7.13 (pinned digest) | Serving previews | HTTPS entry point, file provider, ACME client |
+| [Traefik](https://doc.traefik.io/traefik/) | v3.7.13 (pinned digest) | Serving previews | HTTPS entry point, file provider, ACME client, `forwardAuth` for private previews, `redirectRegex` for sleeping and unknown hosts, Prometheus request counters per preview |
 | [lego](https://go-acme.github.io/lego/) | inside Traefik | Certificates | DNS-01 challenge against your DNS provider |
 | [Let's Encrypt](https://letsencrypt.org) | staging then production | Certificates | Issues the wildcard certificate |
 | [Prometheus client](https://github.com/prometheus/client_golang) | v1.24.1 | Every step | Metrics on the internal listeners |
@@ -253,8 +260,8 @@ discovery and fresh API reads update it, in both build modes.
 
 `build_intents` holds the single current **authorized** request to build that PR.
 Only two things write it: an owner's request (Manual mode, or any mode) and, in
-Automatic mode, a relevant webhook event. Seeing a new commit never builds it by
-itself in Manual mode.
+Automatic mode, a relevant webhook event for a PR from the repository itself (never
+a fork: Chapter 9.3). Seeing a new commit never builds it by itself in Manual mode.
 
 So a PR has three commits that can differ at the same moment:
 
@@ -360,6 +367,9 @@ object Previa creates carries it in its **name** and its labels:
 | `io.previa.pull-request-id`, `generation`, `revision`, `head-sha` | `17`, `7`, `2`, `3f9c…` | Which request created it |
 | `io.previa.base-repository-id`, `head-repository-id` | `987654321`, `987654321` | Repositories (fork identity) |
 | `io.previa.environment-id`, `image`, `port`, `health-path`, `cpu-millis`, `memory-bytes`, `started-at` | | Preview details used by capacity, readiness and cleanup |
+| `io.previa.account-id` | `5` | The Previa user who owns the installation, for per-account preview limits |
+| `io.previa.candidate`, `component` | `previa-…-pr17-g7-r2-…`, `worker` | Which candidate a service, setup or process container belongs to, and which one it is |
+| `io.previa.redact-env` | `API_TOKEN,DATABASE_URL` | Names (never values) of the variables whose values output read later must hide |
 
 Previa only ever counts, reuses or removes objects whose labels name its own
 instance and the right PR. It never runs a global `docker prune`.
@@ -405,8 +415,8 @@ binaries in two deployment shapes.
 | Migrations | `make migrate-up` (Goose migrations, then River's) | One-shot `migrate` service running `previa-migrate up`; server and worker wait for it |
 | Server | `make dev` (Air rebuilds on change) or `make run-server` | `server` service, image `previa-server:<version>`, reached only through the router |
 | Worker | `make run-worker` | `worker` service, image `previa-worker:<version>`, the only service with the Docker socket |
-| Egress proxy image | `make egress-image` builds `previa-egress:dev` | `previa-egress:<version>`, built or pulled with the release |
-| Router | `make router-up` (Traefik from `deploy/traefik/compose.yml`) | `router` service (Traefik) on ports 80 and 443, also serving the dashboard |
+| Egress proxy image | `make egress-image` builds `previa-egress:dev` (rebuild after pulling proxy changes) | `previa-egress:<version>`, built or pulled with the release |
+| Router | `make router-up` (Traefik from `deploy/traefik/compose.yml`, request counters on its loopback API) | `router` service (Traefik) on ports 80 and 443, also serving the dashboard; request counters on its metrics entry point `172.31.250.10:8082` |
 | Settings | `.env`, loaded by the `make` targets | `/etc/previa/previa.env` (root, mode 600) |
 
 The `make` targets load `.env` with `set -a; . ./.env` and then restore any variable
@@ -463,8 +473,9 @@ flowchart LR
    (Chapter 30).
 5. The chi router is assembled: ingress controls (host check, trusted proxies, body
    limits, rate limits, security headers with a per-request CSP nonce), static
-   files, the public unavailable page, the webhook endpoint, then the session group
-   with CSRF and the feature routes.
+   files, the public pages that read no session (unavailable, wake), the router's
+   private-preview check `/previews/auth` (exempt from the host check, Chapter 28),
+   the webhook endpoint, then the session group with CSRF and the feature routes.
 6. The internal listener serves `/livez`, `/readyz` and `/metrics` on
    `INTERNAL_ADDR`; the public listener serves `HTTP_ADDR`.
 
@@ -491,10 +502,19 @@ sequenceDiagram
     W->>D: Ensure previa-egress (create network and container if missing)
     W->>DB: Read the accepted route table
     W->>FS: Write previa-routes.yml if missing or behind
+    W->>D: Compare budgets with the host (Info, df in the router)
     W->>DB: Start River client (register workers and queues)
     W->>DB: Record capabilities heartbeat (every 30 s)
+    W->>D: Start the crash watch (Docker die events)
+    W->>W: Start reading request counts every minute
     W->>W: Serve /livez, /readyz, /metrics on WORKER_INTERNAL_ADDR
 ```
+
+The capacity comparison logs `capacity settings exceed this host` once for each
+budget that does not fit: builds × `BUILD_MEMORY` plus the preview budget plus about
+1 GiB for Previa against Docker's memory, builds × `BUILD_CPUS` against its CPUs,
+and the disk budgets against the size of Docker's disk (read with `df` inside the
+router container). It never stops the worker; the operator may know better.
 
 `buildPipeline` (`internal/app/pipeline.go`) composes capabilities in layers:
 
@@ -502,7 +522,7 @@ sequenceDiagram
 | --- | --- | --- |
 | Database only | Build-log retention | none |
 | + GitHub App ID and key | PR discovery (`pr_discovery`) and mergeability checks | `discovery` |
-| + `PREVIEW_BASE_DOMAIN`, Docker, router settings | Builds, teardown, wake-ups, operations (routes, reports, cleanup), teardown sweep, housekeeping | `discovery`, `execution`, `routing`, `reporting`, `housekeeping` |
+| + `PREVIEW_BASE_DOMAIN`, Docker, router settings | Builds, teardown, wake-ups, operations (routes, reports, cleanup), teardown sweep, housekeeping, app output followers, sleep and wake, route syncs; the crash watch and visit counts beside River | `discovery`, `execution`, `routing`, `reporting`, `housekeeping` |
 | + `BUILDS_PAUSED=true` | Everything above | `execution` off, `paused` on |
 
 Every capability that is off is logged with the reason (for example
@@ -680,9 +700,9 @@ flowchart TD
     I --> J{Newer than the stored observation?}
     J -- no --> J1[Acknowledge, keep state]
     J -- yes --> K[Update PR, generation + 1, supersede stale intent]
-    K --> L{Repository mode}
-    L -- Manual --> M[No build intent]
-    L -- Automatic --> N[Intent with available_at = now + 5 min and a wake-up job]
+    K --> L{Repository mode, and is the head the base repository?}
+    L -- Manual, or a fork --> M[No build intent]
+    L -- Automatic, same repository --> N[Intent with available_at = now + 5 min and a wake-up job]
     M --> O[Commit: receipt, PR, intent, jobs, report work together]
     N --> O
     O --> P[204]
@@ -697,7 +717,8 @@ Details:
 - **Deduplication.** `webhook_deliveries.delivery_id` (the `X-GitHub-Delivery`
   header) is unique. The receipt stores the event type and a hash of the body, never
   the body. A crash before commit leaves nothing; a crash after commit makes the
-  redelivery a no-op.
+  redelivery a no-op. Receipts are deleted after 30 days (Chapter 34): GitHub
+  redelivers within hours, so older ones catch nothing.
 - **Ordering.** GitHub can reorder deliveries. The PR's `updated_at` from the payload
   orders observations; an older one is acknowledged and ignored. Two different heads
   with the same timestamp cannot be ordered safely, so the PR is marked
@@ -752,7 +773,8 @@ dispatch and worker admission all refuse **Checking**, **Conflicts** and **Unkno
 # Part III. Triggering a build
 
 A build starts in one of two ways: the owner asks (Manual, or any mode), or a commit
-arrives in a repository set to Automatic. Both end in the same place: a durable
+arrives in a repository set to Automatic, on a branch of that repository (a fork's
+commits wait for the owner). Both end in the same place: a durable
 `build_intents` row plus a River wake-up job, committed together. The server never
 builds anything.
 
@@ -903,6 +925,32 @@ gantt
 - Why five minutes: bursts of pushes produce one build, not many. The trade-off is
   that continuous pushing postpones the build; Manual is the override.
 
+### 9.3 Forks wait for the owner
+
+A pull request from a fork never builds by itself, even in an Automatic repository.
+On a public repository anyone can open one, and an automatic build would give a
+stranger build minutes with internet access and a public site under the preview
+domain. The rule is the one that withholds secrets (Chapter 21): a PR is
+**untrusted** when GitHub marks it a fork, its head repository is unknown or
+deleted, or its head repository is not the base repository.
+
+```mermaid
+flowchart TD
+    A[New commit observed in an Automatic repository] --> B{Untrusted head?}
+    B -- no --> C[Automatic intent, five-minute quiet period]
+    B -- yes --> D[No intent: treated as Manual]
+    D --> E[PR page: Fork · waits for your approval]
+    E --> F[Owner reads the changes and clicks Build]
+    F --> G[Manual intent: the click is the approval]
+```
+
+- `LockIntentPR` computes the untrusted flag in SQL while it locks the PR, so the
+  decision uses the same row the transaction changes.
+- The worker's claim (Chapter 12) refuses an automatic request for an untrusted PR
+  as well, so even an automatic intent written before this rule existed never runs.
+- The owner's click is the approval, like GitHub Actions' approval for first-time
+  contributors. The fork still gets no secrets and no outbound connections.
+
 ## Chapter 10. From wake-up to build job
 
 ### 10.1 The wake-up runs
@@ -957,6 +1005,12 @@ report work, and considers the next authorized request. A newer request that was
 waiting behind the old job is admitted right there. A newer Manual observation alone
 creates no successor.
 
+The same transaction adds the build's time to its account's day
+(`account_build_usage`, UTC days), and then frees the build slot for the next
+request **in turn**: `NextWaitingBuild` picks a waiting request of an account with
+nothing building first, then the longest wait. Its snoozed build job is made due
+now (`scheduled_at = now`) instead of waiting out its backoff (Chapter 12.3).
+
 ---
 
 # Part IV. Admission
@@ -986,7 +1040,7 @@ so two workers never take the same row, and marks them `running`
 | Returned | River does | Meaning |
 | --- | --- | --- |
 | `nil` | Completes the job | Built (or superseded and cleaned up) |
-| `JobSnooze(d)` | Reschedules after `d`, **no attempt spent** | Waiting for capacity, disk or the kill switch (30 s doubling to 5 min); GitHub rate limit (its own delay); worker shutdown (`ErrInterrupted`, runs again at the next start) |
+| `JobSnooze(d)` | Reschedules after `d`, **no attempt spent** | Waiting for capacity, the account's other build, disk or the kill switch (30 s doubling to 5 min, plus a few seconds' spread per PR); the account's daily build minutes (until just after midnight UTC); GitHub rate limit (its own delay); worker shutdown (`ErrInterrupted`, runs again at the next start) |
 | A retryable error | Retries with backoff, up to 5 attempts | GitHub outage, Docker hiccup |
 | A permanent error | Ends after one attempt (`finishJob` discards it and hands off) | Invalid config, failing Dockerfile, app never ready, time limit |
 
@@ -1011,6 +1065,7 @@ flowchart TD
     E -- matches --> G{Headroom: smallest preview fits, disk ok?}
     G -- no --> W2[Wait: capacity or disk, snooze]
     G -- yes --> H[claimBuild transaction]
+    H -- slots, account limit, daily minutes or turn --> W3[Wait: capacity, account or quota, snooze]
     H -- not allowed --> Z
     H -- allowed --> I[Attempt: environment ID and log epoch]
     I --> J[runtime.Build with a BUILD_TIMEOUT context]
@@ -1023,14 +1078,16 @@ running attempt. It:
 
 1. Locks installation → repository → PR → intent and rechecks owner, installation
    status, repository access, mergeability and eligibility.
-2. **Build slots.** Takes a transaction-scoped
+2. **Build slots and fair sharing.** Takes a transaction-scoped
    [advisory lock](https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS)
-   and counts running requests of other PRs. When all `MAX_CONCURRENT_BUILDS` slots
-   (across every worker) are taken, nothing is claimed: the intent notes
-   `waiting_reason = 'capacity'` and the job snoozes.
+   (`LockBuildSlots`), so every worker's admissions are serialized, and checks in
+   order (Chapter 12.3). A request that may not start yet is not claimed: the
+   intent notes `waiting_reason` (`capacity`, `account` or `quota`) and the job
+   snoozes.
 3. Runs the guarded update (`ClaimBuildIntent`): intent `running`, `started_at` set,
    only if the PR is open at this generation and SHA and the intent is at this
-   revision, active and due.
+   revision, active and due, and, for an **automatic** request, only if the PR is not
+   untrusted (a fork, an unknown or another head repository: Chapter 9.3).
 4. **Provisions the environment** on the PR's first admitted build: one lifetime
    `environments` row per PR with its hostname label, allocated once
    (`routing.NewLabel`):
@@ -1060,6 +1117,40 @@ back and the runtime is never called.
 - The PR has a lifetime environment and hostname.
 - The log is empty and bound to the new epoch.
 - Nothing has touched Docker yet.
+
+### 12.3 Fair sharing between accounts
+
+An **account** is the Previa user who owns the GitHub App installation. On a server
+several accounts share, `admissionWaitTx` decides under the build-slot lock, for a
+request that is not already running:
+
+| Check, in order | Setting | Wait reason and words |
+| --- | --- | --- |
+| Every global slot is taken | `MAX_CONCURRENT_BUILDS` | `capacity`: *Waiting for capacity* |
+| The account already runs its share | `BUILDS_PER_ACCOUNT` (0 = no limit) | `account`: *Waiting for your other build* |
+| The account used today's minutes (UTC) | `BUILD_MINUTES_PER_ACCOUNT_DAY` (0 = no limit) | `quota`: *Daily build minutes used*; snoozed until just after midnight UTC |
+| This is the last free slot and another account with nothing building has waited longer | always on | `capacity` |
+
+```mermaid
+sequenceDiagram
+    participant A as Account A (one build running)
+    participant L as Build-slot lock
+    participant B as Account B (nothing running)
+    Note over A,B: one free slot left
+    B->>L: B2 asks first, waits (capacity), waiting_since 10:00
+    A->>L: A4 asks at 10:01
+    L-->>A: No: B has waited longer and builds nothing
+    Note over A,B: B2 gets the slot on its next look, or at once when a build finishes
+```
+
+- **Turns.** `MarkIntentWaiting` keeps `waiting_since` while the same revision keeps
+  waiting, and every look refreshes `waiting_checked_at`. Only waits refreshed within
+  10 minutes hold a turn, so an abandoned wait never blocks anyone.
+- **Wake-up of the next in turn.** When a build ends (Chapter 10.3), the next waiting
+  request is woken at once, instead of waiting out its snooze.
+- Accounts never see each other: the words say only what applies to their own
+  builds. The daily ledger is `account_build_usage` (seconds and builds per user
+  and UTC day), kept 90 days.
 
 ---
 
@@ -1280,24 +1371,30 @@ In order (`internal/builds/sandbox.go`):
    [internal network](https://docs.docker.com/engine/network/drivers/bridge/#use-the-internal-mode)
    has no gateway: containers on it can reach each other and nothing else, not the
    host, not other networks, not the internet.
-3. **Egress attachment.** `egress.Gateway.Attach` makes sure the `previa-egress`
+3. **Egress attachment.** `egress.Gateway.Join` makes sure the `previa-egress`
    container is running (creating its own `previa-egress` network and the container
-   if needed), connects it to the build network, reads its IPv4 address there and
-   returns `http://<that address>:3128`. The proxy is the only container on the build
-   network that has a second network with a route out.
-4. **Cache volume.** `previa-buildcache-<instance>-r<base repo>-h<head repo>` is
+   if needed), connects it to the build network and reads its IPv4 address there;
+   the builder's proxy is `http://<that address>:3128`. The proxy is the only
+   container on the build network that has a second network with a route out.
+4. **Metering.** The worker registers that address with the proxy:
+   `docker exec previa-egress /previa-egress meter -network <address> -start`, with
+   `-hosts …` when builds may reach package registries only (Chapter 19.7). The
+   command talks to the running proxy over the egress container's **loopback**
+   interface; a request arriving on a build or preview network can never reach that
+   control path. From now on the proxy counts this network's bytes.
+5. **Cache volume.** `previa-buildcache-<instance>-r<base repo>-h<head repo>` is
    created if missing. The **cache scope** is base repository plus source
    repository: same-repository PRs share a cache; each fork gets its own, so a fork
    can never plant layers or cache-mount files that a trusted build (which later
    receives secrets) would reuse.
-5. **Builder container.** Created with the scope's fixed name
+6. **Builder container.** Created with the scope's fixed name
    `previa-builder-<instance>-r…-h…`, which doubles as a lock: if another build of the
    same scope holds it, Docker answers "conflict" and this build creates a uniquely
    named builder with a throwaway anonymous volume instead, and logs *Another build of
    this source is using its cache, so this build runs without it.* A cache-holding
    builder older than `BUILD_TIMEOUT` + 15 minutes belongs to a crashed worker and is
    removed.
-6. **Start and wait.** `ContainerStart`, then `docker exec builder buildctl debug
+7. **Start and wait.** `ContainerStart`, then `docker exec builder buildctl debug
    workers` every 250 ms until it succeeds (30-second limit).
 
 ### 16.3 The builder container, setting by setting
@@ -1480,14 +1577,20 @@ every untrusted container can reach, so it is deliberately small and strict.
 
 ```mermaid
 flowchart TD
-    A[Request from a build step or preview] --> B{More than 512 connections in flight?}
+    A[Request from a build step or preview] --> A1{Path /_previa/meter?}
+    A1 -- yes --> A2{Arrived over loopback?}
+    A2 -- no --> X0[403]
+    A2 -- yes --> A3[Start or end a build network's meter]
+    A1 -- no --> B{More than 512 connections in flight?}
     B -- yes --> B1[503 busy]
     B -- no --> C{Method}
     C -- CONNECT host:port --> D[vet host, default port 443]
     C -- absolute http:// URL --> D2[vet host, default port 80]
     C -- anything else --> C1[400]
-    D --> E{Port 80 or 443?}
-    D2 --> E
+    D --> M{Metered network with a host list, host not on it?}
+    D2 --> M
+    M -- yes --> X1[403, refused host counted]
+    M -- no --> E{Port 80 or 443?}
     E -- no --> X[403 Previa egress denied]
     E -- yes --> F{Literal IP?}
     F -- yes --> H
@@ -1497,9 +1600,12 @@ flowchart TD
     H -- no --> X
     H -- yes --> I[Dial the first checked address, never the name]
     I --> J{CONNECT?}
-    J -- yes --> K[200 Connection established, splice bytes both ways]
-    J -- no --> L[Forward the request, hop-by-hop headers stripped]
+    J -- yes --> K[200 Connection established, splice bytes both ways, counted per network]
+    J -- no --> L[Forward the request, hop-by-hop headers stripped, counted per network]
 ```
+
+The proxy knows which network a request came from by the address it arrived on:
+its own address on that network, which is unique while the network exists.
 
 ### 19.3 "Public" means all of this is refused
 
@@ -1537,7 +1643,7 @@ address and dials only the vetted target carried in the request context.
 
 | Can | Cannot |
 | --- | --- |
-| Download from public registries and mirrors over 80/443 through the proxy | Reach anything private, local, metadata or another container |
+| Download from public registries and mirrors over 80/443 through the proxy (only those, with `BUILD_EGRESS=registries`) | Reach anything private, local, metadata or another container |
 | Call public APIs (sandbox payment APIs, OAuth providers, CDNs) | Use other ports (SSH, databases, SMTP) |
 | | Reach the internet with tools that ignore `HTTP(S)_PROXY` (they fail closed) |
 | | Resolve external names directly (previews have no external DNS) |
@@ -1545,6 +1651,44 @@ address and dials only the vetted target carried in the request context.
 Verified from inside real builds (`make test-builder`) and previews
 (`make test-runtime`): direct internet, the default bridge, `host.docker.internal` and
 `169.254.169.254` are blocked; `http://example.com` through the proxy works.
+
+### 19.7 Counting and limiting a build's traffic
+
+Package installs download a lot and upload almost nothing; a build that uploads
+hundreds of megabytes is moving data out. So every build network is **metered**:
+
+```mermaid
+sequenceDiagram
+    participant W as Worker
+    participant E as previa-egress (loopback control)
+    participant B as Build steps
+    W->>E: meter -network 10.0.5.2 -start [-hosts registries]
+    B->>E: CONNECT registry.npmjs.org:443
+    E-->>B: tunnel, bytes counted up and down
+    B->>E: CONNECT github.com:443
+    E-->>B: 403 when a host list is set (refusal counted, host remembered)
+    W->>E: meter -network 10.0.5.2 -end
+    E-->>W: {up, down, denied, denied_hosts, known}
+```
+
+- The build log ends with `Network: downloaded 312.4 MiB and uploaded 1.2 MiB.`
+  The worker logs `build traffic` with `pr_id`, `bytes_up`, `bytes_down` and
+  `refused`, and observes `previa_build_egress_bytes{direction}`; alerts fire on more
+  than 256 MiB uploaded or 4 GiB downloaded by one build within an hour (Chapter 37).
+- **Package registries only.** With `BUILD_EGRESS=registries`, the registration
+  carries a host list (`builds.RegistryHosts` plus `BUILD_EGRESS_HOSTS`): npm and
+  Yarn, PyPI, the Go proxy, RubyGems, Packagist, NuGet, crates.io, Maven and Gradle,
+  Docker Hub with its blob hosts, GHCR, Quay, MCR, ECR Public and the Debian, Ubuntu
+  and Alpine mirrors. An entry `.example.com` matches its subdomains. Anything else
+  gets 403, and the build log names the first refused hosts so the owner or
+  operator knows what to allow.
+- **Fail closed.** Registrations live only in the proxy's memory. A build whose
+  limit cannot be registered does not start; a proxy that restarted during a build
+  answers `known: false` at the end, and the worker discards the image and fails
+  the attempt as retryable (`builder_unavailable`), because it cannot prove the
+  limit held. Without a limit, counting is best effort and never fails a build.
+- A registration a crashed worker never ended is forgotten after 26 hours, longer
+  than any build may run.
 
 ## Chapter 20. Exporting the image and cleaning up
 
@@ -1565,7 +1709,8 @@ labels: io.previa.managed=true, instance, kind=image, pull-request-id=17,
         generation=7, revision=2, head-sha=3f9c…, base/head repository IDs
 ```
 
-The log says `Built image previa/…:g7-r2-3f9c2a7b1d04 (182.4 MiB).`
+The log says `Built image previa/…:g7-r2-3f9c2a7b1d04 (182.4 MiB).` and then the
+build's traffic, `Network: downloaded … and uploaded ….` (Chapter 19.7).
 
 ### 20.2 Cleanup, always
 
@@ -1573,8 +1718,9 @@ The log says `Built image previa/…:g7-r2-3f9c2a7b1d04 (182.4 MiB).`
 30-second budget detached from the job's (possibly cancelled) context:
 
 1. Remove the builder container (forced, with its anonymous volumes).
-2. Disconnect `previa-egress` from the build network.
-3. Remove the build network.
+2. End the network's meter if the build ended before reading it.
+3. Disconnect `previa-egress` from the build network.
+4. Remove the build network.
 
 The scope's cache volume stays for the next build. The source workspace is released
 by the runtime right after the build, whatever happened.
@@ -1583,7 +1729,7 @@ by the runtime right after the build, whatever happened.
 
 | Code | Retryable | Typical cause |
 | --- | --- | --- |
-| `builder_unavailable` | yes | Docker could not create or start the builder |
+| `builder_unavailable` | yes | Docker could not create or start the builder; or, with registries only, the proxy could not confirm the limit held |
 | `disk_low` | yes (waits) | Not enough free disk on the Docker host |
 | `build_failed` | no | A step failed; the log shows which |
 | `timeout` | no | `BUILD_TIMEOUT` elapsed |
@@ -1670,6 +1816,16 @@ If the app prints a secret while starting, the log stores `[redacted]`. Stated
 plainly: redaction protects logs, not the credential. Code that receives a value can
 transform it (base64) or send it elsewhere.
 
+Output can also be read **later**: when a live preview stops, and while its owner
+watches its live output (Chapter 31). By then the decrypted values are gone from the
+worker's memory. So the candidate's app and processes carry the label
+`io.previa.redact-env` with the **names** of the variables to hide: the repository
+secrets that were injected and Previa's own credential variables (`DATABASE_URL`,
+`PGPASSWORD`, `REDIS_URL`). A later reader inspects the container, takes the values
+of exactly those variables (and the password inside any of them that is a URL) and
+builds the same redactor. Names are not secret; values never leave the container's
+configuration.
+
 ## Chapter 22. Capacity admission
 
 ### 22.1 The budget
@@ -1681,11 +1837,14 @@ Previews share the host with the platform. Their combined limits must fit a budg
 | Memory | 60% of Docker's memory | `docker info` `MemTotal`, or `PREVIEW_MEMORY_BUDGET` |
 | CPU | 75% of Docker's CPUs | `docker info` `NCPU`, or `PREVIEW_CPU_BUDGET` |
 | Previews per repository | 10 PRs | `PREVIEW_MAX_PER_REPOSITORY` |
+| Previews per account | no limit | `PREVIEW_MAX_PER_ACCOUNT` (the installation owner, from `io.previa.account-id`) |
 
 Usage is read from the **labels** of this instance's preview containers that are
 running, restarting or created (`io.previa.cpu-millis`, `io.previa.memory-bytes`).
 During a swap both the active preview and its candidate count. Capacity is released
-only when a container is actually removed.
+only when a container is actually removed. A **stopped** app (a sleeping preview,
+Chapter 31, or one that crashed) uses no memory or CPU but is still a preview: it
+counts towards the repository and account limits, not the budgets.
 
 ### 22.2 The lock
 
@@ -1698,7 +1857,7 @@ sequenceDiagram
     W1->>DB: pg_advisory_lock(hashtext('previa.preview_admission.' + instance))
     W2->>DB: pg_advisory_lock(same key): waits
     W1->>D: List preview containers, sum labels
-    W1->>W1: New limits + usage within budget? 10 PRs per repo?
+    W1->>W1: New limits + usage within budget? 10 PRs per repo? Account cap?
     W1->>D: Ensure network, create labelled container
     W1->>DB: pg_advisory_unlock
     DB-->>W2: Lock granted
@@ -1763,12 +1922,13 @@ docker create \
   --cpus 1 --memory 1g --memory-swap 1g --pids-limit 512 --cpu-shares 512 \
   --oom-score-adj 500 \
   --restart on-failure:3 --stop-timeout 10 \
-  --log-driver json-file --log-opt max-size=10m --log-opt max-file=2 \
+  --log-driver json-file --log-opt max-size=5m --log-opt max-file=2 \
   [--runtime runsc] \
   -e HTTP_PROXY=http://10.a.b.c:3128 -e HTTPS_PROXY=… -e http_proxy=… -e https_proxy=… \
   -e NO_PROXY=localhost,127.0.0.1 -e no_proxy=localhost,127.0.0.1 -e NODE_USE_ENV_PROXY=1 \
   -e PORT=3000 -e HOME=/tmp -e NODE_ENV=preview -e STRIPE_KEY=<decrypted> \
-  --label io.previa.managed=true --label io.previa.kind=preview … \
+  --label io.previa.managed=true --label io.previa.kind=preview \
+  --label io.previa.account-id=5 --label io.previa.redact-env=STRIPE_KEY … \
   <image ID>
 ```
 
@@ -1786,7 +1946,7 @@ docker create \
 | OOM score adjustment | 500 | Under memory pressure the kernel kills previews before the platform |
 | Restart | On failure, at most 3 times | Then it stays stopped and counts as a crash loop |
 | Stop timeout | 10 s | Graceful shutdown on teardown |
-| Logs | json-file, 2 × 10 MB | Bounded disk |
+| Logs | json-file, 2 × 5 MB (10 MB per container, removed with it) | Bounded disk; a backend preview with services and processes keeps about 50 MB at most |
 | Runtime | `PREVIEW_OCI_RUNTIME`, e.g. [gVisor](https://gvisor.dev) `runsc` | Optional user-space kernel for stronger isolation |
 | Host access | No host paths, Docker socket, devices or published ports | Nothing on the host is reachable |
 
@@ -1857,6 +2017,9 @@ output, removes the candidate and returns a typed error. `unhealthy` and `crashe
 permanent: the same commit would fail the same way, so the request ends after one
 attempt and the PR comment says why.
 
+A crash **after** publication is not a readiness failure: the preview was already
+live. The worker's crash watch reports it into the same build log (Chapter 31.2).
+
 ---
 
 # Part VIII. Publishing
@@ -1891,7 +2054,8 @@ the failure code on the environment (`last_error_code`), keeps the active previe
 and the job handoff marks the intent `failed` after the last attempt.
 
 Then the build job finishes: `finishJob` marks the intent `succeeded`, releases the
-`environment:pr:17` key and the build slot, and admits any waiting successor.
+`environment:pr:17` key and the build slot, adds the build's time to its account's
+day, admits any waiting successor and wakes the next request in turn (Chapter 10.3).
 
 ### 25.2 The environment's states
 
@@ -2015,7 +2179,9 @@ target (container, image, backend name, port, network) and the served version. T
 transaction accepts the new version only if it is strictly newer and the PR still
 wants exactly this request. Every acceptance bumps a single `route_table` counter
 whose row lock orders acceptances in commit order, so a table snapshot's version
-covers every acceptance committed before it.
+covers every acceptance committed before it. Accepting a new version also clears a
+sleep (`WakeForNewRoute`): the new candidate is running, so the router must send
+visitors to it, not to the wake page.
 
 **4. Materialization.** The controller renders the whole accepted table and writes
 it to `ROUTER_DYNAMIC_DIR/previa-routes.yml`:
@@ -2078,7 +2244,43 @@ carry no `tls` block on purpose: one would replace the entry point's certificate
 resolver. The lowest-priority fallback router catches every unknown preview host and
 redirects it to the dashboard's public unavailable page.
 
-### 26.4 Guarantees and limits
+Two flags of a route change how its router is written (the route table reads them
+from `environments.asleep_at` and `repos.private_previews`):
+
+```yaml
+"preview-5": {                                  # private (Chapter 28.4)
+  "rule": "Host(`pr-42-gc0uy9-k3x9q2ma.preview.example.net`)",
+  "service": "preview-5-g7-r2",
+  "middlewares": ["previa-access"]
+},
+"preview-6": {                                  # asleep (Chapter 31.4)
+  "rule": "Host(`pr-43-gc0uy9-p8d2s0tb.preview.example.net`)",
+  "service": "noop@internal",
+  "middlewares": ["previa-wake"]                # private and asleep: ["previa-access", "previa-wake"]
+}
+…
+"middlewares": {
+  "previa-access": {"forwardAuth": {"address": "http://172.31.250.20:8080/previews/auth"}},
+  "previa-wake": {"redirectRegex": {"regex": "^https?://([^/]+)/?(.*)$",
+                                    "replacement": "https://previa.example.com/previews/wake/${1}/${2}"}}
+}
+```
+
+A sleeping preview's router has no service: its container is stopped. A private
+preview whose worker has no `PREVIEW_ACCESS_URL` is written like an unknown host
+(redirected to the unavailable page), so it fails closed, never open.
+
+### 26.4 Changes that are not route operations
+
+Putting a preview to sleep, waking it, and making a repository's previews private or
+public change how the router serves hosts without a new route version. Each one
+advances `route_table.version` in its own transaction and then rewrites the file:
+the idle job and the wake job call the controller's `Sync` themselves (they run on
+the worker), and the server, which never writes the file, queues a `route_sync` job
+that a worker runs. `Sync` writes the accepted table only when it is newer than the
+file, so these writes never move the file backwards either.
+
+### 26.5 Guarantees and limits
 
 | Guaranteed | Not guaranteed |
 | --- | --- |
@@ -2180,7 +2382,7 @@ sequenceDiagram
 | DNS | One wildcard `A` record `*.preview.example.net` points at the host; no record per preview |
 | Port 80 | The `web` entry point permanently redirects to HTTPS |
 | TLS | Terminated by Traefik with the wildcard certificate chosen by SNI |
-| Routing | Exact `Host()` rule per environment; the fallback `HostRegexp` router has priority 1 |
+| Routing | Exact `Host()` rule per environment; the fallback `HostRegexp` router has priority 1. A private preview's router first asks the server (28.4); a sleeping one's sends the visitor to the wake page (28.3) |
 | Upstream | Plain HTTP on the PR's internal network to `container-name:port`, `passHostHeader: true` |
 | Isolation | The router is the only thing on the PR network besides the PR's own containers and the egress proxy; the path into a preview never becomes a path out |
 
@@ -2197,7 +2399,78 @@ previews.
 Outbound requests from the app (a payment sandbox, an OAuth provider) go through
 `HTTPS_PROXY` to `previa-egress` and follow the rules of Chapter 19. A preview can
 reach other previews' **public** URLs through the internet like anyone else (previews
-are public by URL), but never directly over a Docker network.
+are public by URL unless their repository's are private), but never directly over a
+Docker network.
+
+The router's request counter for this preview's service increases with every request.
+That number, and when it last changed, is all Previa learns about visitors
+(Chapter 31.1); the router's access log is off.
+
+### 28.3 A sleeping preview
+
+If nobody opened the preview for `PREVIEW_IDLE_SLEEP`, its app is stopped and its
+router redirects (302) to `https://<dashboard>/previews/wake/<host>/<path>`. That
+public page wakes it and sends the visitor back to the address they opened a few
+seconds later. Chapter 31.4 follows it step by step.
+
+### 28.4 A private preview
+
+When the owner switched **Private previews** on for the repository, the router puts
+Traefik's [`forwardAuth`](https://doc.traefik.io/traefik/middlewares/http/forwardauth/)
+in front of each of its previews: before **every** request, Traefik asks the server
+whether this visitor may in. The server reaches its answer from a cookie on the
+preview's host alone; nothing is stored per request.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor V as Visitor
+    participant T as Traefik
+    participant A as Server /previews/auth
+    participant D as Dashboard /previews/access
+    participant GH as GitHub API
+    participant P as Preview
+    V->>T: GET https://pr-42-….preview.example.net/cart
+    T->>A: Same method, X-Forwarded-Host, -Uri, cookies
+    A-->>T: 302 to the dashboard (no valid cookie)
+    T-->>V: 302 /previews/access?host=…&path=/cart
+    V->>D: Signed in? (else GitHub sign-in, then back here)
+    D->>GH: Permission of this login on acme/shop (installation token)
+    GH-->>D: read
+    D-->>V: 303 https://pr-42-…/__previa/access?t=signed token (1 min)
+    V->>T: GET /__previa/access?t=…
+    T->>A: Check
+    A-->>T: 302 /cart with Set-Cookie __Host-previa-access (12 h)
+    T-->>V: 302 with the cookie
+    V->>T: GET /cart, cookie
+    T->>A: Check
+    A-->>T: 200
+    T->>P: GET /cart
+```
+
+- **Who gets in.** The installation's owner always; anyone else whose GitHub role on
+  the repository is `read` or above, asked with the App's installation token
+  (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`). On a public
+  repository everyone signed in to GitHub can see it, so private previews matter
+  mostly for private repositories. Others see **You can't open this preview**.
+- **Tokens and cookies.** Both are `base64(JSON{host, user, path?, expiry})` plus an
+  HMAC-SHA256 with a key derived from `SESSION_SECRET`, signed separately as `token`
+  and `cookie` so one can never be used as the other. The token lives one minute and
+  names the path to return to (always a local path). The cookie is `__Host-`
+  prefixed (host-only, `Path=/`, Secure), `HttpOnly`, `SameSite=Lax`, valid 12 hours
+  and only for the host it was issued on. Losing repository access takes effect when
+  the cookie expires.
+- **The check is public.** `/previews/auth` arrives with the preview's host, so the
+  server's host check exempts that one path. It answers only from a valid signed
+  cookie for the forwarded preview host and stores nothing. Anyone may call it; a
+  forged header gets them nothing.
+- **Sign-in returns the visitor.** GitHub sign-in accepts a local `next` path
+  (`/auth/github/login?next=…`, never another host), so a reviewer who was not signed
+  in comes back to the access step.
+- The app also receives the cookie. It is signed and valid only for this preview's
+  host, so it gives nothing beyond what the visitor already had.
+- Without `PREVIEW_ACCESS_URL` on the worker, a private preview is routed to the
+  unavailable page: it fails closed (Chapter 26.3).
 
 ## Chapter 29. Telling GitHub
 
@@ -2246,6 +2519,7 @@ unchanged rendering (same digest) costs no API call.
 | Queued | Queued; builds when a worker is free | queued |
 | Checking / Conflicts | Waiting for GitHub / resolve conflicts | queued / completed **neutral** |
 | Waiting for capacity or disk | Starts automatically | queued |
+| Waiting for your other build / Daily build minutes used | Starts when the account's other build ends / after midnight UTC | queued |
 | Building | Building commit `3f9c2a7` (also until the route is confirmed) | in progress |
 | Ready | The preview URL, the deployed commit, when it expires | completed **success** with the URL |
 | Failed | One safe sentence for the failure category | completed **failure** |
@@ -2322,7 +2596,8 @@ flowchart LR
     BK[BuildKit progress<br/>app output] --> S1[Strip ANSI and control sequences]
     S1 --> S2[Redact known values]
     S2 --> S3[Split lines: LF, CRLF, lone CR,<br/>8 KiB per line, invalid UTF-8 replaced]
-    S3 --> S4[Caps: 20,000 lines or 5 MiB]
+    S3 --> S3a[Stamp each line with the time it arrived]
+    S3a --> S4[Caps: 20,000 lines or 5 MiB]
     S4 --> S5[Batch: 200 lines or 64 KiB, every 250 ms]
     S5 --> DB[(build_logs, fenced by epoch)]
     DB -->|trigger: buildlog:ENV| H[Hub wake-up]
@@ -2350,16 +2625,261 @@ The log stream's event IDs are `<epoch>.<next sequence>`. A browser holding a cu
 from another epoch gets a `reset` event and a full replay of the current attempt, so
 an old cursor can never skip the start of a new build. Limits: 256 log streams per
 server, 8 per user, 10-second write timeout per frame. Lines are rendered as text
-nodes, so build output can never become markup. Logs are kept 14 days after the
-attempt finishes (`build_log_prune`, hourly).
+nodes, so build output can never become markup.
+
+Steps 1–3 are the shared `internal/platform/textlines` package (`Stripper`,
+`Splitter`), which live app output (Chapter 31.3) uses too.
+
+**Times.** Each line keeps the time the writer received it (`build_logs.created_at`,
+set per line, not per batch). The page renders `HH:MM:SS` in UTC with the exact time
+as its `datetime`; `ui.js` rewrites it in the reader's time zone. Live frames carry
+`"at"` for each line. The download prefixes each line with its UTC time
+(`2026-10-12T09:30:01.500Z`). Copy copies the text only.
+
+### 30.3 How long logs stay
+
+| What | When it goes |
+| --- | --- |
+| The previous attempt's lines | When the next attempt is admitted (Chapter 12.1) |
+| A finished attempt's lines | `BUILD_LOG_RETENTION_DAYS` after it finished (default 14, at most 90): `build_log_prune`, hourly, batches of 5,000, then `pruned_at` so the page says the logs expired |
+| On the owner's request | At once: **Delete logs**, a POST with the attempt's `epoch`, confirmed in a modal |
+| With the pull request | 90 days after it closed (Chapter 34) |
+
+**Delete logs** refuses a running attempt and an attempt the owner did not see (another
+epoch). An attempt whose worker crashed (its stream still open, but it is no longer
+the PR's running request) can be deleted too. The deletion locks the stream row,
+deletes its lines and marks it `finished`, `pruned_at` and `deleted_at`, so a late
+writer stores nothing and the page says **You deleted this attempt's logs**. The next
+attempt starts a clean stream. Backups still hold deleted lines until they expire
+(`BACKUP_RETENTION_DAYS`, 30 days).
+
+A finished stream can still receive one kind of section: the report of a live preview
+that stopped (Chapter 31.2). It goes through the same writer (`Store.OpenFinished`),
+so caps, redaction and fencing hold; expired, deleted or replaced logs take nothing.
+
+## Chapter 31. Life after publication
+
+Once a preview is live, the worker keeps an eye on it in four ways, none of which
+logs what visitors do: it counts requests, notices when the app stops, shows the
+owner the app's output on request, and puts the preview to sleep when nobody uses
+it.
+
+```mermaid
+flowchart LR
+    T[Traefik request counters] -->|every minute, counts only| V[visits, last_visited_at]
+    DE[Docker die events] -->|crash watch| L[Build log section]
+    O[Owner opens App output] -->|follower job| AO[app_output_lines, while watched]
+    V -->|idle for PREVIEW_IDLE_SLEEP| SL[Sleep: app stopped, wake page routed]
+    VIS[Next visitor] -->|wake page| WK[Wake: app started, route restored]
+```
+
+### 31.1 Visits: "Last opened"
+
+Traefik keeps a Prometheus counter `traefik_service_requests_total` per service,
+code, method and protocol. Every minute (`routing.WatchVisits`), the worker runs one
+command inside the router container:
+
+```sh
+docker exec previa-router sh -c 'wget -q -T 5 -O - "http://$PREVIA_METRICS/metrics" | awk …'
+# prints one line per preview service, e.g.
+preview-5-g7-r2@file 1234
+```
+
+Busybox `awk` sums codes, methods and protocols there, so only one line per preview
+leaves the router, whatever the label combinations, and only a count: never paths,
+addresses, headers or anything else about a request. `PREVIA_METRICS` is
+`ROUTER_METRICS_ADDRESS` (production: the metrics entry point `172.31.250.10:8082`;
+development: the loopback API address, where `make router-up` serves metrics too).
+
+For each line, `Repository.RecordRequests` adds what is new in one transaction:
+
+| Stored counter for the environment | Added |
+| --- | --- |
+| None yet | The whole count |
+| Same service, same or larger count | Only the difference |
+| Same service, a smaller count | The whole count: the router restarted |
+| Another service (a newer version) | The whole count: the new service started at zero |
+
+`preview_visit_counters` keeps the last read per environment, locked while it is
+compared, so workers reading the same router count each request once. When anything
+was added, `environments.visits` increases and `last_visited_at` is set (to the
+minute). The PR page shows **Last opened 5 min ago · 37 requests**, the Previews list
+**Opened 5 min ago**. A page with its scripts and images is many requests, so Previa
+says requests, not visits. A worker that cannot read the counters logs `preview
+visits not read` once and keeps trying; while that lasts, nothing goes to sleep
+(31.4).
+
+### 31.2 When a live preview stops
+
+With restart policy `on-failure:3`, Docker restarts a crashing app up to three times
+(Chapter 23). Each stop is a Docker `die` event, and the worker follows those events
+for its own instance (`Runtime.WatchCrashes`, filter
+`label=io.previa.managed=true, io.previa.instance=<instance>`):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant D as Docker events
+    participant W as Worker (crash watch)
+    participant DB as PostgreSQL
+    participant L as Build log
+    D-->>W: die: container 8c1e…, exitCode 1, labels, timeNano
+    W->>W: App or process of a preview? (io.previa.kind)
+    W->>DB: INSERT preview_crashes (container, event time) if the environment<br/>serves this g/r, is running, not asleep, no teardown requested
+    alt recorded (first worker to see this event)
+        W->>D: Inspect: restarting? restart count? out of memory?
+        W->>W: Redactor from io.previa.redact-env (Chapter 21.4)
+        W->>L: OpenFinished(environment, g7, r2): the attempt that built it
+        W->>L: "The app stopped at … with exit code 1. Docker is restarting it (restart 1 of 3)."
+        W->>D: Last 200 lines (64 KiB) of the container's output
+        W->>L: "App output (last 200 lines at most):" and the lines
+    else another worker recorded it, an older candidate, a teardown or a sleep
+        W-->>W: nothing
+    end
+```
+
+- The key `(container_id, event_nanos)` makes workers sharing one Docker host report
+  each stop once.
+- The words say what happens next: *Docker is restarting it (restart n of 3)*,
+  *it ran out of memory*, *It exited on its own, so it is not restarted*, or *It was
+  restarted 3 times and is no longer restarted; build again after fixing it*. A
+  process (`kind=process`) is named: *The worker process stopped …*.
+- Stops Previa causes itself are not reported: a teardown requests it first
+  (`teardown_requested_generation`), a sleep sets `asleep_at` first, and a replaced
+  candidate is no longer the environment's applied generation and revision.
+- Events missed while the worker was down are not replayed. The reconciler still
+  marks a preview whose container vanished as failed (Chapter 34).
+
+### 31.3 Live app output
+
+The build log ends when the preview is published. To see what the running app prints
+(its own request logs, a stack trace behind a 500), the owner opens **App output**:
+`/repositories/{id}/pull-requests/{number}/output`. The server has no Docker access,
+so a worker follows the output and the database carries it, only while someone
+watches.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor O as Owner
+    participant S as Server
+    participant DB as PostgreSQL
+    participant W as Worker (app_output queue)
+    participant D as Docker
+    O->>S: GET …/output (owner-scoped)
+    S->>DB: app_output_watches: requested, seen_at = now
+    S->>DB: InsertTx app_output_follow (one waiting job per preview)
+    O->>S: GET …/output/events (SSE), renews seen_at every 15 s
+    DB-->>W: app_output_follow
+    W->>DB: Begin: requested → following, epoch + 1, old lines cleared
+    W->>D: Inspect: this preview's app? (labels) Redactor from io.previa.redact-env
+    W->>D: Logs: follow, last 200 lines, with timestamps
+    loop every 500 ms
+        W->>DB: Append lines (keep the newest 1,000), trigger NOTIFY appoutput:ENV
+        DB-->>S: NOTIFY
+        S-->>O: lines frame (id epoch.next)
+    end
+    W->>DB: Heartbeat every 10 s: anyone watched within a minute?
+    W->>DB: No: stopped, lines deleted
+```
+
+- Docker's output passes through the same cleaning as build logs (Chapter 30.2):
+  control sequences stripped, values redacted, lines bounded; Docker's RFC 3339
+  timestamp becomes the line's time.
+- The page reuses the build log page and its script: the same `reset`, `lines` and
+  `state` events, ids `epoch.next`. A new follower (a new epoch) resets the view.
+- The follower stops when nobody watched for a minute (and deletes the lines), after
+  two hours even when watched (reload resumes), or when the container stops or is
+  replaced (*The app's output ended … reload to follow it again*). A follower whose
+  worker stopped answering for 45 seconds is replaced on the viewer's next renewal.
+  Housekeeping deletes stopped watches an hour after their last viewer.
+- Bounds: 16 followers per worker, 64 live views per server and 4 per user.
+- Nothing is kept: no request is logged by Previa, and the lines exist only while
+  someone watches.
+
+### 31.4 Idle previews sleep and wake
+
+Memory is the tightest resource on a small host, and a preview nobody opens holds its
+memory until it expires. With `PREVIEW_IDLE_SLEEP` (for example `3h`; the default `0`
+never sleeps), the River leader looks every 5 minutes for previews to put to sleep:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Running: published
+    Running --> Asleep: no visit, publication or wake for PREVIEW_IDLE_SLEEP
+    Asleep --> Waking: a visitor opens the wake page
+    Waking --> Running: app ready, route restored
+    Waking --> Asleep: could not wake (wake_error shown)
+    Asleep --> Running: a new build is published
+    Running --> [*]: teardown, expiry
+    Asleep --> [*]: teardown, expiry
+```
+
+**Going to sleep** (`idle.SleepIdle`), only while the request counts were read within
+the last 3 minutes, so a visit that could not be counted never puts a preview to
+sleep. A candidate is a live preview (`running`, with a container, no pending
+candidate, no build of its PR on the way) whose latest visit, publication and wake
+are all older than the idle time. For each one:
+
+1. In one transaction, under an advisory lock per preview
+   (`previa.idle.<instance>.<environment>`): check again under the environment's row
+   lock, set `asleep_at`, advance `route_table.version`.
+2. Rewrite the router's file (`Sync`): its host now redirects to the wake page.
+3. In a second transaction under the same lock, if it is still asleep, stop its app
+   and processes (`docker stop`, 10 s). Docker never restarts a container that was
+   stopped this way. **Managed services keep running**, so their data survives; the
+   address, route record, image and network stay.
+
+**Waking** starts at the wake page, `GET /previews/wake/<host>/<path>`, which is
+public, reads no session and sets no cookie:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor V as Visitor
+    participant T as Traefik
+    participant S as Server (wake page)
+    participant DB as PostgreSQL
+    participant W as Worker (idle queue)
+    participant D as Docker
+    V->>T: GET https://pr-43-….preview.example.net/orders?id=7
+    T-->>V: 302 /previews/wake/pr-43-….preview.example.net/orders?id=7
+    V->>S: GET the wake page
+    S->>DB: Known preview host? Asleep? wake_requested_at = now
+    S->>DB: InsertTx preview_wake (one waiting job per preview)
+    S-->>V: 202 "Waking the preview…", Refresh: 3
+    DB-->>W: preview_wake
+    W->>DB: Lock this preview (advisory), still asleep?
+    W->>D: Room in the preview budget? Start processes, then the app
+    W->>D: Readiness probes through previa-egress (Chapter 24)
+    W->>DB: asleep_at cleared, woke_at = now, route_table.version + 1
+    W->>W: Sync: the router serves the container again
+    V->>S: Reload after 3 s
+    S-->>V: Woken 3 s ago or more? 302 https://pr-43-…/orders?id=7
+```
+
+- The wake page only ever redirects to the host of a known preview under
+  `PREVIEW_BASE_DOMAIN`, so it is no open redirect. Unknown hosts get the unavailable
+  page.
+- For 3 seconds after a wake it keeps the visitor waiting (`Refresh: 2`), so the
+  router has reloaded the route before they return.
+- A wake that fails (no room in the budget, the app is gone, it never became ready)
+  stops whatever started, leaves the preview asleep and stores a sentence safe for
+  anyone (`wake_error`): the page shows it with **Try again** (a POST). A wake asked
+  for more than 2 minutes ago and still pending is asked for again.
+- A private preview's visitor is checked before the wake page (its router lists
+  `previa-access` before `previa-wake`), so a stranger cannot wake it.
+- A new build of a sleeping preview wakes it when its route is accepted (Chapter 26.2).
+- Sleeping previews still count towards the repository and account preview limits
+  (Chapter 22). The PR page says **Asleep since …**.
 
 ---
 
 # Part X. After the first preview
 
-## Chapter 31. New commits, retries and rebuilds
+## Chapter 32. New commits, retries and rebuilds
 
-### 31.1 A new commit: blue/green swap
+### 32.1 A new commit: blue/green swap
 
 The PR is live at commit A (g6, r1). The author pushes commit B.
 
@@ -2388,11 +2908,11 @@ sequenceDiagram
   says *Current preview (commit A)* with a note that a newer commit failed.
 - During the swap both A and B count against capacity (Chapter 22).
 - A is removed only **after** the router confirms B, and its cleanup is refused while
-  anything still references it (Chapter 32).
+  anything still references it (Chapter 33).
 - In **Manual** mode the push records generation 7 and marks the old request
   superseded but starts nothing: the owner clicks **Build latest commit** when ready.
 
-### 31.2 Retry and Rebuild: same commit, new revision
+### 32.2 Retry and Rebuild: same commit, new revision
 
 **Retry** after a failure and **Rebuild** after a success target the same SHA. They
 advance the intent **revision** without changing the generation (g7, r2). Everything
@@ -2407,7 +2927,7 @@ downstream carries the revision:
 | Check run | A new run with external ID `…:r2`; r1's finished run is kept as history |
 | Log epoch | A new epoch, so r1's late lines can never appear in r2's log |
 
-### 31.3 Races resolved by fences
+### 32.3 Races resolved by fences
 
 | Race | What decides it |
 | --- | --- |
@@ -2417,9 +2937,9 @@ downstream carries the revision:
 | A stale worker's route write arrives late | The file's version check and the `environment_routes` fence |
 | A retried build after its candidate was already recorded | `Service.Build` sees the pending artifact for that revision and only schedules cleanup |
 
-## Chapter 32. Teardown
+## Chapter 33. Teardown
 
-### 32.1 Four ways a preview ends
+### 33.1 Four ways a preview ends
 
 | Trigger | Recorded by | Reason |
 | --- | --- | --- |
@@ -2432,7 +2952,7 @@ Requesting a teardown of an open PR advances its generation, so every in-flight
 build, publication and report of an older generation is defeated by the existing
 fences, and nothing rebuilds until a new owner request or a later Automatic event.
 
-### 32.2 The flow
+### 33.2 The flow
 
 ```mermaid
 flowchart TD
@@ -2462,10 +2982,11 @@ flowchart TD
 - **No GitHub needed.** Teardown, route removal and cleanup never call GitHub, so a
   revoked installation cannot strand a preview.
 - **Kept:** the PR row, its lifetime environment and hostname (a reopen gets the same
-  URL), repository secrets, build caches.
+  URL), repository secrets, build caches. For a closed or merged PR, its records go
+  90 days after it closed (Chapter 34.3); a later reopen is recorded afresh.
 - **Never:** a global prune. Unrelated containers and other PRs' objects survive.
 
-### 32.3 Revocation and the sweep
+### 33.3 Revocation and the sweep
 
 For a revoked installation, `TeardownSweeper` (queue `environment_teardown`) starts the
 recorded teardowns without GitHub access and clears `cleanup_pending` only when no
@@ -2473,9 +2994,9 @@ teardown is unstarted, nothing is live or still tearing down, no route removal o
 cleanup is unfinished, and Docker holds nothing for those PRs. Restoring access does
 not rebuild anything by itself.
 
-## Chapter 33. Housekeeping and crash recovery
+## Chapter 34. Housekeeping and crash recovery
 
-### 33.1 The periodic jobs
+### 34.1 The periodic jobs
 
 All run on the `housekeeping` queue, once when the worker's River client becomes the
 elected leader and then on their interval; only the leader runs periodic jobs.
@@ -2487,12 +3008,15 @@ elected leader and then on their interval; only the leader runs periodic jobs.
 | `housekeeping_pull_requests` | 15 min | 5 min | Confirms up to 10 PRs with live work against GitHub (`VerifyUpstream`), catching a close missed while webhooks were down |
 | `housekeeping_expiry` | 10 min | 2 min | Tears down previews past `expires_at` (unless a request is in flight) |
 | `housekeeping_prune` | 1 h | 15 min | Untagged images, leftover source workspaces, build caches of repositories that can no longer build, then the oldest unused ones beyond `BUILD_CACHE_BUDGET` |
-| `build_log_prune` | 1 h | 5 min | Deletes log lines of attempts finished more than 14 days ago, in batches of 5,000 |
+| `housekeeping_records` | 1 h | 10 min | Deletes history whose retention ended (34.3) |
+| `build_log_prune` | 1 h | 5 min | Deletes log lines of attempts finished more than `BUILD_LOG_RETENTION_DAYS` (14) days ago, in batches of 5,000 |
+| `preview_sleep` (queue `idle`) | 5 min | 4 min | Puts idle previews to sleep when `PREVIEW_IDLE_SLEEP` is set (Chapter 31.4) |
 
 `HOUSEKEEPING_DRY_RUN=true` logs every deletion and makes none;
-`make housekeeping-dry-run` runs one inventory, expiry and prune pass as a diagnostic.
+`make housekeeping-dry-run` runs one inventory, expiry, prune and records pass as a
+diagnostic and prints what each would delete.
 
-### 33.2 Every crash point and who resumes it
+### 34.2 Every crash point and who resumes it
 
 | Crash or loss | What remains durable | Resumed by |
 | --- | --- | --- |
@@ -2507,17 +3031,46 @@ elected leader and then on their interval; only the leader runs periodic jobs.
 | Close webhook missed | Open PR with live work | PR reconciliation records the close; recovery starts the teardown |
 | A candidate whose result was never applied | Labelled container | Resource inventory after the grace period |
 | Source workspace left behind | `workspace.json` marker | Prune, once older than `BUILD_TIMEOUT` plus the grace |
+| The egress proxy restarts during a build limited to registries | Nothing (meters live in memory) | The build ends with `known: false`; its image is discarded and the attempt retried (Chapter 19.7) |
+| Worker dies while a preview sleeps or wakes | `asleep_at`, `wake_requested_at` | The next sleep pass or the wake page's renewed request (after 2 min) runs again under the same per-preview lock |
+| Worker dies while following app output | The watch row, `following` | A viewer's renewal after 45 s without a heartbeat starts a new follower |
+| A live preview's stop while the worker is down | Nothing | Not reported; the reconciler still notices a vanished container |
 
 Recovery only reads durable rows and never authorizes work: every recovered build
 goes through the normal dispatch and admission checks.
+
+### 34.3 How long records stay
+
+`housekeeping_records` keeps only the history Previa needs. Each statement deletes at
+most 5,000 rows; a pass handles at most 50 pull requests.
+
+| Records | Deleted | Why |
+| --- | --- | --- |
+| `webhook_deliveries` | 30 days after receipt | Only duplicates need catching, and GitHub redelivers within hours |
+| Finished `environment_operations` | 30 days after they finished | Enough for diagnosis. Kept longer: a route operation of a PR's current generation while its preview can be live (it protects what the router serves), and a failed cleanup (the sign of something left behind) |
+| `account_build_usage` | after 90 days | Only today counts |
+| Stopped `app_output_watches` | an hour after their last viewer | The follower deletes its own lines earlier |
+| A closed or merged pull request | 90 days after GitHub last updated it | With its environment, build log, route record, operations, report, reconciliation, preview components, crash records, visit counter and dismissals |
+
+A pull request is deleted only once its teardown finished and nothing about it is
+pending: no unfinished operation, active route, build request or unwritten report.
+The list is read first, then each PR is locked (`FOR UPDATE`) and checked again
+before its rows are deleted children first; a webhook that reopens it either waits
+and records it afresh or wins the lock first. Any Docker object left behind belongs
+to a PR the database no longer knows, which the resource inventory removes after its
+grace period.
+
+Backups taken before a deletion still hold the rows until they expire
+(`BACKUP_RETENTION_DAYS`, 30 days by default), so deleted data is fully gone within
+that time.
 
 ---
 
 # Part XI. Cross-cutting
 
-## Chapter 34. The security model in one place
+## Chapter 35. The security model in one place
 
-### 34.1 Trust boundaries
+### 35.1 Trust boundaries
 
 ```mermaid
 flowchart TB
@@ -2547,11 +3100,12 @@ flowchart TB
     RTR -->|PR network only| APP
 ```
 
-### 34.2 Threats and controls
+### 35.2 Threats and controls
 
 | Threat | Controls |
 | --- | --- |
-| Contributor triggers platform spend | Manual by default; build mode is owner data, never repository YAML; Automatic is opt-in with a quiet period |
+| Contributor triggers platform spend | Manual by default; build mode is owner data, never repository YAML; Automatic is opt-in with a quiet period; forks never build automatically (the owner's click approves); optional per-account limits on builds, daily build minutes and previews |
+| Builds abusing bandwidth or exfiltrating data | Every build's upload and download are measured and alerted on; `BUILD_EGRESS=registries` limits builds to package registries and fails closed |
 | Forged or replayed webhook | HMAC-SHA256 over the raw body, unique delivery receipts, source-ordered observations |
 | Stale state builds the wrong commit | Fresh GitHub read before recording and before admission; exact 40-character SHA; archive identity header check |
 | Malicious archive (traversal, links, bombs) | Canonical local paths, `os.Root`, links last, no special files, size, entry and time caps |
@@ -2567,9 +3121,11 @@ flowchart TB
 | Late or duplicate work overwriting newer state | Generation and revision fences on every write; route versions only move forward |
 | Revoked access leaving previews running | Revocation records teardown in the same transaction; teardown needs no GitHub access |
 | Deleting someone else's containers | Label- and instance-verified removal; no global prune; grace period for orphans |
+| Strangers opening a private repository's previews | Private previews: forward authentication on every request, GitHub sign-in and repository permission, host-only signed cookies |
+| Previa collecting visitors' data | No access log; only per-preview request counts; live app output kept only while watched; retention of logs and records (Chapter 34.3) |
 | Credential exposure in config | Key material and tokens as mode-600 files; redaction in logs by key and shape; production mode refuses world-readable keys |
 
-### 34.3 Limits stated plainly
+### 35.3 Limits stated plainly
 
 - Builders and previews are containers on the host's kernel, not virtual machines; a
   kernel exploit is not contained (gVisor narrows this for previews where installed).
@@ -2580,21 +3136,24 @@ flowchart TB
   injected secrets.
 - Code that legitimately receives a secret can exfiltrate it over HTTPS to a public
   host; redaction protects logs only.
-- Previews are public to anyone who has the URL.
+- Previews are public to anyone who has the URL, unless their repository's previews
+  are private. A private preview's access lasts up to 12 hours after repository
+  access is withdrawn.
+- On a public repository, private previews let in anyone signed in to GitHub.
 
-## Chapter 35. Failures, retries and waiting
+## Chapter 36. Failures, retries and waiting
 
 Previa separates three outcomes, because each needs different handling.
 
 | Outcome | Examples | Handling | Spends an attempt? |
 | --- | --- | --- | --- |
-| **Waiting** | Build slots full (`capacity`), preview budget full, low disk (`disk_low`), builds paused | Intent stays, `waiting_reason` recorded and shown, job snoozed 30 s doubling to 5 min | No |
+| **Waiting** | Build slots full (`capacity`), the account's other build (`account`), its daily build minutes (`quota`, until midnight UTC), preview budget full, low disk (`disk_low`), builds paused | Intent stays, `waiting_reason` recorded and shown, job snoozed 30 s doubling to 5 min; a finished build wakes the next in turn at once | No |
 | **Retryable failure** | GitHub 5xx or network error, Docker hiccup, builder could not start | River backoff, up to 5 attempts; GitHub rate limits snooze for GitHub's own delay | Yes (rate limits: no) |
 | **Permanent failure** | Missing or invalid `.previewrc.yaml`, failing Dockerfile, image too large, app never ready, crash loop, time limit, access gone | Ends after one attempt, reported once with a safe sentence | Ends the request |
 | **Superseded** | A newer commit, request, close or teardown | Exits quietly, schedules cleanup of its own resources | No failure is reported |
 | **Interrupted** | Worker shutdown during a build | `ErrInterrupted`, slot kept, snoozed to the next start | No |
 
-### 35.1 The kill switch
+### 36.1 The kill switch
 
 `BUILDS_PAUSED=true` on the worker stops untrusted code from running during an
 incident: admission makes no GitHub or Docker call for a build and every request waits
@@ -2602,7 +3161,7 @@ with reason `paused` (the dashboard, comment and check run say *Builds paused*).
 Teardown, cleanup, routing, reports and housekeeping keep running, so nothing is
 stranded. The dashboard refuses new build requests while the only workers are paused.
 
-### 35.2 Failure codes on the environment
+### 36.2 Failure codes on the environment
 
 `environments.last_error_code` stores a stable category, mapped to a fixed sentence
 for the dashboard and GitHub: `source_failed`, `build_failed`, `secrets_unavailable`,
@@ -2610,9 +3169,9 @@ for the dashboard and GitHub: `source_failed`, `build_failed`, `secrets_unavaila
 `inaccessible`, `incomplete_artifact`, and activation failures. Raw errors, logs and
 provider responses never leave the worker's own logs.
 
-## Chapter 36. Observability along the flow
+## Chapter 37. Observability along the flow
 
-### 36.1 Following one PR through the logs
+### 37.1 Following one PR through the logs
 
 Every process writes JSON lines to standard output. Every record made with a request's
 or job's context carries correlation fields, so one PR can be followed end to end:
@@ -2626,25 +3185,36 @@ docker compose logs worker | grep '"pr_id":17'
 | HTTP request (Build click) | `request_id` (also `X-Request-ID`), `client_ip`, `method`, `path`, `status`, `duration` |
 | Webhook delivery | `delivery_id`, `event`, repository, PR number, installation |
 | Every River job | `job_id`, `job_kind`, `job_attempt`, `pr_id`, `generation`, `revision`, `sha`, `operation_id`, `repo_id` |
-| Process start | `version`, schema version, `environment`, capabilities and unavailable reasons |
+| Process start | `version`, schema version, `environment`, capabilities and unavailable reasons, `capacity settings exceed this host` warnings |
+| Build end | `build traffic` with `pr_id`, `revision`, `bytes_up`, `bytes_down`, `refused` |
+| Live preview | `preview container stopped` (`environment_id`, `exit_code`), `preview asleep`, `preview woke`, `preview did not wake`, `preview visits not read` |
+| Owner actions | `build logs deleted by owner`, `preview access changed` |
+| Housekeeping | `expired records deleted` with the counts of each kind |
 
 Redaction happens at the logging layer too, by key (`secret`, `token`, `password`,
 `authorization`, `cookie`, `private_key`, `credential`, `dsn` …) and by shape (GitHub
 tokens, bearer and basic credentials, PEM keys, URL passwords).
 
-### 36.2 Metrics at each step
+### 37.2 Metrics at each step
 
 | Step | Metric |
 | --- | --- |
 | Webhook arrives | `previa_webhook_deliveries_total{event,outcome}` |
 | Any GitHub call | `previa_github_requests_total{status}`, `previa_github_rate_limit_remaining`, `previa_github_rate_limited_total` |
 | Job waits and runs | `previa_job_queue_wait_seconds{queue}`, `previa_job_duration_seconds{kind}`, `previa_jobs_total{kind,outcome}` |
-| Admission waits | `previa_build_waits_total{reason}` (capacity, disk, paused) |
+| Admission waits | `previa_build_waits_total{reason}` (capacity, disk, paused, account, quota) |
+| Build traffic | `previa_build_egress_bytes{direction}`: one observation per build of bytes sent (`up`) and received (`down`) |
 | Disk check | `previa_build_disk_free_bytes` |
 | Build ends | `previa_builds_total{outcome,code}`, `previa_build_duration_seconds{outcome}` |
 | Preview serving | `previa_request_to_preview_seconds`: from the request becoming eligible (after any quiet period) to the preview serving. The headline number |
 | Housekeeping | `previa_housekeeping_actions_total{job,action}` |
 | Durable state (server, at scrape time) | `previa_queue_jobs`, `previa_queue_oldest_available_seconds`, `previa_environments`, `previa_operations`, `previa_build_requests`, `previa_workers_live`, `previa_worker_capability` |
+
+Alerts built on them, in `deploy/observability/alerts.yml` (27 rules), include
+`PreviaBuildHeavyUpload` (a build uploaded more than 256 MiB within an hour),
+`PreviaBuildHeavyDownload` (more than 4 GiB) and `PreviaCapacityOutgrown` (builds
+waited for a slot, preview memory or disk over a quarter of the last day: time to
+consider a larger server).
 
 Labels are fixed sets only (PR IDs, URLs and hostnames never become label values), so
 cardinality stays bounded. Metrics, `/livez` and `/readyz` are served on the internal
@@ -2652,7 +3222,7 @@ listeners (`127.0.0.1:9090` server, `127.0.0.1:9091` worker), never publicly. Th
 worker's `/readyz` checks the database, the schema, River, a fresh heartbeat and
 Docker, and lists its capabilities.
 
-## Chapter 37. Every timeout and limit
+## Chapter 38. Every timeout and limit
 
 | Step | Bound | Value |
 | --- | --- | --- |
@@ -2667,8 +3237,9 @@ Docker, and lists its capabilities.
 | Automatic quiet period | Trailing | 5 min |
 | Wake-up job | Timeout | 15 s |
 | Worker heartbeat | Interval / considered gone | 30 s / 90 s |
-| Build slots | Across all workers | `MAX_CONCURRENT_BUILDS` |
-| Waiting | Snooze backoff | 30 s doubling to 5 min |
+| Build slots | Across all workers / per account | `MAX_CONCURRENT_BUILDS` / `BUILDS_PER_ACCOUNT` (no limit) |
+| Build minutes | Per account per UTC day | `BUILD_MINUTES_PER_ACCOUNT_DAY` (no limit) |
+| Waiting | Snooze backoff / a turn held for | 30 s doubling to 5 min / 10 min since the last look |
 | Build job | Timeout / attempts | `BUILD_TIMEOUT` (12 min) + 1 min / 5 |
 | Source | Archive / extracted / entries / redirects / time | 256 MiB / 1 GiB / 100,000 / 3 / 5 min |
 | `.previewrc.yaml` | Size | 64 KiB |
@@ -2676,15 +3247,22 @@ Docker, and lists its capabilities.
 | Builder disk | Budget / image / free host disk | 20 GiB / 4 GiB / 15 GiB |
 | Builder disk watch | Interval | 5 s |
 | Egress proxy | DNS and dial / headers / idle / max / connections | 10 s / 1 min / 2 min / 1 h / 512 |
-| Preview | Tier ceiling / tmpfs / PIDs / restarts | 2 vCPU, 2 GiB / 256 MiB / 512 / 3 |
+| Build traffic | Meter forgotten if never ended / refused hosts remembered | 26 h / 5 |
+| Preview | Tier ceiling / tmpfs / PIDs / restarts / Docker logs | 2 vCPU, 2 GiB / 256 MiB / 512 / 3 / 2 × 5 MB |
 | Readiness | Interval / probe / deadline | 1 s / 2 s / 120 s |
 | Pre-publication check | Probes | 5, 1 s apart |
-| Preview budget | Memory / CPU / per repository | 60% / 75% / 10 |
+| Preview budget | Memory / CPU / per repository / per account | 60% / 75% / 10 / no limit (`PREVIEW_MAX_PER_ACCOUNT`) |
+| Visit counts | Read interval | 1 min |
+| Crash report | Output copied | last 200 lines, 64 KiB |
+| App output | Kept lines / batch / follower heartbeat / unwatched after / longest follow / followers / views | 1,000 / 500 ms / 10 s / 1 min / 2 h / 16 per worker / 64 per server, 4 per user |
+| Idle sleep | After / pass interval / visit counts read within / wake page reload / after waking | `PREVIEW_IDLE_SLEEP` (off) / 5 min / 3 min / 3 s / 3 s |
+| Private previews | Access token / access cookie | 1 min / 12 h |
 | Operations | Lease / route / report / cleanup | 4 min / 2 min / 1 min / 90 s |
 | Route confirmation | Convergence | 30 s |
 | Traefik reload | File watch throttle | 250 ms |
 | Reporter | Lease / passes / discovery pages | 2 min / 3 / 5 × 100 |
-| Logs | Per attempt / per line / batch / retention | 5 MiB or 20,000 lines / 8 KiB / 200 lines, 64 KiB, 250 ms / 14 days |
+| Logs | Per attempt / per line / batch / retention | 5 MiB or 20,000 lines / 8 KiB / 200 lines, 64 KiB, 250 ms / `BUILD_LOG_RETENTION_DAYS` (14 days, at most 90) |
+| Records | Webhook receipts, finished operations / closed PRs, build-minute ledgers / stopped output watches | 30 days / 90 days / 1 h |
 | SSE | Heartbeat / lifetime / log streams | 25 s / 5 min / 256 per server, 8 per user |
 | Expiry | After the latest publication | `ENV_TTL_HOURS` (48 h) |
 | Housekeeping | Orphan grace | 15 min |
@@ -2706,7 +3284,9 @@ Docker, and lists its capabilities.
 | Build cache volume | `previa-buildcache-<instance>-r<base>-h<head>` | `build-cache` | First build of a scope | Housekeeping prune (revoked repositories first, then oldest beyond `BUILD_CACHE_BUDGET`) |
 | Image | `previa/<instance>-pr-<P>:g<G>-r<R>-<sha12>` | `image` | Each build | Cleanup after it is replaced or torn down; untagged images by prune |
 | Preview network | `previa-<instance>-pr-<P>` | `preview-network` | First preview of the PR | When the PR's last preview is removed |
-| Preview container | `previa-<instance>-pr<P>-g<G>-r<R>-<nanos>` | `preview` | Each candidate | Cleanup after replacement or teardown; immediately on a failed start |
+| Preview container | `previa-<instance>-pr<P>-g<G>-r<R>-<nanos>` | `preview` | Each candidate | Cleanup after replacement or teardown; immediately on a failed start. Stopped (not removed) while the preview sleeps |
+| Process container | `<candidate>-<name>` | `process` | Each candidate with processes | With its app; stopped while it sleeps |
+| Service container | `<candidate>-postgres`, `<candidate>-redis` | `service` | Each candidate with services | With its app; keeps running while it sleeps |
 | Router (development) | `previa-router` (`ROUTER_CONTAINER`) | not labelled | `make router-up` | `make router-down` |
 
 Inspect what Previa holds for one PR:
@@ -2729,8 +3309,16 @@ docker network ls --filter label=io.previa.managed=true
 | `environment_operation` | `environment_route`, `environment_report`, `environment_cleanup` | 2, 4, 2 | 2 min, 1 min, 90 s | Lifecycle transactions (outbox) |
 | `environment_teardown_sweep` | `environment_teardown` | 1 | — | Revocation webhooks, recovery |
 | `housekeeping_recover`, `_resources`, `_pull_requests`, `_expiry`, `_prune` | `housekeeping` | 1 | 2, 5, 5, 2, 15 min | Periodic (leader only) |
+| `housekeeping_records` | `housekeeping` | (shared) | 10 min | Periodic, hourly (leader only) |
 | `build_log_prune` | `build_log_prune` | 1 | 5 min | Periodic (leader only) |
+| `app_output_follow` | `app_output` | 16 | 2 h + 1 min | The server, when an owner opens App output (one waiting job per preview) |
+| `preview_sleep` | `idle` | 4 | 4 min | Periodic every 5 min when `PREVIEW_IDLE_SLEEP` is set (leader only) |
+| `preview_wake` | `idle` | (shared) | 5 min | The server's wake page (one per preview) |
+| `route_sync` | `route_sync` | 1 | — | The server, after a repository's previews turn private or public |
 | `ping` | default | `MAX_CONCURRENT_BUILDS` | 5 s | Developer tools (not in production) |
+
+Beside River, the worker runs two loops for the life of the process: the crash watch
+(Docker events) and the visit count read (every minute).
 
 Uniqueness: wake-ups by `wake:pr:<id>:g:<generation>:r:<revision>`; build and
 teardown share `environment:pr:<id>` across kinds; operations by their arguments.
@@ -2745,15 +3333,22 @@ teardown share `environment:pr:<id>` across kinds; operations by their arguments
 | Discovery, mergeability (7) | `pr_syncs`, `pull_requests` | `pull_requests`, `pr_syncs`, River jobs |
 | Manual request (8) | `worker_capabilities`, PR scope | `pull_requests` (fresh observation), `build_intents`, `pull_request_reports`, River job |
 | Wake-up and dispatch (10) | PR scope, `build_intents` | `build_intents` (`queued`), River job |
-| Claim (12) | PR scope, running intents (slots) | `build_intents` (`running`), `environments` (first time: hostname), `build_log_streams`, `build_logs` (cleared) |
-| Build output (18, 30) | `build_log_streams` | `build_logs`, `build_log_streams` |
+| Claim (12) | PR scope, running intents (slots, per account), `account_build_usage` | `build_intents` (`running`, or `waiting_*`), `environments` (first time: hostname), `build_log_streams`, `build_logs` (cleared) |
+| Build output (18, 30) | `build_log_streams` | `build_logs` (with each line's time), `build_log_streams` |
+| Build ends (10) | `build_intents` | `account_build_usage`, `river_job` (the next in turn made due) |
 | Secrets (21) | `env_secrets` | — |
 | Capacity (22) | `platform_instance` (lock key) | — (advisory lock only) |
 | Apply (25) | PR scope | `environments` (pending artifact, `publishing`), `environment_operations`, `pull_request_reports`, River jobs |
 | Route activation (26) | PR scope, `environment_routes`, `route_table` | `environment_routes`, `route_table`, `environments` (`running`, `expires_at`), cleanup operations |
+| Private previews (28) | `repos.private_previews`, `environments.subdomain` | `repos.private_previews`, `route_table`, River job (`route_sync`) |
 | Reports (29) | `pull_requests`, `environments`, `build_intents`, `pull_request_reports` | `pull_request_reports`, `pull_requests.github_comment_id` |
-| Teardown (32) | PR scope | `pull_requests` (teardown generation), `environments`, `environment_routes`, operations |
-| Housekeeping (33) | Most tables | `pr_reconciliations`, operations, River jobs |
+| Log deletion (30) | `build_log_streams`, `build_intents` | `build_logs` (deleted), `build_log_streams` (`deleted_at`) |
+| Visits (31) | `preview_visit_counters` | `preview_visit_counters`, `environments.visits`, `last_visited_at` |
+| Stops (31) | `environments`, `pull_requests` | `preview_crashes`, `build_logs` |
+| App output (31) | `app_output_watches`, `app_output_lines` | the same, plus River job |
+| Sleep and wake (31) | `environments`, `build_intents` | `environments` (`asleep_at`, `woke_at`, `wake_*`), `route_table`, River job |
+| Teardown (33) | PR scope | `pull_requests` (teardown generation), `environments`, `environment_routes`, operations |
+| Housekeeping (34) | Most tables | `pr_reconciliations`, operations, River jobs; deletes expired records (34.3) |
 | Every committed change above | — | `NOTIFY previa_events` via triggers |
 
 ## Appendix D. Glossary
@@ -2778,7 +3373,13 @@ teardown share `environment:pr:<id>` across kinds; operations by their arguments
 | Route fence | `environment_routes`: the accepted `(generation, revision)` per environment, moving only forward |
 | Route table version | The `route_table` counter written into the route file's first line |
 | Trusted source | A head repository that is provably the base repository; only these receive secrets |
-| Egress proxy | `previa-egress`: the only exit from build and preview networks |
+| Egress proxy | `previa-egress`: the only exit from build and preview networks; meters each build's traffic |
+| Account | The Previa user who owns a GitHub App installation; the unit of fair sharing |
+| Turn | Waiting builds' order across accounts: an account with nothing building first, then the longest wait |
+| Untrusted PR | A fork, or a PR whose head repository is unknown or not the base: gets no secrets and never builds automatically |
+| Sleep / wake | An idle preview's app stopped while its router sends visitors to the wake page / started again on a visit |
+| Private previews | A repository setting: the router checks each request with the server, which lets in only people who can see the repository |
+| App output | A running preview's own output, followed live only while its owner watches |
 | Instance | The identity of the Previa database that owns a Docker object |
 | Capability | What a running worker can do, published in `worker_capabilities` |
 
@@ -2833,17 +3434,18 @@ click to the reviewer's first page load. Times are illustrative; the order is ex
 | 10:00:01.160 | Worker → DB | Recheck target; log: `Preparing commit 3f9c2a7b1d04 from GitHub.` | — |
 | 10:00:01.500 | Worker → GitHub | Tarball link (token, no redirect follow), then codeload download (no credentials) | Workspace `previa-src-17-g7-r2-…` |
 | 10:00:03.200 | Worker | Identity header matches; tree extracted; `.previewrc.yaml` parsed (`standard`, port 3000, `/health`) | — |
-| 10:00:03.210 | Worker → Docker | Log: `Starting an isolated builder for commit 3f9c2a7b1d04.` Build network, egress attached, cache volume, builder created and started | Builder running |
+| 10:00:03.210 | Worker → Docker | Log: `Starting an isolated builder for commit 3f9c2a7b1d04.` Build network, egress attached and its traffic metered, cache volume, builder created and started | Builder running |
 | 10:00:05.000 | Worker → Docker | `buildctl debug workers` succeeds; `df` shows 120 GiB free | — |
 | 10:00:05.100 | Worker → BuildKit | `Solve` over `buildctl dial-stdio` | Progress lines stream to the log |
 | 10:00:06–10:01:40 | BuildKit → egress → internet | `FROM node:22` layers and `npm ci` packages via CONNECT tunnels | Cache volume updated |
 | 10:01:42.000 | BuildKit → Docker | Export streamed through the 4 GiB cap into `POST /images/load`; log: `Built image previa/…:g7-r2-3f9c2a7b1d04 (182.4 MiB).` | Image stored |
+| 10:01:42.300 | Worker → egress | Meter read and ended; log: `Network: downloaded 214.7 MiB and uploaded 1.3 MiB.` | — |
 | 10:01:42.500 | Worker → Docker | Builder removed, egress detached, build network removed; workspace released | Only the image and cache remain |
 | 10:01:42.520 | Worker → DB | Recheck target: same repository, not a fork; 3 secrets decrypted; startup log with a redactor | — |
 | 10:01:42.540 | Worker → DB, Docker | Admission lock; usage 1.0 of 6 CPUs, 1 GiB of 9.6 GiB; PR network exists; container created; lock released; started | Candidate running |
 | 10:01:42.600 | Worker → egress | Log: `Waiting up to 2m0s for the app on port 3000 for HTTP 200-399 from /health.` Probes every second | — |
 | 10:01:47.700 | Worker | Probe returns 200; last output copied to the log; `The preview is healthy. It is not routed yet.` | — |
-| 10:01:47.720 | Worker → DB | `Apply`: pending artifact, `publishing`, `activate_route` + job, report work; build job completes, slot released | r2 `succeeded`, environment `publishing` |
+| 10:01:47.720 | Worker → DB | `Apply`: pending artifact, `publishing`, `activate_route` + job, report work; build job completes, its 107 s added to the account's day, slot released | r2 `succeeded`, environment `publishing` |
 | 10:01:47.800 | Worker | `activate_route` claimed (lease 4 min); `Endpoint` re-probes the candidate; router connected to the PR network | — |
 | 10:01:47.850 | Worker → DB | `AcceptRoute` (g7, r2) > (g6, r1); `route_table` 41 → 42 | Route accepted |
 | 10:01:47.860 | Worker → disk | `previa-routes.yml` version 42 written atomically | — |
@@ -2853,3 +3455,6 @@ click to the reviewer's first page load. Times are illustrative; the order is ex
 | 10:01:48.900 | Worker → GitHub | Reporter: comment edited to *Ready* with the URL; check run `…:r2` completed **success** | PR shows Ready |
 | 10:01:49.000 | Worker → Docker | r1's container stopped (10 s grace) and removed, then its image | Old preview gone |
 | 10:01:55.000 | Reviewer → Traefik → preview | DNS wildcard, TLS with the wildcard certificate, `Host()` match, Docker DNS, HTTP to port 3000 | Page loads |
+| 10:02:48.000 | Worker → Traefik | Visit count read: 31 requests on `preview-5-g7-r2` | PR page: *Last opened 1 min ago · 31 requests* |
+| 13:05:00.000 | Worker | Idle pass (`PREVIEW_IDLE_SLEEP=3h`): no request since 10:02; asleep, route to the wake page, app stopped | *Asleep since 13:05* |
+| 15:40:10.000 | Reviewer → wake page → worker | Wake job: app started, ready in 4 s, route restored; the reviewer is sent back | Running again |

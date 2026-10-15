@@ -18,8 +18,9 @@ type IntentRepository struct{ pool *pgxpool.Pool }
 func NewIntentRepository(pool *pgxpool.Pool) *IntentRepository { return &IntentRepository{pool: pool} }
 
 type intentScope struct {
-	pr   dbgen.LockIntentPRRow
-	mode string
+	pr      dbgen.LockIntentPRRow
+	mode    string
+	private bool
 }
 
 // Lock order also serializes mode changes and installation revocation. Recheck
@@ -40,7 +41,7 @@ func lockIntentScope(ctx context.Context, q *dbgen.Queries, userID, prID int64) 
 	if err != nil {
 		return intentScope{}, intentAccessError("lock intent PR", err)
 	}
-	return intentScope{pr: pr, mode: repo.BuildMode}, nil
+	return intentScope{pr: pr, mode: repo.BuildMode, private: repo.PrivatePreviews}, nil
 }
 
 // lockOwnerIntentScope locks the intent scope on behalf of the PR's owner,
@@ -124,6 +125,9 @@ func (r *IntentRepository) requestIntentTx(ctx context.Context, tx pgx.Tx, comma
 	}
 	if err != nil {
 		return IntentOutcome{}, fmt.Errorf("persist manual intent: %w", err)
+	}
+	if err := q.ClearLocalTeardownForBuild(ctx, command.PullRequestID); err != nil {
+		return IntentOutcome{}, fmt.Errorf("clear previous teardown for manual build: %w", err)
 	}
 	result.Intent = intentFromRow(row)
 	return result, nil

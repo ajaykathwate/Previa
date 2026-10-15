@@ -89,7 +89,7 @@ func (r *Runtime) serviceImages(ctx context.Context, services []serviceRun, logs
 }
 
 // waitServicesReady waits until every service answers its protocol, not just
-// a TCP accept: PostgreSQL runs an authenticated query and Redis answers an
+// a TCP accept: SQL services run an authenticated query and Redis answers an
 // authenticated PING, each from inside the service's own container.
 func (r *Runtime) waitServicesReady(ctx context.Context, services []serviceRun, ids map[string]string, logs LogSink) error {
 	deadline, cancel := context.WithTimeout(ctx, r.policy.StartupTimeout)
@@ -154,9 +154,9 @@ func (r *Runtime) probeService(deadline context.Context, s serviceRun, container
 }
 
 // serviceAnswers runs a service's protocol check inside its container. With
-// credentials it authenticates (PostgreSQL runs SELECT 1, Redis answers PING
+// credentials it authenticates (SQL services run SELECT 1, Redis answers PING
 // with PONG); without them it checks that the server speaks its protocol
-// (pg_isready, or Redis asking for authentication).
+// (pg_isready, mysqladmin ping, or Redis asking for authentication).
 func (r *Runtime) serviceAnswers(ctx context.Context, s serviceRun, containerID string, authenticated bool) (bool, string, error) {
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -168,6 +168,12 @@ func (r *Runtime) serviceAnswers(ctx context.Context, s serviceRun, containerID 
 		cmd = []string{"psql", "-h", "127.0.0.1", "-p", port, "-U", serviceDatabase, "-d", serviceDatabase, "-tAc", "SELECT 1"}
 	case s.Kind == "postgres":
 		cmd = []string{"pg_isready", "-h", "127.0.0.1", "-p", port, "-t", "3"}
+	case s.Kind == "mysql" && authenticated:
+		env = []string{"MYSQL_PWD=" + s.password}
+		cmd = []string{"mysql", "--protocol=tcp", "--host=127.0.0.1", "--port=" + port, "--user=" + serviceDatabase, "--database=" + serviceDatabase,
+			"--connect-timeout=3", "--batch", "--skip-column-names", "--execute=SELECT 1"}
+	case s.Kind == "mysql":
+		cmd = []string{"mysqladmin", "--protocol=tcp", "--host=127.0.0.1", "--port=" + port, "--connect-timeout=3", "ping"}
 	case authenticated:
 		env = []string{"REDISCLI_AUTH=" + s.password}
 		cmd = []string{"redis-cli", "-h", "127.0.0.1", "-p", port, "PING"}
@@ -182,10 +188,14 @@ func (r *Runtime) serviceAnswers(ctx context.Context, s serviceRun, containerID 
 		return false, "", err
 	}
 	switch {
-	case s.Kind == "postgres" && authenticated:
+	case (s.Kind == "postgres" || s.Kind == "mysql") && authenticated:
 		return result.ExitCode == 0 && result.Stdout == "1", "it does not accept connections yet", nil
 	case s.Kind == "postgres":
 		return result.ExitCode == 0, "it does not accept connections", nil
+	case s.Kind == "mysql":
+		// mysqladmin ping reports success on an authentication refusal too:
+		// either response proves this is a live MySQL server.
+		return result.ExitCode == 0, "it does not answer MySQL ping", nil
 	case authenticated:
 		return result.Stdout == "PONG", "it does not answer PING yet", nil
 	}

@@ -21,8 +21,8 @@ type status struct {
 
 // describe states only what is recorded: the current intent and the stored
 // stream. A stream from an earlier attempt is labelled as such, never shown as
-// the current build's output.
-func describe(t Target, s Stream, hasStream bool) status {
+// the current build's output. retention is how long finished logs are kept.
+func describe(t Target, s Stream, hasStream bool, retention time.Duration) status {
 	st := status{Label: "No build requested", Tone: pages.Tone(""), Summary: "No build has been requested for this pull request."}
 	if hasStream {
 		st.SHA, st.Epoch = s.HeadSHA, s.Epoch
@@ -41,8 +41,11 @@ func describe(t Target, s Stream, hasStream bool) status {
 		st.Notices = append(st.Notices, buildpages.LogNotice{Tone: "tone-warn", Text: "GitHub access to this repository was removed. Stored logs stay readable until they expire."})
 	}
 	st.Empty = emptyText(s, hasStream)
-	if hasStream && !s.PrunedAt.IsZero() {
-		st.Notices = append(st.Notices, buildpages.LogNotice{Tone: "tone-neutral", Text: fmt.Sprintf("Logs are kept for %d days after a build finishes; this attempt's logs were deleted.", int(Retention/(24*time.Hour)))})
+	switch {
+	case hasStream && !s.DeletedAt.IsZero():
+		st.Notices = append(st.Notices, buildpages.LogNotice{Tone: "tone-neutral", Text: "You deleted this attempt's logs on " + s.DeletedAt.UTC().Format("2 Jan 2006, 15:04 UTC") + "."})
+	case hasStream && !s.PrunedAt.IsZero():
+		st.Notices = append(st.Notices, buildpages.LogNotice{Tone: "tone-neutral", Text: fmt.Sprintf("Logs are kept for %d days after a build finishes; this attempt's logs were deleted.", int(retention/(24*time.Hour)))})
 	}
 	if hasStream && s.Truncated {
 		st.Notices = append(st.Notices, buildpages.LogNotice{Tone: "tone-warn", Text: fmt.Sprintf("Logs truncated: the size or line limit was reached, and %d later lines were not stored.", s.OmittedLines)})
@@ -94,6 +97,8 @@ func emptyText(s Stream, hasStream bool) string {
 	switch {
 	case !hasStream:
 		return "No build output is stored for this pull request."
+	case !s.DeletedAt.IsZero():
+		return "Logs deleted."
 	case !s.PrunedAt.IsZero():
 		return "These logs expired."
 	case s.Lines == 0 && !s.Finished:
@@ -103,4 +108,19 @@ func emptyText(s Stream, hasStream bool) string {
 	default:
 		return ""
 	}
+}
+
+// deletable reports whether the owner may delete the stored logs: they
+// exist, and the attempt finished or can no longer write (it is not the
+// PR's running request). Store.Delete checks the same under a lock.
+func deletable(t Target, s Stream, hasStream bool) bool {
+	if !hasStream || !s.PrunedAt.IsZero() || s.Lines == 0 {
+		return false
+	}
+	if s.Finished {
+		return true
+	}
+	i := t.Intent
+	running := i != nil && (i.State == "pending" || i.State == "queued" || i.State == "running")
+	return !running || i.Generation != s.Generation || i.Revision != s.Revision
 }

@@ -68,6 +68,32 @@ func TestFileConcurrentWritersKeepTheNewest(t *testing.T) {
 	}
 }
 
+func TestRefreshUpdatesSettingsButCannotReplaceANewerTable(t *testing.T) {
+	f, err := NewFile(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(4, []byte("deny")); err != nil {
+		t.Fatal(err)
+	}
+	if wrote, err := f.Refresh(4, []byte("auth")); err != nil || !wrote {
+		t.Fatalf("same-version refresh: wrote=%v err=%v", wrote, err)
+	}
+	if wrote, err := f.Refresh(4, []byte("auth")); err != nil || wrote {
+		t.Fatalf("unchanged settings rewrote the file: wrote=%v err=%v", wrote, err)
+	}
+	if _, err := f.Write(5, []byte("newer")); err != nil {
+		t.Fatal(err)
+	}
+	if wrote, err := f.Refresh(4, []byte("old")); err != nil || wrote {
+		t.Fatalf("old snapshot replaced a newer table: wrote=%v err=%v", wrote, err)
+	}
+	data, err := os.ReadFile(f.Path())
+	if err != nil || !strings.Contains(string(data), "newer") {
+		t.Fatalf("newer route was lost: %s %v", data, err)
+	}
+}
+
 func TestFileReplacesAnUnrecognisedFile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, FileName), []byte("garbage"), 0o640); err != nil {

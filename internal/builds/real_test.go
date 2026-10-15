@@ -3,6 +3,7 @@ package builds
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log/slog"
@@ -166,7 +167,8 @@ func TestRealBuilderBuildsCachesReusesAndLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, firstLogs)
 	}
-	if img.Ref != first.ImageRef() || img.ID == "" || img.Reused || !strings.Contains(firstLogs.String(), "STEP_HAS_PROXY") {
+	if img.Ref != first.ImageRef() || img.ID == "" || img.Reused || !strings.Contains(firstLogs.String(), "STEP_HAS_PROXY") ||
+		!strings.Contains(firstLogs.String(), "[previa] Network: downloaded ") {
 		t.Fatalf("first build: %+v\n%s", img, firstLogs)
 	}
 	inspected, err := f.docker.ImageInspect(t.Context(), img.Ref)
@@ -196,6 +198,16 @@ func TestRealBuilderBuildsCachesReusesAndLabels(t *testing.T) {
 	// A River retry of the same revision finds the finished image.
 	retry, retryLogs := f.job(t, 1, 2, f.base, files)
 	retry.HeadSHA = first.HeadSHA
+	// An identical revision/SHA must not adopt an image from another source.
+	otherSource := retry
+	otherSource.HeadRepoID = 0
+	if _, ok := f.builder.reusable(t.Context(), otherSource); ok {
+		t.Fatal("an unverified source reused a trusted image")
+	}
+	otherSource.HeadRepoID, otherSource.BaseRepoID = retry.HeadRepoID, retry.BaseRepoID+1
+	if _, ok := f.builder.reusable(t.Context(), otherSource); ok {
+		t.Fatal("a different base repository reused a trusted image")
+	}
 	reused, err := f.builder.Build(buildCtx(t, time.Minute), retry)
 	if err != nil || !reused.Reused || reused.ID != img2.ID || !strings.Contains(retryLogs.String(), "Reusing the image") {
 		t.Fatalf("retry: %+v %v\n%s", reused, err, retryLogs)
@@ -278,6 +290,61 @@ func TestRealBuilderIsolatesBuildSteps(t *testing.T) {
 		}
 	}
 	f.assertNoSandboxes(t, job.PullRequestID)
+}
+
+// With BUILD_EGRESS=registries a build installs packages and pulls its base
+// image, but reaches no other host, and its log says which it refused.
+func TestRealBuilderReachesOnlyRegistriesWhenLimited(t *testing.T) {
+	f := newRealFixture(t, func(c *Config) { c.EgressHosts = egressHosts(config.BuildEgressRegistries, nil) })
+	script := "apk add --no-cache jq >/dev/null && echo 'PROBE registry REACHED'; " +
+		"(wget -T 15 -q -O- http://example.com >/dev/null 2>&1 && echo 'PROBE other-host REACHED') || echo 'PROBE other-host blocked'"
+	job, logs := f.job(t, 5, 1, f.base, map[string]string{"Dockerfile": "FROM alpine:3.22\nRUN " + script + "\n"})
+	if _, err := f.builder.Build(buildCtx(t, 8*time.Minute), job); err != nil {
+		t.Fatalf("%v\n%s", err, logs)
+	}
+	output := logs.String()
+	for _, want := range []string{"PROBE registry REACHED", "PROBE other-host blocked", "[previa] Network: downloaded ",
+		"It refused 1 request(s) to other hosts: example.com."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("missing %q:\n%s", want, output)
+		}
+	}
+	f.assertNoSandboxes(t, job.PullRequestID)
+}
+
+// A Dockerfile step reads an allowed build secret through a secret mount;
+// the value never reaches the image, and without it the step fails.
+func TestRealBuilderMountsBuildSecrets(t *testing.T) {
+	f := newRealFixture(t, nil)
+	const value = "build-secret-value-42"
+	files := map[string]string{"Dockerfile": "FROM alpine:3.22\n" +
+		"RUN --mount=type=secret,id=NPM_TOKEN,required=true sha256sum /run/secrets/NPM_TOKEN\n" +
+		"RUN test ! -e /run/secrets/NPM_TOKEN && echo IMAGE_CLEAN\n"}
+	job, logs := f.job(t, 6, 1, f.base, files)
+	job.Secrets = map[string][]byte{"NPM_TOKEN": []byte(value)}
+	img, err := f.builder.Build(buildCtx(t, 8*time.Minute), job)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, logs)
+	}
+	if out := logs.String(); !strings.Contains(out, fmt.Sprintf("%x", sha256.Sum256([]byte(value)))) || !strings.Contains(out, "IMAGE_CLEAN") || strings.Contains(out, value) {
+		t.Fatalf("secret mount:\n%s", out)
+	}
+	inspected, err := f.docker.ImageInspect(t.Context(), img.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, env := range inspected.Config.Env {
+		if strings.Contains(env, value) {
+			t.Fatal("the build secret reached the image's environment")
+		}
+	}
+	without, logs := f.job(t, 7, 1, f.base+1, files)
+	// Deliberately give a fork credentials: the builder must withhold them
+	// and use a separate cache instead of a trusted cached secret step.
+	without.Secrets = job.Secrets
+	if _, err := f.builder.Build(buildCtx(t, 8*time.Minute), without); CodeOf(err) != CodeBuildFailed {
+		t.Fatalf("a step needing a secret the build was not given must fail: %v\n%s", err, logs)
+	}
 }
 
 func pullImage(ctx context.Context, docker *client.Client, ref string) error {

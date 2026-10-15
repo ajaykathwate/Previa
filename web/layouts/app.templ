@@ -2,12 +2,22 @@ package layouts
 
 import "github.com/ajaykathwatee/previa/web/components"
 
+// App is the authenticated workspace shell for a top-level page: its trail
+// reads "Workspace / title".
 templ App(title string, username string, csrfToken string, active components.NavItem) {
+	@AppTrail(title, components.WorkspaceCrumb, title, username, csrfToken, active) {
+		{ children... }
+	}
+}
+
+// AppTrail is the workspace shell for a page inside another one: the header
+// trail shows parent (linked) and current, and title names the browser tab.
+templ AppTrail(title string, parent components.Crumb, current string, username string, csrfToken string, active components.NavItem) {
 	@Document(title) {
 		<div class="app-shell">
 			@components.Sidebar(active)
 			<div class="app-column">
-				@components.AppNavbar(username, title, active)
+				@components.AppNavbar(username, current, parent, active)
 				<main id="content" tabindex="-1" class="app-content">
 					<div class="app-page">
 						{ children... }

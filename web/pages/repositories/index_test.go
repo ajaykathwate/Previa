@@ -12,7 +12,7 @@ func TestRepositoryPageEscapesDataAndPreservesFilters(t *testing.T) {
 	if err := Index("owner", "csrf", data).Render(context.Background(), &output); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"Manage connections", "owner&lt;script&gt;", "Installation suspended", "rel=\"next\"", "q=owner+%26+code", "access=unavailable", "aria-current=\"page\"", "csrf_token"} {
+	for _, expected := range []string{"Choose repositories on GitHub", "owner&lt;script&gt;", "Installation suspended", "rel=\"next\"", "q=owner+%26+code", "access=unavailable", "aria-current=\"page\"", "csrf_token"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("missing %q", expected)
 		}

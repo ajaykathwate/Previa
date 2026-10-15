@@ -31,6 +31,10 @@ the pending live checks pass ([27](27-roadmap.md)).
 | Housekeeping (recovery, expiry, orphans, PR reconciliation, pruning) | Part of builds; `ENV_TTL_HOURS`, `HOUSEKEEPING_*`, `BUILD_CACHE_BUDGET` | Part of builds. |
 | Build, Retry, Rebuild and teardown controls (server) | The five server App settings, and a worker with builds seen within 90 seconds | The PR page explains why; the endpoint answers 503 and records nothing. Teardown is recorded without a worker and runs when one starts. |
 | Builds paused (kill switch) | `BUILDS_PAUSED=true` | Off by default. When on, builds wait (reason `paused`) and the dashboard refuses new requests saying builds are paused; teardown, cleanup, routing, reports and housekeeping continue ([24](24-incident-runbook.md#execution-kill-switch)). |
+| Last opened (visit counts) | Part of builds; the router serving Prometheus metrics (`make router-up`; `ROUTER_METRICS_ADDRESS` in production) | The worker logs `preview visits not read`; pages show no "Last opened"; idle previews never sleep. |
+| Idle previews sleep | Part of builds; `PREVIEW_IDLE_SLEEP` | Off by default: previews run until they expire. |
+| Private previews | `PREVIEW_ACCESS_URL` on the worker (the server's `/previews/auth` as the router reaches it); the GitHub App on the server for repository permissions | Without the URL a private preview serves nobody (fails closed); without the App only the installation's owner gets in. |
+| Live app output | Part of builds | Viewers wait on **Connecting** until a worker with builds starts. |
 | Health and metrics | `INTERNAL_ADDR` (server), `WORKER_INTERNAL_ADDR` (worker) | Always on, loopback by default; `/readyz` lists failing dependencies ([23](23-observability-and-hardening.md)). |
 | Source workspaces | `SOURCE_WORKSPACE_ROOT` (default `previa-sources` in the system temporary directory; keep it on a Linux filesystem) | Defaulted. |
 
@@ -49,8 +53,14 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 | `environment_report` | 4 | PR comment and check run: 1 minute (+30 s), under the reporter's 2-minute lease. |
 | `environment_cleanup` | 2 | Owner-verified removal of containers, images, networks: 90 seconds (+30 s). |
 | `environment_teardown` | 1 | Revocation sweep: 2 minutes. |
-| `housekeeping` | 1 | Periodic: recovery every minute (2-minute timeout), resources every 5 minutes (5), PR reconciliation every 15 minutes (5), expiry every 10 minutes (2), pruning hourly (15). |
+| `housekeeping` | 1 | Periodic: recovery every minute (2-minute timeout), resources every 5 minutes (5), PR reconciliation every 15 minutes (5), expiry every 10 minutes (2), pruning hourly (15), record retention hourly (10). |
 | `pr_discovery`, `build_log_prune`, `ping` | 2, 1, `MAX_CONCURRENT_BUILDS` | As before. |
+| `app_output` | 16 | One follower per watched preview: until nobody watched for a minute, at most 2 hours. |
+| `idle` | 4 | `preview_sleep` every 5 minutes (4-minute timeout) when `PREVIEW_IDLE_SLEEP` is set; `preview_wake` per waiting visitor (5 minutes). |
+| `route_sync` | 1 | Rewrites the router's file after a repository's previews turn private or public. |
+
+Beside River, the worker runs two loops: the crash watch (Docker events) and the
+visit count read (every minute). Both end with the process.
 
 - **Retries.** A permanent failure (invalid configuration, failing Dockerfile, app
   never ready, time limit) ends the request after one attempt and is reported once.
@@ -70,9 +80,12 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 ## Running the whole pipeline (local or staging)
 
 1. `make migrate-up` (Goose 20) and `make egress-image`.
-2. A domain whose wildcard record points at the Docker host, a DNS token in a
-   `chmod 600` file, and the routing and `ACME_*` settings in `.env`; then
-   `make router-up` (Let's Encrypt **staging** first, [12](12-routing-and-https.md)).
+2. The routing and `ACME_*` settings in `.env`, then `make router-up`. On one
+   machine use `PREVIEW_BASE_DOMAIN=preview.localtest.me` with a placeholder DNS
+   token and `ACME_CA_SERVER=https://127.0.0.1:1/directory`, as in the
+   [user guide](../technical-docs/user-guide.md#0-before-you-start). With a real
+   domain, its wildcard record points at the Docker host and the token is real
+   (Let's Encrypt **staging** first, [12](12-routing-and-https.md)).
 3. In `.env`, for the worker: the two App settings, `PREVIEW_BASE_DOMAIN`,
    `APP_BASE_URL`, `ROUTER_DYNAMIC_DIR`, the secrets keyring if repositories use
    secrets; optionally `ENV_TTL_HOURS` and the housekeeping settings.
@@ -86,9 +99,10 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 6. **Tear down preview** (confirmed in a dialog) or closing the PR removes route and
    containers; the comment says so.
 
-Without a domain and DNS token the router cannot obtain a certificate, so builds
-stay unavailable; `make test-e2e` proves the whole pipeline on this machine without
-them (a router with Traefik's default certificate). For a production host use the
+Builds do not need a real domain: with `preview.localtest.me` the router serves
+Traefik's self-signed certificate (browsers warn; accept it for testing) and every
+step above works on one machine. A real domain and DNS token are needed only for
+trusted certificates. `make test-e2e` proves the same pipeline automatically. For a production host use the
 release images and Compose file instead ([25](25-production-deployment.md)).
 
 ## What is proven, and by which test
@@ -110,7 +124,7 @@ release images and Compose file instead ([25](25-production-deployment.md)).
 | Restart recovery | `TestRealRoutingRecoversAfterControllerAndRouterRestarts`, `TestRecoveryResumesLostJobsLeasesAndExhaustedRetries`, `TestAWorkerShutdownMidBuildIsNoFailure` |
 | Permanent failures end at once | `TestPermanentFailuresEndAfterOneAttempt` |
 | No worker that can build | `TestBuildIsUnavailableWithoutAWorkerThatCanBuild`, `TestPipelineRegistersOnlyWhatItsDependenciesAllow`, `TestCapabilitiesComeFromLiveWorkersOnly` |
-| Cross-owner rejection | `TestActionsRefuseAnotherOwnersPullRequest` (build, Retry, Rebuild and teardown of another owner's real PR: 404, nothing recorded, absent from Builds and Environments), `TestWorkspaceHTTPAuthorizationCSRFActions`, `TestTeardownIsConfirmedOwnerOnlyAndIdempotent` |
+| Cross-owner rejection | `TestActionsRefuseAnotherOwnersPullRequest` (build, Retry, Rebuild and teardown of another owner's real PR: 404, nothing recorded, absent from Builds and Previews), `TestWorkspaceHTTPAuthorizationCSRFActions`, `TestTeardownIsConfirmedOwnerOnlyAndIdempotent` |
 | Teardown confirmed in a modal, owner-only, CSRF-protected | `TestTeardownIsConfirmedOwnerOnlyAndIdempotent`, browser tests (with and without JavaScript) |
 | Dashboard pages show real state | `TestEnvironmentsAndBuildsShowRealDeliveryState`, browser tests |
 | A GitHub outage never blocks publication; reports catch up | `TestRealEndToEnd` (comment and check-run API failing during a build) |

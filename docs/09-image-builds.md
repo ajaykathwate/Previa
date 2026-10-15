@@ -17,9 +17,11 @@ the worker runs every admitted build through it ([22](22-mvp-operations.md)), up
 | Network for build steps | **Public internet through Previa's egress proxy**, ports 80/443 only, every private, local and metadata range refused | Most Dockerfiles need package registries; nothing internal is reachable. Tools that ignore proxy settings fail closed. |
 | Cache scope | **Per base repository and source repository**: same-repository PRs share a cache, each fork gets its own | A fork's build cannot plant layers or cache-mount files that a trusted build (which later receives secrets) would reuse. This refines DESIGN §9's "per repo". |
 | Limits (Balanced, env-overridable) | 2 CPUs, 4 GiB memory, 2,048 processes, 20 GiB disk, 4 GiB image, refuse to start below 15 GiB free | Owner decision; tune per host. |
-| BuildKit versions | Daemon image `moby/buildkit:v0.33.1-rootless` pinned by digest; Go client v0.33.0 | Client v0.33.1 requires Go 1.26.8, but the toolchain is pinned to 1.26.5. Patch versions of client and daemon are compatible. |
+| BuildKit versions | Daemon image `moby/buildkit:v0.33.1-rootless` pinned by digest; Go client v0.33.0 | Pinned versions verified together by the real-builder suite. |
 | Egress proxy | Written in Go (`internal/platform/egress`, run as `previa-egress` by `cmd/egress`) rather than Squid; shared with previews ([10](10-preview-runtime.md)) | One language, exact address rules, unit-testable rebinding protection, no new third-party service. |
-| Secrets | **Never** in builds: no build arguments, context or secret mounts | Repository secrets are runtime-only for the MVP ([07](07-repository-secrets.md)). |
+| Secrets | Explicit owner opt-in: BuildKit secret mounts and pull-only registry authentication for trusted heads; never build arguments or context files | Forks and unverified heads receive no providers. Known values and returned errors are redacted; code given a credential can still copy or exfiltrate it ([07](07-repository-secrets.md)). |
+
+Repository `build_timeout` limits the image stage within the overall `BUILD_TIMEOUT` (12m by default). Raising it above the operator ceiling is a validation error; source preparation and startup share the remaining overall time. Repeated builds can reuse layers, but secret value changes do not invalidate BuildKit's cache: change a non-secret cache-busting input or the relevant Dockerfile step when a credential change must rerun it.
 
 ## How a build runs
 
@@ -35,7 +37,10 @@ image ──docker-format tar, size-capped──► Docker image store ──►
 ```
 
 1. **Reuse.** If `previa/pr-<id>:g<gen>-r<rev>-<sha12>` already exists with this
-   job's labels (an earlier attempt of the same revision finished it), it is returned.
+   job's labels, including both repository IDs (an earlier attempt of the same
+   revision finished it), it is returned. A changed or unverified source cannot
+   adopt a trusted source's finished image. A fork flag that contradicts matching
+   repository IDs selects an unverified cache scope.
 2. **Sandbox.** Pull the pinned BuildKit image if Docker lacks it. Start the egress
    proxy if needed, create the build's internal network, connect the proxy to it,
    and start the builder. The builder takes the scope's cache volume if no other
@@ -62,7 +67,7 @@ image ──docker-format tar, size-capped──► Docker image store ──►
 | Privileges | Not privileged; every capability dropped except `SETUID`/`SETGID` (needed by `newuidmap`); read-only root filesystem with owned tmpfs for runtime directories | A compromised step lands as an unprivileged user in a minimal container. |
 | Profiles | Docker's seccomp and AppArmor profiles are disabled and `/proc` paths unmasked (the CLI's `systempaths=unconfined`) | Rootless BuildKit must create a user, mount and PID namespace per step; steps then run under BuildKit's own seccomp profile. This is the documented rootless trade-off and far narrower than a privileged builder. |
 | Resources | cgroup limits on CPU, memory (no swap) and processes cover the daemon and every step; disk budget polled and enforced by stopping the build | A timeout alone is not resource isolation. |
-| Host access | No Docker socket, no host paths, no published ports, no Previa credentials or repository secrets | Nothing in the builder can act on the host or on GitHub. |
+| Host access | No Docker socket, no host paths, no published ports or Previa credentials; repository credentials require explicit owner opt-in for trusted builds | The builder has no host or GitHub App credentials. |
 
 **Verified** on Docker Desktop 29.8 (WSL2) by `make test-builder`, from inside a build step:
 
@@ -87,10 +92,43 @@ scope's cache; and two simultaneous builds of one scope never share a cache.
 virtual machines; a kernel exploit is not contained (gVisor or VM isolation is an
 optional upgrade). The outer seccomp and AppArmor profiles are off for the builder (see
 above). Code can still exfiltrate anything it is given over HTTPS to a public host;
-builds are given no secrets. Tools that ignore `HTTP(S)_PROXY` cannot reach the
+builds receive only explicitly allowed credentials for verified same-repository heads. Use scoped test credentials; secret mounts do not stop Dockerfile code from copying values into layers or caches. Tools that ignore `HTTP(S)_PROXY` cannot reach the
 network. The egress proxy is shared by concurrent builds, but it only connects to
 public addresses, so builds cannot reach each other through it. Each build network
 takes an address range from Docker's default pools until it is removed.
+
+## Build traffic and the registries-only mode
+
+Every build network is metered. When the sandbox opens, the worker registers the
+build network's egress address with the proxy (`previa-egress meter -start`, which
+reaches the proxy over the egress container's loopback interface only; build and
+preview networks cannot). The proxy counts bytes sent and received through it for
+that network. When the build ends the worker reads and forgets the totals:
+
+- the build log ends with `Network: downloaded … and uploaded ….`;
+- the worker logs `build traffic` with `pr_id`, `bytes_up`, `bytes_down` and
+  `refused`, which identifies a build behind a traffic alert;
+- `previa_build_egress_bytes{direction="up"|"down"}` (a histogram per build) feeds
+  `PreviaBuildHeavyUpload` (over 256 MiB uploaded within an hour; package installs
+  never need that) and `PreviaBuildHeavyDownload` (over 4 GiB)
+  ([24](24-incident-runbook.md#unusual-build-traffic)).
+
+`BUILD_EGRESS=registries` limits builds to package and image registries: npm and
+Yarn, PyPI, the Go proxy and checksum database, RubyGems, Packagist, NuGet,
+crates.io, Maven Central and Gradle, Docker Hub (with its blob hosts), GHCR, Quay,
+MCR, ECR Public, and the Debian, Ubuntu and Alpine package mirrors
+(`builds.RegistryHosts`). `BUILD_EGRESS_HOSTS` adds more (`.example.com` allows its
+subdomains). Everything else gets `403` from the proxy, and the build log names the
+first refused hosts: `This server lets builds reach package registries only. It
+refused 2 request(s) to other hosts: github.com, nodejs.org.` Git dependencies
+(`git+https://github.com/…`) and tools that download from their own sites need
+their hosts added.
+
+The limit fails closed. A build whose network cannot be registered with a limit
+does not start. Registrations live in the proxy's memory, so a proxy that restarts
+during a build forgets the limit. The worker sees that at the end (the network is
+unknown), discards the image, and fails the attempt as retryable. Without a limit,
+counting is best effort: a build whose traffic could not be counted still succeeds.
 
 ## Identity, retries and cleanup
 
@@ -142,14 +180,20 @@ captured before cleanup; the error remains `builder_unavailable`.
 | `EGRESS_IMAGE` | `previa-egress:dev` | Egress proxy image, shared with previews. |
 | `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS` | `2`, `4GiB`, `2048` | Per-build limits. |
 | `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK` | `20GiB`, `4GiB`, `15GiB` | Disk and image bounds; sizes take `KiB`, `MiB`, `GiB`, `TiB`. |
+| `BUILD_EGRESS`, `BUILD_EGRESS_HOSTS` | `open`, empty | What builds may reach: any public HTTP(S) host, or package registries only (plus the listed hosts). |
 
 ```sh
 make egress-image         # static proxy binary in an empty, non-root image
 make test-builder         # real builds, isolation probes, limits, caching, cleanup (~4 min)
 ```
 
-**Expected:** every `TestRealBuilder…` test passes, the isolation test logs the probe
+**Expected:** every `TestRealBuilder…` test passes (including
+`TestRealBuilderReachesOnlyRegistriesWhenLimited`, which installs a package from
+Alpine's mirror and is refused `example.com`), the isolation test logs the probe
 table above, and afterwards only `previa-egress` (container and network) remains.
+Rebuild the egress image after pulling a change to `cmd/egress` or
+`internal/platform/egress`; the worker replaces a running proxy built from another
+image at its next start.
 
 ## Code and tests
 

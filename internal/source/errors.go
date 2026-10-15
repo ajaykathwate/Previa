@@ -37,6 +37,8 @@ const (
 	CodeMissingConfig     = "missing_file"
 	CodeInvalidConfig     = "invalid_config"
 	CodeMissingDockerfile = "missing_dockerfile"
+	CodeSubmodules        = "submodules_unsupported"
+	CodeLFS               = "lfs_unsupported"
 	CodeWorkspaceFailure  = "workspace_unavailable"
 )
 

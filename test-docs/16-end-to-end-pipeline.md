@@ -120,4 +120,4 @@ flowchart LR
   Steps: Run `make test-source`, `make test-reporting` and a real PR on a deployed host with a real domain.  
   Expected: As in TC-E2E-WEB-002 to 006 against github.com and Let's Encrypt.  
   Evidence: `internal/source` › `TestRealSourcePrepare`; `internal/platform/githubapp` › `TestRealInstallationRepositoryAccess`; `internal/reporting` › `TestRealReportingOnADisposablePR`  
-  **Not run in this cycle:** needs real GitHub credentials for a disposable PR and a real host (see [README](README.md#not-run-in-this-cycle)).
+  **Incomplete on 2026-10-13:** real App access, source preparation and authorized reporting passed on PR #4. The complete build/push/merge journey on a deployed production host remains; see the [current report](2026-10-13-regression-report.md#live-state-and-remaining-limits).

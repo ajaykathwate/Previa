@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"time"
 
@@ -113,10 +114,11 @@ func (p *Preparer) Prepare(ctx context.Context, request Request) (prepared *Prep
 	if err != nil {
 		return nil, err
 	}
-	if err := checkDockerfile(root, result.Config.Dockerfile); err != nil {
+	contextDir, err := prepareContext(ctx, root, result.Config)
+	if err != nil {
 		return nil, err
 	}
-	return &Prepared{Workspace: workspace, ContextDir: workspace.SourceDir(), Dockerfile: result.Config.Dockerfile, Config: result, Stats: stats}, nil
+	return &Prepared{Workspace: workspace, ContextDir: filepath.Join(workspace.SourceDir(), contextDir), Dockerfile: result.Config.Dockerfile, Config: result, Stats: stats}, nil
 }
 
 // Release removes a prepared workspace.

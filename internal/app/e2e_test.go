@@ -30,6 +30,7 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
@@ -39,22 +40,24 @@ import (
 )
 
 const (
-	e2eTraefik = "traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0"
-	e2eDomain  = "preview.test"
-	e2eCommit1 = "1111111111111111111111111111111111111111"
-	e2eCommit2 = "2222222222222222222222222222222222222222"
-	e2eCommit3 = "3333333333333333333333333333333333333333"
-	e2eCommit4 = "4444444444444444444444444444444444444444"
-	e2eCommit5 = "5555555555555555555555555555555555555555"
-	e2eMarker  = "previa-e2e-v1"
+	e2eTraefik   = "traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0"
+	e2eHTTPImage = "busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
+	e2eDomain    = "preview.test"
+	e2eCommit1   = "1111111111111111111111111111111111111111"
+	e2eCommit2   = "2222222222222222222222222222222222222222"
+	e2eCommit3   = "3333333333333333333333333333333333333333"
+	e2eCommit4   = "4444444444444444444444444444444444444444"
+	e2eCommit5   = "5555555555555555555555555555555555555555"
+	e2eMarker    = "previa-e2e-v1"
 )
 
 // e2eApp is a tiny preview: it answers HTTP on 8080 with its marker.
 func e2eApp(marker string) map[string]string {
 	return map[string]string{
 		".previewrc.yaml": "port: 8080\nresource_tier: small\n",
-		"Dockerfile": "FROM alpine:3.22\nENV MARKER=" + marker + "\n" +
-			`CMD ["sh", "-c", "while true; do printf 'HTTP/1.1 200 OK\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' \"${#MARKER}\" \"$MARKER\" | nc -l -p 8080 >/dev/null 2>&1; done"]` + "\n",
+		"Dockerfile": "FROM " + e2eHTTPImage + "\nENV MARKER=" + marker + "\n" +
+			"RUN mkdir -p /srv && printf '%s' \"$MARKER\" > /srv/index.html\n" +
+			`CMD ["httpd", "-f", "-p", "8080", "-h", "/srv"]` + "\n",
 	}
 }
 
@@ -88,6 +91,7 @@ func TestRealEndToEnd(t *testing.T) {
 	// The fixture's images are tiny; the production free-disk floor (15 GiB)
 	// would refuse every build on a CI runner.
 	execution.BuildMinFreeDisk = 1 << 30
+	gateway := newE2EGateway(t, docker, execution.EgressImage)
 	router := startE2ERouter(t, docker)
 	github := newFakeGitHub(t)
 	github.push(e2eCommit1, e2eApp(e2eMarker))
@@ -103,7 +107,7 @@ func TestRealEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := buildPipeline(ctx, pipelineInput{cfg: cfg, pool: pool, producer: producer, docker: docker, github: github, logger: logger,
+	p, err := buildPipeline(ctx, pipelineInput{cfg: cfg, pool: pool, producer: producer, docker: docker, gateway: gateway, github: github, logger: logger,
 		archiveOptions: []source.ArchiveOption{source.WithDownloadClient(github.server.Client()), source.WithArchiveHosts(github.Host())}})
 	if err != nil {
 		t.Fatal(err)
@@ -184,6 +188,11 @@ func TestRealEndToEnd(t *testing.T) {
 	})
 	if body := e2eWait(t, ctx, "the route to serve the preview", time.Minute, func() (string, error) { return router.get(host) }); body != e2eMarker {
 		t.Fatalf("preview answered %q", body)
+	}
+	for range 50 {
+		if body, err := router.get(host); err != nil || body != e2eMarker {
+			t.Fatalf("the published preview did not consistently serve: %q %v", body, err)
+		}
 	}
 	e2eWait(t, ctx, "the PR report to say Ready", 2*time.Minute, func() (string, error) {
 		comment := github.livingComment()
@@ -517,9 +526,14 @@ func startE2ERouter(t *testing.T, docker *client.Client) *e2eRouter {
 	_ = listener.Close()
 	_, port, _ := net.SplitHostPort(address)
 	r := &e2eRouter{name: fmt.Sprintf("previa-e2e-router-%d", time.Now().UnixNano()), dynamic: dir, https: address}
+	logLevel := "ERROR"
+	if os.Getenv("TEST_E2E_LOG") == "1" {
+		logLevel = "DEBUG"
+	}
 	created, err := docker.ContainerCreate(ctx, client.ContainerCreateOptions{Name: r.name, Config: &container.Config{
 		Image: e2eTraefik, ExposedPorts: network.PortSet{network.MustParsePort("443/tcp"): {}},
 		Cmd: []string{"--global.checknewversion=false", "--global.sendanonymoususage=false",
+			"--log.level=" + logLevel,
 			"--providers.file.directory=/etc/traefik/dynamic", "--providers.file.watch=true", "--providers.providersthrottleduration=250ms",
 			"--entrypoints.websecure.address=:443", "--entrypoints.websecure.http.tls=true",
 			"--entrypoints.traefik.address=127.0.0.1:8080", "--api=true", "--api.insecure=true", "--api.dashboard=false",
@@ -532,12 +546,32 @@ func startE2ERouter(t *testing.T, docker *client.Client) *e2eRouter {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		if t.Failed() {
+			logE2ERouter(t, docker, created.ID)
+		}
 		_, _ = docker.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 	})
 	if _, err := docker.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	return r
+}
+
+func logE2ERouter(t *testing.T, docker *client.Client, id string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	reader, err := docker.ContainerLogs(ctx, id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "80"})
+	if err != nil {
+		t.Logf("read test router logs: %v", err)
+		return
+	}
+	defer func() { _ = reader.Close() }()
+	var output strings.Builder
+	if _, err := stdcopy.StdCopy(&output, &output, io.LimitReader(reader, 256<<10)); err != nil {
+		t.Logf("decode test router logs: %v", err)
+	}
+	t.Logf("test router logs:\n%s", output.String())
 }
 
 // get fetches / from host through the router over HTTPS.
@@ -556,7 +590,7 @@ func (r *e2eRouter) get(host string) (string, error) {
 	defer func() { _ = response.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<16))
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("status %d", response.StatusCode)
+		return "", fmt.Errorf("status %d: %s", response.StatusCode, body[:min(len(body), 512)])
 	}
 	return string(body), nil
 }

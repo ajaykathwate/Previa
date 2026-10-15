@@ -81,9 +81,9 @@ they always show the latest state, and that GitHub trouble never blocks a previe
 
 ## 4. Live GitHub proof (TC-RPT-LIVE)
 
-- [ ] **TC-RPT-LIVE-001 · Reports on a real, disposable pull request**  
+- [x] **TC-RPT-LIVE-001 · Reports on a real, disposable pull request**
   Type: Positive · Priority: P1 · Level: System (real GitHub)  
   Steps: `make test-reporting` with `TEST_GITHUB_*` naming an authorized disposable PR.  
   Expected: One living comment and one check run per revision on GitHub; a deleted comment is replaced; nothing duplicated.  
   Evidence: `internal/reporting` › `TestRealReportingOnADisposablePR`, `TestLiveProofRehearsal`  
-  **Not run in this cycle:** needs a real GitHub App installation and a disposable PR, which this environment does not have (see [README](README.md#not-run-in-this-cycle)).
+  **Verified 2026-10-13:** owner-authorized `ajaykathwate/previa.live` PR #4; temporary proof comments removed, original preview comment preserved, three completed live-proof checks remain. The test does not close or merge the PR.

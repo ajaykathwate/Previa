@@ -19,6 +19,7 @@ const (
 	PullRequestInterval = 15 * time.Minute
 	ExpiryInterval      = 10 * time.Minute
 	PruneInterval       = time.Hour
+	RecordsInterval     = time.Hour
 	// EmergencyPruneEvery bounds how often a build waiting for disk space
 	// triggers a prune outside the hourly schedule.
 	EmergencyPruneEvery = 5 * time.Minute

@@ -119,7 +119,10 @@ All three only *observe* state; none of them authorizes a build. The screens are
    expect 204, then check the repository/PR page. Redelivering the same delivery
    must not change generation or create another request.
 6. In Manual mode, expect PR tracking with “Not requested.” In Automatic mode,
-   expect durable pending intent with a five-minute deadline. Actual builds stay disabled.
+   expect durable pending intent with a five-minute deadline; when it passes, a
+   worker that can build previews builds the newest commit
+   ([22](22-mvp-operations.md#capability-and-configuration-matrix)), and one that
+   cannot leaves the request waiting until it can.
 
 These are reproducible instructions, not a claim that a real GitHub delivery was
 observed in this task. Signature behavior follows

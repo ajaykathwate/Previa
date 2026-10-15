@@ -17,7 +17,7 @@ pipeline.
 | Fence | PostgreSQL row per lifetime environment, moved only forward in (generation, revision) order; removals are kept as tombstones | The durable publication decision ([19](19-generation-ordering.md#the-decision)): one logical controller, accepted version stored durably, conditional on the PR's current state. |
 | Hostname | `pr-<number>-<GitHub repo ID, base 36>-<8 random chars>.<PREVIEW_BASE_DOMAIN>`, allocated once per lifetime environment (owner decision) | The repository ID is immutable (renames and same-named repositories never collide); the random part keeps private repositories' previews unguessable, which "public by URL obscurity" needs. |
 | Certificates | One wildcard certificate per preview domain, Let's Encrypt **staging by default**, DNS-01 through Traefik's ACME client (lego) | No per-preview issuance or rate limits; staging first proves DNS credentials without risking production limits. |
-| TLS proof here | A local Pebble ACME server with its DNS test server (owner decision) | No domain or DNS token is available in this environment; staging and live issuance stay an explicit pending gate. |
+| TLS proof here | Local Pebble/DNS regression tests and live Let's Encrypt issuance for the development wildcard | Pebble keeps automated tests isolated; the live development router also verifies normal browser/client trust with a production certificate. |
 | Unknown and removed hosts | A redirect to the dashboard's public `/previews/unavailable` page (owner decision) | Nothing new to run, and the dashboard never answers on untrusted preview hostnames. |
 
 ## Hostnames
@@ -67,8 +67,10 @@ running and schedules the previous artifacts' cleanup; removal finishes the tear
   YAML reader accepts) into `previa-routes.yml` in `ROUTER_DYNAMIC_DIR`, with the
   version in its first line. Writers on the host serialize on a lock file and replace
   the file atomically (temporary file, fsync, rename), and only when their version is
-  newer, so a late or concurrent writer can never move the file backwards. Version 0
-  (nothing accepted yet) is written only when no file exists.
+  newer, so a late or concurrent writer can never move the file backwards. Explicit
+  startup/recovery syncs may refresh changed worker settings at the same version;
+  identical content is left untouched, and an older table is still refused. Version
+  0 (nothing accepted yet) also carries the fallback router.
 - **Confirmation.** Traefik's API listens on `127.0.0.1:8080` inside the router
   container only. The worker, which alone holds the Docker socket, reads one router
   with `docker exec <router> wget …/api/http/routers/preview-<env>@file`. A version
@@ -80,14 +82,24 @@ running and schedules the previous artifacts' cleanup; removal finishes the tear
   file can no longer go back to them.
 - **Recovery.** All state is in PostgreSQL. A retried operation re-verifies the
   candidate, finds its version already accepted (idempotent), rewrites the file if it
-  is behind and confirms. `Controller.Sync` rewrites a missing or stale file at
-  startup and from the reconciler (`Reconciler.WithRoutes`). After a Traefik restart
-  the routes come back from the file without Previa running.
+  is behind and confirms. `Controller.Sync` rewrites a missing or stale file, or
+  changed settings at the same version, at startup and from the reconciler
+  (`Reconciler.WithRoutes`). It also restores the router's preview-network
+  attachments from the accepted routes, including when the file version is
+  unchanged. After a restart of the same Traefik container, routes come back from
+  the file without Previa running. Recreating the container loses its dynamic
+  Docker attachments; worker startup or the one-minute recovery pass restores them.
 - **Failure classes.** A missing, foreign, stopped or unready candidate fails
   permanently: the activation fails, the environment keeps its active preview and
   becomes `failed`, the candidate is cleaned up and a failure report is queued.
   Router, Docker, file and database errors and a convergence timeout (30 s) are
   retryable. Route removal is retried until it succeeds ([13](13-teardown-and-cleanup.md)).
+  Missing private-preview auth configuration fails permanently with
+  `private_preview_unconfigured` before accepting the candidate, while the
+  controller refreshes existing routes to deny access; retry the build after the
+  operator configures the workers. River retries arriving before the
+  durable backoff deadline or another attempt's lease expiry snooze without
+  consuming an attempt or recording a failure.
 
 ### What is guaranteed, and the limits
 
@@ -140,10 +152,11 @@ Not guaranteed (stated plainly):
   wildcard domain, so all preview routers share one certificate obtained over DNS-01.
   Routers must not carry their own `tls` block: it would replace the entry point's
   resolver (found while verifying).
-- **Staging first:** `ACME_CA_SERVER` defaults to Let's Encrypt staging. Issue a staging
-  certificate, check it, then set the production directory and remove the `acme`
-  volume (`docker volume rm previa-router_acme`) so a fresh account and certificate
-  are obtained.
+- **Staging first:** `ACME_CA_SERVER` defaults to Let's Encrypt staging. Its
+  certificates are intentionally untrusted by browsers; Chrome shows
+  `NET::ERR_CERT_AUTHORITY_INVALID`, and HSTS can prevent continuing. Check staging
+  issuance, then switch the local router to production using the settings below.
+  Select separate certificate storage rather than deleting the persistent volume.
 - **Protected credentials:** the DNS provider token is a Docker secret file
   (`ACME_DNS_CREDENTIAL_FILE`, `chmod 600`, outside Git) that lego reads through
   `<VARIABLE>_FILE`; the container environment holds only the path.
@@ -151,6 +164,29 @@ Not guaranteed (stated plainly):
   restarts reuse the certificate (verified: same serial after a restart).
 - **HTTP** port 80 redirects to HTTPS; `websecure` deletes alias headers
   (`aliasHeadersStrategy=delete`).
+
+For trusted HTTPS with `deploy/traefik/compose.yml`, set these in `.env`:
+
+```sh
+ACME_CA_SERVER=https://acme-v02.api.letsencrypt.org/directory
+ACME_STORAGE_FILE=/acme/acme-production.json
+```
+
+Run `ENV_FILE=.env make router-up`. The local router's `ACME_STORAGE_FILE` is an
+absolute path inside its persistent `/acme` volume; the default remains
+`/acme/acme.json`. A separate file lets Traefik create a production account and
+certificate while preserving staging state. Reusing a staging file can keep
+serving its untrusted certificate. Keep the chosen production path on subsequent
+starts so certificate renewal reuses the same account and keys. This setting is
+for the local/staging Compose file; the production stack has separate preview and
+dashboard storage paths.
+
+Changing certificate settings recreates the router. `make router-up` restores
+its existing preview network attachments so already-running previews keep working.
+Use that target instead of directly recreating the container with Compose.
+After issuance, `curl -I https://<preview-host>/` must verify the certificate
+without `-k`; the response may be the app or the private preview sign-in redirect.
+No app rebuild is needed for a certificate change.
 
 ## Origins and cookies
 
@@ -165,6 +201,51 @@ Not guaranteed (stated plainly):
   `/previews/unavailable` on the dashboard: a public 404 page in the signal theme that
   reads no session, sets no cookie, is never cached and says nothing about which host
   existed.
+- A sleeping preview's host is routed (302) to `/previews/wake/<host>/<path>` on the
+  dashboard ([10](10-preview-runtime.md#idle-previews-sleep)). That page is public as
+  well, reads no session, and sends visitors back only to the host of a known preview,
+  so it is no open redirect.
+
+## Private previews
+
+An owner can switch on **Private previews** for a repository (repository page,
+confirmed in a modal). Its previews are then open only to people who sign in to
+Previa with GitHub and can see the repository on GitHub. Changing it advances the
+route table and queues `route_sync`, which a worker turns into the router's file
+within seconds.
+
+1. The router puts Traefik's `forwardAuth` in front of each private preview: before
+   every request it asks the server at `PREVIEW_ACCESS_URL` (`/previews/auth`), which
+   checks a cookie for that host. A valid cookie answers 200 and the request goes
+   through.
+2. Without one, the visitor is redirected to `/previews/access` on the dashboard. It
+   signs them in (GitHub sign-in returns them there) and asks GitHub, with the App's
+   installation token, for their permission on the repository. The installation's
+   owner always gets in. Any role from `read` up does too.
+3. The visitor returns to `https://<host>/__previa/access?t=<token>`. The token is
+   signed (HMAC with a key derived from `SESSION_SECRET`), names the host and the
+   user, and is valid for one minute. The check turns it into the
+   `__Host-previa-access` cookie (host-only, Secure, HttpOnly, SameSite=Lax, 12 hours)
+   and redirects to the path they first asked for.
+
+Notes:
+
+- A cookie opens only the preview host it was issued for. Losing repository access
+  takes effect when the cookie expires (12 hours at most).
+- On a public repository everyone signed in to GitHub can see it, so private
+  previews mostly matter for private repositories.
+- Without the GitHub App on the server, only the installation's owner gets in.
+- The check sees only the host, the path and the cookie; it stores nothing.
+- Enabling private previews requires all live routing workers to advertise a
+  configured `PREVIEW_ACCESS_URL` (migration 0029). The UI explains missing setup
+  and disables enabling; POST enforces the same guard. Paused routing workers count,
+  discovery-only and stale workers do not. A configured URL still needs to be
+  reachable from Traefik; this capability is not a health probe.
+- With `PREVIEW_ACCESS_URL` unset, an existing private preview fails closed: its host is sent
+  to the unavailable page. Production's Compose file sets it to the server on the
+  control network; see [02](02-development-setup.md) for one machine.
+- The app also receives the cookie. It is signed and valid only for this preview's
+  host, so it lets nobody into anything else.
 
 ## Configuration and operation
 
@@ -176,7 +257,10 @@ Not guaranteed (stated plainly):
 | `ROUTER_CONTAINER` | worker | `previa-router` | Router container to attach and query. |
 | `ROUTER_ENTRYPOINT` | worker | `websecure` | Traefik entry point with the wildcard certificate. |
 | `ROUTER_API_ADDRESS` | worker | `127.0.0.1:8080` | Traefik API inside the router container (must be loopback). |
+| `ROUTER_METRICS_ADDRESS` | worker | the API address | Traefik's Prometheus metrics inside the router container, for preview visit counts. |
+| `PREVIEW_ACCESS_URL` | worker | empty | The server's `/previews/auth` as the router reaches it; empty makes private previews serve nobody. |
 | `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE`, `ACME_CA_SERVER`, `ACME_DNS_RESOLVERS` | router (compose) | staging CA | ACME account, lego DNS provider and its credential file. |
+| `ACME_STORAGE_FILE` | local/staging router (compose) | `/acme/acme.json` | Certificate storage inside the persistent `/acme` volume; use a separate file when switching from staging to production. |
 
 ```sh
 make route-sync     # write the accepted route table from PostgreSQL (cmd/route-sync)
@@ -213,6 +297,7 @@ builds are covered by `make test-builder`). It verified:
 | Controller crash after acceptance | restarted controller rewrites the file; the operation resumes and finishes |
 | Traefik restart | routes reloaded from the file; the certificate from `acme.json` (same serial), no new issuance |
 | Routes file deleted | routes dropped (404) until `Sync` rewrites it |
+| Private preview without auth URL, then configured at the same route-table version | explicit missing-configuration failure; deny route refreshed; anonymous visitor refused, fixture-authorized visitor served |
 
 Traefik renews at start any certificate it thinks is near expiry, judged by
 `certificatesduration` (default 90 days, matching Let's Encrypt). Pebble issues
@@ -227,10 +312,14 @@ the controller's failure classes with fakes, routing configuration and origin ch
 protection of accepted, served and unconfirmed targets, failed activations and
 provisioning with hostname collisions.
 
-**Not verified here:** Let's Encrypt staging or production issuance with a real DNS
-provider (needs a domain and token: run `make router-up` with staging settings, then
-`curl -v https://anything.<domain>` and check the staging issuer), and multi-host
-workers.
+**Live proof (2026-10-13):** inspected the existing Let's Encrypt staging certificate
+for `*.dev.previa.live`, then issued a trusted production certificate over Cloudflare
+DNS-01 using separate storage. Ordinary `curl` and OpenSSL verified its chain and
+hostname. The private preview returned its expected sign-in redirect after fixing
+the WSL server's IPv4 listener; existing preview network attachments survived the
+router recreation. Both certificate files retained mode 600.
+
+**Not verified here:** multi-host workers.
 
 ## Code and tests
 

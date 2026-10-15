@@ -106,7 +106,7 @@ func (f *fixture) admit(t *testing.T, generation, revision int64) int64 {
 		ON CONFLICT (environment_id) DO UPDATE SET epoch = build_log_streams.epoch + 1,
 		  generation = EXCLUDED.generation, revision = EXCLUDED.revision, head_sha = EXCLUDED.head_sha,
 		  state = 'open', next_sequence = 0, stored_bytes = 0, truncated = false, omitted_lines = 0,
-		  lost_lines = 0, opened_at = clock_timestamp(), finished_at = NULL, pruned_at = NULL
+		  lost_lines = 0, opened_at = clock_timestamp(), finished_at = NULL, pruned_at = NULL, deleted_at = NULL
 		RETURNING epoch`, f.environmentID, generation, revision).Scan(&epoch); err != nil {
 		t.Fatal(err)
 	}
@@ -338,14 +338,14 @@ func TestPruneDeletesOnlyExpiredAttempts(t *testing.T) {
 	if err := f.store.Finish(t.Context(), f.environmentID, epoch); err != nil {
 		t.Fatal(err)
 	}
-	report, err := f.store.Prune(t.Context(), time.Now().Add(-buildlogs.Retention))
+	report, err := f.store.Prune(t.Context(), time.Now().Add(-f.store.Retention()))
 	if err != nil || report.Streams != 0 || len(f.texts(t, epoch)) != 1 {
 		t.Fatalf("recent logs pruned: %+v %v", report, err)
 	}
 	if _, err := f.pool.Exec(t.Context(), "UPDATE build_log_streams SET finished_at = now() - interval '15 days'"); err != nil {
 		t.Fatal(err)
 	}
-	report, err = f.store.Prune(t.Context(), time.Now().Add(-buildlogs.Retention))
+	report, err = f.store.Prune(t.Context(), time.Now().Add(-f.store.Retention()))
 	if err != nil || report.Streams != 1 || report.Lines != 1 || len(f.texts(t, epoch)) != 0 {
 		t.Fatalf("expired logs kept: %+v %v", report, err)
 	}
@@ -394,4 +394,148 @@ func TestStreamChangesWakeLiveViewers(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor("append")
+}
+
+// Lines keep the time they were received; a running attempt's logs cannot be
+// deleted, a finished one's can (once), and a late writer stores nothing after.
+func TestDeleteRemovesAFinishedAttemptsLinesAndFencesWriters(t *testing.T) {
+	f := setup(t)
+	epoch := f.admit(t, 1, 1)
+	if _, err := f.pool.Exec(t.Context(), `INSERT INTO build_intents(pull_request_id,revision,base_revision,generation,head_sha,source,request_action,requested_by,idempotency_key,state,available_at,started_at)
+		VALUES ($1,1,0,1,'sha-1','manual','build',$2,'fixture-key-0000001','running',now(),now())`, f.prID, f.owner); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now()
+	w := f.open(t, epoch, buildlogs.Limits{})
+	if _, err := fmt.Fprint(w, "first\nsecond\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	lines, err := f.store.LinesFrom(t.Context(), f.environmentID, epoch, 0, 10)
+	if err != nil || len(lines) != 2 {
+		t.Fatalf("lines: %v %v", lines, err)
+	}
+	for _, l := range lines {
+		if l.At.Before(before.Add(-time.Second)) || l.At.After(time.Now().Add(time.Second)) {
+			t.Fatalf("line %d was stored with time %v", l.Sequence, l.At)
+		}
+	}
+	late := f.open(t, epoch, buildlogs.Limits{})
+	if err := f.store.Delete(t.Context(), f.environmentID, epoch); !errors.Is(err, buildlogs.ErrNotDeletable) {
+		t.Fatalf("the running attempt's logs were deletable: %v", err)
+	}
+	if _, err := f.pool.Exec(t.Context(), "UPDATE build_intents SET state='failed', completed_at=now() WHERE pull_request_id=(SELECT pull_request_id FROM environments WHERE id=$1)", f.environmentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Delete(t.Context(), f.environmentID, epoch+1); !errors.Is(err, buildlogs.ErrNotDeletable) {
+		t.Fatalf("another attempt's logs: %v", err)
+	}
+	if err := f.store.Delete(t.Context(), f.environmentID, epoch); err != nil {
+		t.Fatalf("a crashed attempt's logs (stream still open) can be deleted: %v", err)
+	}
+	if len(f.texts(t, epoch)) != 0 {
+		t.Fatal("lines kept")
+	}
+	s, err := f.store.Stream(t.Context(), f.environmentID)
+	if err != nil || s.DeletedAt.IsZero() || s.PrunedAt.IsZero() || !s.Finished {
+		t.Fatalf("stream after deletion: %+v %v", s, err)
+	}
+	if err := f.store.Delete(t.Context(), f.environmentID, epoch); !errors.Is(err, buildlogs.ErrNotDeletable) {
+		t.Fatalf("deleting twice: %v", err)
+	}
+	_, _ = fmt.Fprint(late, "too late\n")
+	_ = late.Close(t.Context())
+	if len(f.texts(t, epoch)) != 0 {
+		t.Fatal("a late writer stored lines after deletion")
+	}
+	// The next attempt starts with a clean stream.
+	next := f.admit(t, 1, 2)
+	if s, _ := f.store.Stream(t.Context(), f.environmentID); s.Epoch != next || !s.DeletedAt.IsZero() {
+		t.Fatalf("a new attempt still reads as deleted: %+v", s)
+	}
+}
+
+// A live preview's crash adds a section to the finished log of the attempt
+// that built it, redacted and after its lines; never to another attempt's
+// or to deleted logs.
+func TestOpenFinishedAddsASectionToTheBuiltAttemptsLog(t *testing.T) {
+	f := setup(t)
+	epoch := f.admit(t, 1, 1)
+	w := f.open(t, epoch, buildlogs.Limits{})
+	_, _ = fmt.Fprint(w, "built\n")
+	if err := w.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.OpenFinished(t.Context(), f.environmentID, 1, 1, redactor(t)); !errors.Is(err, buildlogs.ErrNoStream) {
+		t.Fatalf("an open stream takes no section: %v", err)
+	}
+	if err := f.store.Finish(t.Context(), f.environmentID, epoch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.OpenFinished(t.Context(), f.environmentID, 1, 2, redactor(t)); !errors.Is(err, buildlogs.ErrNoStream) {
+		t.Fatalf("another revision's stream: %v", err)
+	}
+	section, err := f.store.OpenFinished(t.Context(), f.environmentID, 1, 1, redactor(t, "crash-secret-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	section.System("The app stopped.")
+	_, _ = fmt.Fprint(section, "panic: crash-secret-1\n")
+	if err := section.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(f.texts(t, epoch), "|"); got != "built|The app stopped.|panic: [redacted]" {
+		t.Fatalf("lines: %q", got)
+	}
+	if err := f.store.Delete(t.Context(), f.environmentID, epoch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.OpenFinished(t.Context(), f.environmentID, 1, 1, redactor(t)); !errors.Is(err, buildlogs.ErrNoStream) {
+		t.Fatalf("deleted logs take no section: %v", err)
+	}
+}
+
+func TestStoreSearchFiltersLiteralTextSourceEpochAndSparseSequences(t *testing.T) {
+	f := setup(t)
+	epoch := f.admit(t, 1, 1)
+	w := f.open(t, epoch, buildlogs.Limits{})
+	for i := range 1100 {
+		if i%2 == 0 {
+			w.System(fmt.Sprintf("Previa %d 50%%_done", i))
+		} else {
+			if _, err := fmt.Fprintf(w, "Application %d\n", i); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := w.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	filter := buildlogs.Filter{Source: "previa", Query: "50%_DONE"}
+	lines, err := f.store.SearchBefore(t.Context(), f.environmentID, epoch, 1100, 300, filter)
+	if err != nil || len(lines) != 300 || lines[0].Sequence != 500 || lines[299].Sequence != 1098 {
+		t.Fatalf("matching tail: %d %v", len(lines), err)
+	}
+	next, err := f.store.SearchFrom(t.Context(), f.environmentID, epoch, 500, 300, filter)
+	if err != nil || len(next) != 300 || next[0].Sequence != 500 || next[299].Sequence != 1098 {
+		t.Fatalf("matching forward page: %d %v", len(next), err)
+	}
+	app, err := f.store.SearchFrom(t.Context(), f.environmentID, epoch, 0, 1000, buildlogs.Filter{Source: "application", Query: "aPpLiCaTiOn"})
+	if err != nil || len(app) != 550 || app[0].System {
+		t.Fatalf("application source: %d %v", len(app), err)
+	}
+	missing, err := f.store.SearchBefore(t.Context(), f.environmentID, epoch+1, 1100, 300, filter)
+	if err != nil || len(missing) != 0 {
+		t.Fatal("search leaked another epoch")
+	}
+	missing, err = f.store.SearchFrom(t.Context(), f.environmentID+1, epoch, 0, 300, filter)
+	if err != nil || len(missing) != 0 {
+		t.Fatal("search leaked another environment")
+	}
+	missing, err = f.store.SearchFrom(t.Context(), f.environmentID, epoch, 0, 300, buildlogs.Filter{Query: "%_wildcard"})
+	if err != nil || len(missing) != 0 {
+		t.Fatal("search interpreted SQL wildcards")
+	}
 }

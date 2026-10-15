@@ -10,21 +10,22 @@ import (
 // Failure codes. Messages are safe to show the PR owner; causes stay in Err
 // and never include credentials or secret values.
 const (
-	CodeNotCurrent   = "not_current"         // a newer commit, request or close replaced this attempt
-	CodeInaccessible = "inaccessible"        // repository access or the installation was revoked
-	CodeSource       = "source_failed"       // the exact commit could not be prepared
-	CodeBuild        = "build_failed"        // the image build failed
-	CodeSecrets      = "secrets_unavailable" // secrets exist but could not be decrypted
-	CodeCapacity     = "capacity"            // previews already use the host's budget
-	CodeDiskLow      = "disk_low"            // the build host is short of disk space
-	CodeUnhealthy    = "unhealthy"           // not ready before the startup deadline
-	CodeCrashed      = "crashed"             // exited repeatedly while starting
-	CodeTimeout      = "timeout"
-	CodeCancelled    = "cancelled"
-	CodeUnavailable  = "runtime_unavailable" // Docker or the egress gateway failed
-	CodeNotOwned     = "not_owned"           // removal refused: not a Previa object
-	CodeMissing      = "missing"             // the candidate no longer exists
-	CodeInUse        = "in_use"              // still used by a container; removal retries later
+	CodeNotCurrent    = "not_current"         // a newer commit, request or close replaced this attempt
+	CodeInaccessible  = "inaccessible"        // repository access or the installation was revoked
+	CodeSource        = "source_failed"       // the exact commit could not be prepared
+	CodeBuild         = "build_failed"        // the image build failed
+	CodeImageTooLarge = "image_too_large"     // the image exceeds the operator's size cap
+	CodeSecrets       = "secrets_unavailable" // secrets exist but could not be decrypted
+	CodeCapacity      = "capacity"            // previews already use the host's budget
+	CodeDiskLow       = "disk_low"            // the build host is short of disk space
+	CodeUnhealthy     = "unhealthy"           // not ready before the startup deadline
+	CodeCrashed       = "crashed"             // exited repeatedly while starting
+	CodeTimeout       = "timeout"
+	CodeCancelled     = "cancelled"
+	CodeUnavailable   = "runtime_unavailable" // Docker or the egress gateway failed
+	CodeNotOwned      = "not_owned"           // removal refused: not a Previa object
+	CodeMissing       = "missing"             // the candidate no longer exists
+	CodeInUse         = "in_use"              // still used by a container; removal retries later
 	// Backend previews (docs/11-backend-previews.md).
 	CodeServiceUnavailable = "service_unavailable" // a managed service's pinned image could not be pulled
 	CodeServiceFailed      = "service_failed"      // a managed service stopped or was not ready in time
@@ -78,6 +79,10 @@ func AsOperationFailure(err error) error {
 // FailureCode is the stable category the environment records and reports
 // show for a failed attempt; the message stays in the build log.
 func (e *Error) FailureCode() string { return e.Code }
+
+// SafeMessage is the failure in words safe to show anyone, such as a
+// sleeping preview's visitors.
+func (e *Error) SafeMessage() string { return e.Message }
 
 // Permanent reports whether retrying the same request cannot help (an invalid
 // configuration, a failing Dockerfile, an app that never becomes ready).

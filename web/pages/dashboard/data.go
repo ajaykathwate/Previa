@@ -9,8 +9,12 @@ const HighlightRows = 5
 // user, and what the running workers can do.
 type Summary struct {
 	Installations, Repositories, Available int64
-	// Open pull requests, and their current requests and previews.
+	// Open pull requests, and their current requests and previews. Failed
+	// counts failures that need attention (recent, not dismissed);
+	// FailedOlder the undismissed ones older than AttentionDays.
 	OpenPRs, Waiting, Building, Failed, Live int64
+	FailedOlder                              int64
+	AttentionDays                            int
 	// Capabilities of the workers that are running now.
 	Workers Workers
 	// The latest build requests and published previews, newest first.
@@ -68,24 +72,14 @@ type Workers struct{ Discovery, Execution, Reporting, Housekeeping, Paused bool 
 // Unavailable counts linked repositories whose access or installation is inactive.
 func (s Summary) Unavailable() int64 { return max(0, s.Repositories-s.Available) }
 
-// Stage describes one preview pipeline step and whether a running worker
-// provides it now.
-type Stage struct {
-	Name, Detail string
-	Live         bool
-}
-
-// Stages reflects the running workers, not activity or health: a stage is
-// connected while some worker provides it.
-func (s Summary) Stages() []Stage {
-	w := s.Workers
-	return []Stage{
-		{"Discover", "Webhooks and sync track open PRs", w.Discovery},
-		{"Gate", "Mergeability checks before any work", w.Discovery},
-		{"Build", "Image from the exact commit", w.Execution},
-		{"Run", "Isolated, resource-limited container", w.Execution},
-		{"Route", "Subdomain and TLS per PR", w.Execution},
-		{"Report", "PR comment and check run", w.Reporting},
-		{"Teardown", "Cleanup on close and expiry", w.Execution && w.Housekeeping},
+// FailuresURL is where the Overview's failure figures lead: the failures that
+// need attention, else the older ones, else every build.
+func (s Summary) FailuresURL() string {
+	switch {
+	case s.Failed > 0:
+		return "/builds?failures=attention"
+	case s.FailedOlder > 0:
+		return "/builds?failures=older"
 	}
+	return "/builds"
 }

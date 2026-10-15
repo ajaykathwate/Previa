@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	"github.com/kelseyhightower/envconfig"
 )
 
@@ -67,7 +68,19 @@ type BuilderConfig struct {
 	BuildDiskBudget   ByteSize `envconfig:"BUILD_DISK_BUDGET" default:"20GiB"`
 	BuildMaxImageSize ByteSize `envconfig:"BUILD_MAX_IMAGE_SIZE" default:"4GiB"`
 	BuildMinFreeDisk  ByteSize `envconfig:"BUILD_MIN_FREE_DISK" default:"15GiB"`
+	// BuildEgress is what builds may reach through the egress proxy: "open"
+	// (any public host on ports 80 and 443) or "registries" (only the
+	// package and image registries in builds.RegistryHosts, plus
+	// BuildEgressHosts).
+	BuildEgress      string   `envconfig:"BUILD_EGRESS" default:"open"`
+	BuildEgressHosts []string `envconfig:"BUILD_EGRESS_HOSTS"`
 }
+
+// Build egress modes.
+const (
+	BuildEgressOpen       = "open"
+	BuildEgressRegistries = "registries"
+)
 
 func (c *BuilderConfig) check() error {
 	if strings.TrimSpace(c.BuildKitImage) == "" {
@@ -86,6 +99,22 @@ func (c *BuilderConfig) check() error {
 		return errors.New("BUILD_MAX_IMAGE_SIZE must be at least 16MiB and at most BUILD_DISK_BUDGET")
 	case c.BuildMinFreeDisk < 0:
 		return errors.New("BUILD_MIN_FREE_DISK must not be negative")
+	case c.BuildEgress != BuildEgressOpen && c.BuildEgress != BuildEgressRegistries:
+		return errors.New("BUILD_EGRESS must be open or registries")
+	}
+	var hosts []string
+	for _, host := range c.BuildEgressHosts {
+		if host = strings.ToLower(strings.TrimSpace(host)); host == "" {
+			continue
+		}
+		if !egress.ValidHost(host) {
+			return fmt.Errorf("BUILD_EGRESS_HOSTS: %q is not a host name (use registry.example.com, or .example.com for its subdomains)", host)
+		}
+		hosts = append(hosts, host)
+	}
+	c.BuildEgressHosts = hosts
+	if len(c.BuildEgressHosts) > 0 && c.BuildEgress != BuildEgressRegistries {
+		return errors.New("BUILD_EGRESS_HOSTS applies only with BUILD_EGRESS=registries")
 	}
 	return nil
 }
@@ -103,6 +132,9 @@ type PreviewConfig struct {
 	PreviewMemoryBudget     ByteSize `envconfig:"PREVIEW_MEMORY_BUDGET"`
 	PreviewCPUBudget        float64  `envconfig:"PREVIEW_CPU_BUDGET"`
 	PreviewMaxPerRepository int      `envconfig:"PREVIEW_MAX_PER_REPOSITORY" default:"10"`
+	// PreviewMaxPerAccount bounds running previews per account (installation
+	// owner) on this server; zero means no limit.
+	PreviewMaxPerAccount int `envconfig:"PREVIEW_MAX_PER_ACCOUNT" default:"0"`
 	// PreviewOCIRuntime selects an installed Docker runtime such as runsc
 	// (gVisor); empty uses Docker's default.
 	PreviewOCIRuntime string `envconfig:"PREVIEW_OCI_RUNTIME"`
@@ -113,6 +145,9 @@ type PreviewConfig struct {
 	// PreviewSetupTimeout bounds a preview's setup command (migrations, seed
 	// data).
 	PreviewSetupTimeout time.Duration `envconfig:"PREVIEW_SETUP_TIMEOUT" default:"5m"`
+	// PreviewIdleSleep stops a preview's app after this long without a
+	// visit, until the next visit wakes it; zero keeps previews running.
+	PreviewIdleSleep time.Duration `envconfig:"PREVIEW_IDLE_SLEEP" default:"0"`
 }
 
 // ServiceCatalog parses PREVIEW_SERVICE_CATALOG.
@@ -130,10 +165,14 @@ func (c *PreviewConfig) check() error {
 		return errors.New("PREVIEW_PIDS must be between 64 and 65536")
 	case c.PreviewStartupTimeout < 5*time.Second || c.PreviewStartupTimeout > 30*time.Minute:
 		return errors.New("PREVIEW_STARTUP_TIMEOUT must be between 5s and 30m")
+	case c.PreviewIdleSleep != 0 && (c.PreviewIdleSleep < 15*time.Minute || c.PreviewIdleSleep > 7*24*time.Hour):
+		return errors.New("PREVIEW_IDLE_SLEEP must be 0 (never sleep) or between 15m and 168h")
 	case c.PreviewMemoryBudget < 0 || math.IsNaN(c.PreviewCPUBudget) || c.PreviewCPUBudget < 0:
 		return errors.New("PREVIEW_MEMORY_BUDGET and PREVIEW_CPU_BUDGET must not be negative")
 	case c.PreviewMaxPerRepository < 1 || c.PreviewMaxPerRepository > 1000:
 		return errors.New("PREVIEW_MAX_PER_REPOSITORY must be between 1 and 1000")
+	case c.PreviewMaxPerAccount < 0 || c.PreviewMaxPerAccount > 10000:
+		return errors.New("PREVIEW_MAX_PER_ACCOUNT must be between 0 (no limit) and 10000")
 	case c.PreviewOCIRuntime != "" && !runtimeName.MatchString(c.PreviewOCIRuntime):
 		return errors.New("PREVIEW_OCI_RUNTIME must be a Docker runtime name such as runsc")
 	case c.PreviewSetupTimeout < 10*time.Second || c.PreviewSetupTimeout > 30*time.Minute:

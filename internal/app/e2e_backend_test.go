@@ -85,6 +85,7 @@ func TestRealBackendEndToEnd(t *testing.T) {
 	// The fixture's images are tiny; the production free-disk floor (15 GiB)
 	// would refuse every build on a CI runner.
 	execution.BuildMinFreeDisk = 1 << 30
+	gateway := newE2EGateway(t, docker, execution.EgressImage)
 	router := startE2ERouter(t, docker)
 	github := newFakeGitHub(t)
 	binary := buildBackendFixture(t, ctx, docker)
@@ -114,7 +115,7 @@ func TestRealBackendEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := buildPipeline(ctx, pipelineInput{cfg: cfg, pool: pool, producer: producer, docker: docker, github: github, logger: logger,
+	p, err := buildPipeline(ctx, pipelineInput{cfg: cfg, pool: pool, producer: producer, docker: docker, gateway: gateway, github: github, logger: logger,
 		archiveOptions: []source.ArchiveOption{source.WithDownloadClient(github.server.Client()), source.WithArchiveHosts(github.Host())}})
 	if err != nil {
 		t.Fatal(err)
@@ -263,12 +264,22 @@ func TestRealBackendEndToEnd(t *testing.T) {
 	if !withheld {
 		t.Fatal("the fork's approvals were not recorded as withheld")
 	}
+	e2eWait(t, ctx, "the fork's own preview comment", 2*time.Minute, func() (string, error) {
+		github.mu.Lock()
+		defer github.mu.Unlock()
+		for id, body := range github.comments {
+			if github.commentPRs[id] == forkPRNumber && strings.Contains(body, "Previa preview: Ready") && strings.Contains(body, "https://"+forkHost) {
+				return "", nil
+			}
+		}
+		return "", errors.New("fork not reported yet")
+	})
 
 	// 3. Services reach nothing beyond their candidate; other previews cannot
 	// reach them.
 	pgIP, redisIP := serviceAddress(t, ctx, docker, companions["postgres"]), serviceAddress(t, ctx, docker, companions["redis"])
-	egressAddr := egressAddress(t, ctx, docker, instance, pr)
-	forkEgress := egressAddress(t, ctx, docker, instance, forkPR)
+	egressAddr := egressAddress(t, ctx, gateway, instance, pr)
+	forkEgress := egressAddress(t, ctx, gateway, instance, forkPR)
 	forkIP := previewAddress(t, ctx, docker, instance, forkPR, forkApp)
 	for _, target := range []string{"1.1.1.1 443", "93.184.215.14 80", egressAddr.String() + " 3128", "host.docker.internal 5432", forkIP.String() + " 8080"} {
 		if out, reached := connect(t, ctx, docker, companions["postgres"], target); reached {
@@ -297,10 +308,6 @@ func TestRealBackendEndToEnd(t *testing.T) {
 		if out, _ := connect(t, ctx, docker, forkApp, target); out != "" {
 			t.Fatalf("the fork reached %s: %q", target, out)
 		}
-	}
-	gateway, err := egress.NewGateway(docker, execution.EgressImage)
-	if err != nil {
-		t.Fatal(err)
 	}
 	stats := e2eWait(t, ctx, "the egress counters", time.Minute, func() (string, error) {
 		s, err := gateway.Stats(ctx)
@@ -512,17 +519,16 @@ func previewAddress(t *testing.T, ctx context.Context, docker *client.Client, in
 	return inspected.Container.NetworkSettings.Networks[previewNetworkName(instance, pr)].IPAddress
 }
 
-func egressAddress(t *testing.T, ctx context.Context, docker *client.Client, instance string, pr int64) netip.Addr {
+func egressAddress(t *testing.T, ctx context.Context, gateway *egress.Gateway, instance string, pr int64) netip.Addr {
 	t.Helper()
-	inspected, err := docker.ContainerInspect(ctx, egress.ContainerName, client.ContainerInspectOptions{})
+	address, ok, err := gateway.Address(ctx, previewNetworkName(instance, pr))
 	if err != nil {
 		t.Fatal(err)
 	}
-	endpoint := inspected.Container.NetworkSettings.Networks[previewNetworkName(instance, pr)]
-	if endpoint == nil || !endpoint.IPAddress.IsValid() {
+	if !ok {
 		t.Fatal("the egress proxy has no address on the preview network")
 	}
-	return endpoint.IPAddress
+	return address
 }
 
 // crashLeftover stands in for a candidate whose worker died after creating

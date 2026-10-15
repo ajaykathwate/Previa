@@ -183,6 +183,7 @@ func (h *Handler) previewURL(hostname string) string {
 func (h *Handler) describePreview(pr *pages.PR, row dbgen.OwnedPRRow) {
 	pr.OlderPreview = row.DeployedSha != row.HeadSha
 	pr.PreviewURL = h.previewURL(row.Hostname)
+	pr.LastOpenedAt, pr.Requests, pr.AsleepAt = timestamp(row.LastVisitedAt), row.Visits, timestamp(row.AsleepAt)
 	if row.ExpiresAt.Valid {
 		pr.ExpiresAt = row.ExpiresAt.Time.UTC().Format(time.RFC3339)
 	}
@@ -202,7 +203,7 @@ func (h *Handler) describeFailure(ctx context.Context, pr *pages.PR, row dbgen.O
 		if row.FailureCurrent {
 			code = row.FailureCode
 		}
-		pr.Failure = environments.FailureMessage(code)
+		pr.Failure, pr.FailureCode = environments.FailureMessage(code), code
 		if h.logs != nil && row.EnvironmentID > 0 {
 			lines, err := h.logs.Tail(ctx, row.EnvironmentID, row.Generation, row.RequestRevision.Int64, failureLogLines)
 			if err != nil {
@@ -212,7 +213,7 @@ func (h *Handler) describeFailure(ctx context.Context, pr *pages.PR, row dbgen.O
 			pr.FailureLog = lines
 		}
 	case row.EnvironmentStatus == environments.StatusFailed && row.FailureCode == "preview_missing":
-		pr.Failure = environments.FailureMessage(row.FailureCode)
+		pr.Failure, pr.FailureCode = environments.FailureMessage(row.FailureCode), row.FailureCode
 	}
 }
 
@@ -313,7 +314,7 @@ func (h *Handler) actionsFor(ctx context.Context, row dbgen.OwnedPRRow, noWorker
 	switch {
 	case !row.Available.Bool:
 		a.Unavailable, a.Hint, a.Blocked = "GitHub access to this repository is unavailable.",
-			"Restore access with Manage connections on the Repositories page.", label
+			"Restore access on the Repositories page: choose repositories on GitHub and select this one again.", label
 		return a, nil
 	case row.State != "open":
 		a.Unavailable = "Closed and merged pull requests are not built."
@@ -345,8 +346,15 @@ func (h *Handler) actionsFor(ctx context.Context, row dbgen.OwnedPRRow, noWorker
 		return a, nil
 	}
 	switch row.BuildState {
-	case "pending", "queued":
-		a.BuildNow = row.RequestSource == "automatic" // a manual request is already queued
+	case "pending":
+		a.BuildNow = row.RequestSource == "automatic"
+		if !a.BuildNow {
+			a.InProgress = "Build queued"
+		}
+	case "queued":
+		a.InProgress = "Build queued"
+	case "running":
+		a.InProgress = "Building preview"
 	case "failed":
 		a.Retry = true
 	case "succeeded":
@@ -364,12 +372,12 @@ func buildLabel(row dbgen.OwnedPRRow) string {
 		return "Build latest commit"
 	}
 	switch row.BuildState {
-	case "pending", "queued":
+	case "pending":
 		if row.RequestSource == "automatic" {
 			return "Build now"
 		}
 		return ""
-	case "running":
+	case "queued", "running":
 		return ""
 	case "failed":
 		return "Retry build"
@@ -504,14 +512,14 @@ func (h *Handler) teardown(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	// From the Environments page, return there (a fixed path, never a URL
-	// taken from the form).
-	if r.PostFormValue("return") == "environments" {
+	// From the Previews page, return there (a fixed path, never a URL taken
+	// from the form). "environments" is the page's former name.
+	if ret := r.PostFormValue("return"); ret == "previews" || ret == "environments" {
 		page, err := strconv.ParseInt(r.PostFormValue("page"), 10, 64)
 		if err != nil || page < 1 {
 			page = 1
 		}
-		http.Redirect(w, r, "/environments?page="+strconv.FormatInt(page, 10), http.StatusSeeOther)
+		http.Redirect(w, r, "/previews?page="+strconv.FormatInt(page, 10), http.StatusSeeOther)
 		return
 	}
 	h.finishMutation(w, r, user, id)

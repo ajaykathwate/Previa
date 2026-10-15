@@ -7,7 +7,6 @@ import (
 
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/platform/dockerx"
-	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -181,7 +180,7 @@ func (r *Runtime) removeOwnedNetwork(ctx context.Context, pullRequestID int64, i
 		}
 	}
 	for containerID, endpoint := range n.Containers {
-		if r.egress != nil && endpoint.Name == egress.ContainerName {
+		if r.egress != nil && endpoint.Name == r.egress.Name() {
 			continue // Detached above.
 		}
 		if _, err := r.docker.NetworkDisconnect(ctx, n.ID, client.NetworkDisconnectOptions{Container: containerID, Force: true}); err != nil && !cerrdefs.IsNotFound(err) {

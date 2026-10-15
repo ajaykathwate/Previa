@@ -89,6 +89,7 @@ type Proxy struct {
 	logger    *slog.Logger
 	transport *http.Transport
 	slots     chan struct{}
+	meters    *meters
 }
 
 // NewProxy returns a proxy that uses the system resolver.
@@ -97,7 +98,7 @@ func NewProxy(logger *slog.Logger) *Proxy {
 }
 
 func newProxy(r resolver, d dialer, logger *slog.Logger) *Proxy {
-	p := &Proxy{resolver: r, dialer: d, logger: logger, slots: make(chan struct{}, maxConns)}
+	p := &Proxy{resolver: r, dialer: d, logger: logger, slots: make(chan struct{}, maxConns), meters: newMeters()}
 	p.transport = &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -119,6 +120,10 @@ type vettedTarget struct{}
 
 // ServeHTTP handles one proxy request.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodConnect && r.URL.Host == "" && r.URL.Path == meterPath {
+		p.control(w, r)
+		return
+	}
 	select {
 	case p.slots <- struct{}{}:
 		defer func() { <-p.slots }()
@@ -126,15 +131,27 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "egress proxy is busy", http.StatusServiceUnavailable)
 		return
 	}
+	var m *meter
+	if network, ok := localNetwork(r); ok {
+		m = p.meters.get(network)
+	}
 	if r.Method == http.MethodConnect {
-		p.tunnel(w, r)
+		p.tunnel(w, r, m)
 		return
 	}
 	if r.URL.Scheme != "http" || r.URL.Host == "" {
 		http.Error(w, "this proxy forwards only CONNECT tunnels and absolute http:// requests", http.StatusBadRequest)
 		return
 	}
-	p.forward(w, r)
+	p.forward(w, r, m)
+}
+
+// hostOf is the host part of hostport.
+func hostOf(hostport string) string {
+	if host, _, err := net.SplitHostPort(hostport); err == nil {
+		return host
+	}
+	return hostport
 }
 
 // vet resolves hostport and returns the single address to dial.
@@ -174,7 +191,12 @@ func (p *Proxy) deny(w http.ResponseWriter, r *http.Request, host string, err er
 	http.Error(w, "Previa egress denied: "+err.Error(), http.StatusForbidden)
 }
 
-func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, m *meter) {
+	if !m.allows(hostOf(r.Host)) {
+		m.refuse(hostOf(r.Host))
+		p.deny(w, r, r.Host, errNotAllowedHost)
+		return
+	}
 	target, err := p.vet(r.Context(), r.Host, "443")
 	if err != nil {
 		p.deny(w, r, r.Host, err)
@@ -203,12 +225,13 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request) {
 		_ = upstream.Close()
 		return
 	}
-	splice(client, buffered.Reader, upstream)
+	splice(client, buffered.Reader, upstream, m)
 }
 
 // splice copies both directions until either side ends, an idle timeout
-// passes or the tunnel reaches its maximum duration.
-func splice(client net.Conn, clientBuffer *bufio.Reader, upstream net.Conn) {
+// passes or the tunnel reaches its maximum duration, counting the bytes for
+// a metered network.
+func splice(client net.Conn, clientBuffer *bufio.Reader, upstream net.Conn, m *meter) {
 	end := time.Now().Add(maxDuration)
 	var once sync.Once
 	closeBoth := func() {
@@ -220,11 +243,11 @@ func splice(client net.Conn, clientBuffer *bufio.Reader, upstream net.Conn) {
 	defer closeBoth()
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(upstream, &idleReader{conn: client, r: clientBuffer, end: end})
+		_, _ = io.Copy(upstream, m.reader(&idleReader{conn: client, r: clientBuffer, end: end}, true))
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(client, &idleReader{conn: upstream, r: upstream, end: end})
+		_, _ = io.Copy(client, m.reader(&idleReader{conn: upstream, r: upstream, end: end}, false))
 		done <- struct{}{}
 	}()
 	<-done
@@ -264,7 +287,12 @@ func stripHopHeaders(h http.Header) {
 	}
 }
 
-func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, m *meter) {
+	if !m.allows(r.URL.Hostname()) {
+		m.refuse(r.URL.Hostname())
+		p.deny(w, r, r.URL.Host, errNotAllowedHost)
+		return
+	}
 	target, err := p.vet(r.Context(), r.URL.Host, "80")
 	if err != nil {
 		p.deny(w, r, r.URL.Host, err)
@@ -274,6 +302,9 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	out := r.Clone(ctx)
 	out.RequestURI = ""
+	if out.Body != nil && out.Body != http.NoBody {
+		out.Body = io.NopCloser(m.reader(out.Body, true))
+	}
 	stripHopHeaders(out.Header)
 	res, err := p.transport.RoundTrip(out)
 	if err != nil {
@@ -286,5 +317,5 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 		w.Header()[name] = values
 	}
 	w.WriteHeader(res.StatusCode)
-	_, _ = io.Copy(w, res.Body)
+	_, _ = io.Copy(w, m.reader(res.Body, false))
 }

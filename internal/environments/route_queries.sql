@@ -76,6 +76,11 @@ SET served_generation = generation, served_revision = revision,
 WHERE environment_id = sqlc.arg(environment_id)
   AND generation = sqlc.arg(generation) AND revision = sqlc.arg(revision);
 
+-- name: WakeForNewRoute :exec
+-- A newly accepted version serves running containers: the preview is awake.
+UPDATE environments SET asleep_at = NULL, wake_requested_at = NULL, wake_error = ''
+WHERE id = $1 AND asleep_at IS NOT NULL;
+
 -- name: ReadRoute :one
 SELECT * FROM environment_routes WHERE pull_request_id = $1;
 
@@ -83,10 +88,14 @@ SELECT * FROM environment_routes WHERE pull_request_id = $1;
 -- One statement, one snapshot: the version and every active route at it. The
 -- outer join returns the version even when no route is active.
 SELECT t.version AS table_version, r.environment_id, e.subdomain,
-       r.generation, r.revision, r.backend, r.port
+       r.generation, r.revision, r.backend, r.port, r.network_id,
+       coalesce(e.asleep_at IS NOT NULL, false)::boolean AS asleep,
+       coalesce(rp.private_previews, false)::boolean AS private
 FROM route_table t
 LEFT JOIN environment_routes r ON r.state = 'active'
 LEFT JOIN environments e ON e.id = r.environment_id
+LEFT JOIN pull_requests p ON p.id = r.pull_request_id
+LEFT JOIN repos rp ON rp.id = p.repo_id
 ORDER BY r.environment_id NULLS FIRST;
 
 -- name: ListRouteTargets :many

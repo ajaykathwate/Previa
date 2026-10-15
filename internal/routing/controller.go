@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/environments"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // Fence is the route controller's durable state; *environments.Repository
@@ -120,8 +122,20 @@ func (c *Controller) activate(ctx context.Context, op environments.Operation) er
 	}
 	decision, err := c.fence.AcceptRoute(ctx, op, environments.RouteTarget{
 		Artifact: artifact, Backend: backend.Name, Port: backend.Port, NetworkID: backend.NetworkID,
+		AuthConfigured: c.settings.AccessURL != "",
 	})
 	if err != nil {
+		var failure *environments.OperationFailure
+		if errors.As(err, &failure) && failure.Code == "private_preview_unconfigured" {
+			// Refresh existing routes to deny access, without accepting this
+			// failed candidate as a target that later recovery could publish.
+			if err := c.Sync(ctx); err != nil {
+				// A refresh failure must not turn missing authentication into a
+				// transient activation failure that keeps Publish retrying.
+				return errors.Join(failure, fmt.Errorf("refresh private preview denial: %w", err))
+			}
+			return failure
+		}
 		return &environments.OperationFailure{Code: "route_store_unavailable", Err: err}
 	}
 	if !decision.Accepted {
@@ -216,11 +230,27 @@ func (c *Controller) await(ctx context.Context, op environments.Operation, envir
 	}
 }
 
-// Sync rewrites the route table file when it is missing or older than the
-// accepted table, for example at startup or after a crash between an
-// acceptance and its write.
+// Sync refreshes the accepted route table at startup and during recovery,
+// including worker configuration changes at the same table version.
 func (c *Controller) Sync(ctx context.Context) error {
-	return Sync(ctx, c.fence, c.file, c.settings)
+	table, current, err := syncTable(ctx, c.fence, c.file, c.settings)
+	if err != nil || !current {
+		return err
+	}
+	// Recreating Traefik drops Docker attachments even when the route file is
+	// current. Restore them from the accepted targets; never reactivate a route.
+	seen := make(map[string]bool)
+	var errs []error
+	for _, route := range table.Routes {
+		if route.NetworkID == "" || seen[route.NetworkID] {
+			continue
+		}
+		seen[route.NetworkID] = true
+		if err := c.router.Attach(ctx, route.NetworkID); err != nil {
+			errs = append(errs, fmt.Errorf("restore router network for environment %d: %w", route.EnvironmentID, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // RouteTables reads the accepted route table; *environments.Repository
@@ -229,30 +259,34 @@ type RouteTables interface {
 	RouteTable(ctx context.Context) (environments.RouteTable, error)
 }
 
-// Sync writes the accepted route table to file unless the file already holds
-// a version at least as new. Version 0 (no route accepted yet) is written only
-// when there is no file: it already sends unknown hosts to the unavailable
-// page, and its router makes Traefik obtain the wildcard certificate.
+// Sync refreshes the accepted route table and worker settings unless the file
+// holds a newer table. It also sends unknown hosts to the unavailable page
+// and makes Traefik obtain the wildcard certificate before any preview exists.
 func Sync(ctx context.Context, tables RouteTables, file *File, settings Settings) error {
+	_, _, err := syncTable(ctx, tables, file, settings)
+	return err
+}
+
+func syncTable(ctx context.Context, tables RouteTables, file *File, settings Settings) (environments.RouteTable, bool, error) {
 	current, err := file.Version()
 	if err != nil {
-		return err
+		return environments.RouteTable{}, false, err
 	}
 	table, err := tables.RouteTable(ctx)
 	if err != nil {
-		return fmt.Errorf("read accepted route table: %w", err)
+		return environments.RouteTable{}, false, fmt.Errorf("read accepted route table: %w", err)
 	}
 	if current > table.Version {
-		return nil
+		return environments.RouteTable{}, false, nil
 	}
 	content, err := Render(settings, table)
 	if err != nil {
-		return err
+		return environments.RouteTable{}, false, err
 	}
-	if _, err := file.Write(table.Version, content); err != nil {
-		return err
+	if _, err := file.Refresh(table.Version, content); err != nil {
+		return environments.RouteTable{}, false, err
 	}
-	return nil
+	return table, true, nil
 }
 
 func compare(generation, revision, otherGeneration, otherRevision int64) int {
@@ -264,4 +298,35 @@ func compare(generation, revision, otherGeneration, otherRevision int64) int {
 	default:
 		return 1
 	}
+}
+
+// SyncArgs asks a worker to rewrite the router's file from the accepted
+// route table, after a change made outside a route operation (a
+// repository's previews made private or public).
+type SyncArgs struct {
+	Version int64 `json:"version"`
+}
+
+func (SyncArgs) Kind() string { return "route_sync" }
+
+// SyncQueue runs route syncs one at a time.
+const SyncQueue = "route_sync"
+
+// InsertOpts deduplicates a route version while allowing a newer version
+// to queue during a running sync. Each sync writes the latest table.
+func (SyncArgs) InsertOpts() river.InsertOpts {
+	return river.InsertOpts{Queue: SyncQueue, MaxAttempts: 10, UniqueOpts: river.UniqueOpts{
+		ByArgs:  true,
+		ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateScheduled, rivertype.JobStateRetryable},
+	}}
+}
+
+// SyncWorker runs SyncArgs.
+type SyncWorker struct {
+	river.WorkerDefaults[SyncArgs]
+	Controller *Controller
+}
+
+func (w *SyncWorker) Work(ctx context.Context, _ *river.Job[SyncArgs]) error {
+	return w.Controller.Sync(ctx)
 }

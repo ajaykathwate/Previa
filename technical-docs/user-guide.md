@@ -26,6 +26,9 @@ and a checklist to test it all by hand, including the edge cases. Labels in
   or when GitHub access is removed.
 - **Repository secrets**: values your previews need (sandbox API keys), stored
   encrypted and never shown again.
+- **Starter kits**: pick your stack and what it uses, and Previa writes the
+  `Dockerfile` and `.previewrc.yaml` your repository needs, checked and editable,
+  ready to copy or download.
 
 ## The journey at a glance
 
@@ -35,7 +38,7 @@ title: "From sign-in to a preview and back"
 ---
 flowchart TD
     A["Home: Get started with GitHub"] --> B["Overview"]
-    B --> C["Repositories: Install on a repo"]
+    B --> C["Repositories: Install on GitHub"]
     C --> D["GitHub: choose repositories,<br/>authorize the App"]
     D --> E["Repository card appears<br/>(Available)"]
     E --> F["Repository page: pull requests<br/>(Sync Pull Requests)"]
@@ -147,22 +150,25 @@ What you see on **Overview**, top to bottom:
 - When no worker can build, a notice first that says exactly what to fix (for
   example "set `PREVIEW_BASE_DOMAIN` on the worker").
 - **Your next steps**, with progress, until every step is done.
+- Four tiles: **Linked repositories**, **Open pull requests**, **Live previews** and
+  **Needs attention** (builds that failed in the last 7 days and that you have not
+  dismissed); each opens where the number comes from.
 - **Delivery pipeline**: **Open pull requests** → **Waiting or queued** →
   **Building** → **Live previews**, each with its share of open pull requests, plus
   **Failed requests**.
-- **Latest activity**: **Build requests** and **Live previews** tabs. Click a row to
-  see its commit, how it was requested, when it started and finished, why it waits
-  or failed, and links to the pull request and its build logs; a preview also shows
-  **Open**, a copy button and how much of its lifetime is left.
 - **Preview coverage**: how many open pull requests have a live preview.
-- The pipeline stages **Discover, Gate, Build, Run, Route, Report, Teardown**, each
-  **Connected** or **Not running** depending on the worker.
 - **Linked repositories**: available and unavailable.
+- **Latest activity**: **Build requests** and **Live previews** tabs, each a table
+  of pull request, commit, status and when (a failed request says why in plain
+  words, for example **Your app didn't become ready**). Click a row to see how it
+  was requested, when it started and finished, why it waits or failed with what to
+  do first, and links to the pull request and its build logs; a preview also shows
+  **Open**, a copy button and how much of its lifetime is left.
 
 ## 2. Connect your repositories
 
-1. Open **Repositories** and click **Install on a repo** (later **Manage
-   connections**).
+1. Open **Repositories** and click **Install on GitHub** (later **Choose
+   repositories on GitHub**).
 2. On GitHub, pick the account and the repositories Previa may use.
 3. GitHub returns to Previa and asks you to authorize the App with the **same
    account**. Previa checks you really own that installation before linking it.
@@ -170,7 +176,7 @@ What you see on **Overview**, top to bottom:
    the build mode and when pull requests were last synced. Linking never builds
    anything; it starts a first discovery of open pull requests.
 
-To add or remove repositories later, use **Manage connections** (GitHub's page).
+To add or remove repositories later, use **Choose repositories on GitHub**.
 
 ## 3. Find your repositories
 
@@ -205,26 +211,57 @@ To add or remove repositories later, use **Manage connections** (GitHub's page).
    | **Conflicts** | It conflicts with its base branch | No; resolve and push |
    | **Refresh required** | Two observations arrived at the same instant | Sync again |
 
-6. The list's **Preview** column opens each live preview directly, and **Latest
-   request** notes when a request was for an earlier commit. A repository never
-   synced shows a **Sync Pull Requests** button in its empty list.
+6. Each row shows the title with its number, author, branch and when GitHub last
+   updated it; the head **Commit** (opens it on GitHub); the **State**; and
+   **Preview**: **Live** with **Open**, or where the latest build stands
+   (**Not built yet**, **Queued**, **Building**, **Build failed**), noting when it
+   was for an earlier commit. A repository never synced shows a **Sync Pull
+   Requests** button in its empty list.
 7. Click a pull request to open its page:
-   - At the top, the **status panel**: a headline (**Preview is live**, **Building
-     …**, **Build failed**, **Blocked by merge conflicts**, **No preview yet**, …),
-     the preview address with **Copy**, and every action (**Open preview**,
-     Build/Retry/Rebuild, **Tear down preview** or **Cancel build**, **Build
-     logs**). A failed build also shows **Last lines of the build output** with
-     error lines in red.
-   - Three cards: **Latest commit** (linked to GitHub, with **Ready to build**,
-     **Checking mergeability** or **Has merge conflicts**), **Build request** (who
-     asked or **Automatic build**, when it started and finished, how long it took)
-     and **Deployed preview** (when it was published and expires).
+   - The **status card**: a headline (**Preview is live**, **Building …**, **Build
+     failed**, **Blocked by merge conflicts**, **No preview yet**, …), the preview
+     address with **Copy**, and every action (**Open preview**, Build/Retry/Rebuild,
+     **Tear down preview** or **Cancel build**, **Build logs**).
+   - While a build is queued or running, a step tracker shows **Queued → Get code →
+     Build image → Start preview → Publish → Live**, follows the build live with the
+     latest output line under it, and a clock counts the time since it started.
+   - A failed build says what went wrong in plain words (for example **GitHub didn't
+     let Previa download your code**) and lists **What to do next**. **Technical
+     details** opens the exact reason, the failure category, the commit and the
+     **Last lines of the build output** with error lines in red.
+   - The **Details** panel beside it: **Latest commit** (linked to GitHub, with
+     **Ready to build**, **Checking mergeability** or **Has merge conflicts**),
+     **Build request** (who asked or **Automatic build**, when it started and
+     finished, how long it took), **Deployed preview** (when it was published and
+     expires) and **Environment** (managed services and, when live, docs and
+     outbound connections).
    - Times read "3 minutes ago"; hover for the exact UTC time. **View on GitHub**
-     opens the pull request; the back link returns to the list with its filters.
+     opens the pull request; the repository name at the top of the page returns to
+     the list with its filters.
 
 ## 5. Prepare a repository for previews
 
-At the repository root (on the commit you want to preview):
+The quickest start is **Starter kits** in the sidebar:
+
+1. Choose your stack: Next.js, React + Vite, Node.js API, Django, FastAPI, Ruby on
+   Rails, Go, Spring Boot or Laravel. Choose **Own Dockerfile** if you already have
+   one; you then get only `.previewrc.yaml`.
+2. Turn on what your app uses: **PostgreSQL** (sets `DATABASE_URL`), **Redis** (sets
+   `REDIS_URL`), **Migrations**, a **Background worker** and an **API docs link**.
+   Each command has ready-made choices or **My own command…**.
+3. Open **Advanced** to change the port, health check path or preview size.
+4. The files update as you choose, as two tabs: **Dockerfile** and
+   **.previewrc.yaml**. You can edit either one in place. An edited tab shows a dot;
+   your edits stay when you change a choice, and **Reset** brings back the generated
+   file. Previa checks `.previewrc.yaml` as you type: the bar under the file says
+   **Passes Previa's checks** or lists each problem.
+5. **Copy** or **Download** each file (edits included), then read **Check in your
+   app** for anything your code must do (for example, allowing the preview's
+   address). A downloaded `previewrc.yaml` may lose its leading dot: rename it to
+   `.previewrc.yaml`.
+
+Or write the files yourself. At the repository root (on the commit you want to
+preview):
 
 1. A `Dockerfile` that builds and starts your app.
 2. A `.previewrc.yaml`, for example:
@@ -252,15 +289,23 @@ On the repository page (pull request list only):
   not build pull requests that already exist.
 - Turning it off saves Manual at once and cancels automatic requests that have not
   started; running builds and existing previews stay.
+- Pull requests from **forks** never build by themselves, even with Automatic on:
+  they show **Fork · waits for your approval** until you click **Build latest
+  commit**. Read the changes first.
+- **Private previews** switch: a dialog confirms it. When on, people opening a
+  preview of this repository sign in with GitHub, and only those who can see the
+  repository on GitHub get in (for 12 hours on that preview). Turning it off makes
+  the previews public again; it also confirms first.
 
 ## 7. Build a preview (Manual)
 
 1. Open the pull request's page.
 2. Click **Build latest commit**. Previa first reads the pull request fresh from
    GitHub, then records one request (double clicks count once).
-3. The status panel shows **Queued to build …**, then **Building …**; the **Build
-   request** card shows who asked and when it started. Open **Build logs** to watch
-   the output live.
+3. The button shows **Starting…** while the request is sent. The status card then
+   shows **Queued to build …**, then **Building …** with the step tracker moving as
+   the build goes; **Build request** in the Details panel shows who asked and when
+   it started. Open **Follow the build log** to watch the output live.
 4. When the app answers its health check, the preview goes live: the headline says
    **Preview is live**, the address appears with **Copy** and **Open preview**, and
    **Deployed preview** shows **Running**, when it was published and when it
@@ -299,13 +344,20 @@ again**.
 ## 10. Open and share a preview
 
 - Click **Open preview** in the status panel (or **Open** on the pull request list,
-  **Open preview** on **Environments** and **Previews** on Overview). **Copy** puts
+  **Open preview** on **Previews** and on Overview). **Copy** puts
   the address on the clipboard to share with reviewers.
 - The address never changes for that pull request.
 - **This preview serves an earlier commit than the latest one** means a newer
   commit exists but has not been built (Manual) or is building.
 - After teardown, close or expiry, the address shows **Preview not found or
   expired** until the next build.
+- **Last opened 5 min ago · 37 requests** under **Deployed preview** shows that
+  people use it (requests include the page's images and scripts).
+- When the server sleeps idle previews, one nobody opened for a few hours shows
+  **Asleep since …**. Opening its address shows **Waking the preview…** for a few
+  seconds, then the page you asked for. Its databases keep their data.
+- With **Private previews** on, reviewers sign in with GitHub first; anyone who
+  cannot see the repository gets **You can't open this preview**.
 
 ## 11. Feedback on the pull request (GitHub)
 
@@ -328,18 +380,31 @@ A **Previa preview** check run is added for each build request on its exact comm
 ## 12. Read build logs
 
 1. Click **Build logs** on the pull request page (or **Logs** on **Builds** /
-   **Environments**).
+   **Previews**).
 2. The status line says **No build requested**, **Waiting**, **Queued**, **Running**
    or how the attempt ended.
 3. New lines appear live while it runs; the view follows the end while you are at
    the bottom. Scroll up to stop following; **Follow output** resumes.
 4. **Earlier lines** / **Later lines** page through long logs; each line number is a
    link. Lines that look like errors are red.
-5. **Copy** copies the lines shown; **Download** saves the whole output of the
-   attempt as a `.log` file.
+5. Each line shows the time it was printed, in your time zone. **Copy** copies the
+   lines shown; **Download** saves the whole output of the attempt as a `.log` file,
+   each line starting with its UTC time.
 6. Only the current attempt is kept; a new attempt clears the page. Logs are kept
-   14 days after an attempt finishes; at most 5 MiB / 20,000 lines are stored.
-7. Secrets and credentials appear as `[redacted]`.
+   14 days after an attempt finishes (the server's operator may choose up to 90);
+   at most 5 MiB / 20,000 lines are stored.
+7. **Delete logs** (once the attempt finished) removes its output after a
+   confirmation; the page then says you deleted it.
+8. Secrets and credentials appear as `[redacted]`.
+9. If the live preview's app later stops (for example it crashes), its last lines
+   are added at the end with why it stopped and whether it restarts.
+
+### Watch a running preview's output
+
+**App output** on the pull request page (while its preview runs) shows what the app
+prints, live: its own request logs, errors and stack traces, with secrets as
+`[redacted]`. It starts with the last 200 lines. Nothing is kept: a minute after
+you leave the page, the output is deleted.
 
 ## 13. Tear down a preview
 
@@ -355,7 +420,7 @@ From the pull request page:
 While a build runs and nothing is deployed yet, the same control reads **Cancel
 build** (dialog **Cancel this build?**): it stops the build and publishes nothing.
 
-From **Environments**: each published preview has **Tear down** with the same
+From **Previews**: each published preview has **Tear down** with the same
 dialog.
 
 Automatically: closing or merging the pull request removes its preview; reopening
@@ -418,27 +483,43 @@ docs_path: /docs
    **Approve**. **Remove** confirms in a dialog. Pull requests from forks never get
    these connections.
 
-## 16. Builds, Environments and Overview
+## 16. Builds, Previews and Overview
+
+**Builds** answers "what happened when Previa tried to build?"; **Previews** answers
+"what is live right now, and at which link?". Each page says so at the top and links
+to the other.
 
 - **Builds**: the current or latest request of each pull request across your
   repositories, most recent first: the pull request's title, the requested commit
   (and the latest one when it differs), status, why it waits or failed, when it
   became eligible, started or finished and how long it took, and **Logs**. It is not
   a history: a new request replaces the row.
-- **Environments**: each preview, most recently published first: title, status
-  (**Building**, **Publishing**, **Running**, **Failed**, **Removing**), the deployed
-  commit (marked when earlier than the latest), **Open preview** with a copy button,
-  when it was published and expires, **Logs**, and **Tear down** for published
-  previews.
+- **Failures that need attention**: a failed build is highlighted in red, and
+  counted on Overview, for 7 days after it failed. After that it stays on Builds in
+  grey ("Over 7 days old") and Overview counts it separately as an older failure.
+  Choose **Dismiss** (on Builds, or under a failed row on Overview) when a failure no
+  longer matters to you: it stops counting until that pull request fails again.
+  **Undo** brings it back. Filter Builds with **All**, **Needs attention**, **Older
+  failures** and **Dismissed**. Closing the pull request, pushing a new commit or a
+  successful rebuild also clears a failure, as before.
+- **Previews** (formerly **Environments**; old links still work): every preview
+  that is live, most recently published first: title, status (**Live**, **Live ·
+  updating** while a newer build runs, **Live · update failed** when a newer build
+  failed and the last good version keeps serving, **Removing**), the commit it serves
+  (marked when earlier than the latest), **Open preview** (opens your app in a new
+  tab) with a copy button, when it was published and expires, **Logs**, and **Tear
+  down**. Clicking a row does not leave the page; the pull request's title opens the
+  pull request. A build that failed before ever going live is not a preview: it is
+  on **Builds**, with why.
 - **Overview**: see [Sign in](#1-sign-in).
 
 ## 17. Everyday navigation
 
-- Sidebar: **Overview**, **Repositories**, **Builds**, **Environments**, **Developer
-  tools** (development only) and **FAQ**. On phones, the menu button opens it.
+- Sidebar: **Overview**, **Repositories**, **Starter kits**, **Builds**,
+  **Previews**, **Developer tools** (development only) and **FAQ**. On phones, the menu button opens it.
 - **FAQ** answers common questions as a conversation with Previa; the home page has
   the same answers plus **How it works**, a step-by-step conversation you advance with
-  **Ask as Kai** or by choosing a pipeline stage.
+  **Ask as Kai** or by choosing one of its seven steps.
 - **Ctrl K** (**⌘K** on macOS) opens a command palette to jump anywhere.
 - The sun/moon button switches light and dark themes (remembered in this browser).
 - Pages are bookmarkable; Back/Forward keep filters; everything works without
@@ -458,6 +539,10 @@ docs_path: /docs
 | Host busy or short of disk | Builds wait ("Waiting for capacity" / "Waiting for disk space") and start by themselves |
 | Operator pauses builds | Requests wait ("Builds paused"); new build clicks are refused with a message |
 | A container disappears | The preview is marked failed (its container went missing); Retry, Rebuild or a new commit brings it back |
+| A live preview's app crashes | Docker restarts it (three times at most); its last lines go into the build log |
+| Nobody opens a preview for a few hours (if the operator enabled it) | It sleeps; the next visit wakes it in seconds |
+| A shared server is busy | Accounts take turns; your build may wait for **your other build** or until your **daily build minutes** reset at midnight UTC |
+| Old history | Build logs go after 14 days, closed pull requests' records after 90 days |
 
 ## 19. When Previa says no
 
@@ -466,7 +551,7 @@ out, and the box beside it shows the message and the fix below.
 
 | Message | Why | What to do |
 | --- | --- | --- |
-| GitHub access to this repository is unavailable. | The App no longer has access | Restore access in **Manage connections** |
+| GitHub access to this repository is unavailable. | The App no longer has access | Restore access with **Choose repositories on GitHub** |
 | Closed and merged pull requests are not built. | The PR is closed | Reopen it on GitHub |
 | Build refused: resolve merge conflicts and push a new commit first. | **Conflicts** | Fix the conflict and push |
 | Build paused: GitHub is checking mergeability… | **Checking** | Wait or **Sync Pull Requests**; if it says no worker is running, start the worker |
@@ -483,7 +568,7 @@ out, and the box beside it shows the message and the fix below.
 
 ## 20. Uninstall the GitHub App or remove access
 
-On GitHub, open **Manage connections** from Previa (or **Settings → Applications →
+On GitHub, open **Choose repositories on GitHub** from Previa (or **Settings → Applications →
 Installed GitHub Apps → Configure**; for an organization, its settings).
 
 | What you do on GitHub | What Previa does |
@@ -540,7 +625,7 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 
 | # | Steps | Expected |
 | --- | --- | --- |
-| B1 | **Repositories**, **Install on a repo**, choose one repository | Its card appears under **Available** |
+| B1 | **Repositories**, **Install on GitHub**, choose one repository | Its card appears under **Available** |
 | B2 | Install with a different GitHub account than the one signed in | Linking is refused (the installation is not yours) |
 | B3 | On GitHub, remove the repository from the App | The card moves to **Unavailable**; its previews are removed |
 | B4 | Add it back | **Available** again; nothing rebuilds by itself |
@@ -604,9 +689,9 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | F1 | **Tear down preview**, then **Cancel** / Escape | Nothing changes |
 | F2 | **Tear down preview** and confirm | **Removing**, then removed; the address shows "Preview not found or expired"; the comment says removed |
 | F3 | Build again | The preview returns at the same address |
-| F4 | **Environments**, **Tear down** on a row, confirm | Same as F2, back on Environments |
+| F4 | **Previews**, **Tear down** on a row, confirm | Same as F2, back on Previews |
 | F4b | Start a build of a PR with no preview, then **Cancel build** and confirm | The build stops; nothing is published |
-| F4c | **Copy** next to a preview address (PR page, Environments, Overview) | The address is on the clipboard; the button says **Copied** briefly |
+| F4c | **Copy** next to a preview address (PR page, Previews, Overview) | The address is on the clipboard; the button says **Copied** briefly |
 | F5 | Close the PR on GitHub | The preview is removed automatically |
 | F6 | Reopen it (Manual) | Nothing builds until you click |
 | F7 | Set `ENV_TTL_HOURS=1` on the worker, build, wait over an hour | The preview expires; the comment says "Preview expired" |
@@ -671,14 +756,18 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 
 | # | Steps | Expected |
 | --- | --- | --- |
-| J1 | **Ctrl K**, type "env", Enter | Opens Environments; Escape closes the palette |
+| J1 | **Ctrl K**, type "prev" (or "env"), Enter | Opens Previews; Escape closes the palette |
 | J2 | Toggle the theme, reload | The theme stays |
 | J3 | Narrow the window to phone width | Menu button; PR rows become cards; nothing scrolls sideways |
 | J4 | Use Tab and Enter only to open a dialog and cancel it | Focus stays in the dialog; returns to the button afterwards |
 | J5 | Disable JavaScript; sync, change mode, build, tear down | All work through normal page loads |
 | J6 | Bookmark a filtered repository list; open it later | Same filters |
 | J7 | Home page, **How it works**: **Ask as Kai** a few times, then choose **Route** | Previa types, then answers each question; choosing a stage shows every answer up to it; **Start over** resets |
-| J8 | **FAQ** (home page and sidebar): filter **Security**, search "kernel", open a question | Only matching questions remain; the answer appears after a short pause; `/faq#faq-secrets` opens that answer directly |
+| J8 | **FAQ** (home page and sidebar): filter **Security**, search "frameworks", open a question | Only matching questions remain; the answer appears after a short pause; `/faq#faq-secrets` opens that answer directly |
+| J9 | **Starter kits**: choose Django, turn on PostgreSQL and a worker, set the port to 70000, then 8001; switch to the **.previewrc.yaml** tab | The files update in place; 70000 shows "1 to fix" and the files keep the stack's default port, 8000; reloading the address shows the same kit |
+| J10 | In **.previewrc.yaml**, change `port: 8001` to `port: eighty`, then turn on Redis; copy, download, then **Reset** | The tab shows a dot; the bar names the problem on line 4; the edit stays after turning on Redis; copy and download give the edited text; Reset brings back the generated file with Redis |
+| J11 | With a build that failed over 7 days ago, open **Overview**, then **Builds** → **Older failures**; **Dismiss** it, then **Undo** | Overview shows "No new failures · 1 older" in grey, not red; the row is grey with "Over 7 days old"; after Dismiss it is gone from the older count and listed under **Dismissed** with **Undo**; Undo counts it again |
+| J12 | With a build that failed before going live and a live preview, open **Previews**; click a row outside its title; open `/environments` | Only the live preview is listed, with **Open preview**; the failed build is on **Builds**; the click stays on Previews; `/environments` opens Previews |
 
 ### K. Operator behaviour you can observe
 

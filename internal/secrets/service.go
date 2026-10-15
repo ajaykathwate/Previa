@@ -45,6 +45,7 @@ func (e *InvalidError) Error() string { return e.Message }
 type Summary struct {
 	Name      string
 	UpdatedAt time.Time
+	Build     bool // Dockerfile steps of trusted builds may read it
 }
 
 // RepositoryView identifies an owned repository for the secrets page.
@@ -64,6 +65,8 @@ type Store interface {
 	PutMany(ctx context.Context, userID, repoID int64, items []SealedSecret) (int, error)
 	// DeleteMany removes names and reports how many existed.
 	DeleteMany(ctx context.Context, userID, repoID int64, names []string) (int, error)
+	// SetBuild lets builds read a secret or stops it.
+	SetBuild(ctx context.Context, userID, repoID int64, name string, build bool) (bool, error)
 }
 
 // Service manages repository secrets for their owners.
@@ -81,6 +84,24 @@ func NewService(store Store, keys *Keyring) (*Service, error) {
 }
 
 func (s *Service) Configured() bool { return s.keys != nil }
+
+// SetBuild lets Dockerfile steps of trusted builds read the named secret, or
+// stops it. Allowing needs current repository access, like saving a value.
+func (s *Service) SetBuild(ctx context.Context, userID, repoID int64, name string, build bool) (bool, error) {
+	if !namePattern.MatchString(name) {
+		return false, &InvalidError{Field: "name", Message: "Unknown secret."}
+	}
+	if build {
+		view, err := s.store.Repository(ctx, userID, repoID)
+		if err != nil {
+			return false, err
+		}
+		if !view.Available {
+			return false, ErrUnavailable
+		}
+	}
+	return s.store.SetBuild(ctx, userID, repoID, name, build)
+}
 
 func (s *Service) Repository(ctx context.Context, userID, repoID int64) (RepositoryView, error) {
 	return s.store.Repository(ctx, userID, repoID)
@@ -146,6 +167,11 @@ func (s *Service) PutMany(ctx context.Context, userID, repoID int64, entries []E
 		if err := validateValue(e.Value); err != nil {
 			invalid := err.(*InvalidError)
 			return 0, &InvalidError{Field: "value", Message: e.Name + ": " + invalid.Message, Entry: i + 1}
+		}
+		if e.Name == RegistryAuthName {
+			if err := validateRegistryAuth(e.Value); err != nil {
+				return 0, &InvalidError{Field: "value", Message: err.Error(), Entry: i + 1}
+			}
 		}
 	}
 	if s.keys == nil {

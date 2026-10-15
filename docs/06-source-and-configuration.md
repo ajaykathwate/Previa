@@ -78,7 +78,7 @@ exactly as a resolving mergeability check does. Discovery never authorizes anyth
    root (not a link), opened with `O_NOFOLLOW`, and is parsed by `repoconfig.Parse`
    with the same defaults, clamping and hash as below. The configured Dockerfile
    must resolve, through `os.Root`, to a regular file inside the tree. The tree
-   itself is the build context.
+   itself is the default build context. `context: apps/web` narrows what reaches BuildKit; the full archive still has to fit the download, extraction and entry limits. Dockerfile and COPY paths are relative to the selected context. A missing context or a Dockerfile link escaping it is refused. Relevant `.gitmodules` manifests (including paths in the root manifest) and Git LFS pointer files stop preparation with a diagnosis; Previa does not fetch them automatically.
 
 | Limit (`source.DefaultLimits`) | Default |
 | --- | --- |
@@ -142,12 +142,14 @@ resource_tier: standard
 
 | Key | Type | Default when omitted |
 | --- | --- | --- |
-| `dockerfile` | Relative file path string | `Dockerfile` at repository root |
+| `context` | Relative directory inside the repository; no traversal | `.` (repository root); root config stays required |
+| `dockerfile` | Relative file path string, inside `context` | `Dockerfile` inside the selected context |
+| `build_timeout` | Positive duration string (e.g. `10m`) within the operator's `BUILD_TIMEOUT` | Operator deadline (12m by default); image stage only, also bounded by the remaining overall deadline |
 | `port` | Integer, 1–65535 | `3000` inside the preview container |
 | `env` | List of `NAME=value` strings | Empty list |
 | `health_check_path` | Local absolute HTTP path string | No configured HTTP health endpoint |
 | `resource_tier` | `small`, `standard` or `large` string | `standard` |
-| `services`, `setup`, `processes`, `docs_path` | Backend previews: managed PostgreSQL/Redis from the worker's catalog, a setup argv, up to 3 processes, a docs path | None; see [11](11-backend-previews.md) |
+| `services`, `setup`, `processes`, `docs_path` | Backend previews: managed PostgreSQL/Redis/MySQL from the worker's catalog, a setup argv, up to 3 processes, a docs path | None; see [11](11-backend-previews.md) |
 
 The file itself is required: a missing file is an actionable acquisition error.
 `{}` is a valid minimal file. A blank file, explicit nulls or incorrect field types

@@ -1,99 +1,99 @@
 # Project handoff
-Last updated: 2026-10-09
+Last updated: 2026-10-14
 
 ## Start here
 - README.md and DESIGN.md are source of truth; read task-relevant sections only.
-- docs/README.md indexes 25 docs (02 setup, 11 backend previews, 19 publication
-  decision + fencing, 22 operations, 23 observability, 24 incidents, 25 deployment,
-  26 release report, 27 roadmap). 03 and 18 are retired (user guide in
-  technical-docs, decision merged into 19); numbers are not reused or shifted.
-  Do not edit technical-docs/inside-previa.md (owner's rule, 2026-10-09).
-- docs/27-roadmap.md: Prompts 1-13 done. Prompt 14 (detect missed uninstall/suspend/
-  repository-removal webhooks by reconciliation) is planned, not started (an attempt
-  was reverted at the owner's request). docs/26-release-report.md answers the release
-  checklist: ready for staging; production needs the pending live checks.
-- Backend features flat under internal/<feature>; construction in internal/app;
-  presentation in web/ with view models and no backend imports. Keep the "signal"
-  theme, modal confirmations, server-rendered navigation and GET/POST fallbacks.
+- README-MVP-PRODUCT-EXPANSION.md: detailed specification for the first six team SaaS features; onboarding minimal, native Previa reviews with GitHub summaries, notification integrations deferred. Documentation only; no feature implementation or old task resumed.
+- Doc-task verification (2026-10-14): links/structure, Go build/vet and pinned lint passed; Go tests 1195 passed, 244 database/opt-in skips. Test retry needed local listener access; vet retry used lower concurrency.
+- Edit technical-docs/inside-previa.md only when the owner asks (last updated 2026-10-12).
+- docs/27-roadmap.md: Prompts 1-13 done; Prompt 14 (GitHub access reconciliation) not started.
+- Flat features: internal/<feature>, wiring: internal/app; web/ has no backend imports. Preserve signal theme, modal confirmations and server-rendered GET/POST fallbacks.
 
 ## Run and configuration
-- Go 1.26.9+; make build/test/lint/vuln; make observability-check (promtool via Docker).
-- PostgreSQL 17 via Compose; make migrate-up applies Goose 20 and River 007. The
-  dev DB was last seen at 19: run make migrate-up before make run-*/make dev.
-  Processes refuse an older schema ("run migrations first").
-- Prompt 11 settings: APP_ENV, LOG_LEVEL, INTERNAL_ADDR (127.0.0.1:9090),
-  WORKER_INTERNAL_ADDR (:9091), TRUSTED_PROXIES, BACKUP_STATUS_FILE, BUILDS_PAUSED.
-  /livez, /readyz, /metrics only on internal listeners; healthcheck/check-config subcommands.
+- Go 1.26.9+; make build/test/lint/vuln, river-ui (jobs, :8090), observability-check.
+  Lint at 0 (gocognit 30, nestif, gocritic, revive): split functions, don't raise limits.
+- PostgreSQL 17 via Compose; make migrate-up applies Goose 29 and River 007.
+  Dev DB last checked at 29 on 2026-10-13; refuses older schemas. make egress-image/router-up prepare Docker.
+- /livez, /readyz, /metrics: internal listeners :9090/:9091; healthcheck/check-config.
 - Real suites: make test-builder, test-runtime, test-routing, test-housekeeping,
-  test-e2e (TestRealEndToEnd + TestRealBackendEndToEnd). Browser:
-  UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-browser (UI_TEST_PATTERN=regex).
-- Release: make release-images PREVIA_VERSION=x (targets server, worker, egress); make
-  prod-smoke PREVIA_VERSION=x (needs age; SMOKE_OLD_DUMP rehearses an older-schema
-  restore; SMOKE_KEEP=1 keeps a failure). Uses 127.0.0.1:18080/18443/13000.
-- WSL: cwd on /mnt/c can go stale; use absolute paths. Docker Desktop's credential
-  helper sometimes fails pulls; retry or use an empty DOCKER_CONFIG. .env holds an
-  empty ENV_FILE=: unset it after sourcing .env in a script, or Make cannot find it.
+  test-e2e. Browser: UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-browser;
+  UI_TEST_PATTERN narrows cases. Make loads .env; direct Go commands need exports.
+- Release: make release-images / prod-smoke PREVIA_VERSION=x (smoke needs age).
+- WSL: absolute paths; pulls may need empty DOCKER_CONFIG; unset empty ENV_FILE after sourcing .env before Make.
 
-## Prompts 1-12 (details in docs/06-26)
-- Source, secrets, logs, BuildKit builds, hardened previews, fenced routing,
-  teardown, PR feedback, housekeeping; the worker composes the pipeline from
-  validated dependencies (internal/app/pipeline.go); server records, worker executes.
-- Prompt 11 (docs/23, 24): platform/logging redaction, bounded metrics,
-  httpx/ingress.go (client IP, host check, nonce CSP, body/rate/concurrency limits);
-  headline metric previa_request_to_preview_seconds; kill switch Service.Paused().
-- Prompt 12 (docs/25, 26): distroless Dockerfile (UID 65532), deploy/production
-  (compose, setup/backup/restore/smoke), deploy/observability, CI/release workflows,
-  .goreleaser.yaml; router-config writes previa-dashboard.yml; TLS-ALPN-01.
-- UX pass (docs/21): disabled actions say why; PR status panel; secrets editor and
-  .env import; sync stalls after 5m; mergeability "Unknown" after 8 tries (0019);
-  .env.example lines all labelled (config/example_test.go).
+## Preview and login fixes (2026-10-13)
+- App output + Private Preview failed real River inserts: custom unique states
+  omitted required Running. Followers now deduplicate per watch epoch; route syncs
+  per route version. Privacy setting/version/job save atomically via InsertTx.
+- Build now applies only to pending Automatic quiet periods; queued/running
+  current commits show disabled progress controls. SSE ready refetches current
+  state; closing any confirmation resumes deferred refreshes.
+- RequireUser preserves safe GET/HEAD URLs through OAuth (HTMX uses same-host
+  document); invalid/direct login clears stale next; mutation URLs aren't replayed.
 
-## CI (guides technical-docs/ci-in-action.md, cd-in-action.md)
-- Trivy via digest-pinned image; runner allows unprivileged userns for rootless
-  BuildKit; "Free runner disk" step; build tests use small disk thresholds.
-  Not pushed yet: confirm a run tests the pushed SHA.
+## Repository compatibility (2026-10-12, committed 2f7fdb7; migration 0028)
+- Finished Claude's partial build-secret changes and the owner's compatibility list.
+  Secrets default runtime-only; Allow opens an owner-only CSRF-protected modal.
+  Provider.ForBuild + runtime recheck + BuildKit session gates withhold all credentials
+  from forks/unknown heads. REGISTRY_AUTH supplies pull logins only; no app injection.
+  Mounted values and registry tokens redact build logs and returned errors (docs/07,09).
+- Conflicting fork flags/matching IDs use an unverified cache scope. Retry image
+  reuse checks both repository IDs; unit and real BuildKit regressions passed.
+- context selects a contained subfolder; root config remains required. Source detects
+  relevant .gitmodules and LFS pointers before building; no automatic fetching.
+  build_timeout bounds the image stage within BUILD_TIMEOUT's overall deadline.
+  Workers advertise their ceiling; Starter kits use the lowest live executor limit.
+- Default catalog adds digest-pinned MySQL 8.4: isolated tmpfs, 1 CPU/1 GiB, generated
+  app/root credentials, authenticated readiness, MYSQL_* and MYSQL_URL. DATABASE_URL
+  favors PostgreSQL when both SQL services are selected (docs/11). Kits offer MySQL;
+  Spring/Laravel wrappers map it; Rails notes explain mysql2 driver/settings.
+- UI explains private packages, nginx 8080/nginx-unprivileged, limits, Compose,
+  platforms/GPU/Windows and build-time settings. Runtime already permits low ports
+  inside containers; stock nginx can still fail on read-only caches/PID paths.
+- Queue tests isolate River schemas from dev workers; basic E2E uses BusyBox httpd. Follow-up fixes committed 2cb0ae1.
 
-## Prompt 13: backend previews (docs/11)
-- .previewrc.yaml: services {postgres|redis: version} from PREVIEW_SERVICE_CATALOG
-  (empty = pinned PG 17/16, Redis 8/7 by digest; none = off), setup argv, <=3
-  processes, docs_path (repoconfig.ParseFor + Platform; source.NewPreparer).
-- Runtime (backend/candidate/services.go): per-candidate services on the PR's
-  internal "-services" network, generated credentials (redacted, never stored),
-  tmpfs data, readiness services -> setup -> processes -> app; containers labelled
-  io.previa.candidate and removed with the app. preview_components (migration 0020).
-- Outbound (internal/outbound, web/pages/outbound): <=10 host:port, one per port,
-  PREVIEW_OUTBOUND_PORTS (none = off); worker writes allow files on previa-egress
-  (outbound_refresh every minute); /etc/hosts maps names to the proxy; forks get none.
-- Committed d612277 (feature), 6174a28 (CI disk fix), 3e055a1 (DESIGN diagram).
+## Build-log UI and managed services (2026-10-13; committed 8a76185)
+- Shared web/components/logviewer: inline full timestamps (native leading dates preserved, otherwise received UTC), copy/download include dates; source colors and literal search. All/Previa/Application filters apply before paging/export; SSE protocol and build writer unchanged.
+- PR links open recent logs under the main card (latest 300 matching events, bounded live tail); full-page link preserves filters. Close releases SSE; PR refresh retains open/filter state; no-JS links and source/search forms work. Full logs retain 500-event pagination.
+- Managed services display one theme-aware capsule per catalog entry, with versions grouped inside; capsules wrap on narrow screens and unavailable-catalog messages remain explicit.
+- App output reuses event rendering; live status/copy/reset remain supported. No config/schema change; make build or Air + browser refresh loads assets. docs/02,08 and DESIGN section 17 updated.
+- Verification: full go test -race ./... passed with TEST_DATABASE_URL; focused real database + affected-feature race checks passed; build/vet/lint passed. Browser final 55/55 passed (including App output and no-JS filtering). Report: test-docs/2026-10-13-build-log-ui-report.md.
+## Earlier improvements (committed 973907f / 93191aa; migrations 0022-0027)
+- Forks never auto-build (docs/16); account fairness/quotas and capacity warning (docs/17);
+  build egress meter; log/housekeeping retention (docs/08,15); crash/visits/App output, idle wake.
 
-## Code quality pass (2026-10-08; behavior unchanged)
-- .golangci.yml adds gocognit (30, tests exempt), nestif, gocritic and revive style
-  rules; make lint must stay at 0 issues. Split rather than raise limits.
-- Long functions became named steps (environments operation_finalize.go; runtime
-  candidate/services/outbound.go; app execution.go, process.go). Shared rules:
-  cleanupFence, lockOwnerIntentScope, transitionAllowed, judgeObservation.
-- webhooks delivery SQL in sqlc; cmd mains return exit codes so defers run.
+## Open Source Tests page (2026-10-13; committed on ui-improvements, not pushed)
+- Public /open-source-tests (web/pages/opensource; route in internal/dashboard): 19 apps, core ten,
+  each with config/secrets/changes/steps/expected/limits; nav, footer, home section, closing CTA.
+- No app run yet (all "In testing"); after a passing live preview set Status.Verified (YYYY-MM-DD).
+- Tests parse every published config with repoconfig + default catalog; make test and lint pass.
 
-## Regression cycle (2026-10-09, committed e9aac61; test-docs/)
-- test-docs/: 242 cases in 16 module files (ID, type, priority, level, steps,
-  expected, evidence); README holds strategy, commands and cycle results.
-  Tick a case only when its evidence passed in a recorded run.
-- Fixed: D-01 htmx auth refusals now plain text (shown as the reason); D-02 GitHub
-  link only for https://; D-03 Go 1.26.9 + x/net v0.60.0 (13 new advisories);
-  D-04 smoke.sh reads the Go version from the Dockerfile's GO_IMAGE pin.
-- Open (owner decision): install-tailwind.sh curl has no retry/time limit; a GitHub
-  download stall hung a release-images run for 27 minutes.
+## Routing, merge recovery and TLS (2026-10-13; committed 8764e0c)
+- Missing PREVIEW_ACCESS_URL caused activation 112/120 failures; 0029/UI/POST require configured routing workers.
+- Locked AcceptRoute rejects missing auth; private_preview_unconfigured stays permanent if sync fails; startup warns.
+- Sync refreshes same-version settings and restores persisted preview networks after router down/up; older tables stay fenced. River snoozes lease/backoff waits.
+- WSL forwarded Go's dual-stack IPv6 listener only on Windows ::1; explicit IPv4 binds now use tcp4 (IPv6 preserved).
+- Local .env binds 0.0.0.0:8080 and sets http://host.docker.internal:8080/previews/auth; Air loaded the fixed server.
+- Missed merge delivery failed HTTP 502 at the dev tunnel; rebuilt PR retained a teardown marker, hiding it from reconciliation and misreporting removal. New owner intents clear the marker atomically; live-work confirmation no longer excludes legacy markers.
+- Live previa.live PR #3 is merged, environment torn_down, route removed (HTTPS 302 unavailable); PR #4 remains running and HTTPS 200. Worker heartbeat + /readyz verified after regression; all capabilities ready.
+- Staging certificate replaced by trusted production CA + /acme/acme-production.json; same previously working hostname, historical TLS/browser state unknown.
+- ACME_STORAGE_FILE (local Compose) preserves staging state; router-up restores preview networks after recreation.
+- docs/02,12,13,15 cover recovery/setup; test-routing includes private auth. Code fixes require migration 0029 + server/worker restart. Owner explicitly approved replacement public tunnel + App webhook URL update after expiry. New URL: https://stores-sandy-pendant-smile.trycloudflare.com/webhooks/github; signed ping 204, App URL read-back verified, tunnel ready (session 11386). Keep that session running; a new quick tunnel needs a webhook URL update. Worker ready; preview URLs healthy.
+## Backend previews and outbound (docs/11)
+- services {postgres|redis|mysql: version} resolves through PREVIEW_SERVICE_CATALOG
+  (empty = pinned defaults; none = off), setup argv, <=3 processes, docs_path.
+- Per-candidate services use internal services network, fresh tmpfs, generated
+  redacted credentials; readiness -> setup -> processes -> app. Companions carry io.previa.candidate and are removed with the app (0020).
+- Outbound: <=10 owner-approved host:port destinations, one per port;
+  PREVIEW_OUTBOUND_PORTS (none = off), gateway allow files refreshed every minute;
+  /etc/hosts maps names to the proxy; forks get none.
 
-## Deployment and next features (2026-10-09)
-- docs/25 is the one deployment guide (cd-in-action §9-11 point to it): OVHcloud
-  VPS-2 + Cloudflare DNS + R2 backups (~€7/mo), the owner's choice for cost and
-  account handling. Do not reintroduce the earlier providers (owner's request).
-  Starter/VPS-4 budgets; "Account safety" (Manual builds for public repos).
-- NEXT-FEATURES.md (root): 10 candidate features, none built.
-
-## Pending (docs/26)
-- A real host (setup.sh, stack, backups to object storage, restore, upgrade);
-  domains + DNS token (Let's Encrypt staging then production); hosted GitHub
-  (OAuth/App, webhooks, real repo, make test-source / test-reporting with
-  TEST_GITHUB_* of an authorized disposable PR, not in .env); workflows on GitHub
-  and a protected release environment; Alertmanager; optional gVisor.
+## Branches, release and pending work
+- Current branch: ui-improvements (tracks origin/ui-improvements). master changes only through main -> master PRs; CI runs on master PRs/pushes (last observed green c94d35f).
+- Regression 2026-10-13: 240/242 cases verified; test-docs/2026-10-13-regression-report.md has proof and limits.
+- Final Go: 1428 passes, no races; 39 baseline opt-ins exercised separately. Browser 52/52; real Docker 39 passes across five packages including both E2E journeys; build/vet/lint passed.
+- Repeated checks: 200 concurrency/recovery; 50 migration/capability; capacity x10 passed.
+- All 3 release images built/scanned (no fixable HIGH/CRITICAL); production smoke 40/40 with encrypted backup/restore. Govulncheck: no reachable/imported-package vulnerabilities; observability/actionlint passed.
+- E2E gets named gateways, so independent test workers cannot overwrite dev forwarding. Default production gateway unchanged. Capacity fixture accounts for live reservations; smoke derives schema/alert counts and checks its own bindings.
+- Live App access/source/reporting passed on owner-authorized previa.live PR #4. Unique proof comment scope preserves existing feedback; temporary comments cleaned; 3 completed live-proof checks remain.
+- Pending: production host/object-store acceptance, complete hosted PR lifecycle, real private-registry pull. Old-dump smoke branch not run; 0029 upgrade/rollback/reapply verified. Tailwind retry/time limit undecided.

@@ -11,10 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/appoutput"
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/dashboard"
 	"github.com/ajaykathwatee/previa/internal/environments"
+	"github.com/ajaykathwatee/previa/internal/idle"
 	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
@@ -24,9 +26,11 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	"github.com/ajaykathwatee/previa/internal/platform/version"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
+	"github.com/ajaykathwatee/previa/internal/previewaccess"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/secrets"
+	"github.com/ajaykathwatee/previa/internal/starterkits"
 	"github.com/ajaykathwatee/previa/internal/webhooks"
 	"github.com/ajaykathwatee/previa/web"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
@@ -102,17 +106,26 @@ type serverFeatures struct {
 	secrets       *secrets.Handler
 	outbound      *outbound.Handler
 	logs          *buildlogs.Handler
+	output        *appoutput.Handler
+	wake          *idle.WakePage
+	access        *previewaccess.Handler
 	deliveries    *webhooks.DeliveryService
 	pings         *queue.Service
 	summary       dashboard.SummaryReader
 	environments  *environments.Repository
 	capabilities  *workers.Reader
+	kits          *starterkits.Handler
 }
 
 func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
 	f := &serverFeatures{capabilities: workers.NewReader(pool)}
 	f.sessions = auth.NewSessionManager(store, strings.HasPrefix(strings.ToLower(cfg.AppBaseURL), "https://"), logger)
 	f.auth = auth.NewHandler(cfg, f.sessions, auth.NewRepository(pool), auth.NewGitHubOAuth(cfg), logger)
+	kits, err := newStarterKits(f.auth, f.capabilities, logger)
+	if err != nil {
+		return nil, err
+	}
+	f.kits = kits
 	producer, err := queue.NewProducer(pool, logger)
 	if err != nil {
 		return nil, err
@@ -152,7 +165,7 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	if err != nil {
 		return nil, err
 	}
-	logStore := buildlogs.NewStore(pool)
+	logStore := buildlogs.NewStore(pool).WithRetention(cfg.BuildLogRetention())
 	prRepository := pullrequests.NewRepository(pool)
 	f.prs = pullrequests.NewHandler(prRepository, syncService, policy, f.auth, logger, cfg.GitHubAppID > 0).
 		WithLiveUpdates(hub).WithLogTail(logStore)
@@ -171,7 +184,15 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	if f.outbound, err = newOutboundHandler(cfg, pool, producer, f.auth, logger); err != nil {
 		return nil, err
 	}
-	f.logs = buildlogs.NewHandler(logStore, f.auth, logger).WithLiveUpdates(hub, realtime.DefaultStreamOptions)
+	f.logs = buildlogs.NewHandler(logStore, f.auth, logger).WithLiveUpdates(hub, realtime.DefaultStreamOptions).
+		WithRetention(cfg.BuildLogRetention())
+	f.output = appoutput.NewHandler(appoutput.NewStore(pool), f.auth, producer, hub, realtime.DefaultStreamOptions, logger)
+	f.wake = idle.NewWakePage(pool, producer, cfg.PreviewBaseDomain, routing.UnavailablePage, logger)
+	var permissions previewaccess.Permissions
+	if appClient != nil {
+		permissions = githubPermissions{app: appClient}
+	}
+	f.access = previewaccess.NewHandler(pool, f.auth, permissions, producer, cfg.SessionSecret, cfg.PreviewBaseDomain, cfg.AppBaseURL, logger).WithCapabilities(f.capabilities)
 	return f, nil
 }
 
@@ -183,7 +204,7 @@ func overviewSummary(service *installations.Service, prs *pullrequests.Repositor
 		if err != nil {
 			return dashboardpages.Summary{}, err
 		}
-		delivery, err := prs.Delivery(ctx, userID)
+		delivery, err := prs.Delivery(ctx, userID, pullrequests.AttentionSince(time.Now()))
 		if err != nil {
 			return dashboardpages.Summary{}, err
 		}
@@ -197,9 +218,10 @@ func overviewSummary(service *installations.Service, prs *pullrequests.Repositor
 		}
 		return dashboardpages.Summary{
 			Installations: summary.Installations, Repositories: summary.Repositories, Available: summary.Available,
-			OpenPRs: delivery.OpenPrs, Waiting: delivery.Waiting, Building: delivery.Building, Failed: delivery.Failed, Live: delivery.Live,
-			Workers: dashboardpages.Workers{Discovery: caps.Discovery, Execution: caps.Execution, Reporting: caps.Reporting, Housekeeping: caps.Housekeeping, Paused: caps.Paused},
-			Builds:  builds, Previews: previews,
+			OpenPRs: delivery.OpenPrs, Waiting: delivery.Waiting, Building: delivery.Building, Failed: delivery.Failed, FailedOlder: delivery.FailedOlder, Live: delivery.Live,
+			AttentionDays: int(pullrequests.FailureAttentionWindow / (24 * time.Hour)),
+			Workers:       dashboardpages.Workers{Discovery: caps.Discovery, Execution: caps.Execution, Reporting: caps.Reporting, Housekeeping: caps.Housekeeping, Paused: caps.Paused},
+			Builds:        builds, Previews: previews,
 		}, nil
 	}
 }
@@ -251,7 +273,7 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 		return nil, err
 	}
 	router := httpx.New(logger, httpx.Options{
-		AppHost: appURL.Host, HostExempt: []string{webhookPath},
+		AppHost: appURL.Host, HostExempt: []string{webhookPath, routing.AccessPath},
 		Secure: appURL.Scheme == "https", TrustedProxies: proxies,
 		MaxBodyBytes: maxFormBytes, BodyExempt: []string{webhookPath},
 	})
@@ -261,6 +283,12 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 	// The router sends unknown and removed preview hosts here. Public and
 	// outside the session group: it reads and sets no cookie.
 	router.Get(routing.UnavailablePath, routing.UnavailablePage)
+	// A sleeping preview's visitors wait here while it wakes; public too.
+	router.Get(routing.WakePath+"/*", f.wake.ServeHTTP)
+	router.Post(routing.WakePath+"/*", f.wake.ServeHTTP)
+	// The router asks here before each request to a private preview; it
+	// arrives with the preview's host, so the host check exempts it.
+	f.access.MountPublic(router)
 	if cfg.PreviewBaseDomain != "" && config.PreviewSameSite(cfg.PreviewBaseDomain, cfg.AppBaseURL) {
 		logger.Warn("previews share the dashboard's registrable domain; a separate domain isolates them fully", "preview_base_domain", cfg.PreviewBaseDomain)
 	}
@@ -279,6 +307,9 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 		f.secrets.Mount(r, auth.RequireUser)
 		f.outbound.Mount(r, auth.RequireUser)
 		f.logs.Mount(r, auth.RequireUser)
+		f.output.Mount(r, auth.RequireUser)
+		f.access.Mount(r, auth.RequireUser)
+		f.kits.Mount(r, auth.RequireUser)
 		if !cfg.Production() {
 			dashboard.MountPing(r, f.pings, auth.RequireUser, logger)
 		}
@@ -301,7 +332,7 @@ func newHTTPServer(addr string, handler http.Handler, logger *slog.Logger) *http
 
 // serveHTTP serves until ctx ends, then shuts the server down gracefully.
 func serveHTTP(ctx context.Context, server *http.Server, logger *slog.Logger) error {
-	listener, err := net.Listen("tcp", server.Addr)
+	listener, err := listenHTTP(server.Addr)
 	if err != nil {
 		return fmt.Errorf("listen for HTTP: %w", err)
 	}
@@ -328,4 +359,36 @@ func serveHTTP(ctx context.Context, server *http.Server, logger *slog.Logger) er
 		}
 	}
 	return nil
+}
+
+func listenHTTP(addr string) (net.Listener, error) {
+	// An explicit IPv4 bind must create an IPv4 socket. Go's generic TCP
+	// listener can turn 0.0.0.0 into a dual-stack IPv6 socket, which WSL may
+	// forward only on Windows ::1; Docker Desktop then cannot reach it by IPv4.
+	network := "tcp"
+	host, _, err := net.SplitHostPort(addr)
+	if err == nil && net.ParseIP(host).To4() != nil {
+		network = "tcp4"
+	}
+	return net.Listen(network, addr)
+}
+
+// githubPermissions reads a user's role on a repository with the GitHub
+// App's installation token, for private previews.
+type githubPermissions struct{ app *githubapp.Client }
+
+func (g githubPermissions) RepositoryPermission(ctx context.Context, installationID int64, fullName, login string) (string, error) {
+	client, err := g.app.InstallationClient(installationID)
+	if err != nil {
+		return "", err
+	}
+	owner, repo, _ := strings.Cut(fullName, "/")
+	level, res, err := client.Repositories.GetPermissionLevel(ctx, owner, repo, login)
+	if res != nil && res.StatusCode == http.StatusNotFound {
+		return "none", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read %s's permission: %w", login, err)
+	}
+	return level.GetPermission(), nil
 }

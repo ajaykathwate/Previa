@@ -6,7 +6,7 @@ import "github.com/ajaykathwatee/previa/web/components/button"
 import "github.com/ajaykathwatee/previa/web/layouts"
 
 templ Index(username, csrf string, p Page) {
-	@layouts.App("Repositories", username, csrf, components.NavRepositories) {
+	@layouts.AppTrail(p.DocumentTitle(), p.TrailParent(), p.TrailCurrent(), username, csrf, components.NavRepositories) {
 		<div class="repository-workspace">
 			<p class="repository-search-feedback" data-detail-feedback role="status" aria-live="polite"></p>
 			<section id="repository-detail" class="repository-page" aria-label="Repository details" hx-sync="this:replace" hx-request='{"timeout":10000}'>
@@ -24,97 +24,11 @@ templ Index(username, csrf string, p Page) {
 
 templ Panel(p Page, csrf string) {
 	<div class="pr-workspace" data-selected-repo={ strconv.FormatInt(p.RepoID, 10) }>
-		<header class="pr-panel-heading">
-			<div class="pr-heading-text">
-				<nav aria-label="Repository location" class="pr-location">
-					if p.SelectedPR!=nil {
-						<a href={ templ.SafeURL(p.PageURL(p.Number)) } class="text-link pr-directory-link">
-							@components.ArrowLeft()
-							{ p.RepositoryName() } pull requests
-						</a>
-					} else {
-						<a href={ templ.SafeURL(p.CloseURL()) } class="text-link pr-directory-link">
-							@components.ArrowLeft()
-							Repositories
-						</a>
-					}
-					<div class="pr-title-row">
-						<span class="pr-repo-icon" aria-hidden="true">
-							if p.SelectedPR!=nil {
-								@components.PullRequestIcon()
-							} else {
-								@components.RepositoryIcon()
-							}
-						</span>
-						<h1 tabindex="-1" data-detail-heading class="pr-breadcrumb">
-							<a href={ templ.SafeURL(p.CloseURL()) } title={ p.Owner() }>{ p.Owner() }</a>
-							<span aria-hidden="true">/</span>
-							<a
-								href={ templ.SafeURL(p.PageURL(p.Number)) }
-								title={ p.RepositoryName() }
-								if p.SelectedPR==nil {
-									aria-current="page"
-								}
-							>{ p.RepositoryName() }</a>
-							if p.SelectedPR!=nil {
-								<span aria-hidden="true">/</span><span aria-current="page" class="pr-current-crumb" title={ p.Selected().Title }>#{ strconv.Itoa(int(p.Selected().Number)) } · { p.Selected().Title }</span>
-							}
-						</h1>
-					</div>
-				</nav>
-				<p class="pr-summary" role="status">
-					if p.SelectedPR==nil {
-						<span class="pr-summary-item">
-							@components.ClockIcon()
-							<span>
-								Last synced ·
-								if p.LastRefresh!="" {
-									@components.Time(p.LastRefresh, TimeLabel(p.LastRefresh))
-								} else {
-									<span>Never</span>
-								}
-							</span>
-						</span>
-					}
-					<span class="pr-summary-item pr-mode">
-						@components.BuildIcon()
-						<span>{ Label(p.Mode) } builds</span>
-					</span>
-					if p.SelectedPR==nil {
-						if !p.Available {
-							<span class="sync-state tone-neutral">Repository unavailable</span>
-						} else if !p.DiscoveryEnabled {
-							<span class="sync-state tone-neutral">Sync not configured</span>
-						}
-						if p.Syncing() && p.WorkerMissing {
-							<span class="sync-state tone-warn" title="No worker is running to fetch pull requests from GitHub.">Waiting for a worker</span>
-						} else if p.Syncing() && p.SyncStale {
-							<span class="sync-state tone-danger" title="This sync did not finish in time. Sync Pull Requests starts it again.">Sync stalled</span>
-						} else if p.Syncing() {
-							<span class="sync-state tone-info is-syncing" data-refresh-at={ p.SyncStaleAt }>Syncing</span>
-						} else if p.SyncState=="failed" {
-							<span class="sync-state sync-failed tone-danger" title={ p.SyncMessage }>Sync failed</span>
-						}
-					}
-					<span class="live-indicator" aria-hidden="true"><span class="live-dot"></span><span class="live-label-live">Live</span><span class="live-label-reconnecting">Reconnecting</span><span class="live-label-offline">Live updates paused · reload to resume</span></span>
-				</p>
-			</div>
-			if p.SelectedPR==nil {
-				<div class="pr-header-actions">
-					<form method="post" action={ RepoURL(p.RepoID) + "/refresh" } hx-post={ RepoURL(p.RepoID) + "/refresh" } hx-target="#repository-detail" hx-sync="#repository-detail:replace">
-						<input type="hidden" name="csrf_token" value={ csrf }/><input type="hidden" name="workspace_query" value={ p.Query() }/>
-						@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline, Class: "sync-button", Disabled: p.SyncDisabled()}) {
-							@components.SyncIcon()
-							Sync Pull Requests
-						}
-					</form>
-					@AutomaticSwitch(p, csrf)
-				</div>
-			}
-		</header>
 		if p.SelectedPR!=nil {
+			@prHero(p, p.Selected())
 			@PRDetail(p, p.Selected(), csrf)
 		} else {
+			@repositoryHero(p, csrf)
 			@components.RepositoryTabs(p.RepoID, "pull-requests")
 			if p.Available && p.DiscoveryEnabled && p.WorkerMissing {
 				<p class="connection-notice tone-warn" role="status" data-worker-missing>
@@ -131,8 +45,14 @@ templ Panel(p Page, csrf string) {
 					</span>
 				</p>
 			}
-			<p class="policy-hint">
-				@components.InfoIcon()
+			<p class={ "policy-hint", templ.KV("is-automatic", p.Mode == "automatic") }>
+				<span class="policy-hint-icon" aria-hidden="true">
+					if p.Mode=="automatic" {
+						@components.BuildIcon()
+					} else {
+						@components.InfoIcon()
+					}
+				</span>
 				if p.Mode=="automatic" {
 					<span><strong>Automatic mode.</strong> New commits on open pull requests schedule work after five quiet minutes. Existing pull requests are not bulk-built.</span>
 				} else {
@@ -164,11 +84,10 @@ templ Panel(p Page, csrf string) {
 					@Results(p)
 				</div>
 			</section>
-		}
-		if p.SelectedPR==nil {
 			@components.ConfirmationDialog("build-policy", "Enable automatic builds?", "Future PR updates will schedule work after five quiet minutes. Existing PRs are not bulk-built.") {
 				@PolicyForm(p, csrf, true)
 			}
+			@PreviewAccessDialog(p, csrf)
 			<noscript>
 				<section class="workspace-panel pr-policy-fallback">
 					<h3>Automatic builds</h3>
@@ -178,6 +97,174 @@ templ Panel(p Page, csrf string) {
 			</noscript>
 		}
 	</div>
+}
+
+// repositoryHero heads a repository's pull request list: its name, when it
+// last synced, its build mode and the sync and Automatic controls.
+templ repositoryHero(p Page, csrf string) {
+	<header class="page-hero pr-panel-heading">
+		<div class="page-hero-main">
+			<span class="page-hero-icon" aria-hidden="true">
+				@components.RepositoryIcon()
+			</span>
+			<div class="page-hero-text">
+				<p class="page-hero-kicker">{ p.Owner() }</p>
+				<h1 tabindex="-1" data-detail-heading title={ p.Name }>{ p.RepositoryName() }</h1>
+				<p class="pr-summary page-hero-meta" role="status">
+					<span class="pr-summary-item">
+						@components.ClockIcon()
+						<span>
+							Last synced{ " " }
+							if p.LastRefresh!="" {
+								@components.Time(p.LastRefresh, TimeLabel(p.LastRefresh))
+							} else {
+								<span>never</span>
+							}
+						</span>
+					</span>
+					<span class={ "pr-summary-item", "pr-mode", templ.KV("is-automatic", p.Mode == "automatic") }>
+						@components.BuildIcon()
+						<span>{ Label(p.Mode) } builds</span>
+					</span>
+					if !p.Available {
+						<span class="sync-state tone-neutral">Repository unavailable</span>
+					} else if !p.DiscoveryEnabled {
+						<span class="sync-state tone-neutral">Sync not configured</span>
+					}
+					if p.Syncing() && p.WorkerMissing {
+						<span class="sync-state tone-warn" title="No worker is running to fetch pull requests from GitHub.">Waiting for a worker</span>
+					} else if p.Syncing() && p.SyncStale {
+						<span class="sync-state tone-danger" title="This sync did not finish in time. Sync Pull Requests starts it again.">Sync stalled</span>
+					} else if p.Syncing() {
+						<span class="sync-state tone-info is-syncing" data-refresh-at={ p.SyncStaleAt }>Syncing</span>
+					} else if p.SyncState=="failed" {
+						<span class="sync-state sync-failed tone-danger" title={ p.SyncMessage }>Sync failed</span>
+					}
+					@liveIndicator()
+				</p>
+			</div>
+		</div>
+		<div class="pr-header-actions page-hero-actions">
+			<form method="post" action={ RepoURL(p.RepoID) + "/refresh" } hx-post={ RepoURL(p.RepoID) + "/refresh" } hx-target="#repository-detail" hx-sync="#repository-detail:replace">
+				<input type="hidden" name="csrf_token" value={ csrf }/><input type="hidden" name="workspace_query" value={ p.Query() }/>
+				@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline, Class: "sync-button", Disabled: p.SyncDisabled()}) {
+					@components.SyncIcon()
+					Sync Pull Requests
+				}
+			</form>
+			@AutomaticSwitch(p, csrf)
+			<button type="button" role="switch" aria-checked={ strconv.FormatBool(p.PrivatePreviews) } class="automatic-switch" disabled?={ !p.Available || (!p.PrivatePreviews && !p.PrivatePreviewsReady) } data-open-dialog="preview-access" commandfor="preview-access" command="show-modal" aria-haspopup="dialog" aria-describedby={ privateSetupDescription(p) } title={ privateTitle(p.PrivatePreviews) }><span>Private previews</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
+		</div>
+	</header>
+	if !p.PrivatePreviewsReady || p.PrivatePreviewUnavailable {
+		<p id="private-preview-setup" class="tone-warning">Private previews need authentication configured on all routing workers. Ask the operator to set PREVIEW_ACCESS_URL and restart the workers.
+			if p.PrivatePreviews {
+				 Existing previews remain private and may be unavailable until configuration is restored.
+			}
+		</p>
+	}
+}
+
+func privateTitle(private bool) string {
+	if private {
+		return "Previews are private: visitors sign in with GitHub and must be able to see this repository."
+	}
+	return "Previews are public: anyone with a preview's address can open it."
+}
+
+func privateSetupDescription(p Page) string {
+	if !p.PrivatePreviewsReady || p.PrivatePreviewUnavailable {
+		return "private-preview-setup"
+	}
+	return ""
+}
+
+// PreviewAccessDialog confirms making the repository's previews private or
+// public again.
+templ PreviewAccessDialog(p Page, csrf string) {
+	if p.PrivatePreviews {
+		@components.ConfirmationDialog("preview-access", "Make previews public?", "Anyone with a preview's address will be able to open it again, without signing in.") {
+			@previewAccessForm(p, csrf, "Make public")
+		}
+	} else if p.PrivatePreviewsReady {
+		@components.ConfirmationDialog("preview-access", "Make previews private?", "Visitors will sign in with GitHub, and only people who can see this repository on GitHub get in. Each visitor's access lasts 12 hours on that preview. Reviewers without a GitHub account lose access.") {
+			@previewAccessForm(p, csrf, "Make private")
+		}
+	}
+}
+
+templ previewAccessForm(p Page, csrf, label string) {
+	<form method="post" action={ RepoURL(p.RepoID) + "/preview-access" } class="dialog-actions">
+		<input type="hidden" name="csrf_token" value={ csrf }/>
+		<input type="hidden" name="private" value={ strconv.FormatBool(!p.PrivatePreviews) }/>
+		@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "preview-access", "command": "close", "data-close-dialog": true}}) {
+			Cancel
+		}
+		@button.Button(button.Props{Type: button.TypeSubmit, Disabled: !p.PrivatePreviews && !p.PrivatePreviewsReady}) {
+			{ label }
+		}
+	</form>
+}
+
+// prHero heads a pull request page: where it lives, its title and who opened
+// it from which branch, with a link to it on GitHub.
+templ prHero(p Page, pr PR) {
+	<header class="page-hero pr-panel-heading pr-hero">
+		<div class="page-hero-main">
+			<span class={ "page-hero-icon", "pr-hero-icon", Tone(pr.State) } aria-hidden="true">
+				if pr.State=="merged" {
+					@components.MergeIcon()
+				} else {
+					@components.PullRequestIcon()
+				}
+			</span>
+			<div class="page-hero-text">
+				<p class="page-hero-kicker">
+					<span>{ p.Name }</span>
+					<span class="page-hero-kicker-sep" aria-hidden="true">·</span>
+					<span>#{ strconv.Itoa(int(pr.Number)) }</span>
+				</p>
+				<h1 tabindex="-1" data-detail-heading class="pr-hero-title">{ pr.Title }</h1>
+				<div class="page-hero-meta pr-meta">
+					<span class={ "badge", Tone(pr.State) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.State) }</span>
+					if pr.Author!="" {
+						<span class="pr-meta-item"><span class="user-avatar user-avatar-sm" aria-hidden="true">{ components.Initial(pr.Author) }</span>{ pr.Author }</span>
+					}
+					if pr.Branch!="" {
+						<code class="branch-chip">
+							@components.BranchIcon()
+							{ pr.Branch }
+						</code>
+					}
+					if pr.Fork && p.Mode == "automatic" {
+						<span class="badge tone-warn" title="Automatic builds never start a fork's pull request, and forks never receive repository secrets. Choose Build latest commit to build this commit.">Fork · waits for your approval</span>
+					} else if pr.Fork {
+						<span class="badge tone-warn" title="Pull requests from forks never receive repository secrets.">Fork · no secrets</span>
+					}
+					<span class={ "pr-meta-item", "pr-mode", templ.KV("is-automatic", p.Mode == "automatic") }>
+						@components.BuildIcon()
+						{ Label(p.Mode) } builds
+					</span>
+					@liveIndicator()
+				</div>
+			</div>
+		</div>
+		if pr.GitHubURL() != "" {
+			<div class="page-hero-actions">
+				<a class="hero-link github-link" href={ templ.SafeURL(pr.GitHubURL()) } target="_blank" rel="noopener noreferrer">
+					@components.GitHubMark()
+					View on GitHub
+					@components.ArrowUpRight()
+				</a>
+			</div>
+		}
+	</header>
+}
+
+// liveIndicator shows the page's live-update connection; ui.js sets its state
+// on <html> only when a stream exists, so it stays hidden otherwise.
+templ liveIndicator() {
+	<span class="live-indicator" aria-hidden="true"><span class="live-dot"></span><span class="live-label-live">Live updates</span><span class="live-label-reconnecting">Reconnecting</span><span class="live-label-offline">Live updates paused · reload to resume</span></span>
 }
 
 templ AutomaticSwitch(p Page, csrf string) {
@@ -236,32 +323,71 @@ templ Results(p Page) {
 				}
 			</div>
 		} else {
-			<table class="pr-table">
-				<thead><tr><th>Pull request</th><th>Head commit</th><th>State</th><th>Latest request</th><th>Preview</th></tr></thead>
+			<table class="pr-table pr-list">
+				<thead>
+					<tr>
+						<th>Pull request</th>
+						<th>Commit</th>
+						<th>State</th>
+						<th>Preview</th>
+						<th><span class="sr-only">Open</span></th>
+					</tr>
+				</thead>
 				<tbody>
 					for _,pr:=range p.Rows {
 						<tr>
 							<td class="pr-cell-main">
 								<div class="pr-cell-wrap">
 									<span class={ "pr-state-icon", Tone(pr.State) } aria-hidden="true">
-										@components.PullRequestIcon()
+										if pr.State == "merged" {
+											@components.MergeIcon()
+										} else {
+											@components.PullRequestIcon()
+										}
 									</span>
 									<div class="pr-cell-text">
-										<a href={ templ.SafeURL(p.DetailURL(pr.Number)) }>#{ strconv.Itoa(int(pr.Number)) } · { pr.Title }</a>
+										<a href={ templ.SafeURL(p.DetailURL(pr.Number)) }><span class="pr-number">#{ strconv.Itoa(int(pr.Number)) }</span> { pr.Title }</a>
 										<small>
-											<span>{ pr.Author }</span>
-											<code class="branch-chip">{ pr.Branch }</code>
-											if pr.Fork {
-												<span class="meta-flag">· Fork</span>
+											if pr.Author != "" {
+												<span class="pr-row-author"><span class="user-avatar user-avatar-xs" aria-hidden="true">{ components.Initial(pr.Author) }</span>{ pr.Author }</span>
+											}
+											if pr.Branch != "" {
+												<code class="branch-chip">
+													@components.BranchIcon()
+													{ pr.Branch }
+												</code>
+											}
+											if pr.UpdatedAt != "" {
+												<span class="pr-row-updated">
+													Updated { " " }
+													@components.Time(pr.UpdatedAt, TimeLabel(pr.UpdatedAt))
+												</span>
+											}
+											if pr.Fork && p.Mode == "automatic" {
+												<span class="meta-flag" title="Automatic builds never start a fork's pull request; build it from its page.">Fork · needs your approval</span>
+											} else if pr.Fork {
+												<span class="meta-flag">Fork</span>
 											}
 											if pr.NeedsRefresh {
-												<span class="meta-flag tone-warn">· Refresh required</span>
+												<span class="meta-flag tone-warn">Refresh required</span>
 											}
 										</small>
 									</div>
 								</div>
 							</td>
-							<td class="pr-cell-sha" data-label="Head"><code class="sha">{ Short(pr.SHA) }</code></td>
+							<td class="pr-cell-sha" data-label="Commit">
+								if href := pr.CommitURL(pr.SHA); href != "" {
+									<a class="sha sha-link" href={ templ.SafeURL(href) } target="_blank" rel="noopener noreferrer" title={ "Open commit " + pr.SHA + " on GitHub" }>
+										@components.CommitIcon()
+										{ Short(pr.SHA) }
+									</a>
+								} else {
+									<code class="sha" title={ pr.SHA }>
+										@components.CommitIcon()
+										{ Short(pr.SHA) }
+									</code>
+								}
+							</td>
 							<td class="pr-cell-state" data-label="State">
 								<span class={ "repository-status", "badge", Tone(pr.State) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.State) }</span>
 								if pr.MergeUnknown {
@@ -270,21 +396,11 @@ templ Results(p Page) {
 									<small>Waiting for a worker</small>
 								}
 							</td>
-							<td class="pr-cell-build" data-label="Latest request">
-								<span class={ "badge", "badge-quiet", Tone(pr.Build) }>{ Label(pr.Build) }</span>
-								if !pr.RequestCurrent && pr.Build!="Not requested" {
-									<small>For an earlier commit</small>
-								}
+							<td class="pr-cell-build pr-cell-url" data-label="Preview">
+								@previewCell(pr)
 							</td>
-							<td class="pr-cell-url" data-label="Preview">
-								if pr.PreviewURL!="" {
-									<a class="text-link" href={ templ.SafeURL(pr.PreviewURL) } target="_blank" rel="noopener noreferrer" title={ pr.PreviewURL } aria-label={ "Open the preview of #" + strconv.Itoa(int(pr.Number)) }>
-										Open
-										@components.ArrowUpRight()
-									</a>
-								} else {
-									<span class="text-muted" aria-label="No preview">—</span>
-								}
+							<td class="pr-cell-go" aria-hidden="true">
+								@components.Arrow()
 							</td>
 						</tr>
 					}
@@ -294,7 +410,13 @@ templ Results(p Page) {
 	</div>
 	<footer class="repository-pagination">
 		<p role="status" aria-live="polite">
-			{ strconv.FormatInt(p.Total,10) } pull requests · Page { strconv.FormatInt(p.Number,10) } of { strconv.FormatInt(p.Pages,10) }
+			{ strconv.FormatInt(p.Total,10) }
+			if p.Total == 1 {
+				pull request
+			} else {
+				pull requests
+			}
+			· Page { strconv.FormatInt(p.Number,10) } of { strconv.FormatInt(p.Pages,10) }
 		</p>
 		<nav aria-label="Pull request pages" class="pager">
 			if p.Number>1 {
@@ -314,251 +436,289 @@ templ Results(p Page) {
 }
 
 templ PRDetail(p Page, pr PR, csrf string) {
+	{{ diagnosis := pr.Diagnosis() }}
+	{{ progress, tracked := pr.Progress() }}
 	<div class="pr-detail-content">
-		<p class="pr-meta">
-			<span class={ "badge", Tone(pr.State) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.State) }</span>
-			if pr.Author!="" {
-				<span class="pr-meta-item"><span class="user-avatar user-avatar-sm" aria-hidden="true">{ components.Initial(pr.Author) }</span>{ pr.Author }</span>
-			}
-			if pr.Branch!="" {
-				<code class="branch-chip">
-					@components.BranchIcon()
-					{ pr.Branch }
-				</code>
-			}
-			if pr.Fork {
-				<span class="badge tone-warn" title="Pull requests from forks never receive repository secrets.">Fork · no secrets</span>
-			}
-			if pr.GitHubURL() != "" {
-				<a class="text-link github-link" href={ templ.SafeURL(pr.GitHubURL()) } target="_blank" rel="noopener noreferrer">
-					@components.GitHubMark()
-					View on GitHub
-					@components.ArrowUpRight()
-				</a>
-			}
-		</p>
-		<section class={ "workspace-panel", "pr-status", pr.Headline.Tone } aria-labelledby="pr-status-title" data-pr-status>
-			<div class="pr-status-main">
-				<span class="pr-status-dot" aria-hidden="true"></span>
-				<div class="pr-status-text">
-					<h2 id="pr-status-title">{ pr.Headline.Title }</h2>
-					if pr.Headline.Detail!="" {
-						<p>{ pr.Headline.Detail }</p>
-					}
-				</div>
-			</div>
-			if pr.Live() {
-				<div class="pr-status-preview">
-					@components.LinkIcon()
-					<a class="preview-address" href={ templ.SafeURL(pr.PreviewURL) } target="_blank" rel="noopener noreferrer" data-preview-url>{ pr.PreviewURL }</a>
-					@components.CopyButton(pr.PreviewURL, "Copy the preview address")
-				</div>
-			}
-			@backendFacts(pr)
-			<div class="pr-detail-actions">
-				if pr.Live() {
-					@button.Button(button.Props{Href: pr.PreviewURL, Target: "_blank", Attributes: templ.Attributes{"rel": "noopener noreferrer"}}) {
-						Open preview
-						@components.ArrowUpRight()
-					}
-				}
-				if pr.Actions.HasBuildAction() {
-					<form method="post" action={ templ.SafeURL(PRURL(p.RepoID, pr.Number) + "/build") } hx-post={ PRURL(p.RepoID, pr.Number) + "/build" } hx-target="#repository-detail" hx-sync="#repository-detail:replace" hx-disabled-elt="find button">
-						<input type="hidden" name="csrf_token" value={ csrf }/>
-						<input type="hidden" name="workspace_query" value={ p.Query() }/>
-						<input type="hidden" name="expected_revision" value={ strconv.FormatInt(pr.Actions.ExpectedRevision, 10) }/>
-						<input type="hidden" name="request_key" value={ pr.Actions.RequestKey }/>
-						if pr.Actions.Retry {
-							<input type="hidden" name="action" value="retry"/>
-							@button.Button(button.Props{Type: button.TypeSubmit, Variant: secondaryWhen(pr.Live())}) {
-								@components.BuildIcon()
-								Retry build
-							}
-						} else if pr.Actions.Rebuild {
-							<input type="hidden" name="action" value="rebuild"/>
-							@button.Button(button.Props{Type: button.TypeSubmit, Variant: secondaryWhen(pr.Live())}) {
-								@components.BuildIcon()
-								Rebuild preview
-							}
+		<div class="pr-layout">
+			<div class="pr-main">
+			<section class={ "workspace-panel", "pr-status", pr.Headline.Tone, templ.KV("is-active", progress.Active) } aria-labelledby="pr-status-title" data-pr-status>
+				<div class="pr-status-main">
+					<span class="pr-status-icon" aria-hidden="true">
+						@statusIcon(pr, progress)
+					</span>
+					<div class="pr-status-text">
+						if diagnosis.Title != "" && pr.Headline.Tone == "tone-danger" {
+							<p class="pr-status-kicker"><span class="badge tone-danger"><span class="badge-dot" aria-hidden="true"></span>{ pr.Headline.Title }</span></p>
+							<h2 id="pr-status-title">{ diagnosis.Title }</h2>
+							<p>{ diagnosis.Summary }</p>
 						} else {
-							<input type="hidden" name="action" value="build"/>
-							@button.Button(button.Props{Type: button.TypeSubmit, Variant: secondaryWhen(pr.Live())}) {
-								@components.BuildIcon()
-								if pr.Actions.BuildNow {
-									Build now
-								} else {
-									Build latest commit
-								}
+							<h2 id="pr-status-title">{ pr.Headline.Title }</h2>
+							if pr.Headline.Detail!="" {
+								<p>{ pr.Headline.Detail }</p>
 							}
-						}
-					</form>
-				} else if pr.Actions.Blocked!="" {
-					@button.Button(button.Props{Disabled: true, Variant: secondaryWhen(pr.Live()), Attributes: templ.Attributes{"aria-describedby": "build-unavailable"}}) {
-						@components.BuildIcon()
-						{ pr.Actions.Blocked }
-					}
-				}
-				if pr.Actions.Teardown {
-					@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"data-open-dialog": "teardown-preview", "commandfor": "teardown-preview", "command": "show-modal", "aria-haspopup": "dialog"}}) {
-						{ pr.Actions.TeardownLabel() }
-					}
-				}
-				<a class="text-link logs-link" href={ templ.SafeURL(LogsURL(p.RepoID, pr.Number)) }>
-					@components.LogsIcon()
-					Build logs
-				</a>
-			</div>
-			if pr.Actions.Unavailable!="" {
-				<div
-					id="build-unavailable"
-					if pr.Actions.Blocked!="" {
-						class="connection-notice tone-warn pr-blocked"
-					} else {
-						class="connection-notice tone-neutral pr-blocked"
-					}
-					role="status"
-					data-build-unavailable
-				>
-					@components.AlertIcon()
-					<div>
-						<strong>{ pr.Actions.Unavailable }</strong>
-						if pr.Actions.Hint!="" {
-							<span>{ pr.Actions.Hint }</span>
 						}
 					</div>
-				</div>
-			}
-		</section>
-		if len(pr.FailureLog)>0 {
-			<section class="workspace-panel failure-log" aria-labelledby="failure-log-title">
-				<header class="failure-log-header">
-					<h2 id="failure-log-title">Last lines of the build output</h2>
-					<a class="text-link" href={ templ.SafeURL(LogsURL(p.RepoID, pr.Number)) }>
-						Open the full log
-						@components.Arrow()
-					</a>
-				</header>
-				<ol class="failure-log-lines" aria-label="Last build output lines">
-					for _, line := range pr.FailureLog {
-						<li class={ templ.KV("log-error", LooksLikeError(line)) }>{ line }</li>
-					}
-				</ol>
-			</section>
-		}
-		<div class="pr-detail-grid lifecycle" role="list" aria-label="Commit lifecycle">
-			<section class="workspace-panel lifecycle-step" role="listitem">
-				<header>
-					<span class="lifecycle-index" aria-hidden="true">01</span>
-					<span class="lifecycle-icon" aria-hidden="true">
-						@components.CommitIcon()
-					</span>
-				</header>
-				<h2>Latest commit</h2>
-				@commitChip(pr, pr.SHA, true)
-				<p><span class={ "badge", Tone(pr.State) }><span class="badge-dot" aria-hidden="true"></span>{ Gate(pr.State) }</span></p>
-			</section>
-			<section class="workspace-panel lifecycle-step" role="listitem">
-				<header>
-					<span class="lifecycle-index" aria-hidden="true">02</span>
-					<span class="lifecycle-icon" aria-hidden="true">
-						@components.BuildIcon()
-					</span>
-				</header>
-				<h2>Build request</h2>
-				if pr.RequestedSHA=="" {
-					<p class="lifecycle-empty">No build requested yet.</p>
-				} else {
-					@commitChip(pr, pr.RequestedSHA, false)
-					<p>
-						if pr.Waiting!="" {
-							<span class="badge tone-info"><span class="badge-dot" aria-hidden="true"></span>{ pr.Waiting }</span>
-						} else {
-							<span class={ "badge", Tone(pr.Build) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.Build) }</span>
-						}
-					</p>
-					<ul class="lifecycle-facts">
-						if pr.RequestSource=="automatic" {
-							<li>
-								Automatic build · { " " }
-								@components.Time(pr.RequestedAt, TimeLabel(pr.RequestedAt))
-							</li>
-						} else if pr.RequestedBy!="" {
-							<li>
-								Requested by { pr.RequestedBy } · { " " }
-								@components.Time(pr.RequestedAt, TimeLabel(pr.RequestedAt))
-							</li>
-						}
-						if pr.Build=="running" && pr.StartedAt!="" {
-							<li>
-								Started { " " }
-								@components.Time(pr.StartedAt, TimeLabel(pr.StartedAt))
-							</li>
-						}
-						if pr.CompletedAt!="" && (pr.Build=="succeeded" || pr.Build=="failed") {
-							<li>
-								Finished { " " }
-								@components.Time(pr.CompletedAt, TimeLabel(pr.CompletedAt))
-								if took := Took(pr.StartedAt, pr.CompletedAt); took!="" {
-									{ " · took " + took }
-								}
-							</li>
-						}
-					</ul>
-					if !pr.RequestCurrent {
-						<p class="lifecycle-note tone-warn">This request was for an earlier commit than the latest one.</p>
-					}
-					if pr.Build=="superseded" && pr.RequestCurrent {
-						<p class="lifecycle-note">Replaced by a teardown or a newer request before it finished.</p>
-					}
-					if pr.Waiting!="" {
-						<p class="lifecycle-note">{ pr.WaitingNote }</p>
-					} else if pr.Deadline!="" && pr.Build=="pending" {
-						<p class="lifecycle-note">
-							Eligible { " " }
-							@components.Time(pr.Deadline, TimeLabel(pr.Deadline))
+					if progress.Active && progress.Since != "" {
+						<p class="pr-status-clock" title="Time since the build started">
+							@components.ClockIcon()
+							<time datetime={ progress.Since } data-elapsed>{ TimeLabel(progress.Since) }</time>
 						</p>
 					}
-					if pr.Failure!="" {
-						<p class="lifecycle-note tone-danger" data-failure>{ pr.Failure } <a class="text-link" href={ templ.SafeURL(LogsURL(p.RepoID, pr.Number)) }>See the build log</a>.</p>
+				</div>
+				if tracked {
+					if progress.Active {
+						@Tracker(progress, LogsURL(p.RepoID, pr.Number)+"/events")
+					} else {
+						@Tracker(progress, "")
 					}
 				}
-			</section>
-			<section class="workspace-panel lifecycle-step" role="listitem">
-				<header>
-					<span class="lifecycle-index" aria-hidden="true">03</span>
-					<span class="lifecycle-icon" aria-hidden="true">
-						@components.EnvironmentIcon()
-					</span>
-				</header>
-				<h2>Deployed preview</h2>
-				if pr.DeployedSHA=="" {
-					<p class="lifecycle-empty">Nothing deployed.</p>
-					<p><span class={ "badge", Tone(pr.Environment) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.Environment) }</span></p>
-				} else {
-					@commitChip(pr, pr.DeployedSHA, false)
-					<p><span class={ "badge", Tone(pr.Environment) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.Environment) }</span></p>
-					<ul class="lifecycle-facts">
-						if pr.PublishedAt!="" {
-							<li>
-								Published { " " }
-								@components.Time(pr.PublishedAt, TimeLabel(pr.PublishedAt))
-							</li>
+				if diagnosis.Title != "" {
+					@diagnosisCard(p, pr, diagnosis)
+				}
+				if pr.Live() {
+					<div class="pr-status-preview">
+						@components.LinkIcon()
+						<a class="preview-address" href={ templ.SafeURL(pr.PreviewURL) } target="_blank" rel="noopener noreferrer" data-preview-url>{ pr.PreviewURL }</a>
+						@components.CopyButton(pr.PreviewURL, "Copy the preview address")
+					</div>
+				}
+				<div class="pr-detail-actions">
+					if pr.Live() {
+						@button.Button(button.Props{Href: pr.PreviewURL, Target: "_blank", Attributes: templ.Attributes{"rel": "noopener noreferrer"}}) {
+							Open preview
+							@components.ArrowUpRight()
 						}
-						if pr.ExpiresAt!="" {
-							<li>
-								Expires { " " }
-								@components.Time(pr.ExpiresAt, TimeLabel(pr.ExpiresAt))
-							</li>
-						}
-					</ul>
-					if pr.OlderPreview {
-						<p class="lifecycle-note tone-warn">This preview serves an earlier commit than the latest one.</p>
 					}
-				}
-				if pr.RemovedNote!="" {
-					<p class="lifecycle-note">{ pr.RemovedNote }</p>
+					if pr.Actions.HasBuildAction() {
+						<form method="post" action={ templ.SafeURL(PRURL(p.RepoID, pr.Number) + "/build") } hx-post={ PRURL(p.RepoID, pr.Number) + "/build" } hx-target="#repository-detail" hx-sync="#repository-detail:replace" hx-disabled-elt="find button" class="build-form">
+							<input type="hidden" name="csrf_token" value={ csrf }/>
+							<input type="hidden" name="workspace_query" value={ p.Query() }/>
+							<input type="hidden" name="expected_revision" value={ strconv.FormatInt(pr.Actions.ExpectedRevision, 10) }/>
+							<input type="hidden" name="request_key" value={ pr.Actions.RequestKey }/>
+							if pr.Actions.Retry {
+								<input type="hidden" name="action" value="retry"/>
+								@button.Button(button.Props{Type: button.TypeSubmit, Variant: secondaryWhen(pr.Live()), Class: "busy-button"}) {
+									@buildButtonIcon(components.RestartIcon())
+									<span class="busy-text">Retry build</span>
+									<span class="busy-label">Starting…</span>
+								}
+							} else if pr.Actions.Rebuild {
+								<input type="hidden" name="action" value="rebuild"/>
+								@button.Button(button.Props{Type: button.TypeSubmit, Variant: secondaryWhen(pr.Live()), Class: "busy-button"}) {
+									@buildButtonIcon(components.BuildIcon())
+									<span class="busy-text">Rebuild preview</span>
+									<span class="busy-label">Starting…</span>
+								}
+							} else {
+								<input type="hidden" name="action" value="build"/>
+								@button.Button(button.Props{Type: button.TypeSubmit, Variant: secondaryWhen(pr.Live()), Class: "busy-button"}) {
+									@buildButtonIcon(components.BuildIcon())
+									<span class="busy-text">
+										if pr.Actions.BuildNow {
+											Build now
+										} else {
+											Build latest commit
+										}
+									</span>
+									<span class="busy-label">Starting…</span>
+								}
+							}
+						</form>
+					} else if pr.Actions.InProgress != "" {
+						@button.Button(button.Props{Disabled: true, Variant: secondaryWhen(pr.Live())}) {
+							@components.BuildIcon()
+							{ pr.Actions.InProgress }
+						}
+					} else if pr.Actions.Blocked!="" {
+						@button.Button(button.Props{Disabled: true, Variant: secondaryWhen(pr.Live()), Attributes: templ.Attributes{"aria-describedby": "build-unavailable"}}) {
+							@components.BuildIcon()
+							{ pr.Actions.Blocked }
+						}
+					}
+					if pr.Actions.Teardown {
+						@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"data-open-dialog": "teardown-preview", "commandfor": "teardown-preview", "command": "show-modal", "aria-haspopup": "dialog"}}) {
+							{ pr.Actions.TeardownLabel() }
+						}
+					}
+					<a class="text-link logs-link" data-open-pr-logs href={ templ.SafeURL(LogsURL(p.RepoID, pr.Number)) }>
+						@components.LogsIcon()
+						if progress.Active {
+							Follow the build log
+						} else {
+							Build logs
+						}
+					</a>
+					if pr.Running() {
+						<a class="text-link logs-link" href={ templ.SafeURL(OutputURL(p.RepoID, pr.Number)) }>
+							@components.ServerIcon()
+							App output
+						</a>
+					}
+				</div>
+				if pr.Actions.Unavailable!="" {
+					<div
+						id="build-unavailable"
+						if pr.Actions.Blocked!="" {
+							class="connection-notice tone-warn pr-blocked"
+						} else {
+							class="connection-notice tone-neutral pr-blocked"
+						}
+						role="status"
+						data-build-unavailable
+					>
+						@components.AlertIcon()
+						<div>
+							<strong>{ pr.Actions.Unavailable }</strong>
+							if pr.Actions.Hint!="" {
+								<span>{ pr.Actions.Hint }</span>
+							}
+						</div>
+					</div>
 				}
 			</section>
+				<details class="pr-recent-logs" data-pr-logs data-pr-logs-url={ LogsURL(p.RepoID, pr.Number)+"/recent" }>
+					<summary>Recent build logs <span>Latest 300 events</span></summary>
+					<div id="pr-recent-log-content">
+						<p class="log-empty"><a class="text-link" href={ templ.SafeURL(LogsURL(p.RepoID, pr.Number)) }>View full build logs</a></p>
+					</div>
+				</details>
+			</div>
+			<aside class="workspace-panel pr-details" aria-labelledby="pr-details-title">
+				<h2 id="pr-details-title" class="pr-details-title">Details</h2>
+				<div class="pr-detail-grid lifecycle" role="list" aria-label="Commit lifecycle">
+					<section class="lifecycle-step" role="listitem" aria-labelledby="lifecycle-commit">
+						<h3 id="lifecycle-commit">
+							@components.CommitIcon()
+							Latest commit
+						</h3>
+						<div class="lifecycle-row">
+							@commitChip(pr, pr.SHA, false)
+							<span class={ "badge", Tone(pr.State) }><span class="badge-dot" aria-hidden="true"></span>{ Gate(pr.State) }</span>
+						</div>
+					</section>
+					<section class={ "lifecycle-step", templ.KV("is-current", progress.Active) } role="listitem" aria-labelledby="lifecycle-request">
+						<h3 id="lifecycle-request">
+							@components.BuildIcon()
+							Build request
+						</h3>
+						if pr.RequestedSHA=="" {
+							<p class="lifecycle-empty">No build requested yet.</p>
+						} else {
+							<div class="lifecycle-row">
+								@commitChip(pr, pr.RequestedSHA, false)
+								if pr.Waiting!="" {
+									<span class="badge tone-info"><span class="badge-dot" aria-hidden="true"></span>{ pr.Waiting }</span>
+								} else {
+									<span class={ "badge", Tone(pr.Build) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.Build) }</span>
+								}
+							</div>
+							<ul class="lifecycle-facts">
+								if pr.RequestSource=="automatic" {
+									<li>
+										Automatic build · { " " }
+										@components.Time(pr.RequestedAt, TimeLabel(pr.RequestedAt))
+									</li>
+								} else if pr.RequestedBy!="" {
+									<li>
+										Requested by { pr.RequestedBy } · { " " }
+										@components.Time(pr.RequestedAt, TimeLabel(pr.RequestedAt))
+									</li>
+								}
+								if pr.Build=="running" && pr.StartedAt!="" {
+									<li>
+										Started { " " }
+										@components.Time(pr.StartedAt, TimeLabel(pr.StartedAt))
+									</li>
+								}
+								if pr.CompletedAt!="" && (pr.Build=="succeeded" || pr.Build=="failed") {
+									<li>
+										Finished { " " }
+										@components.Time(pr.CompletedAt, TimeLabel(pr.CompletedAt))
+										if took := Took(pr.StartedAt, pr.CompletedAt); took!="" {
+											{ " · took " + took }
+										}
+									</li>
+								}
+							</ul>
+							if !pr.RequestCurrent {
+								<p class="lifecycle-note tone-warn">This request was for an earlier commit than the latest one.</p>
+							}
+							if pr.Build=="superseded" && pr.RequestCurrent {
+								<p class="lifecycle-note">Replaced by a teardown or a newer request before it finished.</p>
+							}
+							if pr.Waiting!="" {
+								<p class="lifecycle-note">{ pr.WaitingNote }</p>
+							} else if pr.Deadline!="" && pr.Build=="pending" {
+								<p class="lifecycle-note">
+									Eligible { " " }
+									@components.Time(pr.Deadline, TimeLabel(pr.Deadline))
+								</p>
+							}
+							if pr.Failure!="" {
+								<p class="lifecycle-note tone-danger" data-failure>{ diagnosis.Title }.</p>
+							}
+						}
+					</section>
+					<section class="lifecycle-step" role="listitem" aria-labelledby="lifecycle-preview">
+						<h3 id="lifecycle-preview">
+							@components.EnvironmentIcon()
+							Deployed preview
+						</h3>
+						if pr.DeployedSHA=="" {
+							<div class="lifecycle-row">
+								<span class="lifecycle-empty">Nothing deployed.</span>
+								<span class={ "badge", Tone(pr.Environment) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.Environment) }</span>
+							</div>
+						} else {
+							<div class="lifecycle-row">
+								@commitChip(pr, pr.DeployedSHA, false)
+								<span class={ "badge", Tone(pr.Environment) }><span class="badge-dot" aria-hidden="true"></span>{ Label(pr.Environment) }</span>
+							</div>
+							<ul class="lifecycle-facts">
+								if pr.PublishedAt!="" {
+									<li>
+										Published { " " }
+										@components.Time(pr.PublishedAt, TimeLabel(pr.PublishedAt))
+									</li>
+								}
+								if pr.AsleepAt!="" {
+									<li>
+										Asleep since { " " }
+										@components.Time(pr.AsleepAt, TimeLabel(pr.AsleepAt))
+										{ " · the next visit wakes it in a few seconds" }
+									</li>
+								}
+								if pr.LastOpenedAt!="" {
+									<li>
+										Last opened { " " }
+										@components.Time(pr.LastOpenedAt, TimeLabel(pr.LastOpenedAt))
+										{ " · " + RequestCount(pr.Requests) }
+									</li>
+								}
+								if pr.ExpiresAt!="" {
+									<li>
+										Expires { " " }
+										@components.Time(pr.ExpiresAt, TimeLabel(pr.ExpiresAt))
+									</li>
+								}
+							</ul>
+							if pr.OlderPreview {
+								<p class="lifecycle-note tone-warn">This preview serves an earlier commit than the latest one.</p>
+							}
+						}
+						if pr.RemovedNote!="" {
+							<p class="lifecycle-note">{ pr.RemovedNote }</p>
+						}
+					</section>
+				</div>
+				<section class="lifecycle-step" aria-labelledby="lifecycle-services">
+					<h3 id="lifecycle-services">
+						@components.ServerIcon()
+						Environment
+					</h3>
+					@backendFacts(pr)
+				</section>
+			</aside>
 		</div>
 		if pr.Actions.Teardown {
 			@components.ConfirmationDialog("teardown-preview", teardownTitle(pr.Actions), teardownText(pr.Actions)) {
@@ -575,6 +735,206 @@ templ PRDetail(p Page, pr PR, csrf string) {
 				</form>
 			}
 		}
+	</div>
+}
+
+// previewCell is a list row's delivery status: the live preview with its
+// address first, otherwise where the latest build request stands.
+templ previewCell(pr PR) {
+	if pr.PreviewURL != "" {
+		<span class="delivery tone-ok">
+			<span class="delivery-icon" aria-hidden="true">
+				@components.EnvironmentIcon()
+			</span>
+			Live
+		</span>
+		<a class="delivery-open" href={ templ.SafeURL(pr.PreviewURL) } target="_blank" rel="noopener noreferrer" title={ pr.PreviewURL } aria-label={ "Open the preview of #" + strconv.Itoa(int(pr.Number)) }>
+			Open
+			@components.ArrowUpRight()
+		</a>
+		switch  {
+			case pr.Build == "failed":
+				<small class="tone-danger-text">Latest build failed</small>
+			case pr.Build == "running" || pr.Build == "queued" || pr.Build == "pending":
+				<small>Newer build { Label(pr.Build) }</small>
+			case pr.OlderPreview:
+				<small class="tone-warn-text">On an earlier commit</small>
+		}
+	} else if pr.Build == "Not requested" || pr.Build == "" {
+		<span class="delivery delivery-none">
+			<span class="delivery-icon" aria-hidden="true">
+				@components.BuildIcon()
+			</span>
+			Not built yet
+		</span>
+	} else {
+		<span class={ "delivery", Tone(pr.Build) }>
+			<span class="delivery-icon" aria-hidden="true">
+				switch pr.Build {
+					case "failed":
+						@components.XIcon()
+					case "running":
+						@components.SpinnerIcon()
+					case "queued", "pending":
+						@components.ClockIcon()
+					case "succeeded":
+						@components.CheckIcon()
+					default:
+						@components.InfoIcon()
+				}
+			</span>
+			switch pr.Build {
+				case "failed":
+					Build failed
+				case "running":
+					Building
+				default:
+					{ Label(pr.Build) }
+			}
+		</span>
+		if !pr.RequestCurrent {
+			<small class="tone-warn-text">For an earlier commit</small>
+		}
+	}
+}
+
+// statusIcon is the status card's symbol: a spinner while work is in
+// flight, otherwise one for the headline's tone.
+templ statusIcon(pr PR, progress Progress) {
+	switch  {
+		case progress.Active || pr.Build == "queued" || pr.Build == "pending":
+			@components.SpinnerIcon()
+		case pr.Headline.Tone == "tone-danger":
+			@components.AlertIcon()
+		case pr.Live():
+			@components.EnvironmentIcon()
+		case pr.Headline.Tone == "tone-ok":
+			@components.CheckIcon()
+		default:
+			@components.InfoIcon()
+	}
+}
+
+// buildButtonIcon swaps the build button's icon for a spinner while its
+// request is in flight (CSS, keyed on HTMX's request class).
+templ buildButtonIcon(icon templ.Component) {
+	<span class="busy-icon" aria-hidden="true">
+		@icon
+		@components.SpinnerIcon()
+	</span>
+}
+
+// Tracker shows where a build request is: queued, getting the code, building
+// the image, starting, publishing, live. With events (the attempt's live log
+// stream) ui.js follows the output and names the exact step; the log page
+// passes none and updates it from its own stream.
+templ Tracker(progress Progress, events string) {
+	<div
+		class={ "build-tracker", templ.KV("is-failed", progress.Failed), templ.KV("is-active", progress.Active) }
+		data-build-progress
+		if events != "" {
+			data-progress-events={ events }
+		}
+	>
+		<ol class="tracker-steps" aria-label="Build progress">
+			for i, stage := range progress.Stages {
+				<li class={ "tracker-step", "is-" + stage.State } data-stage={ stage.Key }>
+					<span class="tracker-node" aria-hidden="true">
+						<span class="tracker-num">{ strconv.Itoa(i + 1) }</span>
+						@components.CheckIcon()
+						@components.XIcon()
+					</span>
+					<span class="tracker-text">
+						<strong>{ stage.Label }</strong>
+						<small>{ stage.Hint }</small>
+					</span>
+					<span class="sr-only">{ stageStatus(stage.State) }</span>
+				</li>
+			}
+		</ol>
+		if progress.Active {
+			<p class="tracker-live" data-progress-line hidden>
+				<span class="tracker-live-label">Now</span>
+				<code data-progress-text></code>
+			</p>
+		}
+	</div>
+}
+
+// stageStatus reads a stage's state aloud.
+func stageStatus(state string) string {
+	switch state {
+	case "done":
+		return "(done)"
+	case "current":
+		return "(in progress)"
+	case "working":
+		return "(may be in progress)"
+	case "failed":
+		return "(failed here)"
+	default:
+		return "(not started)"
+	}
+}
+
+// diagnosisCard says what to do about a failed build, with the technical
+// details (the stored category, the precise reason and the last output
+// lines) one click away.
+templ diagnosisCard(p Page, pr PR, d Diagnosis) {
+	<div class="diagnosis" data-diagnosis>
+		<div class="diagnosis-next">
+			<h3>
+				@components.WrenchIcon()
+				What to do next
+			</h3>
+			<ol class="diagnosis-steps">
+				for _, step := range d.Steps {
+					<li>{ step }</li>
+				}
+			</ol>
+			if d.Retry {
+				<p class="diagnosis-retry">This is often temporary: retrying may be all it takes.</p>
+			}
+		</div>
+		<details class="diagnosis-details">
+			<summary>
+				@components.ChevronDownIcon()
+				Technical details
+			</summary>
+			<dl class="diagnosis-facts">
+				if d.Reason != "" {
+					<div><dt>Reason</dt><dd class="diagnosis-reason">{ d.Reason }</dd></div>
+				}
+				<div><dt>What Previa recorded</dt><dd>{ pr.Failure }</dd></div>
+				if d.Code != "" {
+					<div><dt>Failure category</dt><dd><code>{ d.Code }</code></dd></div>
+				}
+				if pr.RequestedSHA != "" {
+					<div><dt>Commit</dt><dd><code>{ Short(pr.RequestedSHA) }</code></dd></div>
+				}
+			</dl>
+			if len(pr.FailureLog)>0 {
+				<div class="failure-log">
+					<header class="failure-log-header">
+						<h4>Last lines of the build output</h4>
+						<a class="text-link" data-open-pr-logs href={ templ.SafeURL(LogsURL(p.RepoID, pr.Number)) }>
+							Show recent logs
+							@components.Arrow()
+						</a>
+					</header>
+					<ol class="failure-log-lines" aria-label="Last build output lines">
+						for _, line := range pr.FailureLog {
+							<li class={ templ.KV("log-error", LooksLikeError(line)) }>{ line }</li>
+						}
+					</ol>
+				</div>
+			} else {
+				<a class="text-link diagnosis-log-link" data-open-pr-logs href={ templ.SafeURL(LogsURL(p.RepoID, pr.Number)) }>
+					Show recent logs
+					@components.Arrow()
+				</a>
+			}
+		</details>
 	</div>
 }
 
@@ -609,9 +969,9 @@ templ ActivityIndex(username, csrf string, p Activity) {
 	{{
 		title := "Builds"
 		nav := components.NavBuilds
-		if p.Environments {
-			title = "Environments"
-			nav = components.NavEnvironments
+		if p.Previews {
+			title = "Previews"
+			nav = components.NavPreviews
 		}
 	}}
 	@layouts.App(title, username, csrf, nav) {
@@ -620,16 +980,16 @@ templ ActivityIndex(username, csrf string, p Activity) {
 				<div class="page-header-text">
 					<span class="eyebrow">Delivery</span>
 					<h1>{ title }</h1>
-					if p.Environments {
-						<p>Previews that exist now, most recently published first: what each serves, its address and when it expires.</p>
+					if p.Previews {
+						<p>What is live now: each pull request's preview, the commit it serves, its link and when it expires. Every attempt to build, including ones that failed before going live, is on <a class="text-link" href="/builds">Builds</a>.</p>
 					} else {
-						<p>The current or latest build request of each pull request, most recent first. A new request replaces the row; this is not a history.</p>
+						<p>Each pull request's latest attempt to build a commit: waiting, building, succeeded or failed, and why. A new attempt replaces the row. What is live, and its link, is on <a class="text-link" href="/previews">Previews</a>.</p>
 					}
 				</div>
 				<nav class="segmented segmented-nav" aria-label="Delivery views">
 					<a
 						href="/builds"
-						if !p.Environments {
+						if !p.Previews {
 							aria-current="page"
 						}
 					>
@@ -637,34 +997,55 @@ templ ActivityIndex(username, csrf string, p Activity) {
 						<span>Builds</span>
 					</a>
 					<a
-						href="/environments"
-						if p.Environments {
+						href="/previews"
+						if p.Previews {
 							aria-current="page"
 						}
 					>
 						@components.EnvironmentIcon()
-						<span>Environments</span>
+						<span>Previews</span>
 					</a>
 				</nav>
 			</header>
 			<section class="workspace-panel repository-browser">
+				if !p.Previews {
+					@failureToolbar(csrf, p)
+				}
 				<div class="repository-results">
 					<div class="repository-table-scroll" tabindex="0" role="region" aria-label={ title + " list" }>
-						if len(p.Rows)==0 {
+						if len(p.Rows)==0 && p.Failures != "" {
+							{{ heading, text := FailureEmpty(p.Failures) }}
 							<div class="repository-empty activity-empty">
 								<span class="empty-source-icon" aria-hidden="true">
-									if p.Environments {
+									@components.CheckIcon()
+								</span>
+								<h2>{ heading }</h2>
+								<p>{ text }</p>
+								<a class="text-link" href={ p.FilterURL("") }>
+									All builds
+									@components.Arrow()
+								</a>
+							</div>
+						} else if len(p.Rows)==0 {
+							<div class="repository-empty activity-empty">
+								<span class="empty-source-icon" aria-hidden="true">
+									if p.Previews {
 										@components.EnvironmentIcon()
 									} else {
 										@components.BuildIcon()
 									}
 								</span>
-								<h2>No { title } to show.</h2>
-								<p>Only real saved records appear here. Connecting or discovering a repository does not create a deployment.</p>
+								if p.Previews {
+									<h2>No live previews.</h2>
+									<p>A preview appears here when a pull request's build succeeds. Builds that failed before going live are on <a class="text-link" href="/builds">Builds</a>.</p>
+								} else {
+									<h2>No builds to show.</h2>
+									<p>Only real saved records appear here. Connecting or discovering a repository does not start a build.</p>
+								}
 								<ul class="empty-explainer">
-									if p.Environments {
-										<li><strong>Status</strong><span>Publishing, serving, failed or being removed</span></li>
-										<li><strong>Preview</strong><span>The stable address and the commit it serves</span></li>
+									if p.Previews {
+										<li><strong>Status</strong><span>Live, updating to a newer commit, or being removed</span></li>
+										<li><strong>Link</strong><span>The preview's address, the same for the pull request's whole life</span></li>
 										<li><strong>Expiry</strong><span>When an idle preview is removed</span></li>
 									} else {
 										<li><strong>Status</strong><span>Waiting, queued, building and outcome</span></li>
@@ -678,14 +1059,14 @@ templ ActivityIndex(username, csrf string, p Activity) {
 								</a>
 							</div>
 						} else {
-							<table class="pr-table activity-table">
+							<table class={ "pr-table", "activity-table", templ.KV("is-previews", p.Previews) }>
 								<thead>
 									<tr>
 										<th>Pull request</th>
 										<th>Status</th>
-										if p.Environments {
+										if p.Previews {
 											<th>Serving</th>
-											<th>Preview</th>
+											<th>Link</th>
 											<th>Published</th>
 										} else {
 											<th>Commit</th>
@@ -699,8 +1080,8 @@ templ ActivityIndex(username, csrf string, p Activity) {
 										<tr>
 											<td class="pr-cell-main">
 												<div class="pr-cell-wrap">
-													<span class={ "pr-state-icon", Tone(row.State) } aria-hidden="true">
-														if p.Environments {
+													<span class={ "pr-state-icon", row.IconTone(p.Previews) } aria-hidden="true">
+														if p.Previews {
 															@components.EnvironmentIcon()
 														} else {
 															@components.BuildIcon()
@@ -724,16 +1105,27 @@ templ ActivityIndex(username, csrf string, p Activity) {
 												</div>
 											</td>
 											<td class="pr-cell-state" data-label="Status">
-												if row.Waiting!="" {
-													<span class="badge tone-info"><span class="badge-dot" aria-hidden="true"></span>{ row.Waiting }</span>
+												if p.Previews {
+													{{ label, tone := row.PreviewStatus() }}
+													<span class={ "badge", tone }><span class="badge-dot" aria-hidden="true"></span>{ label }</span>
+													if row.Failure!="" {
+														<small title={ row.Failure }>Newer build failed: { row.Diagnosis().Title }</small>
+													}
 												} else {
-													<span class={ "badge", Tone(row.State) }><span class="badge-dot" aria-hidden="true"></span>{ Label(row.State) }</span>
-												}
-												if row.Failure!="" {
-													<small class="tone-danger">{ row.Failure }</small>
+													if row.Waiting!="" {
+														<span class="badge tone-info"><span class="badge-dot" aria-hidden="true"></span>{ row.Waiting }</span>
+													} else {
+														<span class={ "badge", row.StatusTone() }><span class="badge-dot" aria-hidden="true"></span>{ Label(row.State) }</span>
+													}
+													if row.Failure!="" {
+														<small class={ templ.KV("tone-danger", row.StatusTone() == "tone-danger") } title={ row.Failure }>{ row.Diagnosis().Title }</small>
+													}
+													if row.AttentionNote != "" {
+														<small class="attention-note">{ row.AttentionNote }</small>
+													}
 												}
 											</td>
-											if p.Environments {
+											if p.Previews {
 												<td class="pr-cell-sha" data-label="Serving">
 													if row.Deployed!="" {
 														<code class="sha" title={ row.Deployed }>{ Short(row.Deployed) }</code>
@@ -744,9 +1136,9 @@ templ ActivityIndex(username, csrf string, p Activity) {
 														<small>Earlier than the latest commit</small>
 													}
 												</td>
-												<td class="pr-cell-url" data-label="Preview">
+												<td class="pr-cell-url" data-label="Link">
 													if row.PreviewURL!="" {
-														<a class="text-link" href={ templ.SafeURL(row.PreviewURL) } target="_blank" rel="noopener noreferrer" title={ row.PreviewURL }>
+														<a class="preview-open" href={ templ.SafeURL(row.PreviewURL) } target="_blank" rel="noopener noreferrer" title={ row.PreviewURL } aria-label={ "Open the preview of " + row.Name + " #" + strconv.Itoa(int(row.Number)) + " in a new tab" }>
 															Open preview
 															@components.ArrowUpRight()
 														</a>
@@ -760,6 +1152,15 @@ templ ActivityIndex(username, csrf string, p Activity) {
 														<span class="cell-line">
 															@components.Time(row.PublishedAt, TimeLabel(row.PublishedAt))
 														</span>
+													}
+													if row.AsleepAt!="" {
+														<small>Asleep · wakes on the next visit</small>
+													}
+													if row.LastOpenedAt!="" {
+														<small>
+															Opened { " " }
+															@components.Time(row.LastOpenedAt, TimeLabel(row.LastOpenedAt))
+														</small>
 													}
 													if row.ExpiresAt!="" {
 														<small>
@@ -778,7 +1179,7 @@ templ ActivityIndex(username, csrf string, p Activity) {
 													}
 												</td>
 												<td class="pr-cell-when" data-label="When">
-													switch {
+													switch  {
 														case row.State=="pending" && row.Waiting=="" && row.Deadline!="":
 															Eligible { " " }
 															@components.Time(row.Deadline, TimeLabel(row.Deadline))
@@ -804,6 +1205,9 @@ templ ActivityIndex(username, csrf string, p Activity) {
 													@components.LogsIcon()
 													Logs
 												</a>
+												if !p.Previews && (row.CanDismiss() || row.Dismissed()) {
+													@failureAction(csrf, p, row)
+												}
 												if row.Teardown {
 													<button type="button" class="danger-link teardown-link" data-open-dialog={ row.TeardownDialog() } commandfor={ row.TeardownDialog() } command="show-modal" aria-haspopup="dialog" aria-label={ "Tear down the preview of " + row.Name + " #" + strconv.Itoa(int(row.Number)) }>Tear down</button>
 												}
@@ -817,7 +1221,7 @@ templ ActivityIndex(username, csrf string, p Activity) {
 									@components.ConfirmationDialog(row.TeardownDialog(), "Tear down this preview?", row.Name+" #"+strconv.Itoa(int(row.Number))+": the preview stops serving and its containers are removed. Its address stays reserved; build again from the pull request to bring it back.") {
 										<form method="post" action={ templ.SafeURL(PRURL(row.RepoID, row.Number) + "/teardown") } class="dialog-actions">
 											<input type="hidden" name="csrf_token" value={ csrf }/>
-											<input type="hidden" name="return" value="environments"/>
+											<input type="hidden" name="return" value="previews"/>
 											<input type="hidden" name="page" value={ strconv.FormatInt(p.Number, 10) }/>
 											@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "data-close-dialog": true, "commandfor": row.TeardownDialog(), "command": "close"}}) {
 												Cancel
@@ -881,7 +1285,75 @@ templ backendFacts(pr PR) {
 		}
 		<div>
 			<dt>Managed services</dt>
-			<dd class="pr-backend-offer" data-services-offered>{ pr.ServicesLabel() }</dd>
+			<dd class="pr-backend-offer" data-services-offered>
+				if pr.ExecutionWorker && len(pr.ServicesOffered) > 0 {
+					<ul class="pr-service-tags" aria-label="Available managed services">
+						for _, service := range pr.ServicesOffered {
+							<li class="badge tone-neutral">{ service }</li>
+						}
+					</ul>
+				} else {
+					{ pr.ServicesLabel() }
+				}
+			</dd>
 		</div>
 	</dl>
+}
+
+// failureToolbar filters Builds by failure, and offers Undo right after a
+// dismissal (a filtered list may no longer show the row).
+templ failureToolbar(csrf string, p Activity) {
+	<div class="repository-toolbar activity-toolbar">
+		<nav class="segmented activity-filters" aria-label="Failures">
+			for _, f := range FailureFilters() {
+				<a
+					href={ p.FilterURL(f.Value) }
+					if f.Value == p.Failures {
+						aria-current="page"
+					}
+				>{ f.Label }</a>
+			}
+		</nav>
+		<p class="activity-filters-hint">
+			Failures need attention for { strconv.Itoa(p.AttentionDays) } days, then stay here quietly.
+		</p>
+	</div>
+	if row, ok := p.DismissedPR(); ok {
+		<div class="activity-notice" role="status">
+			@components.CheckIcon()
+			<span>Failure dismissed. It no longer counts on the Overview, and returns if this pull request fails again.</span>
+			<form method="post" action={ row.FailureURL("restore") }>
+				@failureReturn(csrf, p)
+				<button type="submit" class="link-button">Undo</button>
+			</form>
+		</div>
+	}
+}
+
+// failureAction is a row's Dismiss or Undo, returning to this Builds view.
+templ failureAction(csrf string, p Activity, row ActivityRow) {
+	if row.CanDismiss() {
+		<form method="post" action={ row.FailureURL("dismiss") } class="row-action">
+			@failureReturn(csrf, p)
+			<input type="hidden" name="revision" value={ strconv.FormatInt(row.Revision, 10) }/>
+			<button type="submit" class="link-button" title="Stop counting this failure on the Overview" aria-label={ "Dismiss the failure of " + row.Name + " #" + strconv.Itoa(int(row.Number)) }>Dismiss</button>
+		</form>
+	} else {
+		<form method="post" action={ row.FailureURL("restore") } class="row-action">
+			@failureReturn(csrf, p)
+			<button type="submit" class="link-button" aria-label={ "Undo dismissing the failure of " + row.Name + " #" + strconv.Itoa(int(row.Number)) }>Undo</button>
+		</form>
+	}
+}
+
+templ failureReturn(csrf string, p Activity) {
+	<input type="hidden" name="csrf_token" value={ csrf }/>
+	<input type="hidden" name="return" value="builds"/>
+	<input type="hidden" name="page" value={ strconv.FormatInt(p.Number, 10) }/>
+	if p.Failures != "" {
+		<input type="hidden" name="failures" value={ p.Failures }/>
+	}
+	if p.RepoID > 0 {
+		<input type="hidden" name="repo_id" value={ strconv.FormatInt(p.RepoID, 10) }/>
+	}
 }

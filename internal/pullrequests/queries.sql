@@ -50,7 +50,7 @@ UPDATE pr_syncs SET state='failed',message=$3 WHERE repo_id=$1 AND revision=$2 A
 -- name: MarkSyncing :exec
 UPDATE pr_syncs SET state='syncing',message='' WHERE repo_id=$1 AND revision=$2;
 -- name: OwnedRepository :one
-SELECT r.id,r.full_name,r.accessible,r.build_mode,i.status,i.github_installation_id
+SELECT r.id,r.full_name,r.accessible,r.build_mode,r.private_previews,i.status,i.github_installation_id
 FROM repos r JOIN installations i ON i.id=r.installation_id
 WHERE r.id=$1 AND i.owner_user_id=$2;
 -- name: CountPRs :one
@@ -84,6 +84,7 @@ SELECT p.*,(r.accessible AND i.status='active') AS available,coalesce(b.state,'N
  coalesce(e.status,'Not deployed') AS environment_status,
  coalesce(e.head_sha,'') AS deployed_sha, coalesce(e.subdomain,'')::text AS hostname,
  e.expires_at, e.last_active_at AS published_at, coalesce(e.last_error_code,'')::text AS failure_code,
+ e.last_visited_at, coalesce(e.visits,0)::bigint AS visits, e.asleep_at,
  coalesce(e.applied_generation = b.generation AND e.applied_revision = b.revision, false)::boolean AS failure_current,
  (p.teardown_requested_generation = p.generation)::boolean AS teardown_requested,
  pc.services AS backend_services, coalesce(pc.setup, false)::boolean AS backend_setup, pc.processes AS backend_processes,
@@ -99,16 +100,26 @@ WHERE r.id=$1 AND i.owner_user_id=$2 AND p.number=$3;
 SELECT count(*) FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
-WHERE i.owner_user_id=$1 AND ($2::bigint=0 OR r.id=$2)
-AND (($3::boolean AND e.id IS NOT NULL) OR (NOT $3::boolean AND b.pull_request_id IS NOT NULL));
+LEFT JOIN build_failure_dismissals d ON d.pull_request_id=p.id AND d.user_id=sqlc.arg(owner_user_id) AND d.revision=b.revision
+WHERE i.owner_user_id=sqlc.arg(owner_user_id) AND (sqlc.arg(repo_id)::bigint=0 OR r.id=sqlc.arg(repo_id))
+AND ((sqlc.arg(previews)::boolean AND e.head_sha IS NOT NULL) OR (NOT sqlc.arg(previews)::boolean AND b.pull_request_id IS NOT NULL))
+AND (sqlc.arg(failures)::text = '' OR (b.state = 'failed' AND (
+ (sqlc.arg(failures) = 'attention' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= sqlc.arg(attention_since))
+ OR (sqlc.arg(failures) = 'older' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at < sqlc.arg(attention_since))
+ OR (sqlc.arg(failures) = 'dismissed' AND d.pull_request_id IS NOT NULL))));
 -- name: Activity :many
--- Builds (current requests) or Environments (live previews), most recently
--- active first.
+-- Builds (current requests) or Previews (environments that serve a commit:
+-- live, updating or kept after a failed update; an address reserved by a
+-- build that never went live is not a preview), most recently active first. failures narrows Builds to failed requests that need
+-- attention (recent), older ones, or the ones this owner dismissed; the
+-- same conditions as DeliverySummary.
 SELECT p.repo_id,p.number,p.head_sha,p.title,r.full_name,r.accessible,i.status AS installation_status,
  coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,b.available_at,
  b.started_at, b.completed_at, coalesce(b.source,'')::text AS request_source,
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
- e.last_active_at AS published_at,
+ coalesce(b.revision, 0)::bigint AS request_revision,
+ (d.pull_request_id IS NOT NULL)::boolean AS failure_dismissed,
+ e.last_active_at AS published_at, e.last_visited_at, e.asleep_at,
  coalesce(e.status,'Not deployed') AS environment_status,coalesce(e.head_sha,'') AS deployed_sha,
  coalesce(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END,'')::text AS waiting_reason,
  coalesce(e.subdomain,'')::text AS hostname, e.expires_at, coalesce(e.last_error_code,'')::text AS failure_code,
@@ -117,10 +128,26 @@ SELECT p.repo_id,p.number,p.head_sha,p.title,r.full_name,r.accessible,i.status A
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
-WHERE i.owner_user_id=$1 AND ($2::bigint=0 OR r.id=$2)
-AND (($3::boolean AND e.id IS NOT NULL) OR (NOT $3::boolean AND b.pull_request_id IS NOT NULL))
-ORDER BY (CASE WHEN $3::boolean THEN e.last_active_at ELSE b.updated_at END) DESC NULLS LAST, p.id DESC
-LIMIT 10 OFFSET $4;
+LEFT JOIN build_failure_dismissals d ON d.pull_request_id=p.id AND d.user_id=sqlc.arg(owner_user_id) AND d.revision=b.revision
+WHERE i.owner_user_id=sqlc.arg(owner_user_id) AND (sqlc.arg(repo_id)::bigint=0 OR r.id=sqlc.arg(repo_id))
+AND ((sqlc.arg(previews)::boolean AND e.head_sha IS NOT NULL) OR (NOT sqlc.arg(previews)::boolean AND b.pull_request_id IS NOT NULL))
+AND (sqlc.arg(failures)::text = '' OR (b.state = 'failed' AND (
+ (sqlc.arg(failures) = 'attention' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= sqlc.arg(attention_since))
+ OR (sqlc.arg(failures) = 'older' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at < sqlc.arg(attention_since))
+ OR (sqlc.arg(failures) = 'dismissed' AND d.pull_request_id IS NOT NULL))))
+ORDER BY (CASE WHEN sqlc.arg(previews)::boolean THEN e.last_active_at ELSE b.updated_at END) DESC NULLS LAST, p.id DESC
+LIMIT 10 OFFSET sqlc.arg(row_offset);
+
+-- name: DismissFailure :execrows
+-- Dismisses the PR's failed request, only while that revision is its current
+-- request and failed; dismissing again replaces an older dismissal.
+INSERT INTO build_failure_dismissals (user_id, pull_request_id, revision)
+SELECT sqlc.arg(user_id), b.pull_request_id, b.revision FROM build_intents b
+WHERE b.pull_request_id = sqlc.arg(pull_request_id) AND b.revision = sqlc.arg(revision) AND b.state = 'failed'
+ON CONFLICT (user_id, pull_request_id) DO UPDATE SET revision = EXCLUDED.revision, dismissed_at = clock_timestamp();
+
+-- name: RestoreFailure :exec
+DELETE FROM build_failure_dismissals WHERE user_id = sqlc.arg(user_id) AND pull_request_id = sqlc.arg(pull_request_id);
 
 -- name: InitialDiscoveryRepositories :many
 SELECT r.id FROM repos r JOIN installations i ON i.id=r.installation_id
@@ -136,14 +163,18 @@ SELECT repo_id, number FROM pull_requests WHERE id=$1;
 
 -- name: DeliverySummary :one
 -- Overview counts across the owner's repositories: open PRs, current requests
--- by state and live previews.
+-- by state and live previews. A failed request needs attention when it
+-- finished at or after attention_since and the owner has not dismissed it;
+-- earlier undismissed ones are counted as older.
 SELECT
  count(*)::bigint AS open_prs,
  count(*) FILTER (WHERE b.state IN ('pending','queued') AND b.generation = p.generation)::bigint AS waiting,
  count(*) FILTER (WHERE b.state = 'running' AND b.generation = p.generation)::bigint AS building,
- count(*) FILTER (WHERE b.state = 'failed' AND b.generation = p.generation)::bigint AS failed,
+ count(*) FILTER (WHERE b.state = 'failed' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= sqlc.arg(attention_since))::bigint AS failed,
+ count(*) FILTER (WHERE b.state = 'failed' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at < sqlc.arg(attention_since))::bigint AS failed_older,
  count(*) FILTER (WHERE e.status IN ('running','failed','publishing') AND e.head_sha IS NOT NULL)::bigint AS live
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id
-WHERE i.owner_user_id=$1 AND p.state='open';
+LEFT JOIN build_failure_dismissals d ON d.pull_request_id=p.id AND d.user_id=sqlc.arg(owner_user_id) AND d.revision=b.revision
+WHERE i.owner_user_id=sqlc.arg(owner_user_id) AND p.state='open';

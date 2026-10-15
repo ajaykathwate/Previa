@@ -16,12 +16,12 @@ templ story(loggedIn bool) {
 		<div class="site-container">
 			<div class="section-heading" data-scroll-reveal>
 				<span class="eyebrow">How it works</span>
-				<h2 id="story-title">Ask Previa. <em>Step by step.</em></h2>
-				<p>Kai maintains a busy repository and asked Previa what really happens between opening a pull request and sharing a preview. Ask Kai's questions yourself, or jump to any stage of the pipeline.</p>
+				<h2 id="story-title">From pull request to preview, <em>in seven steps.</em></h2>
+				<p>Kai maintains a busy repository and asked Previa what happens between opening a pull request and sharing a preview. Ask Kai's questions yourself, or jump to any step.</p>
 			</div>
 			<div class="story" data-story>
-				<nav class="story-rail" aria-label="Pipeline stages">
-					<p class="story-rail-label">The pipeline</p>
+				<nav class="story-rail" aria-label="The seven steps">
+					<p class="story-rail-label">Seven steps</p>
 					<ol>
 						for i, t := range storyTurns() {
 							<li>
@@ -29,7 +29,7 @@ templ story(loggedIn bool) {
 									<span class="story-stage-icon">
 										@t.Icon
 									</span>
-									<span class="story-stage-text"><strong>{ t.Stage }</strong><small>{ t.Hint }</small></span>
+									<span class="story-stage-text"><strong><span class="story-stage-number">{ stepNumber(i) }</span>{ t.Stage }</strong><small>{ t.Hint }</small></span>
 									<span class="story-stage-check" aria-hidden="true">
 										@components.CheckIcon()
 									</span>
@@ -61,10 +61,10 @@ templ story(loggedIn bool) {
 								@components.PreviaAvatar()
 							</span>
 							<p class="story-intro-title">How a pull request becomes a preview</p>
-							<p class="story-intro-text">{ strconv.Itoa(len(storyTurns())) } questions, from the first webhook to the last cleanup. Previa answers each one with an example.</p>
+							<p class="story-intro-text">{ strconv.Itoa(len(storyTurns())) } questions, from opening a pull request to cleaning up after it. Previa answers each one with an example.</p>
 						</div>
 						@components.PreviaMessage(nil, nil) {
-							<p>Hi Kai, I'm Previa. I turn pull requests into live previews on your own server. Ask me how, one step at a time.</p>
+							<p>Hi Kai, I'm Previa. I turn every pull request into a live preview your team can open. Ask me how, one step at a time.</p>
 						}
 						for _, t := range storyTurns() {
 							<div class="story-turn" id={ "story-" + t.ID } data-story-turn tabindex="-1">
@@ -130,6 +130,14 @@ templ story(loggedIn bool) {
 	</section>
 }
 
+// stepNumber is a step's two-digit position on the rail.
+func stepNumber(i int) string {
+	if i < 9 {
+		return "0" + strconv.Itoa(i+1)
+	}
+	return strconv.Itoa(i + 1)
+}
+
 // exampleHead titles an example card; the tag keeps illustrations from
 // reading as live data.
 templ exampleHead(title string) {
@@ -143,28 +151,28 @@ templ tick() {
 }
 
 templ replyDiscover() {
-	<p>Right away. GitHub sends me a signed webhook, and I verify its signature before trusting a single field. Then I record the pull request, its newest commit and whether it can merge.</p>
-	<p>If a webhook ever goes missing, <strong>Sync</strong> catches me up.</p>
+	<p>Right away. As soon as a pull request is opened or updated, I pick it up, note its latest commit and check whether it can merge.</p>
+	<p>Missed an update? <strong>Sync</strong> in your dashboard catches me up in one click.</p>
 }
 
 templ cardDiscover() {
 	<div class="story-card">
-		@exampleHead("Webhook")
+		@exampleHead("Pull request")
 		<dl class="story-kv">
-			<div><dt>Event</dt><dd><code>pull_request · opened</code></dd></div>
-			<div><dt>Pull request</dt><dd>#42 · feat: a calmer checkout</dd></div>
-			<div><dt>Commit</dt><dd><code>3f9c2a7</code></dd></div>
+			<div><dt>Opened</dt><dd>#42 · feat: a cleaner task list</dd></div>
+			<div><dt>Branch</dt><dd><code>feature/task-list</code> → <code>main</code></dd></div>
+			<div><dt>Latest commit</dt><dd><code>3f9c2a7</code></dd></div>
 		</dl>
 		<p class="story-card-foot is-ok">
 			@tick()
-			Signature verified (HMAC-SHA256)
+			Picked up, merge status checked
 		</p>
 	</div>
 }
 
 templ replyGate() {
 	<p>When you say so. Press <strong>Build latest commit</strong>, or switch the repository to Automatic and I'll start five minutes after your last push.</p>
-	<p>Right before anything runs I ask GitHub again: is the pull request still open, is this still its newest commit, can it merge? If anything changed, I build nothing.</p>
+	<p>Right before anything runs I check with GitHub again: is the pull request still open, is this still its newest commit, can it merge? If anything changed, I wait.</p>
 }
 
 templ cardGate() {
@@ -173,7 +181,7 @@ templ cardGate() {
 		<ul class="story-checks">
 			<li>
 				@tick()
-				<span>The owner pressed <strong>Build latest commit</strong></span>
+				<span>You pressed <strong>Build latest commit</strong></span>
 			</li>
 			<li>
 				@tick()
@@ -181,70 +189,77 @@ templ cardGate() {
 			</li>
 			<li>
 				@tick()
-				<span>GitHub says it can merge</span>
+				<span>No merge conflicts</span>
 			</li>
 			<li>
 				@tick()
-				<span>A build slot is free</span>
+				<span>Your turn in the queue</span>
 			</li>
 		</ul>
 	</div>
 }
 
 templ replyBuild() {
-	<p>From exactly that commit, fetched by its full SHA and unpacked with every path checked. A fresh rootless BuildKit runs your Dockerfile on a private network whose only exit is my proxy: public registries on ports 80 and 443, nothing internal.</p>
-	<p>The build log streams live while it runs.</p>
+	<p>Yes, from exactly that commit. I build your own <code>Dockerfile</code> in a clean, isolated build with sensible time and size limits. No Dockerfile yet? My starter kits write one for your stack.</p>
+	<p>The build log streams live while it runs, and your dashboard shows which step it's on.</p>
 }
 
 templ cardBuild() {
 	<div class="story-card is-console">
 		@exampleHead("Build log")
 		<ol class="story-console">
-			<li><span>#1</span>[internal] load build definition from Dockerfile</li>
-			<li><span>#6</span>[3/5] RUN npm ci</li>
-			<li><span>#9</span>exporting to docker image format</li>
-			<li class="is-ok">Built image previa/…-pr-42:g1-r1-3f9c2a7b1d04</li>
+			<li><span>›</span>Preparing commit 3f9c2a7</li>
+			<li><span>#1</span>FROM node:22-alpine</li>
+			<li><span>#3</span>RUN npm ci</li>
+			<li><span>#5</span>RUN npm run build</li>
+			<li class="is-ok">Build finished in 1 min 12 s</li>
 		</ol>
-		<p class="story-card-foot"><span class="story-chip">rootless BuildKit</span><span class="story-chip">private network</span><span class="story-chip">egress 80/443</span></p>
+		<p class="story-card-foot"><span class="story-chip">your Dockerfile</span><span class="story-chip">exact commit</span><span class="story-chip">live log</span></p>
 	</div>
 }
 
 templ replyRun() {
-	<p>No. It gets its own container on a network only that pull request uses, as an unprivileged user with a read-only filesystem, no capabilities and hard CPU and memory limits.</p>
-	<p>Repository secrets are added only for pull requests from your own repository, never from forks, and nobody can reach it until its health check passes.</p>
+	<p>In its own space, with firm CPU and memory limits, and it can't see your other previews or anything private.</p>
+	<p>Your repository secrets are added when it starts, never for forks, and nobody can open it until its health check passes.</p>
 }
 
 templ cardRun() {
 	<div class="story-card">
-		@exampleHead("Preview container")
-		<p class="story-spec"><span class="story-chip">user 65532</span><span class="story-chip">read-only root</span><span class="story-chip">no capabilities</span><span class="story-chip">1 vCPU · 1 GiB</span><span class="story-chip">private network</span></p>
+		@exampleHead("Preview")
+		<dl class="story-kv">
+			<div><dt>Size</dt><dd>standard · 1 vCPU · 1 GiB</dd></div>
+			<div><dt>Secrets</dt><dd>added at start</dd></div>
+			<div><dt>Network</dt><dd>private to this pull request</dd></div>
+			<div><dt>Lifetime</dt><dd>48 hours</dd></div>
+		</dl>
 		<p class="story-card-foot is-ok">
 			@tick()
-			<code>GET /health</code> answered 200: healthy, not routed yet
+			<span><code>GET /health</code> answered 200: healthy</span>
 		</p>
 	</div>
 }
 
 templ replyRoute() {
-	<p>At one stable HTTPS address for the whole pull request. When a new commit is healthy I switch the address to it, and only then retire the old version, so reviewers keep a working link while the next one builds.</p>
+	<p>At one private HTTPS link for the whole pull request, with a random part nobody can guess.</p>
+	<p>When you push again, the new version takes over only once it's healthy, so reviewers never land on a broken page.</p>
 }
 
 templ cardRoute() {
 	<div class="story-card">
-		@exampleHead("Preview address")
+		@exampleHead("Preview link")
 		<p class="story-url">
 			@components.LockIcon()
-			<span>https://pr-42-gc0uy9-k3x9q2ma.preview.example.net</span>
+			<span>https://pr-42-gc0uy9.preview.example.dev</span>
 		</p>
 		<ol class="story-swap">
-			<li class="is-old"><span><code>a1f9c3e</code> keeps serving while the next commit builds</span></li>
-			<li class="is-new"><span><code>3f9c2a7</code> takes over once healthy</span></li>
+			<li class="is-old"><span><code>3f9c2a7</code> keeps serving while the next commit builds</span></li>
+			<li class="is-new"><span><code>8d41e0b</code> takes over once healthy</span></li>
 		</ol>
 	</div>
 }
 
 templ replyReport() {
-	<p>I keep one comment on the pull request up to date, from Queued to Building to Ready with the link, and add a check run to the exact commit.</p>
+	<p>I keep one comment on the pull request up to date, from Queued to Building to Ready with the link, and add a check to the exact commit.</p>
 	<p>Your Previa dashboard updates live too, no refresh needed.</p>
 }
 
@@ -253,18 +268,19 @@ templ cardReport() {
 		@exampleHead("On the pull request")
 		<div class="story-comment">
 			<p class="story-comment-title">Previa preview: Ready</p>
-			<p class="story-comment-link">https://pr-42-gc0uy9-k3x9q2ma.preview.example.net</p>
+			<p class="story-comment-link">https://pr-42-gc0uy9.preview.example.dev</p>
 			<p class="story-comment-meta">Commit <code>3f9c2a7</code> · expires in 48 hours</p>
 		</div>
 		<p class="story-card-foot is-ok">
 			@tick()
-			<span><strong>Previa preview</strong> check run: success</span>
+			<span><strong>Previa preview</strong> check: success</span>
 		</p>
 	</div>
 }
 
 templ replyTeardown() {
-	<p>I take the address down first, then remove the container, the image and its network. A preview nobody closes expires after 48 hours by default, and anything a crash leaves behind is cleaned up automatically.</p>
+	<p>I tidy up after myself. When the pull request closes, the link stops working and the preview and its data are removed.</p>
+	<p>A preview nobody closes expires 48 hours after it was last published. Building again brings it back at the same link.</p>
 }
 
 templ cardTeardown() {
@@ -273,19 +289,19 @@ templ cardTeardown() {
 		<ol class="story-checks">
 			<li>
 				@tick()
-				<span>Address withdrawn first</span>
+				<span>Link switched off</span>
 			</li>
 			<li>
 				@tick()
-				<span>Container stopped and removed</span>
+				<span>Preview stopped</span>
 			</li>
 			<li>
 				@tick()
-				<span>Image removed</span>
+				<span>Build removed</span>
 			</li>
 			<li>
 				@tick()
-				<span>Private network removed</span>
+				<span>Preview data removed</span>
 			</li>
 		</ol>
 	</div>

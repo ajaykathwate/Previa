@@ -28,6 +28,10 @@ func (w *BuildWorker) Work(ctx context.Context, job *river.Job[BuildArgs]) error
 	if errors.As(err, &waiting) {
 		// The request keeps its place; snoozing spends no attempt.
 		w.Service.logger.InfoContext(ctx, "build waits", "pr_id", request.PullRequestID, "revision", request.Revision, "reason", waiting.Reason)
+		if !waiting.Until.IsZero() {
+			// A daily budget: look again when it resets, with a little spread.
+			return river.JobSnooze(max(time.Until(waiting.Until), time.Second) + time.Duration(request.PullRequestID%60)*time.Second)
+		}
 		return river.JobSnooze(waitDelay(job.JobRow))
 	}
 	if errors.Is(err, ErrInterrupted) {
