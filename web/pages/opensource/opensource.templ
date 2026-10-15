@@ -99,7 +99,7 @@ templ index() {
 					for _, r := range Repos() {
 						<tr>
 							<th scope="row">
-								<a href={ templ.URL("#repo-" + r.ID) }><span class="lab-owner">{ r.Owner() }/</span>{ r.Title() }</a>
+								<a href={ components.PublicURL(ctx, templ.URL("#repo-"+r.ID)) }><span class="lab-owner">{ r.Owner() }/</span>{ r.Title() }</a>
 								if r.Core {
 									<span class="lab-core">Core</span>
 								}
@@ -137,7 +137,7 @@ templ coverage() {
 								<span class="lab-cap">{ c.Name }</span>
 								<span class="lab-cap-repos">
 									for _, r := range Covering(c.ID) {
-										<a href={ templ.URL("#repo-" + r.ID) } class={ "lab-mini", templ.KV("is-core", r.Core) } title={ r.Name }>{ r.Label() }</a>
+										<a href={ components.PublicURL(ctx, templ.URL("#repo-"+r.ID)) } class={ "lab-mini", templ.KV("is-core", r.Core) } title={ r.Name }>{ r.Label() }</a>
 									}
 								</span>
 							</li>
@@ -181,7 +181,7 @@ templ card(r Repo) {
 					<span>{ r.Level } config</span>
 				</p>
 				<h3 id={ "repo-" + r.ID + "-title" }>
-					<a href={ templ.URL(r.URL) } rel="noopener noreferrer">
+					<a href={ components.PublicURL(ctx, templ.URL(r.URL)) } rel="noopener noreferrer">
 						<span class="lab-owner">{ r.Owner() }/</span>{ r.Title() }
 						@components.ArrowUpRight()
 						<span class="sr-only">(opens on GitHub)</span>

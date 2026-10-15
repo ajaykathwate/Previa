@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -12,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	"github.com/ajaykathwatee/previa/web/components/logviewer"
 	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
@@ -102,11 +102,11 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 }
 
 func (h *Handler) identity(r *http.Request) (user, repoID int64, number int32, ok bool) {
-	repoID, err := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+	repoID, err := publicid.Param(r, "repoID", "repository")
 	if err != nil || repoID <= 0 {
 		return 0, 0, 0, false
 	}
-	n, err := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
+	n, err := publicid.PRNumber(r, repoID)
 	if err != nil || n <= 0 {
 		return 0, 0, 0, false
 	}
@@ -186,11 +186,11 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, inline bool) {
 		panel.EarlierURL = ""
 		panel.LaterURL = ""
 		panel.FullURL = view.LatestURL()
-		templ.Handler(logviewer.Viewer(panel)).ServeHTTP(w, r)
+		publicid.Handler(r, logviewer.Viewer(panel), view).ServeHTTP(w, r)
 		return
 	}
 	username, _ := h.users.Username(r.Context())
-	templ.Handler(buildpages.Logs(username, h.users.CSRFToken(r.Context()), view)).ServeHTTP(w, r)
+	publicid.Handler(r, buildpages.Logs(username, h.users.CSRFToken(r.Context()), view), view).ServeHTTP(w, r)
 }
 
 var errBadPage = errors.New("invalid log page")
@@ -326,7 +326,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.logger.InfoContext(r.Context(), "build logs deleted by owner", "pr_id", target.PullRequestID, "epoch", epoch)
-	http.Redirect(w, r, pages.LogsURL(target.RepoID, target.Number), http.StatusSeeOther)
+	publicid.Redirect(w, r, pages.LogsURL(target.RepoID, target.Number), http.StatusSeeOther)
 }
 
 // downloadBatch bounds reads; downloadName keeps attachment names safe.

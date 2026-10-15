@@ -62,6 +62,10 @@ const (
 // preparation, which sourceDiagnosis refines from the reason.
 func categoryDiagnosis(code string) Diagnosis {
 	switch code {
+	case "worker_failed":
+		return Diagnosis{Title: "The build worker could not finish", Summary: "Retries have ended for this request. Any earlier published preview stays available.", Retry: true,
+			Steps: []string{"Ask a workspace operator to check the worker log and database migrations for the underlying error.", "After that problem is resolved, choose Retry build."}}
+
 	case "build_failed":
 		return Diagnosis{Title: "Your Dockerfile build failed", Stage: "image",
 			Summary: "The image build stopped on an error from a step in your Dockerfile.",
@@ -124,7 +128,7 @@ func categoryDiagnosis(code string) Diagnosis {
 		return Diagnosis{Title: "The preview service was unavailable", Stage: "start", Retry: true,
 			Summary: "The server couldn't start containers at that moment.",
 			Steps:   []string{"This is usually temporary.", stepRetry, "If it keeps happening, check that Docker is running on the build server."}}
-	case "missing", "not_owned", "route_not_converged", "router_unavailable", "route_store_unavailable", "route_config_unwritable":
+	case "external_operation_failed", "generation_check_failed", "invalid_operation", "missing", "not_owned", "route_not_converged", "router_unavailable", "route_store_unavailable", "route_config_unwritable":
 		return Diagnosis{Title: "The preview couldn't be published", Stage: "publish", Retry: true,
 			Summary: "It built and started, but Previa couldn't give it its HTTPS address.",
 			Steps:   []string{"This is usually temporary.", stepRetry, "If it keeps happening, check that the router is running on the server."}}

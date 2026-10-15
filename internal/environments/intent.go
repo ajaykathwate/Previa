@@ -60,6 +60,7 @@ var (
 // BuildIntent is current coordination state, not a historical attempt record.
 // Idempotency keys are opaque and must not be logged or exposed in views.
 type BuildIntent struct {
+	ExecutionJobID int64
 	PullRequestID  int64
 	Revision       int64
 	BaseRevision   int64

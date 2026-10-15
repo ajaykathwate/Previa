@@ -21,7 +21,7 @@ WHERE b.pull_request_id = pr.id AND pr.id = $2
     AND b.generation = pr.generation AND b.head_sha = pr.head_sha
     AND b.revision = $4 AND b.state = $5
     AND ($1::text <> 'running' OR b.available_at <= clock_timestamp())
-RETURNING b.pull_request_id, b.revision, b.base_revision, b.generation, b.head_sha, b.source, b.request_action, b.requested_by, b.idempotency_key, b.state, b.available_at, b.requested_at, b.started_at, b.completed_at, b.updated_at, b.waiting_revision, b.waiting_reason, b.waiting_since, b.waiting_checked_at, b.workspace_id, b.authorization_stamp
+RETURNING b.pull_request_id, b.revision, b.base_revision, b.generation, b.head_sha, b.source, b.request_action, b.requested_by, b.idempotency_key, b.state, b.available_at, b.requested_at, b.started_at, b.completed_at, b.updated_at, b.waiting_revision, b.waiting_reason, b.waiting_since, b.waiting_checked_at, b.workspace_id, b.authorization_stamp, b.execution_job_id, b.execution_error_code
 `
 
 type AdvanceBuildIntentParams struct {
@@ -63,6 +63,8 @@ func (q *Queries) AdvanceBuildIntent(ctx context.Context, arg AdvanceBuildIntent
 		&i.WaitingCheckedAt,
 		&i.WorkspaceID,
 		&i.AuthorizationStamp,
+		&i.ExecutionJobID,
+		&i.ExecutionErrorCode,
 	)
 	return i, err
 }
@@ -98,7 +100,7 @@ func (q *Queries) FindIntentScope(ctx context.Context, id int64) (FindIntentScop
 }
 
 const lockBuildIntent = `-- name: LockBuildIntent :one
-SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at, workspace_id, authorization_stamp FROM build_intents WHERE pull_request_id = $1 FOR UPDATE
+SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at, workspace_id, authorization_stamp, execution_job_id, execution_error_code FROM build_intents WHERE pull_request_id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockBuildIntent(ctx context.Context, pullRequestID int64) (BuildIntent, error) {
@@ -126,6 +128,8 @@ func (q *Queries) LockBuildIntent(ctx context.Context, pullRequestID int64) (Bui
 		&i.WaitingCheckedAt,
 		&i.WorkspaceID,
 		&i.AuthorizationStamp,
+		&i.ExecutionJobID,
+		&i.ExecutionErrorCode,
 	)
 	return i, err
 }
@@ -217,7 +221,7 @@ func (q *Queries) LockIntentRepository(ctx context.Context, arg LockIntentReposi
 }
 
 const readBuildIntent = `-- name: ReadBuildIntent :one
-SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at, workspace_id, authorization_stamp FROM build_intents WHERE pull_request_id = $1
+SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at, workspace_id, authorization_stamp, execution_job_id, execution_error_code FROM build_intents WHERE pull_request_id = $1
 `
 
 func (q *Queries) ReadBuildIntent(ctx context.Context, pullRequestID int64) (BuildIntent, error) {
@@ -245,6 +249,8 @@ func (q *Queries) ReadBuildIntent(ctx context.Context, pullRequestID int64) (Bui
 		&i.WaitingCheckedAt,
 		&i.WorkspaceID,
 		&i.AuthorizationStamp,
+		&i.ExecutionJobID,
+		&i.ExecutionErrorCode,
 	)
 	return i, err
 }
@@ -331,9 +337,9 @@ SET revision = build_intents.revision + 1, base_revision = EXCLUDED.base_revisio
     requested_by = EXCLUDED.requested_by, idempotency_key = EXCLUDED.idempotency_key,
     state = 'pending', available_at = EXCLUDED.available_at,
     requested_at = clock_timestamp(), updated_at = clock_timestamp(),
-    started_at = NULL, completed_at = NULL
+    started_at = NULL, completed_at = NULL, execution_job_id=NULL, execution_error_code=''
 WHERE build_intents.revision = $1::bigint
-RETURNING pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at, workspace_id, authorization_stamp
+RETURNING pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at, workspace_id, authorization_stamp, execution_job_id, execution_error_code
 `
 
 type ReplaceBuildIntentParams struct {
@@ -383,6 +389,8 @@ func (q *Queries) ReplaceBuildIntent(ctx context.Context, arg ReplaceBuildIntent
 		&i.WaitingCheckedAt,
 		&i.WorkspaceID,
 		&i.AuthorizationStamp,
+		&i.ExecutionJobID,
+		&i.ExecutionErrorCode,
 	)
 	return i, err
 }

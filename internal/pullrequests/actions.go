@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,7 +15,6 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
-	"github.com/go-chi/chi/v5"
 )
 
 // Builds records owner build requests and their durable wake-ups; the
@@ -123,7 +123,7 @@ func requestKey() string {
 // columns, why work waits or failed (with the end of its output), the
 // preview's address and expiry, and the actions the owner may take now.
 func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR, error) {
-	pr := pages.PR{Number: row.Number, Title: row.Title, Author: row.Author,
+	pr := pages.PR{Number: row.Number, Title: row.Title, Description: row.Description, Author: row.Author,
 		Branch: row.HeadBranch, SHA: row.HeadSha, State: DisplayStatus(row.State, row.BuildStatus), Build: row.BuildState,
 		URL: row.HtmlUrl, RequestedSHA: row.RequestedSha, DeployedSHA: row.DeployedSha,
 		Environment: row.EnvironmentStatus, Available: row.Available.Bool,
@@ -139,9 +139,17 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 		// the request column carries its state.
 		pr.Environment = "Not deployed"
 	}
+	if row.BuildState == "failed" && pr.Environment == "publishing" {
+		pr.Environment = "Not deployed"
+		if pr.DeployedSHA != "" {
+			pr.Environment = environments.StatusRunning
+		}
+	}
 	if row.RequestCurrent && row.WaitingReason != "" {
 		pr.Waiting, pr.WaitingNote = environments.WaitingTitle(row.WaitingReason), environments.WaitingMessage(row.WaitingReason)
 	}
+	pr.ExecutionRetrying = row.ExecutionErrorCode == "worker_retrying"
+	pr.PublicationRetrying = row.EnvironmentStatus == "publishing" && row.PublicationErrorCode != ""
 	h.describeFailure(ctx, &pr, row)
 	pr.RemovedNote = removedNote(row)
 	if pr.State == "checking" && row.MergeabilityUnresolvedAt.Valid {
@@ -153,6 +161,7 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 			return pages.PR{}, err
 		}
 		pr.NoWorker = !caps.Discovery
+		pr.BuildWorkerMissing = !caps.Execution && !caps.Paused
 		pr.ServicesOffered, pr.ExecutionWorker = caps.Services, caps.Execution || caps.Paused
 	}
 	actions, err := h.actionsFor(ctx, row, pr.NoWorker)
@@ -200,8 +209,8 @@ func (h *Handler) describePreview(pr *pages.PR, row dbgen.OwnedPRRow) {
 func (h *Handler) describeFailure(ctx context.Context, pr *pages.PR, row dbgen.OwnedPRRow) {
 	switch {
 	case row.RequestCurrent && row.BuildState == string(environments.IntentFailed):
-		code := ""
-		if row.FailureCurrent {
+		code := row.ExecutionErrorCode
+		if code == "" && row.FailureCurrent {
 			code = row.FailureCode
 		}
 		pr.Failure, pr.FailureCode = environments.FailureMessage(code), code
@@ -235,8 +244,14 @@ func headline(pr pages.PR, row dbgen.OwnedPRRow) pages.Headline {
 			title, tone = "Pull request merged", "tone-merged"
 		}
 		return pages.Headline{Tone: tone, Title: title, Detail: detail}
+	case pr.PublicationRetrying:
+		return pages.Headline{Tone: "tone-warn", Title: "Publishing failed; retrying", Detail: environments.FailureMessage(row.PublicationErrorCode) + " Previa will retry automatically; any earlier preview stays available."}
 	case pr.Waiting != "":
 		return pages.Headline{Tone: "tone-info", Title: pr.Waiting, Detail: pr.WaitingNote}
+	case current && (row.BuildState == "running" || row.BuildState == "queued") && row.ExecutionErrorCode == "worker_retrying":
+		return pages.Headline{Tone: "tone-warn", Title: "Build attempt failed; retrying", Detail: "Previa will retry automatically. If attempts are exhausted, this request is marked failed. Check build logs for available output."}
+	case current && (row.BuildState == "running" || row.BuildState == "queued") && pr.BuildWorkerMissing:
+		return pages.Headline{Tone: "tone-warn", Title: "Build waiting for a worker", Detail: "No build worker is available. This request resumes when a worker reconnects; it is not publishing a new preview right now."}
 	case current && row.BuildState == "running":
 		return pages.Headline{Tone: "tone-info", Title: "Building " + pages.Short(row.RequestedSha),
 			Detail: "The preview updates when the build succeeds. Follow it in the build log."}
@@ -419,7 +434,7 @@ func (h *Handler) ownedPR(w http.ResponseWriter, r *http.Request) (int64, int64,
 		h.fail(w, r, err)
 		return 0, 0, dbgen.OwnedPRRow{}, false
 	}
-	n, err := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
+	n, err := publicid.PRNumber(r, id)
 	if err != nil || n <= 0 {
 		http.NotFound(w, r)
 		return 0, 0, dbgen.OwnedPRRow{}, false
@@ -520,7 +535,7 @@ func (h *Handler) teardown(w http.ResponseWriter, r *http.Request) {
 		if err != nil || page < 1 {
 			page = 1
 		}
-		http.Redirect(w, r, "/previews?page="+strconv.FormatInt(page, 10), http.StatusSeeOther)
+		publicid.Redirect(w, r, "/previews?page="+strconv.FormatInt(page, 10), http.StatusSeeOther)
 		return
 	}
 	h.finishMutation(w, r, user, id)

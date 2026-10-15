@@ -12,7 +12,7 @@ import (
 )
 
 const claimBuildIntent = `-- name: ClaimBuildIntent :execrows
-UPDATE build_intents b SET state = 'running', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp(),
+UPDATE build_intents b SET state = 'running', execution_error_code='', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp(),
     waiting_revision = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_revision END,
     waiting_reason = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_reason END,
     waiting_since = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_since END,
@@ -134,6 +134,64 @@ func (q *Queries) CountWorkspaceRunningBuilds(ctx context.Context, arg CountWork
 	return count, err
 }
 
+const failAbandonedExecution = `-- name: FailAbandonedExecution :execrows
+UPDATE build_intents b SET state='failed', execution_error_code='worker_failed',
+ started_at=coalesce(b.started_at,clock_timestamp()),completed_at=clock_timestamp(),updated_at=clock_timestamp(),
+ waiting_revision=NULL,waiting_reason=NULL,waiting_since=NULL,waiting_checked_at=NULL
+FROM pull_requests p WHERE b.pull_request_id=p.id AND p.id=$1 AND b.revision=$2
+AND b.generation=$3 AND b.head_sha=$4 AND p.generation=b.generation AND p.head_sha=b.head_sha AND p.state='open'
+AND b.state IN ('queued','running')
+`
+
+type FailAbandonedExecutionParams struct {
+	ID         int64
+	Revision   int64
+	Generation int64
+	HeadSha    string
+}
+
+// Finalization is a failure-only fallback; it neither grants authorization nor
+// publishes resources, and it cannot replace a newer request or successful one.
+func (q *Queries) FailAbandonedExecution(ctx context.Context, arg FailAbandonedExecutionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failAbandonedExecution,
+		arg.ID,
+		arg.Revision,
+		arg.Generation,
+		arg.HeadSha,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const failPublicationBuild = `-- name: FailPublicationBuild :one
+WITH previous AS MATERIALIZED (
+ SELECT b.pull_request_id,b.state FROM build_intents b JOIN pull_requests p ON p.id=b.pull_request_id
+ WHERE p.id=$1 AND b.generation=$2 AND b.revision=$3 AND p.generation=b.generation AND p.head_sha=b.head_sha
+ AND p.state='open' AND b.state IN ('queued','running','succeeded') FOR UPDATE OF b
+)
+UPDATE build_intents b SET state='failed',execution_error_code='',started_at=coalesce(b.started_at,clock_timestamp()),
+ completed_at=coalesce(b.completed_at,clock_timestamp()),updated_at=clock_timestamp(),
+ waiting_revision=NULL,waiting_reason=NULL,waiting_since=NULL,waiting_checked_at=NULL
+FROM previous WHERE b.pull_request_id=previous.pull_request_id RETURNING previous.state AS previous_state
+`
+
+type FailPublicationBuildParams struct {
+	ID         int64
+	Generation int64
+	Revision   int64
+}
+
+// Publication is part of the requested preview. Fail only its captured revision;
+// preserve already-recorded build time if image execution finished earlier.
+func (q *Queries) FailPublicationBuild(ctx context.Context, arg FailPublicationBuildParams) (string, error) {
+	row := q.db.QueryRow(ctx, failPublicationBuild, arg.ID, arg.Generation, arg.Revision)
+	var previous_state string
+	err := row.Scan(&previous_state)
+	return previous_state, err
+}
+
 const findPROwner = `-- name: FindPROwner :one
 SELECT w.owner_user_id FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
 JOIN installations i ON i.id = r.installation_id JOIN workspaces w ON w.id=i.workspace_id WHERE pr.id = $1
@@ -157,8 +215,31 @@ func (q *Queries) FindPRWorkspace(ctx context.Context, id int64) (pgtype.Int8, e
 	return workspace_id, err
 }
 
+const finishAbandonedStream = `-- name: FinishAbandonedStream :exec
+UPDATE build_log_streams s SET state='finished',finished_at=clock_timestamp(),updated_at=clock_timestamp()
+FROM environments e WHERE s.environment_id=e.id AND e.pull_request_id=$1
+AND s.generation=$2 AND s.revision=$3 AND s.head_sha=$4 AND s.state='open'
+`
+
+type FinishAbandonedStreamParams struct {
+	PullRequestID int64
+	Generation    int64
+	Revision      int64
+	HeadSha       string
+}
+
+func (q *Queries) FinishAbandonedStream(ctx context.Context, arg FinishAbandonedStreamParams) error {
+	_, err := q.db.Exec(ctx, finishAbandonedStream,
+		arg.PullRequestID,
+		arg.Generation,
+		arg.Revision,
+		arg.HeadSha,
+	)
+	return err
+}
+
 const finishBuildIntent = `-- name: FinishBuildIntent :execrows
-UPDATE build_intents b SET state = $1, completed_at = clock_timestamp(), updated_at = clock_timestamp(),
+UPDATE build_intents b SET state = $1, execution_error_code='', completed_at = clock_timestamp(), updated_at = clock_timestamp(),
     waiting_revision = NULL, waiting_reason = NULL, waiting_since = NULL, waiting_checked_at = NULL
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = $2
@@ -185,6 +266,22 @@ func (q *Queries) FinishBuildIntent(ctx context.Context, arg FinishBuildIntentPa
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const linkExecutionJob = `-- name: LinkExecutionJob :exec
+UPDATE build_intents SET execution_job_id=$3
+WHERE pull_request_id=$1 AND revision=$2 AND state IN ('pending','queued','running')
+`
+
+type LinkExecutionJobParams struct {
+	PullRequestID  int64
+	Revision       int64
+	ExecutionJobID pgtype.Int8
+}
+
+func (q *Queries) LinkExecutionJob(ctx context.Context, arg LinkExecutionJobParams) error {
+	_, err := q.db.Exec(ctx, linkExecutionJob, arg.PullRequestID, arg.Revision, arg.ExecutionJobID)
+	return err
 }
 
 const listSchedulingCandidates = `-- name: ListSchedulingCandidates :many
@@ -309,6 +406,32 @@ func (q *Queries) NextWaitingBuild(ctx context.Context, liveAfter pgtype.Timesta
 	var pull_request_id int64
 	err := row.Scan(&pull_request_id)
 	return pull_request_id, err
+}
+
+const noteExecutionRetry = `-- name: NoteExecutionRetry :execrows
+UPDATE build_intents SET execution_error_code='worker_retrying', updated_at=clock_timestamp()
+WHERE pull_request_id=$1 AND revision=$2 AND generation=$3 AND head_sha=$4
+AND state IN ('queued','running') AND execution_error_code<>'worker_retrying'
+`
+
+type NoteExecutionRetryParams struct {
+	PullRequestID int64
+	Revision      int64
+	Generation    int64
+	HeadSha       string
+}
+
+func (q *Queries) NoteExecutionRetry(ctx context.Context, arg NoteExecutionRetryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, noteExecutionRetry,
+		arg.PullRequestID,
+		arg.Revision,
+		arg.Generation,
+		arg.HeadSha,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const olderWaiterFromIdleWorkspace = `-- name: OlderWaiterFromIdleWorkspace :one

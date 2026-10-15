@@ -85,11 +85,16 @@ func newIntentFixture(t *testing.T) *intentFixture {
 	applyIntentMigration(t, pool, "0007_intent_dispatch.sql")
 	applyIntentMigration(t, pool, "0008_pr_workspace.sql")
 	applyIntentMigration(t, pool, "0010_pr_mergeability.sql")
+	applyIntentMigration(t, pool, "0011_realtime_events.sql")
 	applyIntentMigration(t, pool, "0014_routes_and_teardown.sql") // local teardown markers cleared by a new owner build
 	applyIntentMigration(t, pool, "0016_housekeeping.sql")        // build requests that wait for capacity
 	applyIntentMigration(t, pool, "0022_account_fairness.sql")    // waits that take turns between accounts
 	applyIntentMigration(t, pool, "0027_private_previews.sql")    // publication reads privacy under the repository lock
 	applyIntentMigration(t, pool, "0030_workspaces.sql")          // shared team authorization and request stamps
+	applyIntentMigration(t, pool, "0017_worker_capabilities.sql")
+	applyIntentMigration(t, pool, "0020_backend_previews.sql")
+	applyIntentMigration(t, pool, "0033_public_resource_ids.sql")
+	applyIntentMigration(t, pool, "0034_pr_details_and_execution_health.sql")
 	if _, err := pool.Exec(ctx, "UPDATE pull_requests SET mergeable=true, mergeable_state='clean', build_status='open', head_repo_id=501"); err != nil {
 		t.Fatal(err)
 	}

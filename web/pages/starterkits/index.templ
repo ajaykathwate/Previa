@@ -280,7 +280,7 @@ templ editor(p Page) {
 				}
 			</div>
 			for _, f := range p.Files {
-				<form class="kit-panel" id={ "kit-panel-" + f.ID } data-kit-file={ f.ID } data-lang={ f.Kind } method="post" action={ templ.SafeURL("/starter-kits/download/" + f.ID) }>
+				<form class="kit-panel" id={ "kit-panel-" + f.ID } data-kit-file={ f.ID } data-lang={ f.Kind } method="post" action={ components.PublicURL(ctx, "/starter-kits/download/"+f.ID) }>
 					<input type="hidden" name="csrf_token" value={ p.CSRF }/>
 					<div class="kit-panel-bar">
 						<p class="kit-crumb"><code>{ f.Name }</code><span aria-hidden="true">›</span>{ f.Purpose }</p>

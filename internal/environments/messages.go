@@ -38,6 +38,9 @@ func WaitingMessage(reason string) string {
 // log lines never reach GitHub; the log page holds the details.
 func FailureMessage(code string) string {
 	switch code {
+	case "worker_failed":
+		return "The build worker could not finish this request and its retries have ended. Check the worker log for the underlying error, then retry this build. Any previously published preview stays available."
+
 	case "source_failed":
 		return "The commit could not be prepared (download, or an invalid .previewrc.yaml)."
 	case "build_failed":

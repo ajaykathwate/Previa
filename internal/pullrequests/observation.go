@@ -18,13 +18,13 @@ var ErrUnavailable = errors.New("repository is unavailable or not owned by this 
 var ErrSnapshotChanged = errors.New("repository changed during discovery; retry the page")
 
 type Observation struct {
-	Number                                 int32
-	SHA, State, Title, Author, Branch, URL string
-	HeadRepoID                             int64
-	Fork                                   bool
-	UpdatedAt                              time.Time
-	Mergeable                              *bool
-	MergeableState, BuildStatus            string
+	Number                                              int32
+	SHA, State, Title, Author, Branch, URL, Description string
+	HeadRepoID                                          int64
+	Fork                                                bool
+	UpdatedAt                                           time.Time
+	Mergeable                                           *bool
+	MergeableState, BuildStatus                         string
 }
 
 func FromGitHub(p *github.PullRequest, baseRepoID int64) (Observation, error) {
@@ -39,7 +39,7 @@ func FromGitHub(p *github.PullRequest, baseRepoID int64) (Observation, error) {
 		return Observation{}, errors.New("invalid pull request state")
 	}
 	headID := p.GetHead().GetRepo().GetID()
-	return Observation{Number: int32(p.GetNumber()), SHA: p.GetHead().GetSHA(), State: state, Title: p.GetTitle(), Author: p.GetUser().GetLogin(), Branch: p.GetHead().GetRef(), URL: p.GetHTMLURL(), Mergeable: p.Mergeable, MergeableState: p.GetMergeableState(), BuildStatus: MergeabilityStatus(p.Mergeable, p.GetMergeableState()), HeadRepoID: headID, Fork: headID == 0 || headID != baseRepoID, UpdatedAt: p.GetUpdatedAt().Time}, nil
+	return Observation{Number: int32(p.GetNumber()), SHA: p.GetHead().GetSHA(), State: state, Title: p.GetTitle(), Description: p.GetBody(), Author: p.GetUser().GetLogin(), Branch: p.GetHead().GetRef(), URL: p.GetHTMLURL(), Mergeable: p.Mergeable, MergeableState: p.GetMergeableState(), BuildStatus: MergeabilityStatus(p.Mergeable, p.GetMergeableState()), HeadRepoID: headID, Fork: headID == 0 || headID != baseRepoID, UpdatedAt: p.GetUpdatedAt().Time}, nil
 }
 
 type Observer interface {
@@ -136,7 +136,7 @@ func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webh
 	if webhook || (exists && changed) {
 		generation++
 	}
-	id, err := q.SaveObservation(ctx, dbgen.SaveObservationParams{RepoID: repoID, Number: o.Number, HeadSha: o.SHA, State: o.State, Generation: generation, Title: o.Title, Author: o.Author, HeadBranch: o.Branch, HtmlUrl: o.URL, HeadRepoID: pgtype.Int8{Int64: o.HeadRepoID, Valid: o.HeadRepoID > 0}, IsFork: o.Fork, SourceUpdatedAt: pgtype.Timestamptz{Time: o.UpdatedAt, Valid: true}, Mergeable: nullableBool(o.Mergeable), MergeableState: o.MergeableState, BuildStatus: o.BuildStatus})
+	id, err := q.SaveObservation(ctx, dbgen.SaveObservationParams{RepoID: repoID, Number: o.Number, HeadSha: o.SHA, State: o.State, Generation: generation, Title: o.Title, Description: o.Description, Author: o.Author, HeadBranch: o.Branch, HtmlUrl: o.URL, HeadRepoID: pgtype.Int8{Int64: o.HeadRepoID, Valid: o.HeadRepoID > 0}, IsFork: o.Fork, SourceUpdatedAt: pgtype.Timestamptz{Time: o.UpdatedAt, Valid: true}, Mergeable: nullableBool(o.Mergeable), MergeableState: o.MergeableState, BuildStatus: o.BuildStatus})
 	if err != nil {
 		return false, fmt.Errorf("save PR observation: %w", err)
 	}
@@ -272,4 +272,27 @@ func DisplayStatus(state, buildStatus string) string {
 		return state
 	}
 	return buildStatus
+}
+
+// ProcessMetadataWebhookTx updates text without advancing code generation or
+// scheduling builds. Its independent source time cannot hide a delayed push.
+func ProcessMetadataWebhookTx(ctx context.Context, tx pgx.Tx, githubRepoID, installationID int64, o Observation) error {
+	q := dbgen.New(tx)
+	repoID, err := q.FindGitHubRepository(ctx, dbgen.FindGitHubRepositoryParams{GithubRepoID: pgtype.Int8{Int64: githubRepoID, Valid: true}, GithubInstallationID: installationID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("find metadata repository: %w", err)
+	}
+	if _, err := lockScope(ctx, tx, repoID, 0); err != nil {
+		if errors.Is(err, ErrUnavailable) {
+			return nil
+		}
+		return err
+	}
+	if err := q.UpdatePRMetadata(ctx, dbgen.UpdatePRMetadataParams{RepoID: repoID, Number: o.Number, Title: o.Title, Description: o.Description, DescriptionUpdatedAt: pgtype.Timestamptz{Time: o.UpdatedAt, Valid: true}}); err != nil {
+		return fmt.Errorf("save PR metadata: %w", err)
+	}
+	return nil
 }

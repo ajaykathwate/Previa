@@ -54,7 +54,7 @@ SET revision = build_intents.revision + 1, base_revision = EXCLUDED.base_revisio
     requested_by = EXCLUDED.requested_by, idempotency_key = EXCLUDED.idempotency_key,
     state = 'pending', available_at = EXCLUDED.available_at,
     requested_at = clock_timestamp(), updated_at = clock_timestamp(),
-    started_at = NULL, completed_at = NULL
+    started_at = NULL, completed_at = NULL, execution_job_id=NULL, execution_error_code=''
 WHERE build_intents.revision = sqlc.arg(base_revision)::bigint
 RETURNING *;
 

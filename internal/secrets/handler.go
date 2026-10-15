@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -52,7 +53,7 @@ func secretsURL(repoID int64, query url.Values) string {
 }
 
 func (h *Handler) identity(r *http.Request) (int64, int64, bool) {
-	repoID, err := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+	repoID, err := publicid.Param(r, "repoID", "repository")
 	user, _, ok := h.users.UserIDs(r.Context())
 	return user, repoID, err == nil && repoID > 0 && ok
 }
@@ -131,7 +132,7 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		query.Set("saved_count", strconv.Itoa(len(form.entries)))
 		query.Set("created", strconv.Itoa(created))
 	}
-	http.Redirect(w, r, secretsURL(repoID, query), http.StatusSeeOther)
+	publicid.Redirect(w, r, secretsURL(repoID, query), http.StatusSeeOther)
 }
 
 // secretsForm is a submitted secrets form: the page to show again (names and
@@ -244,7 +245,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	case errors.As(err, &invalid):
-		http.Redirect(w, r, secretsURL(repoID, nil), http.StatusSeeOther)
+		publicid.Redirect(w, r, secretsURL(repoID, nil), http.StatusSeeOther)
 		return
 	case err != nil:
 		h.logger.ErrorContext(r.Context(), "delete repository secrets failed", "repo_id", repoID)
@@ -260,7 +261,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 			query.Set("deleted_count", strconv.Itoa(deleted))
 		}
 	}
-	http.Redirect(w, r, secretsURL(repoID, query), http.StatusSeeOther)
+	publicid.Redirect(w, r, secretsURL(repoID, query), http.StatusSeeOther)
 }
 
 // setBuild lets Dockerfile steps of trusted builds read one secret, or stops
@@ -290,7 +291,7 @@ func (h *Handler) setBuild(w http.ResponseWriter, r *http.Request) {
 	if build {
 		key = "build_on"
 	}
-	http.Redirect(w, r, secretsURL(repoID, url.Values{key: {name}}), http.StatusSeeOther)
+	publicid.Redirect(w, r, secretsURL(repoID, url.Values{key: {name}}), http.StatusSeeOther)
 }
 
 // render loads the owned repository and its secret names. It never receives or
@@ -321,5 +322,5 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, user, repoID in
 		view.Replacing, view.Rows = "", nil
 	}
 	username, _ := h.users.Username(r.Context())
-	templ.Handler(pages.Index(username, h.users.CSRFToken(r.Context()), view), templ.WithStatus(status)).ServeHTTP(w, r)
+	publicid.Handler(r, pages.Index(username, h.users.CSRFToken(r.Context()), view), view, templ.WithStatus(status)).ServeHTTP(w, r)
 }

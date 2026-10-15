@@ -293,6 +293,15 @@ func (r *Repository) failActivation(ctx context.Context, op Operation, owner, co
 		case err != nil:
 			return fmt.Errorf("fail pending activation: %w", err)
 		default:
+			previous, err := q.FailPublicationBuild(ctx, dbgen.FailPublicationBuildParams{ID: op.PullRequestID, Generation: op.Generation, Revision: op.Revision})
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("fail publication request: %w", err)
+			}
+			if err == nil && previous != "succeeded" {
+				if err := q.RecordFinishedBuildTime(ctx, dbgen.RecordFinishedBuildTimeParams{PrID: op.PullRequestID, Revision: op.Revision}); err != nil {
+					return fmt.Errorf("record failed publication build time: %w", err)
+				}
+			}
 			// The candidate, and any older candidate it had replaced, are done.
 			if err := r.enqueueTakenTx(ctx, tx, op, []Artifact{candidate, op.Payload.PreviousPending}); err != nil {
 				return err

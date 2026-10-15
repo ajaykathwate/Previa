@@ -201,7 +201,7 @@ func (r *IntentRepository) ReadIntent(ctx context.Context, userID, prID int64) (
 
 func intentFromRow(row dbgen.BuildIntent) BuildIntent {
 	return BuildIntent{
-		PullRequestID: row.PullRequestID, Revision: row.Revision, BaseRevision: row.BaseRevision,
+		ExecutionJobID: row.ExecutionJobID.Int64, PullRequestID: row.PullRequestID, Revision: row.Revision, BaseRevision: row.BaseRevision,
 		Generation: row.Generation, HeadSHA: row.HeadSha, Source: row.Source, Action: row.RequestAction,
 		RequestedBy: row.RequestedBy.Int64, IdempotencyKey: row.IdempotencyKey, State: IntentState(row.State),
 		AvailableAt: row.AvailableAt.Time, RequestedAt: row.RequestedAt.Time,

@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"github.com/ajaykathwatee/previa/web/components"
 	"strconv"
 	"strings"
 	"time"
@@ -119,3 +120,7 @@ func (p Page) RemainingLabel() string {
 func (s Secret) UpdatedLabel() string { return s.UpdatedAt.UTC().Format("2 Jan 2006, 15:04 UTC") }
 
 func (s Secret) UpdatedISO() string { return s.UpdatedAt.UTC().Format(time.RFC3339) }
+
+func (p Page) PublicReferences() []components.ResourceRef {
+	return components.ResourceRefs("repository", p.RepoID)
+}

@@ -2,8 +2,8 @@ package builds
 
 import (
 	"github.com/ajaykathwatee/previa/web/components"
-	"github.com/ajaykathwatee/previa/web/components/logviewer"
 	"github.com/ajaykathwatee/previa/web/components/button"
+	"github.com/ajaykathwatee/previa/web/components/logviewer"
 	"github.com/ajaykathwatee/previa/web/layouts"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 	"strconv"
@@ -32,7 +32,7 @@ templ Logs(username, csrf string, p LogPage) {
 					</div>
 				</div>
 				<div class="page-hero-actions">
-					<a class="hero-link" href={ templ.SafeURL(p.PRURL()) }>
+					<a class="hero-link" href={ components.PublicURL(ctx, p.PRURL()) }>
 						@components.PullRequestIcon()
 						Pull request
 					</a>
@@ -46,7 +46,6 @@ templ Logs(username, csrf string, p LogPage) {
 					if p.StreamSHA != "" {
 						<code class="sha" title={ p.StreamSHA } data-log-sha>{ pages.Short(p.StreamSHA) }</code>
 					}
-
 				</div>
 				if progress, ok := p.Progress(); ok {
 					@pages.Tracker(progress, "")
@@ -69,7 +68,7 @@ templ Logs(username, csrf string, p LogPage) {
 			@logviewer.Viewer(p.Viewer())
 			if p.CanDelete {
 				@components.ConfirmationDialog("delete-logs", "Delete these build logs?", "This attempt's output is removed from Previa now and can't be recovered. Database backups keep it until they expire, at most 30 days. Building again records new logs.") {
-					<form method="post" action={ templ.SafeURL(p.DeleteURL()) } class="dialog-actions">
+					<form method="post" action={ components.PublicURL(ctx, p.DeleteURL()) } class="dialog-actions">
 						<input type="hidden" name="csrf_token" value={ csrf }/>
 						<input type="hidden" name="epoch" value={ strconv.FormatInt(p.Epoch, 10) }/>
 						@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "delete-logs", "command": "close", "data-close-dialog": true}}) {

@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
@@ -25,6 +25,9 @@ func (h *Handler) ValidateSelection(ctx context.Context, userID, repoID int64, p
 }
 
 func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Values) (pages.Page, error) {
+	if err := publicid.Selection(ctx, repoID, params); err != nil {
+		return pages.Page{}, installations.ErrWorkspaceInput
+	}
 	f, number, err := workspaceQuery(params)
 	if err != nil {
 		return pages.Page{}, err
@@ -127,7 +130,7 @@ func (h *Handler) finishMutation(w http.ResponseWriter, r *http.Request, userID,
 	}
 	location := repositorypages.WorkspaceURL(repoID, params)
 	if r.Header.Get("HX-Request") != "true" {
-		http.Redirect(w, r, location, http.StatusSeeOther)
+		publicid.Redirect(w, r, location, http.StatusSeeOther)
 		return
 	}
 	page, err := h.page(r.Context(), userID, repoID, params)
@@ -135,7 +138,10 @@ func (h *Handler) finishMutation(w http.ResponseWriter, r *http.Request, userID,
 		h.fail(w, r, err)
 		return
 	}
-	w.Header().Set("HX-Push-Url", location)
+	if err := publicid.SetHeader(w, r, "HX-Push-Url", location); err != nil {
+		http.Error(w, "Unable to prepare the page address.", http.StatusServiceUnavailable)
+		return
+	}
 	w.Header().Add("Vary", "HX-Request, HX-Target")
-	templ.Handler(pages.Panel(page, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
+	publicid.Handler(r, pages.Panel(page, h.users.CSRFToken(r.Context())), page).ServeHTTP(w, r)
 }

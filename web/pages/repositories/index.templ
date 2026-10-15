@@ -16,8 +16,8 @@ templ Index(username string, csrfToken string, page Page) {
 				</div>
 				<div class="repository-action">
 					if !components.CanManage(ctx) {
- <p class="availability-note">An administrator can connect repositories and grant your access.</p>
- } else if page.Enabled {
+						<p class="availability-note">An administrator can connect repositories and grant your access.</p>
+					} else if page.Enabled {
 						<form method="post" action="/installations/start">
 							<input type="hidden" name="csrf_token" value={ csrfToken }/>
 							@button.Button(button.Props{Type: button.TypeSubmit}) {
@@ -112,8 +112,8 @@ templ Results(page Page) {
 						<li class="repository-row">
 							<a
 								class={ "repository-select", templ.KV("is-unavailable", !row.Accessible) }
-								href={ templ.SafeURL(page.SelectURL(row.ID)) }
-								data-repo-link={ strconv.FormatInt(row.ID, 10) }
+								href={ components.PublicURL(ctx, page.SelectURL(row.ID)) }
+								data-repo-link={ components.PublicValue(ctx, "repository", row.ID) }
 							>
 								<div class="repository-card-top">
 									<span class="repository-card-icon" aria-hidden="true">
@@ -176,7 +176,7 @@ templ Results(page Page) {
 					<nav aria-label="Repository pages">
 						{{ numbers := PageNumbers(page.Number, page.Pages) }}
 						if page.Number>1 {
-							<a hx-get={ templ.SafeURL(page.URL(page.Number - 1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Number - 1)) } rel="prev" aria-label="Previous page">
+							<a hx-get={ components.PublicURL(ctx, page.URL(page.Number-1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ components.PublicURL(ctx, page.URL(page.Number-1)) } rel="prev" aria-label="Previous page">
 								@components.ArrowLeft()
 							</a>
 						} else {
@@ -185,19 +185,19 @@ templ Results(page Page) {
 							</span>
 						}
 						if numbers[0]>1 {
-							<a hx-get={ templ.SafeURL(page.URL(1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(1)) }>1</a>
+							<a hx-get={ components.PublicURL(ctx, page.URL(1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ components.PublicURL(ctx, page.URL(1)) }>1</a>
 							if numbers[0]>2 {
 								<span aria-hidden="true">…</span>
 							}
 						}
 						for _, number := range numbers {
 							<a
-								hx-get={ templ.SafeURL(page.URL(number)) }
+								hx-get={ components.PublicURL(ctx, page.URL(number)) }
 								hx-target="#repository-results"
 								hx-swap="innerHTML"
 								hx-sync="#repository-filters:replace"
 								hx-push-url="true"
-								href={ templ.SafeURL(page.URL(number)) }
+								href={ components.PublicURL(ctx, page.URL(number)) }
 								if number==page.Number {
 									aria-current="page"
 								}
@@ -207,10 +207,10 @@ templ Results(page Page) {
 							if numbers[len(numbers)-1]<page.Pages-1 {
 								<span aria-hidden="true">…</span>
 							}
-							<a hx-get={ templ.SafeURL(page.URL(page.Pages)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Pages)) }>{ strconv.FormatInt(page.Pages,10) }</a>
+							<a hx-get={ components.PublicURL(ctx, page.URL(page.Pages)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ components.PublicURL(ctx, page.URL(page.Pages)) }>{ strconv.FormatInt(page.Pages,10) }</a>
 						}
 						if page.Number<page.Pages {
-							<a hx-get={ templ.SafeURL(page.URL(page.Number + 1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Number + 1)) } rel="next" aria-label="Next page">
+							<a hx-get={ components.PublicURL(ctx, page.URL(page.Number+1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ components.PublicURL(ctx, page.URL(page.Number+1)) } rel="next" aria-label="Next page">
 								@components.Arrow()
 							</a>
 						} else {
@@ -233,7 +233,7 @@ templ Results(page Page) {
 					} else if page.Search!="" || page.Access!="all" {
 						<h2>No repositories match these filters.</h2>
 						<p>Try a different name or include all access states.</p>
-						<a href={ templ.SafeURL(WorkspaceURL(0, nil)) } data-clear-directory hx-get={ WorkspaceURL(0, nil) } hx-target="#repository-results" hx-sync="#repository-filters:replace" hx-push-url="true" class="text-link">
+						<a href={ components.PublicURL(ctx, WorkspaceURL(0, nil)) } data-clear-directory hx-get={ components.PublicURL(ctx, WorkspaceURL(0, nil)) } hx-target="#repository-results" hx-sync="#repository-filters:replace" hx-push-url="true" class="text-link">
 							Clear filters
 							@components.ArrowUpRight()
 						</a>

@@ -116,13 +116,13 @@ func recordDelivery(ctx context.Context, q *dbgen.Queries, id, kind, hash string
 	return false, nil
 }
 
-// pullRequest applies an opened, reopened, synchronized or closed PR.
+// pullRequest applies an opened, reopened, synchronized, edited or closed PR.
 func (s *DeliveryService) pullRequest(ctx context.Context, tx pgx.Tx, e *github.PullRequestEvent) error {
 	if e.GetAction() == "" {
 		return ErrInvalidEvent
 	}
 	switch e.GetAction() {
-	case "opened", "reopened", "synchronize", "closed":
+	case "opened", "reopened", "synchronize", "closed", "edited":
 	default:
 		return nil
 	}
@@ -132,6 +132,9 @@ func (s *DeliveryService) pullRequest(ctx context.Context, tx pgx.Tx, e *github.
 	o, err := pullrequests.FromGitHub(e.GetPullRequest(), e.GetRepo().GetID())
 	if err != nil {
 		return fmt.Errorf("%w: incomplete PR", ErrInvalidEvent)
+	}
+	if e.GetAction() == "edited" {
+		return pullrequests.ProcessMetadataWebhookTx(ctx, tx, e.GetRepo().GetID(), e.GetInstallation().GetID(), o)
 	}
 	closing := e.GetAction() == "closed"
 	if closing == (o.State == environments.StateOpen) {

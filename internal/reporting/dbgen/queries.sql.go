@@ -58,10 +58,10 @@ const readReportSnapshot = `-- name: ReadReportSnapshot :one
 
 SELECT pr.id, pr.number, pr.head_sha, pr.state, pr.generation, pr.build_status, pr.needs_refresh,
        pr.is_fork, pr.github_comment_id, pr.teardown_requested_generation, pr.teardown_reason,
-       r.id AS repo_id, r.github_repo_id, r.accessible, i.github_installation_id,
+       r.id AS repo_id, r.public_id::text AS repo_public_id, pr.public_id::text AS pr_public_id, r.github_repo_id, r.accessible, i.github_installation_id,
        i.status AS installation_status,
        b.revision AS intent_revision, b.generation AS intent_generation, b.head_sha AS intent_head_sha,
-       b.state AS intent_state, b.available_at AS intent_available_at,
+       COALESCE(b.execution_error_code,'')::text AS intent_execution_error, b.state AS intent_state, b.available_at AS intent_available_at,
        COALESCE(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END, '')::text AS intent_waiting,
        e.id AS environment_id, e.status AS environment_status, e.subdomain, e.head_sha AS deployed_sha,
        e.applied_generation, e.applied_revision, e.pending_generation, e.pending_revision,
@@ -95,6 +95,8 @@ type ReadReportSnapshotRow struct {
 	TeardownRequestedGeneration int64
 	TeardownReason              pgtype.Text
 	RepoID                      int64
+	RepoPublicID                string
+	PrPublicID                  string
 	GithubRepoID                pgtype.Int8
 	Accessible                  bool
 	GithubInstallationID        int64
@@ -102,6 +104,7 @@ type ReadReportSnapshotRow struct {
 	IntentRevision              pgtype.Int8
 	IntentGeneration            pgtype.Int8
 	IntentHeadSha               pgtype.Text
+	IntentExecutionError        string
 	IntentState                 pgtype.Text
 	IntentAvailableAt           pgtype.Timestamptz
 	IntentWaiting               string
@@ -148,6 +151,8 @@ func (q *Queries) ReadReportSnapshot(ctx context.Context, id int64) (ReadReportS
 		&i.TeardownRequestedGeneration,
 		&i.TeardownReason,
 		&i.RepoID,
+		&i.RepoPublicID,
+		&i.PrPublicID,
 		&i.GithubRepoID,
 		&i.Accessible,
 		&i.GithubInstallationID,
@@ -155,6 +160,7 @@ func (q *Queries) ReadReportSnapshot(ctx context.Context, id int64) (ReadReportS
 		&i.IntentRevision,
 		&i.IntentGeneration,
 		&i.IntentHeadSha,
+		&i.IntentExecutionError,
 		&i.IntentState,
 		&i.IntentAvailableAt,
 		&i.IntentWaiting,

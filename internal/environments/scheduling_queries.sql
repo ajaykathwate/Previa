@@ -13,7 +13,7 @@ WHERE pull_request_id = $1 AND revision = $2 AND state = 'pending';
 -- Admission ends a wait for a build slot; a running request that waits for
 -- preview capacity or disk keeps its note until a result is applied. An
 -- automatic request never starts for a fork's code (see LockIntentPR).
-UPDATE build_intents b SET state = 'running', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp(),
+UPDATE build_intents b SET state = 'running', execution_error_code='', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp(),
     waiting_revision = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_revision END,
     waiting_reason = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_reason END,
     waiting_since = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_since END,
@@ -47,7 +47,7 @@ DELETE FROM build_logs l USING environments e
 WHERE l.environment_id = e.id AND e.pull_request_id = $1;
 
 -- name: FinishBuildIntent :execrows
-UPDATE build_intents b SET state = sqlc.arg(next_state), completed_at = clock_timestamp(), updated_at = clock_timestamp(),
+UPDATE build_intents b SET state = sqlc.arg(next_state), execution_error_code='', completed_at = clock_timestamp(), updated_at = clock_timestamp(),
     waiting_revision = NULL, waiting_reason = NULL, waiting_since = NULL, waiting_checked_at = NULL
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
@@ -158,3 +158,40 @@ ON CONFLICT (workspace_id, day) DO UPDATE SET build_seconds = workspace_build_us
 
 -- name: FindPRWorkspace :one
 SELECT i.workspace_id FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id WHERE p.id=$1;
+
+-- name: LinkExecutionJob :exec
+UPDATE build_intents SET execution_job_id=$3
+WHERE pull_request_id=$1 AND revision=$2 AND state IN ('pending','queued','running');
+
+-- name: NoteExecutionRetry :execrows
+UPDATE build_intents SET execution_error_code='worker_retrying', updated_at=clock_timestamp()
+WHERE pull_request_id=$1 AND revision=$2 AND generation=$3 AND head_sha=$4
+AND state IN ('queued','running') AND execution_error_code<>'worker_retrying';
+
+-- name: FailAbandonedExecution :execrows
+-- Finalization is a failure-only fallback; it neither grants authorization nor
+-- publishes resources, and it cannot replace a newer request or successful one.
+UPDATE build_intents b SET state='failed', execution_error_code='worker_failed',
+ started_at=coalesce(b.started_at,clock_timestamp()),completed_at=clock_timestamp(),updated_at=clock_timestamp(),
+ waiting_revision=NULL,waiting_reason=NULL,waiting_since=NULL,waiting_checked_at=NULL
+FROM pull_requests p WHERE b.pull_request_id=p.id AND p.id=$1 AND b.revision=$2
+AND b.generation=$3 AND b.head_sha=$4 AND p.generation=b.generation AND p.head_sha=b.head_sha AND p.state='open'
+AND b.state IN ('queued','running');
+
+-- name: FinishAbandonedStream :exec
+UPDATE build_log_streams s SET state='finished',finished_at=clock_timestamp(),updated_at=clock_timestamp()
+FROM environments e WHERE s.environment_id=e.id AND e.pull_request_id=$1
+AND s.generation=$2 AND s.revision=$3 AND s.head_sha=$4 AND s.state='open';
+
+-- name: FailPublicationBuild :one
+-- Publication is part of the requested preview. Fail only its captured revision;
+-- preserve already-recorded build time if image execution finished earlier.
+WITH previous AS MATERIALIZED (
+ SELECT b.pull_request_id,b.state FROM build_intents b JOIN pull_requests p ON p.id=b.pull_request_id
+ WHERE p.id=$1 AND b.generation=$2 AND b.revision=$3 AND p.generation=b.generation AND p.head_sha=b.head_sha
+ AND p.state='open' AND b.state IN ('queued','running','succeeded') FOR UPDATE OF b
+)
+UPDATE build_intents b SET state='failed',execution_error_code='',started_at=coalesce(b.started_at,clock_timestamp()),
+ completed_at=coalesce(b.completed_at,clock_timestamp()),updated_at=clock_timestamp(),
+ waiting_revision=NULL,waiting_reason=NULL,waiting_since=NULL,waiting_checked_at=NULL
+FROM previous WHERE b.pull_request_id=previous.pull_request_id RETURNING previous.state AS previous_state;

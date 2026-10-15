@@ -62,6 +62,8 @@ type BuildIntent struct {
 	WaitingCheckedAt   pgtype.Timestamptz
 	WorkspaceID        pgtype.Int8
 	AuthorizationStamp pgtype.Text
+	ExecutionJobID     pgtype.Int8
+	ExecutionErrorCode string
 }
 
 type BuildLog struct {
@@ -130,6 +132,7 @@ type Environment struct {
 	WokeAt             pgtype.Timestamptz
 	WakeRequestedAt    pgtype.Timestamptz
 	WakeError          string
+	PublicID           pgtype.UUID
 }
 
 type EnvironmentOperation struct {
@@ -184,6 +187,7 @@ type Installation struct {
 	SourceUpdatedAt      pgtype.Timestamptz
 	CleanupPending       bool
 	WorkspaceID          pgtype.Int8
+	PublicID             pgtype.UUID
 }
 
 type InstallationRepositoryEvent struct {
@@ -269,6 +273,9 @@ type PullRequest struct {
 	TeardownRequestedGeneration int64
 	TeardownReason              pgtype.Text
 	MergeabilityUnresolvedAt    pgtype.Timestamptz
+	PublicID                    pgtype.UUID
+	Description                 string
+	DescriptionUpdatedAt        pgtype.Timestamptz
 }
 
 type PullRequestReport struct {
@@ -299,6 +306,7 @@ type Repo struct {
 	BuildMode          string
 	ObservationVersion int64
 	PrivatePreviews    bool
+	PublicID           pgtype.UUID
 }
 
 type RepositoryDestination struct {
@@ -308,6 +316,7 @@ type RepositoryDestination struct {
 	Port      int32
 	CreatedBy pgtype.Int8
 	CreatedAt pgtype.Timestamptz
+	PublicID  pgtype.UUID
 }
 
 type RepositoryMembership struct {
@@ -329,11 +338,31 @@ type Session struct {
 }
 
 type User struct {
-	ID        int64
-	GithubID  int64
-	Username  string
-	CreatedAt pgtype.Timestamptz
-	AvatarUrl string
+	ID               int64
+	GithubID         int64
+	Username         string
+	CreatedAt        pgtype.Timestamptz
+	AvatarUrl        string
+	FirstName        string
+	LastName         string
+	ProfileRevision  int64
+	GithubName       string
+	Email            string
+	EmailSyncError   bool
+	GithubProfileUrl string
+	GithubBio        string
+	GithubCompany    string
+	GithubLocation   string
+	GithubCreatedAt  pgtype.Timestamptz
+	ProfileSyncedAt  pgtype.Timestamptz
+	PublicID         pgtype.UUID
+	AvatarVersion    int64
+	CustomAvatar     bool
+}
+
+type UserAvatar struct {
+	UserID int64
+	Data   []byte
 }
 
 type WebhookDelivery struct {
@@ -368,6 +397,7 @@ type Workspace struct {
 	CreatedAt       pgtype.Timestamptz
 	Description     string
 	ProfileRevision int64
+	PublicID        pgtype.UUID
 }
 
 type WorkspaceBuildUsage struct {
@@ -389,6 +419,7 @@ type WorkspaceInvitation struct {
 	CreatedBy   int64
 	Revision    int64
 	CreatedAt   pgtype.Timestamptz
+	PublicID    pgtype.UUID
 }
 
 type WorkspaceInvitationRepository struct {

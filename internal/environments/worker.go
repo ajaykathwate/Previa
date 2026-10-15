@@ -41,7 +41,14 @@ func (w *BuildWorker) Work(ctx context.Context, job *river.Job[BuildArgs]) error
 	if errors.As(err, &limited) {
 		return river.JobSnooze(max(limited.Delay, time.Second)) // GitHub's rate limit
 	}
-	return finishJob(ctx, w.Broker, request, job, err)
+	result := finishJob(ctx, w.Broker, request, job, err)
+	if result == nil {
+		return nil
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	terminal := job.Attempt >= job.MaxAttempts || permanent(err)
+	return errors.Join(result, w.Broker.noteExecutionFailure(cleanupCtx, request, terminal))
 }
 
 type TeardownWorker struct {

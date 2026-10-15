@@ -363,6 +363,10 @@ func TestFailedActivationKeepsTheServingPreview(t *testing.T) {
 	}
 	executor.fail = map[env.OperationKind]error{env.ActivateRoute: &env.OperationFailure{Code: "unhealthy", Permanent: true}}
 	processKind(t, f, executor, env.ActivateRoute, b.Generation)
+	var buildState string
+	if err := f.pool.QueryRow(t.Context(), "SELECT state FROM build_intents WHERE pull_request_id=$1", b.PullRequestID).Scan(&buildState); err != nil || buildState != "failed" {
+		t.Fatalf("publication failure left build request %s: %v", buildState, err)
+	}
 	opB := loadOperation(t, f, env.ActivateRoute, b.Generation)
 	if opB.State != env.OperationFailed {
 		t.Fatalf("activation state %s", opB.State)

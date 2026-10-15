@@ -1,8 +1,6 @@
 package input
 
-import (
-	"github.com/ajaykathwatee/previa/web/components/utils"
-)
+import "github.com/ajaykathwatee/previa/web/components/utils"
 
 type Type string
 
@@ -24,19 +22,19 @@ const (
 )
 
 type Props struct {
-	ID               string
-	Class            string
-	Attributes       templ.Attributes
-	Name             string
-	Type             Type
-	Form             string
-	Placeholder      string
-	Value            string
-	Disabled         bool
-	Readonly         bool
-	Required         bool
-	FileAccept       string
-	HasError         bool
+	ID          string
+	Class       string
+	Attributes  templ.Attributes
+	Name        string
+	Type        Type
+	Form        string
+	Placeholder string
+	Value       string
+	Disabled    bool
+	Readonly    bool
+	Required    bool
+	FileAccept  string
+	HasError    bool
 }
 
 templ Input(props ...Props) {
@@ -98,7 +96,5 @@ templ Input(props ...Props) {
 			}
 			{ p.Attributes... }
 		/>
-
 	</div>
 }
-

@@ -10,6 +10,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/environments/dbgen"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -177,6 +178,10 @@ func (b *Broker) dispatchLockedTx(ctx context.Context, tx pgx.Tx, scope intentSc
 		if err != nil || !ready {
 			return 0, err
 		}
+		ended, err := b.reconcileExecutionTx(ctx, tx, i)
+		if err != nil || ended {
+			return 0, err
+		}
 		r.Revision = i.Revision
 	} else if pending, err := teardownPending(ctx, dbgen.New(tx), r.PullRequestID); err != nil || !pending {
 		return 0, err
@@ -236,6 +241,9 @@ func (b *Broker) insertJobTx(ctx context.Context, tx pgx.Tx, r Request) (int64, 
 	}
 	if captured.Generation != r.Generation || captured.Revision != r.Revision || captured.State != r.State || r.State != StateOpen {
 		return result.Job.ID, nil
+	}
+	if err := dbgen.New(tx).LinkExecutionJob(ctx, dbgen.LinkExecutionJobParams{PullRequestID: r.PullRequestID, Revision: r.Revision, ExecutionJobID: pgtype.Int8{Int64: result.Job.ID, Valid: true}}); err != nil {
+		return 0, fmt.Errorf("link execution job: %w", err)
 	}
 	queued, err := dbgen.New(tx).QueueCurrentIntent(ctx, dbgen.QueueCurrentIntentParams{PullRequestID: r.PullRequestID, Revision: r.Revision})
 	if err != nil {

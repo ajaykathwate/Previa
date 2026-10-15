@@ -2,6 +2,7 @@ package starterkits
 
 import (
 	"context"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -63,7 +64,7 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 	username, _ := h.users.Username(r.Context())
 	p := view(kit, offer)
 	p.CSRF = h.users.CSRFToken(r.Context())
-	templ.Handler(kitpages.Index(username, p)).ServeHTTP(w, r)
+	publicid.Handler(r, kitpages.Index(username, p), nil).ServeHTTP(w, r)
 }
 
 // maxFileBytes bounds an edited file; a build reads at most this much of

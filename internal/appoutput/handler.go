@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	outputpages "github.com/ajaykathwatee/previa/web/pages/appoutput"
 	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
@@ -77,11 +77,11 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 }
 
 func (h *Handler) preview(r *http.Request) (Preview, int64, error) {
-	repoID, err := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+	repoID, err := publicid.Param(r, "repoID", "repository")
 	if err != nil || repoID <= 0 {
 		return Preview{}, 0, ErrUnavailable
 	}
-	n, err := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
+	n, err := publicid.PRNumber(r, repoID)
 	if err != nil || n <= 0 {
 		return Preview{}, 0, ErrUnavailable
 	}
@@ -143,7 +143,7 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 	view.StatusLabel, view.StatusTone, view.Summary, view.Notices, view.Empty = st.Label, st.Tone, st.Summary, st.Notices, st.Empty
 	username, _ := h.users.Username(r.Context())
 	w.Header().Set("Cache-Control", "no-store")
-	templ.Handler(outputpages.Output(username, h.users.CSRFToken(r.Context()), view)).ServeHTTP(w, r)
+	publicid.Handler(r, outputpages.Output(username, h.users.CSRFToken(r.Context()), view), view).ServeHTTP(w, r)
 }
 
 // follow starts (or keeps) a follower for a live preview and fills the page

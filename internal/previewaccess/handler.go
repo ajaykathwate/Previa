@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net"
 	"net/http"
@@ -140,7 +141,7 @@ func (h *Handler) check(w http.ResponseWriter, r *http.Request) {
 			Name: cookieName, Value: h.signer.sign("cookie", claims{Host: host, User: token.User, Revision: token.Revision, Local: token.Local, Expires: expires.Unix()}),
 			Path: "/", Expires: expires, MaxAge: int(cookieLifetime.Seconds()), Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		})
-		http.Redirect(w, r, token.Path, http.StatusFound)
+		publicid.Redirect(w, r, token.Path, http.StatusFound)
 		return
 	}
 	if cookie, err := r.Cookie(cookieName); err == nil {
@@ -150,7 +151,7 @@ func (h *Handler) check(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	next := url.Values{"host": {host}, "path": {forwarded.RequestURI()}}
-	http.Redirect(w, r, h.appBaseURL+accessPage+"?"+next.Encode(), http.StatusFound)
+	publicid.Redirect(w, r, h.appBaseURL+accessPage+"?"+next.Encode(), http.StatusFound)
 }
 
 // access signs the visitor in, checks they can see the repository and sends
@@ -158,7 +159,7 @@ func (h *Handler) check(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) access(w http.ResponseWriter, r *http.Request) {
 	user, _, signedIn := h.users.UserIDs(r.Context())
 	if !signedIn {
-		http.Redirect(w, r, "/auth/github/login?"+url.Values{"next": {r.URL.RequestURI()}}.Encode(), http.StatusSeeOther)
+		publicid.Redirect(w, r, "/auth/github/login?"+url.Values{"next": {r.URL.RequestURI()}}.Encode(), http.StatusSeeOther)
 		return
 	}
 	host := strings.ToLower(r.URL.Query().Get("host"))
@@ -182,7 +183,7 @@ func (h *Handler) access(w http.ResponseWriter, r *http.Request) {
 	}
 	target := "https://" + host + path
 	if !preview.PrivatePreviews {
-		http.Redirect(w, r, target, http.StatusSeeOther)
+		publicid.Redirect(w, r, target, http.StatusSeeOther)
 		return
 	}
 	allowed, local, err := h.allowed(r.Context(), user, label, preview)
@@ -198,7 +199,7 @@ func (h *Handler) access(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := h.signer.sign("token", claims{Host: host, User: user, Revision: preview.AuthorizationRevision, Local: local, Path: path, Expires: h.now().Add(tokenLifetime).Unix()})
-	http.Redirect(w, r, "https://"+host+returnPath+"?"+url.Values{"t": {token}}.Encode(), http.StatusSeeOther)
+	publicid.Redirect(w, r, "https://"+host+returnPath+"?"+url.Values{"t": {token}}.Encode(), http.StatusSeeOther)
 }
 
 // validGrant checks current local authority for every protected preview request.
@@ -230,6 +231,11 @@ func (h *Handler) allowed(ctx context.Context, user int64, label string, p dbgen
 		return false, false, nil
 	}
 	login, ok := h.users.Username(ctx)
+	if provider, exists := h.users.(interface {
+		GitHubUsername(context.Context) (string, bool)
+	}); exists {
+		login, ok = provider.GitHubUsername(ctx)
+	}
 	_, githubID, signedIn := h.users.UserIDs(ctx)
 	if !ok || !signedIn || login == "" {
 		return false, false, nil
@@ -245,7 +251,7 @@ func (h *Handler) allowed(ctx context.Context, user int64, label string, p dbgen
 // a worker to route them that way.
 func (h *Handler) set(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := h.users.UserIDs(r.Context())
-	repoID, err := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+	repoID, err := publicid.Param(r, "repoID", "repository")
 	if !ok || err != nil || repoID <= 0 {
 		http.NotFound(w, r)
 		return
@@ -293,7 +299,7 @@ func (h *Handler) set(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if errors.Is(err, errPrivateUnavailable) {
-		http.Redirect(w, r, "/repositories/"+strconv.FormatInt(repoID, 10)+"?preview_access=unavailable", http.StatusSeeOther)
+		publicid.Redirect(w, r, "/repositories/"+strconv.FormatInt(repoID, 10)+"?preview_access=unavailable", http.StatusSeeOther)
 		return
 	}
 	if err != nil {
@@ -303,7 +309,7 @@ func (h *Handler) set(w http.ResponseWriter, r *http.Request) {
 	if changed {
 		h.logger.InfoContext(r.Context(), "preview access changed", "repo_id", repoID, "private", private)
 	}
-	http.Redirect(w, r, "/repositories/"+strconv.FormatInt(repoID, 10), http.StatusSeeOther)
+	publicid.Redirect(w, r, "/repositories/"+strconv.FormatInt(repoID, 10), http.StatusSeeOther)
 }
 
 var errNotOwned = errors.New("repository not owned")

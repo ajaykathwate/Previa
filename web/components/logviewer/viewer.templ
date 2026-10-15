@@ -2,6 +2,7 @@ package logviewer
 
 import (
 	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/resourceid"
 	"strconv"
 )
 
@@ -16,7 +17,7 @@ templ Viewer(p Panel) {
 			data-log-limit="300"
 		}
 		if p.EventsURL != "" {
-			data-log-events={ p.EventsURL }
+			data-log-events={ resourceid.PublicURL(ctx, p.EventsURL) }
 			data-log-cursor={ p.Cursor }
 		}
 	>
@@ -24,14 +25,14 @@ templ Viewer(p Panel) {
 			<div class="log-panel-title"><h2>Log events</h2><span class="log-panel-note">Secrets are masked</span></div>
 			<nav class="log-pager" aria-label="Log tools">
 				if p.EarlierURL != "" {
-					<a class="log-tool" href={ templ.SafeURL(p.EarlierURL) } rel="prev">
+					<a class="log-tool" href={ resourceid.PublicURL(ctx, p.EarlierURL) } rel="prev">
 						@components.ArrowLeft()
 						Earlier lines
 					</a>
 				}
 				<a
 					class="log-tool"
-					href={ templ.SafeURL(p.LatestURL) }
+					href={ resourceid.PublicURL(ctx, p.LatestURL) }
 					if p.Inline {
 						data-refresh-pr-logs
 					}
@@ -44,7 +45,7 @@ templ Viewer(p Panel) {
 					<span data-copy-status aria-live="polite">Copy</span>
 				</button>
 				if p.HasOutput {
-					<a class="log-tool" href={ templ.SafeURL(p.DownloadURL) } download>
+					<a class="log-tool" href={ resourceid.PublicURL(ctx, p.DownloadURL) } download>
 						@components.DownloadIcon()
 						Download
 					</a>
@@ -63,9 +64,9 @@ templ Viewer(p Panel) {
 		<form
 			class="log-filters"
 			method="get"
-			action={ templ.SafeURL(p.BaseURL) }
+			action={ resourceid.PublicURL(ctx, p.BaseURL) }
 			if p.Inline {
-				hx-get={ p.BaseURL + "/recent" }
+				hx-get={ resourceid.PublicURL(ctx, p.BaseURL+"/recent") }
 				hx-target="#pr-recent-log-content"
 				hx-swap="innerHTML"
 			}
@@ -104,13 +105,13 @@ templ Viewer(p Panel) {
 			</span>
 			if p.Inline {
 				<span>Latest 300 matching events</span>
-				<a class="log-tool" href={ templ.SafeURL(p.FullURL) }>
+				<a class="log-tool" href={ resourceid.PublicURL(ctx, p.FullURL) }>
 					View full build logs
 					@components.ArrowUpRight()
 				</a>
 			}
 			if p.LaterURL != "" {
-				<a class="text-link" href={ templ.SafeURL(p.LaterURL) } rel="next">
+				<a class="text-link" href={ resourceid.PublicURL(ctx, p.LaterURL) } rel="next">
 					Later lines
 					@components.Arrow()
 				</a>
@@ -121,7 +122,7 @@ templ Viewer(p Panel) {
 
 templ Event(line Line) {
 	<li id={ line.Anchor() } class={ "log-line", templ.KV("log-system", line.System), templ.KV("log-error", line.IsError()) } data-log-source={ line.Source() }>
-		<a class="log-number" href={ templ.SafeURL("#" + line.Anchor()) } tabindex="-1">{ line.Number() }</a>
+		<a class="log-number" href={ resourceid.PublicURL(ctx, "#"+line.Anchor()) } tabindex="-1">{ line.Number() }</a>
 		<span class="log-text"><span class="log-timestamp" title={ "Received at " + line.ISOTime() }>{ line.Timestamp() }</span>{ " "+line.Message() }</span>
 	</li>
 }

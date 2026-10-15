@@ -3,6 +3,7 @@ package pullrequests
 import (
 	"context"
 	"errors"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -10,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
@@ -90,7 +90,7 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 	})
 }
 func (h *Handler) identity(r *http.Request) (int64, int64, error) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+	id, err := publicid.Param(r, "repoID", "repository")
 	if err != nil || id <= 0 {
 		return 0, 0, ErrUnavailable
 	}
@@ -156,7 +156,7 @@ func (h *Handler) servePage(w http.ResponseWriter, r *http.Request, detail bool)
 		params.Del("page")
 	}
 	if detail {
-		n, err := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
+		n, err := publicid.PRNumber(r, id)
 		if err != nil || n < 1 {
 			http.NotFound(w, r)
 			return
@@ -188,22 +188,25 @@ func (h *Handler) servePage(w http.ResponseWriter, r *http.Request, detail bool)
 	if requested := params.Get("pr_page"); requested != "" && requested != strconv.FormatInt(page.Number, 10) || r.URL.Query().Has("state") {
 		location := page.CurrentURL()
 		if partial {
-			w.Header().Set("HX-Replace-Url", location)
+			if err := publicid.SetHeader(w, r, "HX-Replace-Url", location); err != nil {
+				http.Error(w, "Unable to prepare the page address.", http.StatusServiceUnavailable)
+				return
+			}
 		} else {
-			http.Redirect(w, r, location, http.StatusSeeOther)
+			publicid.Redirect(w, r, location, http.StatusSeeOther)
 			return
 		}
 	}
 	if partial && r.Header.Get("HX-Target") == "pull-request-results" {
-		templ.Handler(pages.Results(page)).ServeHTTP(w, r)
+		publicid.Handler(r, pages.Results(page), page).ServeHTTP(w, r)
 		return
 	}
 	if partial && r.Header.Get("HX-Target") == "repository-detail" {
-		templ.Handler(pages.Panel(page, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
+		publicid.Handler(r, pages.Panel(page, h.users.CSRFToken(r.Context())), page).ServeHTTP(w, r)
 		return
 	}
 	username, _ := h.users.Username(r.Context())
-	templ.Handler(pages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
+	publicid.Handler(r, pages.Index(username, h.users.CSRFToken(r.Context()), page), page).ServeHTTP(w, r)
 }
 
 // events streams invalidation signals for one owned repository. Browsers react
@@ -285,7 +288,7 @@ func (h *Handler) activity(w http.ResponseWriter, r *http.Request) {
 	}
 	var repoID int64
 	if v := r.URL.Query().Get("repo_id"); v != "" {
-		repoID, err = strconv.ParseInt(v, 10, 64)
+		repoID, err = publicid.Value(r, "repository", v, 0)
 		if err != nil || repoID <= 0 {
 			http.Error(w, "Invalid repository.", http.StatusBadRequest)
 			return
@@ -305,19 +308,19 @@ func (h *Handler) activity(w http.ResponseWriter, r *http.Request) {
 	}
 	page := pages.Activity{Number: data.Page, Pages: data.Pages, Total: data.Total, RepoID: repoID, Previews: previews, Failures: failures,
 		AttentionDays: int(FailureAttentionWindow / (24 * time.Hour))}
-	page.DismissedRepo, page.DismissedNumber = dismissedNotice(r.URL.Query().Get("dismissed"))
+	page.DismissedRepo, page.DismissedNumber = publicid.Dismissed(r, r.URL.Query().Get("dismissed"), dismissedNotice)
 	for _, row := range data.Rows {
 		page.Rows = append(page.Rows, h.activityRow(row, previews, since))
 	}
 	if page.Number != f.Page {
-		http.Redirect(w, r, page.PageURL(page.Number), http.StatusSeeOther)
+		publicid.Redirect(w, r, page.PageURL(page.Number), http.StatusSeeOther)
 		return
 	}
 	username, _ := h.users.Username(r.Context())
 	if previews {
-		templ.Handler(previewpages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
+		publicid.Handler(r, previewpages.Index(username, h.users.CSRFToken(r.Context()), page), page).ServeHTTP(w, r)
 	} else {
-		templ.Handler(buildpages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
+		publicid.Handler(r, buildpages.Index(username, h.users.CSRFToken(r.Context()), page), page).ServeHTTP(w, r)
 	}
 }
 
@@ -328,7 +331,7 @@ func movedToPreviews(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
-	http.Redirect(w, r, target, http.StatusMovedPermanently)
+	publicid.Redirect(w, r, target, http.StatusMovedPermanently)
 }
 
 // dismissedNotice reads the Builds page's "dismissed=<repo>-<number>", which
@@ -395,10 +398,13 @@ func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool, since tim
 	if row.WaitingReason != "" && (row.BuildState == "pending" || row.BuildState == "queued" || row.BuildState == "running") {
 		out.Waiting = environments.WaitingTitle(row.WaitingReason)
 	}
+	if row.ExecutionErrorCode == "worker_retrying" && (row.BuildState == "running" || row.BuildState == "queued") {
+		out.Waiting = "Retrying after a worker error"
+	}
 	switch {
 	case !deployments && row.BuildState == "failed":
-		code := ""
-		if row.FailureCurrent {
+		code := row.ExecutionErrorCode
+		if code == "" && row.FailureCurrent {
 			code = row.FailureCode
 		}
 		out.Failure, out.FailureCode = environments.FailureMessage(code), code

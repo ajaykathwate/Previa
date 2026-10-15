@@ -7,7 +7,7 @@ import "strconv"
 templ RepositoryTabs(repoID int64, active string) {
 	<nav class="repo-tabs" aria-label="Repository sections">
 		<a
-			href={ templ.SafeURL("/repositories/" + strconv.FormatInt(repoID, 10)) }
+			href={ PublicURL(ctx, "/repositories/"+strconv.FormatInt(repoID, 10)) }
 			if active == "pull-requests" {
 				aria-current="page"
 			}
@@ -16,24 +16,24 @@ templ RepositoryTabs(repoID int64, active string) {
 			<span>Pull requests</span>
 		</a>
 		if CanManage(ctx) {
-		<a
-			href={ templ.SafeURL("/repositories/" + strconv.FormatInt(repoID, 10) + "/secrets") }
-			if active == "secrets" {
-				aria-current="page"
-			}
-		>
-			@KeyIcon()
-			<span>Secrets</span>
-		</a>
-		<a
-			href={ templ.SafeURL("/repositories/" + strconv.FormatInt(repoID, 10) + "/outbound") }
-			if active == "outbound" {
-				aria-current="page"
-			}
-		>
-			@SendIcon()
-			<span>Outbound</span>
-		</a>
+			<a
+				href={ PublicURL(ctx, "/repositories/"+strconv.FormatInt(repoID, 10)+"/secrets") }
+				if active == "secrets" {
+					aria-current="page"
+				}
+			>
+				@KeyIcon()
+				<span>Secrets</span>
+			</a>
+			<a
+				href={ PublicURL(ctx, "/repositories/"+strconv.FormatInt(repoID, 10)+"/outbound") }
+				if active == "outbound" {
+					aria-current="page"
+				}
+			>
+				@SendIcon()
+				<span>Outbound</span>
+			</a>
 		}
 	</nav>
 }

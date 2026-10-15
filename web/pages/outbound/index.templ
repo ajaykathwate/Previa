@@ -69,7 +69,7 @@ templ Index(username, csrf string, p Page) {
 													@components.Time(d.CreatedISO(), d.CreatedLabel())
 												</td>
 												<td class="secret-actions">
-													<button type="button" class="text-link danger-link" commandfor={ "remove-destination-" + strconv.FormatInt(d.ID, 10) } command="show-modal" data-open-dialog={ "remove-destination-" + strconv.FormatInt(d.ID, 10) } aria-haspopup="dialog" aria-label={ "Remove " + d.Address() }>Remove</button>
+													<button type="button" class="text-link danger-link" commandfor={ "remove-destination-" + components.ResourceToken(ctx, "destination", d.ID) } command="show-modal" data-open-dialog={ "remove-destination-" + components.ResourceToken(ctx, "destination", d.ID) } aria-haspopup="dialog" aria-label={ "Remove " + d.Address() }>Remove</button>
 												</td>
 											</tr>
 										}
@@ -94,7 +94,7 @@ templ Index(username, csrf string, p Page) {
 								{ p.Error }
 							</p>
 						}
-						<form method="post" action={ templ.SafeURL("/repositories/" + strconv.FormatInt(p.RepoID, 10) + "/outbound") } class="outbound-form" autocomplete="off" data-outbound-form>
+						<form method="post" action={ components.PublicURL(ctx, "/repositories/"+strconv.FormatInt(p.RepoID, 10)+"/outbound") } class="outbound-form" autocomplete="off" data-outbound-form>
 							<input type="hidden" name="csrf_token" value={ csrf }/>
 							<fieldset class="outbound-fields" disabled?={ !p.CanAdd() }>
 								<legend class="sr-only">Destination to approve</legend>
@@ -170,10 +170,10 @@ templ Index(username, csrf string, p Page) {
 				</aside>
 			</div>
 			for _, d := range p.Destinations {
-				@components.ConfirmationDialog("remove-destination-"+strconv.FormatInt(d.ID, 10), "Remove "+d.Address()+"?", "Running previews lose this connection within a minute, and previews started later never get it.") {
-					<form method="post" action={ templ.SafeURL("/repositories/" + strconv.FormatInt(p.RepoID, 10) + "/outbound/" + strconv.FormatInt(d.ID, 10) + "/remove") } class="dialog-actions">
+				@components.ConfirmationDialog("remove-destination-"+components.ResourceToken(ctx, "destination", d.ID), "Remove "+d.Address()+"?", "Running previews lose this connection within a minute, and previews started later never get it.") {
+					<form method="post" action={ components.PublicURL(ctx, "/repositories/"+strconv.FormatInt(p.RepoID, 10)+"/outbound/"+strconv.FormatInt(d.ID, 10)+"/remove") } class="dialog-actions">
 						<input type="hidden" name="csrf_token" value={ csrf }/>
-						@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "remove-destination-" + strconv.FormatInt(d.ID, 10), "command": "close", "data-close-dialog": true}}) {
+						@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "remove-destination-" + components.ResourceToken(ctx, "destination", d.ID), "command": "close", "data-close-dialog": true}}) {
 							Cancel
 						}
 						@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantDestructive}) {

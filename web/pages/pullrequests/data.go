@@ -28,8 +28,12 @@ type PR struct {
 	// from GitHub (State is then "unknown").
 	MergeUnknown bool
 	// NoWorker: no running worker syncs pull requests or checks mergeability.
-	NoWorker bool
+	PublicationRetrying bool
+	ExecutionRetrying   bool
+	BuildWorkerMissing  bool
+	NoWorker            bool
 	// Detail only: display data the handler derives from persisted state.
+	Description   string
 	Headline      Headline
 	Waiting       string // why the current request waits ("Waiting for capacity"), if it does
 	WaitingNote   string
@@ -598,3 +602,24 @@ func RequestCount(n int64) string {
 
 // Running reports whether the PR's preview runs now, so it has live output.
 func (pr PR) Running() bool { return pr.DeployedSHA != "" && pr.Environment == "running" }
+
+func (p Page) PublicReferences() []components.ResourceRef {
+	refs := components.ResourceRefs("repository", p.RepoID)
+	for _, pr := range p.Rows {
+		refs = append(refs, components.PRRefs(p.RepoID, pr.Number)...)
+	}
+	if p.SelectedPR != nil {
+		refs = append(refs, components.PRRefs(p.RepoID, p.SelectedPR.Number)...)
+	}
+	return refs
+}
+func (a Activity) PublicReferences() []components.ResourceRef {
+	refs := components.ResourceRefs("repository", a.RepoID)
+	for _, r := range a.Rows {
+		refs = append(refs, components.PRRefs(r.RepoID, r.Number)...)
+	}
+	if a.DismissedRepo > 0 {
+		refs = append(refs, components.PRRefs(a.DismissedRepo, a.DismissedNumber)...)
+	}
+	return refs
+}

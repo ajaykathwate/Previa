@@ -395,7 +395,7 @@ templ openSourceTests() {
 		<ul class="lab-teaser-grid" aria-label="The core ten" data-scroll-reveal>
 			for _, r := range opensource.Core() {
 				<li>
-					<a href={ templ.URL("/open-source-tests#repo-" + r.ID) }>
+					<a href={ components.PublicURL(ctx, templ.URL("/open-source-tests#repo-"+r.ID)) }>
 						<span class="lab-teaser-kind">{ r.Kind } · { r.Level }</span>
 						<strong>{ r.Label() }</strong>
 						<span class="lab-teaser-stack">{ r.StackLine() }</span>

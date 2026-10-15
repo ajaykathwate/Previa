@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -73,7 +74,7 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if scope.WorkspaceID(r.Context()) <= 0 {
-		http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
+		publicid.Redirect(w, r, "/workspaces", http.StatusSeeOther)
 		return
 	}
 	state := newState()
@@ -83,7 +84,7 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 	h.sessions.Put(r.Context(), "installation_expires", time.Now().Add(10*time.Minute).Unix())
 	h.sessions.Remove(r.Context(), "pending_installation")
 	h.sessions.Remove(r.Context(), "installation_authorize_state")
-	http.Redirect(w, r, "https://github.com/apps/"+h.slug+"/installations/new?state="+state, http.StatusSeeOther)
+	publicid.Redirect(w, r, "https://github.com/apps/"+h.slug+"/installations/new?state="+state, http.StatusSeeOther)
 }
 func (h *Handler) validSession(r *http.Request, stateKey string) bool {
 	userID, _, ok := h.users.UserIDs(r.Context())
@@ -109,7 +110,7 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 	h.sessions.Put(r.Context(), "pending_installation", id)
 	state := newState()
 	h.sessions.Put(r.Context(), "installation_authorize_state", state)
-	http.Redirect(w, r, h.service.authorization.AuthCodeURL(state), http.StatusSeeOther)
+	publicid.Redirect(w, r, h.service.authorization.AuthCodeURL(state), http.StatusSeeOther)
 }
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) {
 	if !h.validSession(r, "installation_authorize_state") {
@@ -144,7 +145,7 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	h.logger.InfoContext(r.Context(), "installation linked; authenticated repository verification completed", "installation_id", id)
 	h.sessions.Put(r.Context(), "installation_notice", "linked")
-	http.Redirect(w, r, "/repositories", http.StatusSeeOther)
+	publicid.Redirect(w, r, "/repositories", http.StatusSeeOther)
 }
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, status int, message string) {
 	templ.Handler(authpages.Error(message), templ.WithStatus(status)).ServeHTTP(w, r)

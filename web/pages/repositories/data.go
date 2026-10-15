@@ -1,6 +1,7 @@
 package repositories
 
 import (
+	"github.com/ajaykathwatee/previa/web/components"
 	"net/url"
 	"strconv"
 	"strings"
@@ -115,4 +116,12 @@ func plural(n int64, one, many string) string {
 		return one
 	}
 	return many
+}
+
+func (p Page) PublicReferences() []components.ResourceRef {
+	var refs []components.ResourceRef
+	for _, r := range p.Rows {
+		refs = append(refs, components.ResourceRef{Kind: "repository", ID: r.ID})
+	}
+	return refs
 }

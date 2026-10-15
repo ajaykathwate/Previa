@@ -25,7 +25,7 @@ templ story(loggedIn bool) {
 					<ol>
 						for i, t := range storyTurns() {
 							<li>
-								<a class="story-stage" href={ templ.SafeURL("#story-" + t.ID) } data-story-stage={ strconv.Itoa(i) }>
+								<a class="story-stage" href={ components.PublicURL(ctx, "#story-"+t.ID) } data-story-stage={ strconv.Itoa(i) }>
 									<span class="story-stage-icon">
 										@t.Icon
 									</span>

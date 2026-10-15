@@ -1,5 +1,7 @@
 package dashboard
 
+import "github.com/ajaykathwatee/previa/web/components"
+
 import prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
 
 // HighlightRows is how many recent builds and live previews the Overview lists.
@@ -82,4 +84,14 @@ func (s Summary) FailuresURL() string {
 		return "/builds?failures=older"
 	}
 	return "/builds"
+}
+
+func (s Summary) PublicReferences() []components.ResourceRef {
+	var refs []components.ResourceRef
+	for _, rows := range [][]prpages.ActivityRow{s.Builds, s.Previews} {
+		for _, r := range rows {
+			refs = append(refs, components.PRRefs(r.RepoID, r.Number)...)
+		}
+	}
+	return refs
 }

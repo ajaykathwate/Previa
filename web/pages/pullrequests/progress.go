@@ -35,6 +35,15 @@ var stageText = map[string][2]string{
 // Progress places the current build request along the stages; ok is false
 // when no tracker applies (nothing requested, or the preview is simply live).
 func (pr PR) Progress() (Progress, bool) {
+	if pr.Build == "failed" && pr.FailureCode == "worker_failed" {
+		return Progress{Failed: true}, false
+	}
+	if (pr.Build == "running" || pr.Build == "queued") && (pr.ExecutionRetrying || pr.BuildWorkerMissing) {
+		return Progress{}, false
+	}
+	if pr.PublicationRetrying {
+		return Progress{}, false
+	}
 	switch {
 	case pr.Build == "pending" || pr.Build == "queued":
 		return track("queue", "current", false), true

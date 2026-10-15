@@ -26,16 +26,17 @@ const (
 
 // Snapshot is the persisted truth a report is rendered from.
 type Snapshot struct {
-	PullRequestID int64
-	RepoID        int64 // Previa repository ID (dashboard URLs)
-	Number        int32
-	HeadSHA       string
-	State         string // open, closed, merged
-	Generation    int64
-	BuildStatus   string // open, checking, conflicts
-	NeedsRefresh  bool
-	Fork          bool
-	SecretCount   int64
+	PullRequestID            int64
+	RepoPublicID, PRPublicID string
+	RepoID                   int64 // Previa repository ID (dashboard URLs)
+	Number                   int32
+	HeadSHA                  string
+	State                    string // open, closed, merged
+	Generation               int64
+	BuildStatus              string // open, checking, conflicts
+	NeedsRefresh             bool
+	Fork                     bool
+	SecretCount              int64
 	// A local teardown requested at the current generation, and why.
 	TeardownRequested bool
 	TeardownReason    string
@@ -47,12 +48,13 @@ type Snapshot struct {
 
 // Intent is the PR's single build request.
 type Intent struct {
-	Generation  int64
-	Revision    int64
-	HeadSHA     string
-	State       string // pending, queued, running, succeeded, failed, cancelled, superseded
-	AvailableAt time.Time
-	Waiting     string // an environments.Wait* reason while this request waits; empty otherwise
+	ExecutionError string
+	Generation     int64
+	Revision       int64
+	HeadSHA        string
+	State          string // pending, queued, running, succeeded, failed, cancelled, superseded
+	AvailableAt    time.Time
+	Waiting        string // an environments.Wait* reason while this request waits; empty otherwise
 }
 
 // Environment is the PR's lifetime environment.
@@ -120,7 +122,11 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 		v.describePreview(env, settings)
 	}
 	if env != nil && settings.AppBaseURL != "" {
-		v.LogsURL = fmt.Sprintf("%s/repositories/%d/pull-requests/%d/logs", settings.AppBaseURL, s.RepoID, s.Number)
+		if s.RepoPublicID != "" && s.PRPublicID != "" {
+			v.LogsURL = fmt.Sprintf("%s/repositories/%s/pull-requests/%s/logs", settings.AppBaseURL, s.RepoPublicID, s.PRPublicID)
+		} else {
+			v.LogsURL = fmt.Sprintf("%s/repositories/%d/pull-requests/%d/logs", settings.AppBaseURL, s.RepoID, s.Number)
+		}
 	}
 	current := s.Intent
 	if current != nil && (current.Generation != s.Generation || current.HeadSHA != s.HeadSHA) {
@@ -158,8 +164,8 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 		}
 	case string(environments.IntentFailed):
 		v.Phase = PhaseFailed
-		code := ""
-		if env != nil && env.AppliedGeneration == current.Generation && env.AppliedRevision == current.Revision {
+		code := current.ExecutionError
+		if code == "" && env != nil && env.AppliedGeneration == current.Generation && env.AppliedRevision == current.Revision {
 			code = env.LastErrorCode
 		}
 		v.Failure = environments.FailureMessage(code)

@@ -10,10 +10,12 @@ WHERE r.github_repo_id=$1 AND i.github_installation_id=$2;
 -- name: LockPR :one
 SELECT * FROM pull_requests WHERE repo_id=$1 AND number=$2 FOR UPDATE;
 -- name: SaveObservation :one
-INSERT INTO pull_requests (repo_id,number,head_sha,state,generation,title,author,head_branch,html_url,head_repo_id,is_fork,source_updated_at,mergeable,mergeable_state,build_status)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+INSERT INTO pull_requests (repo_id,number,head_sha,state,generation,title,author,head_branch,html_url,head_repo_id,is_fork,source_updated_at,mergeable,mergeable_state,build_status,description,description_updated_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$12)
 ON CONFLICT (repo_id,number) DO UPDATE SET head_sha=EXCLUDED.head_sha,state=EXCLUDED.state,
- generation=EXCLUDED.generation,title=EXCLUDED.title,author=EXCLUDED.author,
+ generation=EXCLUDED.generation,title=CASE WHEN EXCLUDED.source_updated_at >= coalesce(pull_requests.description_updated_at,'-infinity'::timestamptz) THEN EXCLUDED.title ELSE pull_requests.title END,
+ description=CASE WHEN EXCLUDED.source_updated_at >= coalesce(pull_requests.description_updated_at,'-infinity'::timestamptz) THEN EXCLUDED.description ELSE pull_requests.description END,
+ description_updated_at=greatest(EXCLUDED.source_updated_at,pull_requests.description_updated_at),author=EXCLUDED.author,
  head_branch=EXCLUDED.head_branch,html_url=EXCLUDED.html_url,head_repo_id=EXCLUDED.head_repo_id,
  is_fork=EXCLUDED.is_fork,source_updated_at=EXCLUDED.source_updated_at,needs_refresh=false,mergeable=EXCLUDED.mergeable,mergeable_state=EXCLUDED.mergeable_state,build_status=EXCLUDED.build_status,
  mergeability_unresolved_at=NULL
@@ -75,10 +77,11 @@ ORDER BY p.number DESC LIMIT 10 OFFSET sqlc.arg(row_offset)::integer;
 -- The PR's three lifecycle columns (observed, requested, deployed) and what
 -- the owner may do next. A torn-down environment is shown as removed.
 SELECT p.*,(r.accessible AND i.status='active') AS available,coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
- b.available_at,b.revision AS request_revision,
+ coalesce((SELECT op.last_error_code FROM environment_operations op WHERE op.pull_request_id=p.id AND op.generation=b.generation AND op.revision=b.revision AND op.kind='activate_route' AND op.state='retryable' ORDER BY op.id DESC LIMIT 1),'')::text AS publication_error_code,
+ b.available_at,b.revision AS request_revision, coalesce(b.execution_error_code,'')::text AS execution_error_code,
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
  coalesce(b.source,'')::text AS request_source,
- b.requested_at, b.started_at, b.completed_at, coalesce(u.username,'')::text AS requested_by_login,
+ b.requested_at, b.started_at, b.completed_at, coalesce(nullif(trim(u.first_name||' '||u.last_name),''),u.username,'')::text AS requested_by_login,
  coalesce(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END,'')::text AS waiting_reason,
  coalesce(e.id,0)::bigint AS environment_id,
  coalesce(e.status,'Not deployed') AS environment_status,
@@ -114,7 +117,7 @@ AND (sqlc.arg(failures)::text = '' OR (b.state = 'failed' AND (
 -- attention (recent), older ones, or the ones this owner dismissed; the
 -- same conditions as DeliverySummary.
 SELECT p.repo_id,p.number,p.head_sha,p.title,r.full_name,r.accessible,i.status AS installation_status,
- coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,b.available_at,
+ coalesce(b.state,'Not requested') AS build_state,coalesce(b.execution_error_code,'')::text AS execution_error_code,coalesce(b.head_sha,'') AS requested_sha,b.available_at,
  b.started_at, b.completed_at, coalesce(b.source,'')::text AS request_source,
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
  coalesce(b.revision, 0)::bigint AS request_revision,
@@ -181,3 +184,7 @@ WHERE (sqlc.arg(workspace_id)::bigint=0 OR i.workspace_id=sqlc.arg(workspace_id)
 
 -- name: CanOperateRepository :one
 SELECT workspace_repository_access($1::bigint,$2::bigint,'operate')::boolean;
+
+-- name: UpdatePRMetadata :exec
+UPDATE pull_requests SET title=$3,description=$4,description_updated_at=$5
+WHERE repo_id=$1 AND number=$2 AND (description_updated_at IS NULL OR description_updated_at<=$5);

@@ -31,11 +31,11 @@ templ Output(username, csrf string, p OutputPage) {
 					</div>
 				</div>
 				<div class="page-hero-actions">
-					<a class="hero-link" href={ templ.SafeURL(p.LogsURL()) }>
+					<a class="hero-link" href={ components.PublicURL(ctx, p.LogsURL()) }>
 						@components.LogsIcon()
 						Build logs
 					</a>
-					<a class="hero-link" href={ templ.SafeURL(p.PRURL()) }>
+					<a class="hero-link" href={ components.PublicURL(ctx, p.PRURL()) }>
 						@components.PullRequestIcon()
 						Pull request
 					</a>
@@ -73,7 +73,7 @@ templ Output(username, csrf string, p OutputPage) {
 				data-log-panel
 				aria-labelledby="output-title"
 				if p.EventsURL != "" {
-					data-log-events={ p.EventsURL }
+					data-log-events={ components.PublicURL(ctx, p.EventsURL) }
 					data-log-cursor={ p.Cursor() }
 				}
 			>
@@ -83,7 +83,7 @@ templ Output(username, csrf string, p OutputPage) {
 						<span class="log-panel-note">Live · secrets are masked · not stored</span>
 					</div>
 					<nav class="log-pager" aria-label="Output tools">
-						<a class="log-tool" href={ templ.SafeURL(p.OutputURL()) }>
+						<a class="log-tool" href={ components.PublicURL(ctx, p.OutputURL()) }>
 							@components.RestartIcon()
 							Refresh
 						</a>
