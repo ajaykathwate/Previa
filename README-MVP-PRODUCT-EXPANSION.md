@@ -1,13 +1,13 @@
 # Previa: complete team SaaS MVP specification
 
-**Status:** Feature 1's shared workspace core is implemented. Its review and account-lifecycle dependencies remain pending in Features 3 and 6; Features 2–6 remain implementation specifications.
-**Prepared:** 14 October 2026.  
+**Status:** Feature 1's shared workspace core is implemented. Its review and account-lifecycle dependencies remain pending in Features 3 and 6; Features 2–6 and 5B remain implementation specifications.
+**Prepared:** 14 October 2026. **Updated:** 15 October 2026 (Feature 5B, persistent test data, added after Feature 5).  
 **Audience:** small development teams using hosted Previa.  
-**Scope:** the first six product improvements agreed with the owner; onboarding is deliberately minimal. Separate notification integrations are deferred.
+**Scope:** the first six product improvements agreed with the owner, plus Feature 5B, which extends Feature 5; onboarding is deliberately minimal. Separate notification integrations are deferred.
 
 This document explains the complete product behavior to implement, the changes to the existing application, and how completion will be demonstrated. Feature 1's workspace creation, membership, access, invitations, handover and shared quota identity now have application code and verification described in [Shared team workspaces](docs/28-shared-workspaces.md). Review/assignment interactions, visible account usage and billing controls, and durable workspace deletion/disconnection referenced in its permission matrix depend on Features 3 and 6 and are not implemented. The remaining features are planned; this document does not claim they already exist.
 
-All six capabilities belong to the existing Previa application. Previa owns team access, review instructions, feedback, review decisions, activity, usage, and account settings. GitHub continues to provide identity, source, PR lifecycle, and a living status comment/check; it receives summaries and links back to Previa. Reviewers must not have to finish the Previa review workflow in GitHub, Slack, or another application.
+All of these capabilities belong to the existing Previa application. Previa owns team access, review instructions, feedback, review decisions, activity, usage, and account settings. GitHub continues to provide identity, source, PR lifecycle, and a living status comment/check; it receives summaries and links back to Previa. Reviewers must not have to finish the Previa review workflow in GitHub, Slack, or another application.
 
 ## Contents
 
@@ -19,8 +19,9 @@ All six capabilities belong to the existing Previa application. Previa owns team
 6. [Feature 3: native preview review and feedback](#6-feature-3-native-preview-review-and-feedback)
 7. [Feature 4: review status and activity timeline](#7-feature-4-review-status-and-activity-timeline)
 8. [Feature 5: ready-to-test sample data](#8-feature-5-ready-to-test-sample-data)
+   - 8B. [Feature 5B: persistent test data](#8b-feature-5b-persistent-test-data)
 9. [Feature 6: usage and account management](#9-feature-6-usage-and-account-management)
-10. [GitHub reporting across all six features](#10-github-reporting-across-all-six-features)
+10. [GitHub reporting across all features](#10-github-reporting-across-all-features)
 11. [Migration and implementation sequence](#11-migration-and-implementation-sequence)
 12. [Verification and release acceptance](#12-verification-and-release-acceptance)
 13. [Product configuration and unresolved business inputs](#13-product-configuration-and-unresolved-business-inputs)
@@ -35,6 +36,7 @@ All six capabilities belong to the existing Previa application. Previa owns team
 | 3. Shared review and feedback | Complete native review page, instructions, contextual threads, replies, editing, removal, resolution, and access control | A reviewer can understand, test, and discuss a change inside Previa. |
 | 4. Review status and activity | Complete review requests, assignments, decisions, freshness rules, review queue, and bounded event history | Everyone can see what needs review, what changed, and which version was checked. |
 | 5. Sample data | Complete documented setup/seed workflow, example journeys, test-access guidance, and failure/rebuild behavior | A deployed application is usable for testing. |
+| 5B. Persistent test data | Repository baseline built from the baseline branch, PR data kept across builds, a separate `seed` step, layered starting data with automatic fallback, and Reset choices | Every preview opens with useful data, and testers' work survives new commits without PRs sharing a database. |
 | 6. Usage and accounts | Complete usage/limit enforcement, account lifecycle, support/status information, and a defined paid subscription lifecycle when paid plans are enabled | Customers understand access, limits, charges, retention, and how to leave. |
 
 The target journey is:
@@ -53,7 +55,7 @@ flowchart LR
 
 "Complete" means each included operation has a working UI, server authorization, persistence, concurrency rules, meaningful error handling, cleanup/retention behavior, and verification. A disabled button, hard-coded count, mock billing confirmation, or a route whose backend is missing does not complete a feature.
 
-Complete scope does not mean every possible adjacent feature. General chat, visual annotations, screenshot/video storage, anonymous guest access, SSO/SCIM, Compose support, framework auto-detection, production-data cloning, permanent build-log archives, and separate notification integrations are excluded. These exclusions keep the six features coherent and do not leave holes in their stated workflows.
+Complete scope does not mean every possible adjacent feature. General chat, visual annotations, screenshot/video storage, anonymous guest access, SSO/SCIM, Compose support, framework auto-detection, production-data cloning, permanent build-log archives, and separate notification integrations are excluded. These exclusions keep the features coherent and do not leave holes in their stated workflows. A live database shared by several PRs is also excluded; Feature 5B shares copies of synthetic data instead.
 
 ### 1.1 Changes to the existing source-of-truth boundaries
 
@@ -65,6 +67,7 @@ The owner has authorized this document as the plan for a broader hosted team pro
 | GitHub comments/checks are the review-facing channel in README §2.4 | Previa becomes the canonical application for preview review; GitHub displays summaries and links. | No bidirectional synchronization of all human GitHub discussions. |
 | One current build/environment per PR; no build archive in README §4.5 | Add bounded activity records and immutable references to reviewed deployments. | No historical containers, past-build browsing, or retained copies of every log. |
 | Self-hosted control plane with operator/account limits | Hosted workspaces need visible entitlements, usage, billing state, and account lifecycle. | Existing server/worker architecture and host resource ceilings remain. |
+| Managed-service data never survives a rebuild (README §2.5, [backend previews](docs/11-backend-previews.md)); every build is a PR build | Feature 5B copies a repository baseline or the PR's own serving data into each new candidate, adds a `seed` key, and adds a baseline build of one branch that is not attached to a PR. | Every candidate keeps its own service containers, credentials, network and tmpfs. No shared live database, no production data, no data moving between PRs or from a PR into the baseline; Redis stays fresh. |
 
 These are explicit product-scope changes, not incidental UI polish. Nothing here requires React, Kubernetes, another database, a separate service, or a replacement orchestration pipeline.
 
@@ -125,6 +128,7 @@ Preserve DESIGN §20: feature packages remain flat and own their handler, servic
 | Instructions, contextual feedback, review rounds/decisions | `internal/reviews` | `web/pages/reviews` and PR tabs |
 | Bounded activity recording and authorized feeds | `internal/activity` | `web/pages/activity`, reusable display components |
 | Setup/seed execution | Existing `internal/runtime`, `internal/repoconfig`, `internal/starterkits` | Existing kit pages and review instructions |
+| Test-data settings, repository baselines, refresh jobs and starting-data records | `internal/sampledata` (not `testdata`, which the Go tool ignores); data copy and baseline execution in `internal/runtime` | `web/pages/sampledata` (repository Test data tab) and existing PR/review pages |
 | Usage ledger and entitlement checks | `internal/usage` | `web/pages/usage` |
 | Provider subscription lifecycle | `internal/billing` | `web/pages/billing` |
 | Personal account deletion and lifecycle coordination | `internal/accounts` | `web/pages/accounts` |
@@ -558,6 +562,260 @@ Render supports preview initialization with sample data, and Heroku recommends c
 - Same-repository and fork cases prove credential separation and redaction.
 - Startup/setup output is not visible to Reviewers; no confidential test credentials reach GitHub summaries or activity events.
 
+### 8.9 Relationship to Feature 5B
+
+Feature 5 ships first with the behavior above: every candidate starts from an empty database and runs `setup`. Feature 5B is delivered next and changes only these Feature 5 statements, and only for repositories that turn Test data on:
+
+- §8.4 "no `seed` parser": Feature 5B adds an optional `seed` key. Repositories that do not declare it keep running `setup` as before.
+- §8.5 "a persistent database snapshot is excluded" and "data remains ephemeral": production snapshots stay excluded. A repository baseline is a regenerable dump of the repository's own synthetic seed, and kept PR data never outlives the PR's preview.
+- §8.2 example, §8.3 item 6 and §8.8 "a rebuild resets reviewer edits": with Keep test data on, a new commit or Rebuild keeps them; Reset test data still returns to a defined seeded state.
+
+Repositories with Test data off behave exactly as Feature 5 describes.
+
+## 8B. Feature 5B: persistent test data
+
+### 8B.1 Problem and user benefit
+
+Feature 5 makes a preview usable by seeding every candidate. Three problems remain:
+
+1. **Work is lost on every push.** Managed services belong to a candidate, so each new commit, Rebuild or Reset starts from an empty database. Records a reviewer created while testing disappear and must be recreated after every push.
+2. **The same preparation repeats.** PRs of one repository need almost the same starting data, yet every candidate of every PR runs the full seed again, and each PR branch must keep its seed working against its own schema changes.
+3. **Migrations are only tested on empty tables.** A PR's migration never meets existing rows, so failures that only appear with data (a NOT NULL column without a default, a unique index over duplicate values, a data backfill) surface after merge.
+
+One live database shared by all PRs of a repository is rejected:
+
+| Problem with a shared database | Consequence |
+| --- | --- |
+| Schema divergence | PRs change the schema. One PR's migration renames or drops a column and every other preview breaks; migration-history tables (`goose_db_version`, `schema_migrations`, `_prisma_migrations`) hold versions other branches do not know, and some tools refuse to start. Closing the PR does not undo its migration. |
+| Data contamination | One PR's testing changes data another reviewer relies on; results stop being reproducible. |
+| Isolation and trust | Each PR's services network has no route anywhere ([backend previews](docs/11-backend-previews.md)). A shared database connects PRs, and a fork's untrusted code could read or destroy every preview's data. |
+| Queues | PR A's worker would take jobs enqueued by PR B in a shared Redis and run them with the wrong code. |
+| Blast radius and storage | One bad migration or seed breaks every preview; the database needs persistent disk, backups and growth limits that tmpfs services avoid. |
+
+Feature 5B instead **shares copies of data, never a live database**. Each candidate still has its own service containers; what changes is what is loaded into them before `setup` runs.
+
+| Layer | What it adds | Problem solved |
+| --- | --- | --- |
+| Seed (Feature 5, refined) | A separate `seed` command creates the starting data, only in an empty database | Data is written once, in the repository |
+| Repository baseline | Previa runs the baseline branch's migrations and seed once and saves an encrypted dump; every PR candidate restores its own copy | Previews open with data; preparation is not repeated per PR; PR migrations run against existing rows |
+| Kept PR data | A new candidate of a PR starts from a copy of that PR's serving data | Reviewers' work survives new commits |
+
+The rule that keeps this safe: **data moves only from the baseline branch to a PR, and from a PR to that same PR's next candidate.** It never moves from one PR to another, from a PR into the baseline, from a fork anywhere, or out of Previa.
+
+### 8B.2 Current and proposed user flow
+
+**Current (after Feature 5):** developer declares services and setup → every candidate starts empty → setup migrates and seeds → reviewer tests → developer pushes → the new candidate starts empty again and the reviewer's records are gone.
+
+**Proposed:** Owner/Admin turns on Test data for a repository → Previa builds a baseline from the baseline branch → each PR's first candidate restores the baseline and runs only that PR's new migrations → reviewer tests immediately with seeded accounts → developer pushes → the new candidate copies the PR's serving data and migrates it → the reviewer's records are still there → anyone permitted can Reset to the baseline or to an empty seeded database → merging into the baseline branch refreshes the baseline for later PRs.
+
+#### Example: `acme/shop` (Rails, PostgreSQL 17)
+
+```yaml
+services: { postgres: 17, redis: 7 }
+setup: ["bin/rails", "db:migrate"]   # every candidate: bring the schema up to date
+seed:  ["bin/rails", "db:seed"]      # empty database only: admin@preview.test, 3 products, 2 orders
+```
+
+1. The Owner turns on Test data. The repository's GitHub default branch is `main`. Previa builds `main@a1b2c3` without repository secrets, starts a temporary PostgreSQL, runs `db:migrate` then `db:seed`, and stores a 4 MB encrypted dump. The Test data tab shows *Baseline ready · main@a1b2c3 · PostgreSQL 17 · 4 MB*.
+2. PR #42 *Discount codes* adds one migration. Its first candidate restores the baseline; `db:migrate` applies only the new `discount_codes` migration to tables that already hold rows; `seed` is skipped. Ravi opens the preview, signs in as `admin@preview.test`, creates code `SAVE10` and places an order.
+3. Maya pushes a fix to #42. The new candidate copies the serving candidate's database, runs `db:migrate` (nothing new) and publishes. `SAVE10` and Ravi's order are still present. The PR page says *Started from: previous build (d4e5f6)*.
+4. PR #43 *Checkout redesign* builds at the same time. It restores its own copy of the baseline: the seeded admin and products, but not `SAVE10`.
+5. PR #44 branched from an older `main`, and its migration tool rejects the baseline's newer migration history. Setup fails on the baseline copy, the attempt is discarded, and the candidate retries on an empty database with `setup` and `seed`. The page says *Started from: empty database and seed. The repository baseline did not work with this branch (setup failed).*
+6. #42 is merged into `main`. Previa refreshes the baseline from the new `main` head; later PRs start with the `discount_codes` table.
+7. Ravi clicks **Reset test data** on #42 and confirms *Repository baseline* in the modal. A new candidate starts from the current baseline; his earlier records are gone, and Feature 4 opens a new review round.
+
+### 8B.3 Complete included behavior
+
+1. **Repository settings** on a new **Test data** tab, editable by Owner/Admin through CSRF-protected forms: Test data on/off (default off); Keep test data between builds (default on); Use repository baseline (default on); Baseline branch (default: the repository's GitHub default branch); Refresh baseline automatically (default on). Repository YAML can never set them.
+2. **`seed` key** in `.previewrc.yaml` (§8B.8). It runs only when a candidate's database starts empty, and in baseline builds.
+3. **Repository baseline** built, refreshed, stored and retired as described in §8B.4.
+4. **Kept PR data** copied from the serving candidate as described in §8B.5.
+5. **Starting-data selection with automatic fallback** for every candidate of a repository with Test data on (§8B.6).
+6. **Reset test data** extended with a source choice (§8B.7).
+7. **Visible outcomes:** the PR page shows the starting-data source, any fallback and its reason, and Setup/Seed outcomes. The Review page (Feature 3) shows a one-line reviewer version: *Test data kept from the previous version*, *Test data reset to the repository baseline* or *Fresh seeded data*. The Rebuild modal states that test data is kept and points to Reset for a clean start.
+8. **Test data tab status:** current baseline per service (branch, commit, build time, size), whether the branch has moved since, the last refresh attempt with a safe failure category and a link to its build log (developers only), Refresh baseline, and Delete baseline (confirmed in a modal).
+9. **GitHub comment:** one line naming the starting-data source, for example *Test data: kept from previous build*. Never row contents, sizes or credentials.
+
+When Test data is off, or the worker's service catalog is empty, the tab says so and builds behave exactly as Feature 5 describes.
+
+### 8B.4 Repository baseline
+
+**Which branch.** The baseline is built from **the repository's GitHub default branch**, whatever it is called (`main`, `master`, `develop`). It is read from the repository API at every refresh, so a renamed or changed default branch is followed automatically; it is never a hard-coded `main`. An Owner/Admin may choose another existing branch instead, for example `develop` when PRs target `develop` and the default branch only receives releases. There is one baseline branch per repository; PRs targeting other branches use the same baseline and fall back when it does not fit. The branch's code decides what every PR, forks included, starts with, so it should be a branch only trusted maintainers can push to; the tab says this.
+
+```mermaid
+flowchart LR
+  T1[PR merged into the baseline branch] --> J[Baseline refresh<br/>one per repository, latest head wins]
+  T2[Refresh baseline button] --> J
+  T3[Test data turned on] --> J
+  T4[Daily check: branch head moved] --> J
+  J --> B[Build image of the branch head<br/>no secrets, no outbound]
+  B --> S[Start temporary services<br/>isolated network]
+  S --> M[setup, then seed]
+  M -- ok --> D[Dump PostgreSQL / MySQL inside their containers<br/>compress, encrypt, check size and checksum]
+  D --> C[Mark current, retire previous baseline<br/>remove all temporary resources]
+  M -- fails --> F[Keep previous baseline<br/>show failure on the Test data tab]
+```
+
+**Triggers.**
+
+| Trigger | Source | Notes |
+| --- | --- | --- |
+| Test data turned on | Settings form | Builds the first baseline. |
+| PR merged into the baseline branch | Existing `pull_request` `closed` webhook with `merged` true and the base branch equal to the baseline branch | No new GitHub event subscription or permission. The refresh intent is committed in the same transaction as the PR state update. |
+| Refresh baseline button | Owner/Admin, or a Developer with a repository grant | Confirmed in a modal stating that it uses build minutes. |
+| Daily freshness check | Housekeeping: one branch-head request per enabled repository per day, through existing rate-limit handling | Catches direct pushes and default-branch changes. |
+| Baseline unusable | Missing or corrupt file; the catalog no longer offers its version | A refresh is scheduled; candidates fall back meanwhile. |
+
+With *Refresh baseline automatically* off, only the button and the first build create baselines, and the tab shows when the branch has moved. Turning Test data on is the Owner/Admin's explicit authorization for automatic baseline builds. It does not authorize PR builds; Manual build policy for PRs is unchanged.
+
+**Coalescing and ordering.** At most one refresh per repository runs at a time. Requests arriving meanwhile collapse into one follow-up that resolves the branch head when it starts. Each refresh carries an increasing refresh sequence; a finished refresh becomes current only if its sequence is newer than the current baseline's, so a slow older refresh never replaces a newer baseline. Automatic refreshes of one repository are spaced at least `PREVIEW_BASELINE_MIN_INTERVAL` apart.
+
+**Baseline build steps.**
+
+1. Resolve the branch head SHA with the installation token, outside database transactions. A missing branch fails with `branch_not_found`.
+2. Fetch and validate `.previewrc.yaml` at that commit with the existing parser and the worker's catalog. A baseline needs a `seed` key and at least one PostgreSQL or MySQL service; otherwise the tab explains what to add and no build runs.
+3. Build the image through the existing builder, limits, cache and redacted build log, as a **baseline build** owned by the repository rather than a PR. It is admitted under the same workspace running-build limit, build-minute accounting and host capacity checks as PR builds, and waits the same way.
+4. Start every requested service (Redis too, in case `setup` or `seed` needs it) with generated credentials on a dedicated internal baseline network: no egress proxy, no outbound approvals, no route, no published port. **Repository secrets are never provided**, so the result can be given to fork PRs. `env` entries from the YAML apply as usual.
+5. Run `setup`, then `seed`, each as a one-off container with the app's hardening within `PREVIEW_SETUP_TIMEOUT`. Processes and the app are not started; there is no URL and no readiness check.
+6. Capture each PostgreSQL and MySQL service: `pg_dump --format=custom`, or `mysqldump --single-transaction --routines --triggers`, runs inside the service container with that container's own credentials and streams to the worker, which compresses it, encrypts it with the platform keyring, checks the size limit, records a checksum and writes it to baseline storage. Redis is never captured.
+7. In one transaction, mark the new baseline current for each service and the previous one retired; then delete retired files.
+8. Remove every baseline container, network and setup container through the existing cleanup contract. All carry a baseline label, so inventory, housekeeping and crash recovery find them.
+
+Any failure keeps the previous baseline current and records one safe category: `branch_not_found`, `config_invalid`, `build_failed`, `service_failed`, `setup_failed`, `seed_failed`, `capture_failed`, `capture_too_large`, `quota_blocked` or `capacity_wait`. PR builds are never affected by a failed refresh.
+
+**Storage.** Baseline dumps are encrypted files in a worker-owned directory (`PREVIEW_BASELINE_DIR`), at most `PREVIEW_BASELINE_MAX_SIZE` per service after compression; restores are additionally bounded by the existing service data tmpfs (192 MiB PostgreSQL, 384 MiB MySQL). PostgreSQL holds only metadata. Baselines are derived data: a lost or corrupt file is marked missing and rebuilt from the branch. Keeping them out of the control-plane database keeps its backups small and free of customer rows. Several workers would need shared storage; that is outside this release and stated in the operations documentation.
+
+### 8B.5 Kept PR data
+
+When *Keep test data between builds* is on and the build is not a Reset, a new candidate of a PR starts from a copy of **that PR's currently serving candidate**:
+
+- The serving candidate may be active or asleep. Sleeping previews keep their services running, so no wake-up is needed.
+- The copy is taken just before the new candidate's `setup`. The dump runs inside the serving service container and streams straight into the new candidate's service container, where it is restored. Nothing is written to disk and no network path is opened between the two candidates.
+- `pg_dump` and `mysqldump --single-transaction` read a consistent snapshot without stopping the serving preview. Writes made after the snapshot, while the new candidate prepares, are not copied; the PR page says so.
+- The copy is per service kind. A service is copied only if the new configuration still requests that kind at the same or a newer major version. An added, removed or downgraded service starts from the baseline or empty instead.
+- If nothing serves (the PR never published, or its preview expired or was torn down), there is nothing to keep and the baseline is used.
+- Fork PRs keep their own data like any PR. Kept data never leaves its PR.
+
+Kept data lives only inside candidates' tmpfs, so it ends with the PR's preview: expiry, teardown, close and merge delete it. Previa never stores a copy.
+
+### 8B.6 Starting data for every candidate
+
+```mermaid
+flowchart TD
+  A[PR candidate: new commit, Rebuild, retry or Reset] --> B[Candidate gets its own empty services, as today]
+  B --> K{Keep test data on, not a Reset,<br/>and a serving candidate exists?}
+  K -- yes --> C1[Copy the serving candidate's data] --> M1[setup]
+  K -- no --> Q{Use baseline on and a<br/>compatible baseline is ready?}
+  M1 -- fails --> Q
+  Q -- yes --> C2[Restore the repository baseline] --> M2[setup]
+  Q -- no --> E[Empty database] --> M3[setup, then seed]
+  M2 -- fails --> E
+  M1 -- ok --> P[Processes, app, readiness, publication, as today]
+  M2 -- ok --> P
+  M3 -- ok --> P
+  M3 -- fails --> X[setup_failed or seed_failed<br/>previous preview keeps serving]
+```
+
+1. Sources are tried in order: **kept PR data → repository baseline → empty database**. A Reset starts at the source the user chose.
+2. `setup` runs after every source. `seed` runs **only** when the source is the empty database.
+3. A failing `setup` (non-zero exit or timeout) on copied data does not fail the build. The worker records the reason, recreates the candidate's database service containers from the same specification so their tmpfs starts empty again, and tries the next source. At most two fallbacks occur. The empty-database attempt is authoritative: its failure is the build's `setup_failed` or `seed_failed`, with the existing rules for logs and the serving preview.
+4. A copy problem also moves to the next source, recorded as `copy_failed`, `restore_failed`, `too_large` or `version_incompatible`.
+5. Only setup and copy failures trigger fallback. If the app later fails its readiness check, the build fails normally, because Previa cannot tell an application bug from a data problem; the failure page suggests Reset test data.
+6. Each attempt has its own setup deadline, and usage accounting counts the execution time of every attempt.
+7. The candidate's record stores the source used (kept: the source candidate's commit and publication; baseline: branch, commit and build time; empty), every fallback reason, and the Setup and Seed outcomes. Feature 4's publication record references it, so a review round knows whether data was kept or reset.
+
+Repositories that do not declare `seed` still run `setup` on copied data. If their `setup` seeds in a way that cannot repeat, the copied-data attempt fails and the fallback reaches the empty database: the same result as Feature 5, only slower. The PR page then suggests moving seeding into `seed`.
+
+### 8B.7 Reset test data
+
+Feature 5's Reset action gains a source choice in its confirmation modal:
+
+| Choice | Starts from | Available when |
+| --- | --- | --- |
+| Repository baseline (default) | The current baseline, then `setup` | Test data on and a ready baseline |
+| Empty database and seed | Empty services, then `setup` and `seed` | Always |
+
+Reset still executes the existing Rebuild path of the current authorized commit with the same source verification, permissions, quotas, Manual-policy rules, fences and cleanup. It records a distinct activity event with the chosen source and produces a new publication and review round (Feature 4). The modal explains that everything testers created in this preview will be replaced, and that the serving preview keeps its data until the replacement publishes. A Reset never alters other PRs or the baseline.
+
+### 8B.8 Configuration contract
+
+`.previewrc.yaml` gains one optional key; existing keys are unchanged.
+
+| Key | Type | Rules |
+| --- | --- | --- |
+| `seed` | list of strings (argv) | Same limits as `setup`: program first, at most 64 arguments and 4 KiB, no NUL bytes; replaces the image's entrypoint and command. Requires a PostgreSQL or MySQL service. Runs after `setup`, only on an empty database and in baseline builds, within `PREVIEW_SETUP_TIMEOUT`. Part of the effective configuration hash. |
+
+When `seed` is declared, `setup` must be safe to run again on a database that already has data. Migration commands are; seeding commands usually are not. Starter kits and the Feature 5 reference journeys show the split for Node.js (Prisma), Rails, Django and Go (goose).
+
+Proposed operator settings, accepted by the executable only once Feature 5B is implemented:
+
+| Variable | Process | Proposed default | Meaning |
+| --- | --- | --- | --- |
+| `PREVIEW_BASELINE_DIR` | worker | a directory under the worker's data path | Where encrypted baseline dumps are written |
+| `PREVIEW_BASELINE_MAX_SIZE` | worker | `128MiB` | Compressed size limit per service dump |
+| `PREVIEW_DATA_COPY_TIMEOUT` | worker | `2m` | Limit for one dump-and-restore (kept data or baseline) |
+| `PREVIEW_BASELINE_MIN_INTERVAL` | worker | `10m` | Minimum gap between automatic refreshes of one repository |
+
+### 8B.9 Technical changes
+
+- **`internal/repoconfig`:** the `seed` key, its validation and its place in the configuration hash.
+- **`internal/runtime`:** a *load starting data* step in the candidate sequence between "services pass their protocol check" and `setup`; dump and restore commands executed inside service containers, the same mechanism as today's in-container readiness checks (no control-plane network connection to preview databases, no credential viewer); service-container recreation for fallback; a baseline runner that starts services, runs `setup` and `seed`, captures, and never starts an app; baseline labels in inventory, capacity and cleanup.
+- **`internal/sampledata` (new):** settings with revisions, baseline records, refresh requests and River jobs (unique per repository), the daily freshness job, storage behind a small encrypted-file interface wired from the platform keyring, the Test data tab handlers and routes, and retention/cleanup jobs. It defines consumer interfaces for what it needs: a baseline builder (implemented by builds/runtime), branch-head lookup (GitHub), repository authorization (workspaces) and usage admission (Feature 6).
+- **Builds and scheduling:** a baseline build target owned by a repository instead of a PR. It reuses the builder, build-log streaming and admission but not PR generations; its fence is the refresh sequence. Build logs gain a repository-baseline owner, visible to Owner/Admin and Developers with a repository grant.
+- **Webhooks and pull requests:** when a merged `closed` event targets the baseline branch of an enabled repository, enqueue a refresh in the same transaction.
+- **Environments:** Rebuild and Reset intents carry the requested starting source; Reset's source is validated server-side.
+- **Housekeeping:** orphaned baseline files and containers, retired files, and the daily freshness check.
+- **Reviews and activity (Features 3/4):** publications reference the candidate's starting-data record; activity records Reset and baseline-refresh events.
+- **Reporting:** the source line in the living PR comment.
+
+Proposed records: `repository_sampledata_settings` (repository, enabled, keep data, use baseline, baseline branch or null for the default branch, automatic refresh, revision, actor, time); `repository_baselines` (repository, service kind and major version, branch, commit, configuration hash, refresh sequence, storage key, size, checksum, key ID, status building/current/retired/failed/missing, failure category, times); `baseline_refresh_requests` (repository, trigger, actor, sequence, state, attempt, result); and starting-data fields on the existing candidate component record (source kind, source reference, fallback reasons, setup and seed outcomes).
+
+Presentation follows the signal theme: status in semantic tones, commits and branches in monospace, modals for Refresh, Delete and Reset, working no-JS forms, and SSE invalidation of the Test data tab and the PR panel after committed changes.
+
+### 8B.10 Data and access rules
+
+- Data flows only baseline branch → baseline → PR candidates, and PR candidate → the same PR's next candidate.
+- Every candidate keeps its own service containers, generated credentials, per-PR services network and tmpfs. No database is ever reachable by two PRs.
+- Only PostgreSQL and MySQL are copied. Redis always starts fresh, so queued jobs and caches never cross builds; sessions stored in Redis end at each new build.
+- Baselines come only from the repository's own `seed`. Uploading dumps, capturing a preview's data into the baseline, and copying external databases reached through outbound connections are excluded. Production data stays excluded.
+- Baseline builds receive no repository secrets or outbound approvals, so baselines may be restored into fork PRs.
+- Baseline files are encrypted, never downloadable and never shown as rows. Logs record only sizes, durations and failure categories; dump and restore output is redacted.
+- Owner/Admin change settings and delete baselines. Owner/Admin and Developers with a repository grant refresh baselines and reset test data. Reviewers see the source line only and cannot change sources.
+- Repository disconnection and workspace deletion delete baselines and settings through Feature 6's lifecycle. Turning Test data off deletes the repository's baselines after a confirmation modal.
+
+### 8B.11 Edge cases and recovery
+
+- PR branched before the baseline's newest migration: setup on the baseline may fail; the fallback to empty and seed is shown with its reason.
+- A developer edits a migration that already ran on kept data: the migration tool considers it applied, so the schema can be stale while setup succeeds. Previa cannot detect this; the Rebuild modal and failure page point to Reset.
+- Serving database unhealthy, dump fails, or the copy exceeds `PREVIEW_DATA_COPY_TIMEOUT`: skip to the baseline. The serving preview is only read and stays untouched.
+- Baseline file missing or checksum mismatch: mark it missing, schedule a refresh, and fall back for candidates meanwhile.
+- Baseline branch deleted or renamed: with the default branch, the new default is followed; with a chosen branch, refresh fails with `branch_not_found` until an Owner/Admin picks another.
+- Refresh blocked by quota or capacity: the previous baseline remains current; the refresh resumes when allowed.
+- Worker crash during a baseline build or a copy: labelled resources are removed by housekeeping, the refresh retries, and a candidate interrupted mid-copy is cleaned like any failed candidate.
+- Two refreshes race: the refresh-sequence fence keeps the newest; the older result is discarded and its file deleted.
+- Service version changed in a PR or on the baseline branch: data is restored only into the same kind at the same or a newer major version; otherwise the next source is used.
+- Expired preview reopened: nothing to keep; it starts from the baseline.
+- Settings changed during a build: the candidate uses the settings revision captured at admission; the next build uses the new one.
+- Seeds that generate random values: everyone starts from the same baseline snapshot, which makes PRs comparable.
+
+### 8B.12 Benefits and costs
+
+**Benefits:** previews open ready to test; reviewers' work survives new commits; the seed is maintained on one branch and its failures appear once on the Test data tab instead of in every PR; PR migrations are exercised against existing rows; parallel PRs stay isolated; forks get useful data without secrets.
+
+**Costs:** a new build kind not owned by a PR; baseline builds use build minutes; encrypted dumps need worker storage and, for now, a single worker; copy and restore add seconds to each build; fallbacks can triple setup time in the worst case; edited migrations on kept data are not detected; more states to explain on the PR, Review and Test data pages.
+
+### 8B.13 Completion criteria
+
+- A baseline is built from the GitHub default branch and from a chosen branch, refreshed on merge, button and daily check, coalesced and fenced; a failed refresh keeps the previous baseline and affects no PR.
+- A PR's first candidate restores the baseline, runs only its new migrations, skips `seed`, and a Reviewer can use the seeded accounts immediately.
+- After a new commit and after a Rebuild, records a Reviewer created are still present; a parallel PR never sees them.
+- Reset to the baseline and Reset to empty and seed each produce the expected data and a new review round.
+- An incompatible migration history falls back to empty and seed with the reason shown; a genuinely broken migration still fails the build as `setup_failed`.
+- A fork PR receives the baseline, no secrets, and never another PR's data. Redis starts empty in every candidate.
+- Crash injection during refresh and copy leaves no orphaned containers, networks or files; disconnecting the repository deletes its baselines.
+- Size limits, checksum mismatches and missing files are handled as specified; no row contents, credentials or dump output appear in logs, SSE, activity or GitHub.
+- The Feature 5 reference journeys pass with Test data on (PostgreSQL and MySQL) and with Test data off.
+
 ## 9. Feature 6: usage and account management
 
 ### 9.1 Problem and user benefit
@@ -581,7 +839,7 @@ Use one workspace Usage page, with repository breakdown available to authorized 
 | Limit | What it counts | Behavior at limit |
 | --- | --- | --- |
 | Concurrent builds | Admitted running requests in the workspace | Wait fairly; no invented queue position. |
-| Included build minutes | Actual bounded worker execution for admitted build attempts, including failed/superseded work | Deny/wait new execution until reset or a verified entitlement change; stop admitted work at its reserved deadline if allowance runs out. |
+| Included build minutes | Actual bounded worker execution for admitted build attempts, including failed/superseded work and Feature 5B baseline builds and fallback attempts | Deny/wait new execution until reset or a verified entitlement change; stop admitted work at its reserved deadline if allowance runs out. |
 | Operator daily build ceiling | Additional UTC-day safety ceiling when configured | Block further build execution until the next UTC day; explain that upgrading cannot bypass a platform safety cap. |
 | Active preview slots | PR environments retaining active/sleeping previews or reserved new slots; a same-PR replacement reuses its slot | Preserve existing previews; block a new PR's publication/admission until a slot is available. |
 | Host CPU/memory/disk | Existing platform-wide budgets, counting candidate swaps/resources | Existing capacity wait; workspace entitlement does not override host capacity. |
@@ -621,7 +879,7 @@ Previa's plan controls remain native; there is no required separate customer bil
 | --- | --- | --- |
 | Sign out / end other sessions | Current/all other selected sessions stop working | Revoke session records; membership and workspace resources remain. |
 | Leave workspace | Membership ends; resources remain with the team | Revoke grants/streams/cookies; repair outstanding assignments and unstarted actor requests. |
-| Disconnect repository | Repository becomes unavailable in Previa; current work/preview cleanup is visible | Fence new work, cancel intents, remove routes/containers/services, delete its secrets and local settings according to retention. |
+| Disconnect repository | Repository becomes unavailable in Previa; current work/preview cleanup is visible | Fence new work, cancel intents and baseline refreshes, remove routes/containers/services, delete its secrets, test-data baselines and local settings according to retention. |
 | Disconnect installation | All connected repositories become unavailable | Same durable cleanup for each repository; explain how to uninstall the GitHub App separately if desired. |
 | Delete workspace | Owner confirms affected resources and subscription outcome; page shows Deleting until completed | Disable admission, settle/cancel provider subscription, fence work, remove previews, erase secrets and product data, then tombstone required billing metadata. |
 | Delete personal account | Identity and sessions are removed after ownership constraints are resolved | Remove memberships/grants, revoke sessions, erase personal fields, pseudonymize retained shared attribution; do not delete other members' workspaces. |
@@ -630,7 +888,7 @@ Disconnecting locally does not pretend to uninstall the GitHub App. Signed incom
 
 Owner must transfer or delete every owned workspace before deleting their personal account. Admins cannot bypass this by removing the last Owner. Personal deletion must never cascade through `users` foreign keys and erase a shared team's repositories or billing usage accidentally.
 
-Workspace deletion is an ordered, resumable operation: record intent and deny new writes → cancel new/queued work and fence running candidates → remove published routes and preview resources → revoke grants/sessions scoped to the workspace → delete secrets/configuration/review content → complete provider cancellation/reconciliation → mark complete and show the final confirmation. Cleanup and billing may retry independently; expose the actual outstanding steps to Owner/support and never label partial cleanup complete.
+Workspace deletion is an ordered, resumable operation: record intent and deny new writes → cancel new/queued work and fence running candidates → remove published routes and preview resources → revoke grants/sessions scoped to the workspace → delete secrets/configuration/test-data baselines/review content → complete provider cancellation/reconciliation → mark complete and show the final confirmation. Cleanup and billing may retry independently; expose the actual outstanding steps to Owner/support and never label partial cleanup complete.
 
 Deleting a workspace requests immediate subscription cancellation to prevent renewal, unlike ordinary period-end cancellation. Previa must reconcile the provider result before confirming that future renewals are stopped. Refund/credit treatment and legally retained invoice records follow published provider/business policy; no refund is promised implicitly.
 
@@ -701,7 +959,7 @@ Restore-safe erasure requires a deletion/revocation journal newer than the resto
 - Help, support requests, incident/status information, retention pages, and cancellation/delete controls are real and accessible inside Previa.
 - Paid mode is unavailable with a clear reason unless provider configuration, prices, entitlements, terms, and test/live acceptance are complete. A free beta is labeled free and finite; it never implies that paid billing has already shipped.
 
-## 10. GitHub reporting across all six features
+## 10. GitHub reporting across all features
 
 ### 10.1 Canonical data and visible result
 
@@ -743,7 +1001,7 @@ Keep App permissions minimal. The existing comment-update endpoint accepts a Git
 
 ### 10.4 Explicitly deferred notifications
 
-No Previa email delivery, Slack integration, notification-preferences center, push delivery, invitation emails, or notification inbox is required here. Invitation links are copied manually. Review queue, activity, current page state, and GitHub summaries provide discovery within the agreed six features. Any unavoidable payment-provider transactional communication is provider behavior, not a separate Previa messaging integration.
+No Previa email delivery, Slack integration, notification-preferences center, push delivery, invitation emails, or notification inbox is required here. Invitation links are copied manually. Review queue, activity, current page state, and GitHub summaries provide discovery within the agreed features. Any unavoidable payment-provider transactional communication is provider behavior, not a separate Previa messaging integration.
 
 ## 11. Migration and implementation sequence
 
@@ -758,8 +1016,9 @@ This is an ordered implementation plan, not permission to resume a previous road
 5. Change build/runtime quota identity and labels to workspace IDs. Existing live containers require a controlled reconciliation/update or a bounded transition mapping so host counting and fairness include them. An ignored legacy label cannot create free capacity.
 6. Keep legacy account usage visible only as correctly labeled legacy data; start workspace accounting at the documented cutover. Do not duplicate one historical ledger into every workspace.
 7. Add publication/review/activity state. Existing live previews can receive a backfilled publication reference marked “Present at migration,” with their actual deployed fence; do not invent historical review outcomes or build events.
-8. Add entitlement/account/billing lifecycle records. Existing users start in a documented grandfathered/free-beta policy chosen by the owner; never create provider subscriptions or charges during a schema migration.
-9. Verify upgrade on a populated database with live previews and inactive installations. A rollback after new memberships/reviews exist cannot silently discard them; document forward-fix requirements and backup/restore procedure where a lossless down migration is impossible.
+8. Add Feature 5B test-data settings, baseline and refresh records, and starting-data fields on the candidate component record. No backfill is needed: existing repositories start with Test data off, so existing previews and builds behave as before, and no baseline is built during a schema migration.
+9. Add entitlement/account/billing lifecycle records. Existing users start in a documented grandfathered/free-beta policy chosen by the owner; never create provider subscriptions or charges during a schema migration.
+10. Verify upgrade on a populated database with live previews and inactive installations. A rollback after new memberships/reviews exist cannot silently discard them; document forward-fix requirements and backup/restore procedure where a lossless down migration is impossible.
 
 ### 11.2 Delivery order and dependency boundaries
 
@@ -771,9 +1030,12 @@ This is an ordered implementation plan, not permission to resume a previous road
 | D | Assignments, decisions, review queue and freshness | New/failed/same-SHA builds behave correctly; decisions cannot cross publications. |
 | E | GitHub projection of native review state | Existing comment/check reliability remains; privacy policy and replay tests pass. |
 | F | Minimal onboarding and complete seed/reference journeys | First usable preview flow; true tested examples; reset/failure behavior. |
-| G | Usage reservations and finite plans | Shared limits and exact cutover accounting; recovery/boundary tests. |
-| H | Accounts, disconnect/delete, support/status | Resumable cleanup/erasure; ownership constraints; working customer controls. |
-| I | Paid subscription mode | Real provider test-mode lifecycle, embedded payment UX, reconciliation, cancellation, policies. |
+| G | Feature 5B persistent test data: `seed` key, repository baseline, kept PR data, fallback, Reset choices | Baseline refresh/fence/storage, starting-data selection and fallback, fork and Redis isolation, crash cleanup, and reference journeys with Test data on and off. |
+| H | Usage reservations and finite plans | Shared limits and exact cutover accounting, including baseline builds; recovery/boundary tests. |
+| I | Accounts, disconnect/delete, support/status | Resumable cleanup/erasure, including baselines; ownership constraints; working customer controls. |
+| J | Paid subscription mode | Real provider test-mode lifecycle, embedded payment UX, reconciliation, cancellation, policies. |
+
+Step G follows F because Feature 5B extends Feature 5's seed workflow, setup outcomes, Reset action and test-access guidance, and needs Features 3/4 publications and review rounds to show reviewers whether data was kept or reset. It precedes H and I so usage accounting and deletion cover baseline builds and stored baselines from their first release instead of being retrofitted.
 
 Features can reuse small interfaces from an earlier step, but visible functionality must not end with mock persistence or an unimplemented action. Keep beta/purchase controls unavailable until their corresponding backend and verification exist. A free beta release can omit paid mode only if explicitly labeled and agreed; it does not satisfy a later claim that paid subscription support is complete.
 
@@ -797,7 +1059,7 @@ make test
 make lint
 ```
 
-These cover generation/assets, Go build, existing tests, and the pinned lint workflow (including vet). Run meaningful feature tests against PostgreSQL, plus browser journeys with and without JavaScript. Run affected real runtime/routing/E2E suites for access, publication, seed, usage, and cleanup changes; do not rely only on mock adapters.
+These cover generation/assets, Go build, existing tests, and the pinned lint workflow (including vet). Run meaningful feature tests against PostgreSQL, plus browser journeys with and without JavaScript. Run affected real runtime/routing/E2E suites for access, publication, seed, baseline/kept-data, usage, and cleanup changes; do not rely only on mock adapters.
 
 Direct equivalents where generated sources/assets already exist include `go build ./...`, `go test ./...`, and `go vet ./...`. The repository's pinned golangci-lint invocation is defined by `make lint`; do not substitute an unpinned global version. State opt-in skips/prerequisites accurately. No new test is needed merely to mirror this Markdown text.
 
@@ -811,6 +1073,7 @@ Direct equivalents where generated sources/assets already exist include `go buil
 | Deployment freshness | New commit, delayed Manual build, same-SHA rebuild, failed update, sleep/wake, expiry, and close/merge preserve correct publication/review relationships. |
 | Offboarding/handover | Removal revokes routes/streams/actions; Owner transfers; installer leaves; team retains resources and subscription without privilege leakage. |
 | Useful seed/reset | Example data exists; test login/API journey works; reset recreates it; failure preserves prior data and cleans replacement resources. |
+| Persistent test data | Baseline builds from the default branch; first PR build starts seeded; reviewer records survive a new commit; a parallel PR and a fork never see them; incompatible history falls back with its reason; Reset to baseline and to empty both work; crashes leave nothing behind. |
 | Shared quota | Several members contend for finite allowance/slots; duplicate/retried/crashed work counts correctly and cannot overrun reservations. |
 | Paid account | Test-mode checkout, renewal, pending plan change, cancellation/reversal, payment failure/grace, and recovery change entitlement only after verification. |
 | Exit | Disconnect, workspace deletion, and personal deletion finish after injected crashes/provider outages without renewed work or accidental deletion of another team's resources. |
@@ -829,12 +1092,13 @@ Record only actual events needed to assess the product:
 - Requested rounds that complete for their current publication, with time awaiting review and unresolved findings.
 - Repeat review use across subsequent PRs, rather than time spent in the dashboard.
 - Setup/build failure categories, quota blocks, stale decisions rejected, and failed cleanup/reporting reconciliation.
+- Candidates by starting-data source (kept, baseline, empty) and fallback reason, and baseline refresh outcomes.
 
 An authenticated Open preview action is not proof of a completed review. Router asset/request counts are operational counters, not distinct reviewers, engagement, or test success. Do not introduce session replay or invasive analytics to obtain these measures.
 
 ### 12.4 Definition of release-complete
 
-The six features are complete when their acceptance criteria and the above journeys pass, the operational/user documents reflect shipped behavior, and there are no placeholder actions or undisclosed manual steps in an included flow. Paid mode additionally requires real provider acceptance; test-mode success alone is not a live-payment claim.
+The features in this document are complete when their acceptance criteria and the above journeys pass, the operational/user documents reflect shipped behavior, and there are no placeholder actions or undisclosed manual steps in an included flow. Paid mode additionally requires real provider acceptance; test-mode success alone is not a live-payment claim.
 
 Existing deployment/security release acceptance remains a separate required release discipline. This specification does not claim that product features can replace production-host, backup, routing, or source-isolation verification.
 
@@ -850,6 +1114,7 @@ Most behavior above is specified. The following inputs must be supplied or agree
 | Support operator IDs and staffing/contact | Native request/status workflow; restricted operator access; no invented SLA. | Operating customer support. |
 | Operator-approved privacy/terms and retained financial-record policy | Explicit live-data/backup/provider/GitHub boundaries; real deletion behavior. | Public account and paid release. |
 | Content limits | Bounded feedback text/counts, support text, instructions, and events with tested rejection/pruning. | Abuse resistance and storage behavior. |
+| Test-data storage and defaults | Baseline size limit, refresh spacing, copy timeout and worker storage location (§8B.8); Keep test data on by default once Test data is enabled. | Enabling Feature 5B on a hosted worker. |
 
 Recommended starting technical bounds, to make implementation concrete: invitation expiry seven days; feedback message 8 KiB; instructions 32 KiB; 500 threads and 5,000 messages per PR; 50-item feedback/activity pages; activity 90 days/5,000 events per PR; preflight result expiry 15 minutes; support message 16 KiB and resolved support retention 90 days; usage execution reservations at most 60 seconds. Active unresolved reviews/support must not be silently deleted by age-based pruning. These are proposed defaults, not current configuration values, and must be validated against actual costs and enforced consistently.
 
@@ -867,6 +1132,7 @@ The external references describe market patterns and integration contracts. They
 - Reviewer participation and issue-context workflows: [Netlify Drawer](https://docs.netlify.com/deploy/review-deploys/netlify-drawer-for-feedback/overview/).
 - Shared workspace roles: [Render members and permissions](https://render.com/docs/team-members).
 - Initialization and synthetic test data: [Render preview environments](https://render.com/docs/preview-environments), [Heroku Review Apps](https://devcenter.heroku.com/articles/github-integration-review-apps).
+- Baseline capture and restore: [pg_dump](https://www.postgresql.org/docs/current/app-pgdump.html), [pg_restore](https://www.postgresql.org/docs/current/app-pgrestore.html), [mysqldump](https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html); baseline branch and merge trigger: [Repositories API (`default_branch`)](https://docs.github.com/en/rest/repos/repos), [`pull_request` webhook](https://docs.github.com/en/webhooks/webhook-events-and-payloads#pull_request).
 - Visible usage and limit behavior: [Railway Cost Control](https://docs.railway.com/pricing/cost-control).
 - GitHub projection contract: [Issue/PR comments API](https://docs.github.com/en/rest/issues/comments).
 - Subscription implementation contracts: [Stripe Checkout subscriptions](https://docs.stripe.com/payments/checkout/build-subscriptions), [Webhooks](https://docs.stripe.com/webhooks), [Subscription events](https://docs.stripe.com/billing/subscriptions/webhooks), [Cancellation](https://docs.stripe.com/billing/subscriptions/cancel), [Idempotency](https://docs.stripe.com/api/idempotent_requests).

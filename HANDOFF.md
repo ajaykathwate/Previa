@@ -66,3 +66,7 @@ Last updated: 2026-10-15
 
 ## Next steps
 - User review of the latest UI; push only when asked (to `main`, never `master`).
+- Spec only, not implemented: Feature 5B "persistent test data" (baseline from the
+  repo's GitHub default branch, kept PR data, `seed` key, fallback, Reset choices)
+  is README-MVP-PRODUCT-EXPANSION.md §8B, delivery step G (after F, before usage).
+  The user follows the documented feature order; no shared live database across PRs.
