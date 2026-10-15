@@ -141,7 +141,7 @@ Previa review content is escaped plain text with paragraph formatting and valida
 
 ## 4. Feature 1: shared team workspace
 
-Implementation and current scope: [Shared team workspaces](docs/28-shared-workspaces.md). Native review interactions and durable workspace deletion in this section are boundaries for Features 3 and 6; their UI remains labelled Coming next.
+Implementation and current scope: [Shared team workspaces](docs/28-shared-workspaces.md). Native review interactions and durable workspace deletion in this section are boundaries for Features 3 and 6; their controls are omitted until those features are implemented.
 
 ### 4.1 Problem and user benefit
 

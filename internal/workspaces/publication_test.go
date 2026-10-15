@@ -1,6 +1,8 @@
 package workspaces
 
 import (
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/ajaykathwatee/previa/internal/environments"
@@ -129,21 +131,24 @@ func TestReviewerKeepsPreviousPreviewLinkDuringReplacement(t *testing.T) {
 	if _, err := f.pool.Exec(t.Context(), "INSERT INTO environments(pull_request_id,subdomain,status,container_id,image_tag,head_sha) VALUES($1,'previous-preview','publishing','previous','previous-image','old')", f.pr); err != nil {
 		t.Fatal(err)
 	}
+
+	b := testBrowser{router: fixtureRouter(t, f), cookies: map[string]*http.Cookie{}}
+	b.login(t, "reviewer")
 	for _, status := range []string{"running", "publishing", "failed"} {
 		if _, err := f.pool.Exec(t.Context(), "UPDATE environments SET status=$1 WHERE pull_request_id=$2", status, f.pr); err != nil {
 			t.Fatal(err)
 		}
-		p, err := f.service.Page(t.Context(), f.reviewer, f.wid, "previews", "preview.test", 1)
-		if err != nil || len(p.Previews) != 1 || p.Previews[0].URL != "https://previous-preview.preview.test" {
-			t.Fatalf("previous preview link lost during %s: %+v %v", status, p.Previews, err)
+		r := b.request(http.MethodGet, "/previews", nil)
+		if r.Code != 200 || !strings.Contains(r.Body.String(), `href="https://previous-preview.preview.test"`) {
+			t.Fatalf("previous link lost during %s: %d %s", status, r.Code, r.Body.String())
 		}
 	}
 	if _, err := f.pool.Exec(t.Context(), "UPDATE repos SET accessible=false WHERE id=$1", f.repo); err != nil {
 		t.Fatal(err)
 	}
-	p, err := f.service.Page(t.Context(), f.reviewer, f.wid, "previews", "preview.test", 1)
-	if err != nil || len(p.Previews) != 1 || p.Previews[0].URL != "" {
-		t.Fatalf("unavailable repository exposed a preview link: %+v %v", p.Previews, err)
+	r := b.request(http.MethodGet, "/previews", nil)
+	if r.Code != 200 || strings.Contains(r.Body.String(), `href="https://previous-preview.preview.test"`) {
+		t.Fatalf("inaccessible preview exposed: %d", r.Code)
 	}
 }
 

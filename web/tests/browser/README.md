@@ -95,3 +95,9 @@ session/CSRF/workspace handlers with fixture GitHub responses. Four scenarios in
 `workspaces.test.cjs` cover layouts, access confirmation, workspace creation and
 switching, JavaScript-free invitation consent, and ownership handover. Screenshots
 use the existing `UI_BROWSER_SCREENSHOTS=1` setting and ignored artifacts folder.
+
+The workspace suite also checks direct Members/Settings navigation, username
+search, separate invitations, switcher alignment, profile edits, PNG upload and
+removal, stale forms, narrow layouts, and no-JavaScript saves against PostgreSQL.
+Its fixture timeout is five minutes. `UI_BROWSER_SCREENSHOTS=1` includes settings,
+logo, invitation and switcher screenshots in the ignored artifacts directory.

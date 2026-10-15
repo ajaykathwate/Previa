@@ -56,7 +56,7 @@ func isolatedPoolBefore(t *testing.T, before bool) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	for _, file := range files {
-		if before && strings.HasPrefix(filepath.Base(file), "0030_") {
+		if before && filepath.Base(file) >= "0030_" {
 			continue
 		}
 		b, err := os.ReadFile(file)

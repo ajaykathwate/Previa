@@ -2,6 +2,7 @@ package workspaces
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,6 +25,7 @@ func TestWorkspaceBrowser(t *testing.T) {
 		t.Skip("run make test-workspace-browser with TEST_DATABASE_URL")
 	}
 	f := newFixture(t)
+	seedPreview(t, f)
 	f.invite(t, "admin", "admin", f.admin, 102, nil)
 	f.invite(t, "dev", "developer", f.dev, 103, []int64{f.repo})
 	f.invite(t, "reviewer", "reviewer", f.reviewer, 104, []int64{f.repo})
@@ -46,11 +48,11 @@ func TestWorkspaceBrowser(t *testing.T) {
 	router.Mount("/", fixtureRouter(t, f, origin))
 	server.Start()
 	defer server.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "node", "--test", "workspaces.test.cjs")
 	cmd.Dir = "../../web/tests/browser"
-	cmd.Env = append(os.Environ(), "WORKSPACE_BROWSER_URL="+server.URL, fmt.Sprintf("WORKSPACE_TEST_ID=%d", f.wid), fmt.Sprintf("WORKSPACE_DEV_ID=%d", f.dev))
+	cmd.Env = append(os.Environ(), "WORKSPACE_LOGO_PNG="+base64.StdEncoding.EncodeToString(logoPNG(t, 64, 64)), "WORKSPACE_BROWSER_URL="+server.URL, fmt.Sprintf("WORKSPACE_TEST_ID=%d", f.wid), fmt.Sprintf("WORKSPACE_DEV_ID=%d", f.dev))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("workspace browser checks: %v\n%s", err, output)

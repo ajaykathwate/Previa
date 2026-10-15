@@ -359,13 +359,15 @@ type WorkerCapability struct {
 }
 
 type Workspace struct {
-	ID           int64
-	Name         string
-	OwnerUserID  int64
-	LegacyUserID pgtype.Int8
-	State        string
-	Revision     int64
-	CreatedAt    pgtype.Timestamptz
+	ID              int64
+	Name            string
+	OwnerUserID     int64
+	LegacyUserID    pgtype.Int8
+	State           string
+	Revision        int64
+	CreatedAt       pgtype.Timestamptz
+	Description     string
+	ProfileRevision int64
 }
 
 type WorkspaceBuildUsage struct {
@@ -392,6 +394,12 @@ type WorkspaceInvitation struct {
 type WorkspaceInvitationRepository struct {
 	InvitationID int64
 	RepoID       int64
+}
+
+type WorkspaceLogo struct {
+	WorkspaceID int64
+	Version     int64
+	Data        []byte
 }
 
 type WorkspaceMembership struct {

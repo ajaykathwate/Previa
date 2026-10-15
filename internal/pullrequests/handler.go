@@ -44,17 +44,18 @@ type SourceAccess interface {
 }
 
 type Handler struct {
-	sourceAccess SourceAccess
-	repo         *Repository
-	sync         Refresher
-	policy       Policy
-	users        UserSession
-	logger       *slog.Logger
-	enabled      bool
-	live         LiveEvents
-	actions      *Actions
-	logs         LogTail
-	now          func() time.Time // when failures stop needing attention is measured from
+	sourceAccess  SourceAccess
+	previewDomain string
+	repo          *Repository
+	sync          Refresher
+	policy        Policy
+	users         UserSession
+	logger        *slog.Logger
+	enabled       bool
+	live          LiveEvents
+	actions       *Actions
+	logs          LogTail
+	now           func() time.Time // when failures stop needing attention is measured from
 }
 
 func NewHandler(repo *Repository, sync Refresher, policy Policy, users UserSession, logger *slog.Logger, enabled bool) *Handler {
@@ -414,6 +415,7 @@ func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool, since tim
 }
 
 func (h *Handler) WithSourceAccess(access SourceAccess) *Handler { h.sourceAccess = access; return h }
+func (h *Handler) WithPreviewDomain(domain string) *Handler      { h.previewDomain = domain; return h }
 func (h *Handler) canReadLogTail(ctx context.Context, repo int64) bool {
 	if h.sourceAccess == nil {
 		return true

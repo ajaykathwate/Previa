@@ -46,7 +46,7 @@ import (
 const (
 	webhookPath        = "/webhooks/github"
 	webhookConcurrency = 32
-	maxFormBytes       = 256 << 10 // the largest form is a 32 KiB secret value
+	maxFormBytes       = 256 << 10 // includes bounded 192 KiB workspace-logo uploads
 )
 
 // signInPaths are reachable without a session or start one; each client may
@@ -171,7 +171,7 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	logStore := buildlogs.NewStore(pool).WithRetention(cfg.BuildLogRetention())
 	prRepository := pullrequests.NewRepository(pool)
 	f.prs = pullrequests.NewHandler(prRepository, syncService, policy, f.auth, logger, cfg.GitHubAppID > 0).
-		WithLiveUpdates(hub).WithLogTail(logStore)
+		WithLiveUpdates(hub).WithLogTail(logStore).WithPreviewDomain(cfg.PreviewBaseDomain)
 	if appClient != nil {
 		// Builds need fresh GitHub reads; without the App the controls say so.
 		f.prs.WithActions(pullrequests.Actions{
@@ -202,7 +202,7 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	}
 	workspaceService := workspaces.NewService(workspaces.NewRepository(pool), workspaceAccess, workspaceAccess, coordinator)
 	f.prs.WithSourceAccess(workspaceService)
-	f.workspaces = workspaces.NewHandler(workspaceService, f.auth, logger, cfg.AppBaseURL, cfg.PreviewBaseDomain)
+	f.workspaces = workspaces.NewHandler(workspaceService, f.auth, logger, cfg.AppBaseURL)
 	f.workspaceScope = workspaces.NewMiddleware(workspaceService, f.auth, logger)
 	return f, nil
 }

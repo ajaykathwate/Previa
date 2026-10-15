@@ -22,7 +22,7 @@ capture. Reconnecting or replacing an inactive installation preserves repository
 IDs only within the same workspace. A connection already claimed by another team
 cannot be reassigned through this flow.
 
-Open **Team & settings → Members** to invite a GitHub username, select a role and
+Open **Members** directly in the sidebar to invite a GitHub username, select a role and
 choose repositories. Previa resolves the immutable GitHub account ID and displays
 an invitation link once. Copy and share it manually. Links expire in seven days;
 regeneration invalidates the old link. Only a digest is stored, and request logs
@@ -30,6 +30,45 @@ redact invitation paths. The signed-in recipient sees the role and exact reposit
 scope before accepting or declining. Repeated acceptance is idempotent, and cannot
 restore removed membership or replace a newer role. Invites issued by someone who
 loses invitation authority are revoked.
+
+## Navigation and workspace identity
+
+One workspace represents one team. It can contain many members and repositories;
+there are no nested teams or channels. A person can join several workspaces and
+switch with the sidebar selector. Its aligned chevron, role capsule, full-name
+tooltip and current-workspace indicator make the selected scope visible. The menu
+also links directly to members, settings and the workspace picker.
+
+**Members** handles people and access. Its Members and Invitations views keep
+pending invitations separate from joined people. Search matches GitHub usernames
+literally, ignoring case, and works across the full paginated list. Members have
+role capsules and repository summaries. Manage access opens one dialog containing
+the role and grants. Admin roles explain their all-repository access; Developer
+and Reviewer roles show explicit checkboxes. Owners can appoint Admins. Removing
+or leaving requires a confirmation modal over the current page. Only managers see
+invitations and invitation actions.
+
+**Workspace settings** handles identity and ownership. Owners/Admins can edit the
+name (1–80 characters), optional description (up to 240 characters), and logo. A
+summary shows the actual owner, role, member/repository counts, creation date and
+copyable workspace ID. Upload PNG/JPEG up to 192 KiB and 512 × 512 pixels; square
+images work best. Preview a selected image, upload it, or remove it to restore the
+initial. No public image URL or image service is involved. Settings is hidden and
+inaccessible to Developers/Reviewers. A nominated Admin gets a handover link on
+Members; the nomination and acceptance controls live under Settings → Ownership.
+
+The primary CTA on Members is Invite teammate; Settings has a Manage members link.
+The command palette exposes both pages. **Previews** is the sole preview listing;
+Reviewers get a read-only version there without source/log/build controls. Older
+`/workspaces/{id}/previews` bookmarks select an authorized workspace and redirect
+to `/previews`. No duplicate Previews tab is rendered inside settings.
+
+Forms work without JavaScript; JavaScript adds role explanations, unchanged-save
+detection, image preview and menu positioning. Invalid profile inputs retain page
+context and typed values; a stale profile submission shows current details with a
+409 response so the user can review before trying again. Profile and logo edits
+do not sign people out of previews or invalidate in-flight manual requests.
+Light/dark palettes and narrow layouts use the existing signal tokens.
 
 ## Roles
 
@@ -105,7 +144,12 @@ it cannot retract output already delivered to a browser.
 `web/pages/workspaces` and `web/styles/teams.css` reuse the signal palette and the
 existing shell. The selector and member/settings layout follow familiar team
 workspace patterns; no chat/channel system or new UI library is introduced.
-Members, pending invitations and permitted previews use database pagination.
+Members, pending invitations and previews use database pagination.
+Migration **0031** adds workspace descriptions, profile revisions and separate
+logo storage. Name/description/logo writes lock the workspace and recheck current
+Owner/Admin membership. Their revision is separate from authorization revisions.
+Logos are decoded with bounded dimensions, re-encoded as PNG to strip metadata,
+and read only after an active membership check; responses use private/no-store.
 
 Migration **0030** adds workspaces, memberships, preferences, invitation/grant and
 handover records, and the stable workspace usage ledger. It backfills existing
@@ -135,7 +179,7 @@ handover does not reset limits. Old and workspace ledgers use existing retention
 Follow [development setup](02-development-setup.md#shared-workspace-cutover).
 Stop old server/worker processes before applying 0030; run only workspace-aware
 binaries afterward. This access-model cutover is not compatible with leaving an
-old owner-based server serving requests. New binaries require Goose 30. Existing
+old owner-based server serving requests. New binaries require Goose 31. Existing
 preview containers do not need recreation for label migration.
 
 A solo upgrade can roll back before team data exists, preserving newly recorded
@@ -149,15 +193,16 @@ container identity, publication/offboarding races, private token/cookie revocati
 and stream closure. The
 workspace browser suite uses real PostgreSQL and session/CSRF handlers with
 fixture GitHub responses; it exercises creation/switching, access confirmations,
-light/dark/mobile layouts, invitation consent without JavaScript and handover.
+light/dark/mobile layouts, direct navigation, literal search, invitation consent
+without JavaScript, profile/logo persistence, stale edits and handover.
 See [browser setup](02-development-setup.md#browser-regression-checks-optional).
 
 The shared workspace core is implemented and verified. The original Feature 1
 section also references native feedback/review decisions, review-assignment
 offboarding, visible usage/account controls and durable deletion/disconnection.
 Those dependencies are **not implemented**: the review UI belongs to Feature 3
-and account lifecycle/usage to Feature 6. The current UI labels the review and
-account-management boundaries **Coming next**. This is not a claim that every
+and account lifecycle/usage to Feature 6. The settings UI focuses on implemented workspace controls; unbuilt review and
+account-management panels are omitted. This is not a claim that every
 interaction in the original cross-feature permission matrix is finished.
 Notification integrations remain deferred as agreed. Hosted, live multi-user
 GitHub acceptance has not been exercised by the fixture-backed verification.

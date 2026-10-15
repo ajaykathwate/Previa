@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 30**, **River 007**. After pulling changes, run
+Current schema: **Goose 31**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker. When the egress proxy or the
 router changed (this version changed both), also run `make egress-image` (builds
 are metered and may be limited to package registries) and `make router-up` (the
@@ -212,6 +212,7 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0028 | Opt-in build secrets ([07](07-repository-secrets.md)): `env_secrets.build`, false for all existing secrets; `worker_capabilities.build_timeout_ns` lets Starter kits validate against live worker ceilings. Server and worker require this schema. |
 | 0029 | `worker_capabilities.private_previews`: all live routing workers must advertise a configured auth URL before an owner can enable private previews. Legacy workers default false; server and worker require this schema. |
 | 0030 | Shared workspaces, roles/grants, invitation consent and handover, installation workspace ownership, manual-intent/publication authorization fences, and workspace consumption. Backfills existing connections without changing resource IDs. Coordinated server/worker cutover required. |
+| 0031 | Workspace description, independent profile revision and authenticated small-logo storage. Existing memberships, connections and authorization revisions remain intact. |
 
 ### Shared workspace cutover
 
@@ -227,19 +228,38 @@ make run-server      # terminal 1
 make run-worker      # terminal 2
 ```
 
-**Expected:** Goose reports schema 30; server/worker pass the schema check. Existing
+**Expected:** Goose reports schema 31; server/worker pass the schema check. Existing
 installers see their original repositories in a backfilled workspace. Sign in,
-open **Team & settings**, invite a Developer/Reviewer, and select explicit
+open **Members** in the sidebar, invite a Developer/Reviewer, and select explicit
 repositories. No new environment variable, notification integration or frontend
 runtime is required. Make's run/migration targets load `.env`; direct Go commands
 and test targets require manual exports as described below. Air rebuilds code and
 assets but does not apply migrations automatically.
 
-Rollback is safe only before team data exists; it copies workspace consumption
-back to the legacy ledger. With invitations, extra memberships, new workspaces
-or transferred ownership, `make migrate-down` refuses to discard team data. Use a
-forward fix or restore a rehearsed pre-upgrade backup with its matching previous
+Rolling 0030 back is safe only before team data exists; it copies workspace
+consumption back to the legacy ledger. Invitations, extra memberships, new
+workspaces or transferred ownership make that rollback refuse data loss. Migration
+0031 Down removes descriptions/logos and profile revisions; reapplying Up does not
+restore the removed profile data. Use a forward fix or restore a rehearsed pre-upgrade backup with its matching previous
 binaries. See [workspaces](28-shared-workspaces.md#upgrade-and-verification).
+
+### Workspace profile and navigation update (0031)
+
+If already on schema 30, stop the server and worker, then run `make migrate-up`,
+`make build`, and restart both with the commands above. New binaries require 31;
+Air does not migrate the database. No new environment variables or services are
+needed. The existing 256 KiB HTTP form cap allows a 192 KiB logo plus multipart
+fields; PNG/JPEG uploads are also limited to 512 × 512 pixels by the server.
+Logos live in PostgreSQL and are served to active members only. Include them in
+the normal database backup. Avoid rolling 0031 Down unless losing logo/description
+changes is intentional.
+
+**Expected:** Members and Workspace settings appear directly in the sidebar.
+Members contains joined people and a separate Invitations view; Settings contains
+editable name/description, logo and ownership. Changing identity does not revoke
+preview cookies or cancel builds. Preview listings remain at `/previews`, including
+a read-only view for Reviewers. A workspace is one team with many members/repos;
+people can belong to multiple workspaces. Old workspace preview bookmarks redirect.
 
 Optional check that live updates are wired:
 
@@ -711,9 +731,10 @@ UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-workspace-browser
 
 **Expected:** fixtures create/drop isolated schemas; roles, grants, callback binding,
 shared quota enforcement, token/cookie/stream revocation, safe rollback and handover
-pass. Four browser scenarios cover access editing and modal confirmation,
-light/dark/mobile layouts, creation/switching, invitation acceptance without
-JavaScript and ownership acceptance. Only GitHub responses are fixtures; sessions,
+pass. Browser scenarios cover access editing and modal confirmation,
+light/dark/mobile layouts, direct navigation, search, creation/switching,
+invitation acceptance without JavaScript, profile/logo persistence, stale edits
+and ownership acceptance. Only GitHub responses are fixtures; sessions,
 CSRF, workspace handlers and PostgreSQL are real. `RUN_WORKSPACE_BROWSER_TESTS=1`
 enables that suite for direct Go runs; browser tooling remains optional.
 
@@ -748,7 +769,7 @@ make run-server
 ```
 
 **Expected:** `internal listener serving /livez, /readyz and /metrics`,
-`database health check passed` (with `version`, `schema=30` and `environment`), then
+`database health check passed` (with `version`, `schema=31` and `environment`), then
 `HTTP server listening`. Open <http://localhost:8080/> and sign in with GitHub.
 `curl -s localhost:9090/readyz` answers `{"checks":{"database":"ok","schema":"ok"},"status":"ready",...}`.
 The server refuses to start if migrations are behind (`run migrations first`).
@@ -935,8 +956,8 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
 
 ### Fresh local setup after deleting Docker data
 
-A new database can run all migrations from scratch, including workspace migration
-0030. Deleting the PostgreSQL volume erases users/sessions, workspace memberships,
+A new database can run all migrations from scratch, including workspace migrations
+0030 and 0031. Deleting the PostgreSQL volume erases users/sessions, workspace memberships,
 invitations, repository links, stored secrets, preview history and usage. Remove
 data only if you intend to discard it, or take a database backup first. Restrict
 cleanup to Previa resources; global Docker cleanup can erase other projects.
@@ -982,7 +1003,7 @@ make egress-image
 make router-up
 ```
 
-**Expected:** PostgreSQL is healthy; Goose reaches 30 and River reaches 007;
+**Expected:** PostgreSQL is healthy; Goose reaches 31 and River reaches 007;
 the application builds, the egress image exists and Traefik starts with the fresh
 route table. These Make targets automatically read `.env`. Start `make dev`
 (or `make run-server`) and `make run-worker` in separate terminals. Sign in,

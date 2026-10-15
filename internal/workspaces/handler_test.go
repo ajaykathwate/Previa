@@ -16,6 +16,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/scope"
+	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/alexedwards/scs/v2/memstore"
 	"github.com/go-chi/chi/v5"
 )
@@ -87,7 +88,8 @@ func fixtureRouter(t *testing.T, f fixture, origins ...string) http.Handler {
 	router := chi.NewRouter()
 	router.Use(sessions.LoadAndSave, users.LoadUser, users.CSRF, NewMiddleware(f.service, users, logger).Load)
 	users.Mount(router)
-	NewHandler(f.service, users, logger, origin, "preview.test").Mount(router, auth.RequireUser)
+	NewHandler(f.service, users, logger, origin).Mount(router, auth.RequireUser)
+	pullrequests.NewHandler(pullrequests.NewRepository(f.pool), nil, nil, users, logger, false).WithPreviewDomain("preview.test").Mount(router, auth.RequireUser)
 	buildlogs.NewHandler(buildlogs.NewStore(f.pool), users, logger).Mount(router, auth.RequireUser)
 	router.With(auth.RequireUser).Get("/repositories/{repoID}", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	router.With(auth.RequireUser).Post("/repositories/{repoID}/policy", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -130,6 +132,7 @@ func TestWorkspaceRoutesRespectRoleScopeAndCSRF(t *testing.T) {
 func TestInvitationRouteShowsExactScopeAndJoinsWithoutJavaScript(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()
+	seedPreview(t, f)
 	w, _ := f.service.Read(ctx, f.owner, f.wid)
 	token, err := f.service.Invite(ctx, InvitationCommand{ActorID: f.owner, WorkspaceID: f.wid, Revision: w.Revision, Login: "reviewer", Role: "reviewer", Repositories: []int64{f.repo}})
 	if err != nil {
@@ -149,6 +152,10 @@ func TestInvitationRouteShowsExactScopeAndJoinsWithoutJavaScript(t *testing.T) {
 		t.Fatal("accept failed", r.Code, r.Body.String())
 	}
 	r = b.request(http.MethodGet, fmt.Sprintf("/workspaces/%d/previews", f.wid), nil)
+	if r.Code != 303 || r.Header().Get("Location") != "/previews" {
+		t.Fatal("legacy preview redirect", r.Code)
+	}
+	r = b.request(http.MethodGet, "/previews", nil)
 	if r.Code != 200 || !strings.Contains(r.Body.String(), "acme/api") || strings.Contains(r.Body.String(), "acme/private") {
 		t.Fatalf("joined scope: %d %s", r.Code, r.Body.String())
 	}

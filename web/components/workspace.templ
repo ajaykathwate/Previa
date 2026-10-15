@@ -1,39 +1,32 @@
 package components
 
-import "strconv"
-
 templ WorkspaceSwitcher() {
 	if Workspace(ctx).ID > 0 {
 		<details class="workspace-switcher" data-workspace-switcher>
-			<summary>
-				<span class="workspace-avatar">
-					{ WorkspaceInitial(Workspace(ctx).Name) }
-				</span>
+			<summary title={ Workspace(ctx).Name } aria-label={ "Switch workspace: " + Workspace(ctx).Name }>
+				@WorkspaceAvatar(Workspace(ctx).Name, Workspace(ctx).ID, Workspace(ctx).LogoVersion)
 				<span class="workspace-switcher-label">
 					<strong>
 						{ Workspace(ctx).Name }
 					</strong>
-					<small>
-						{ Workspace(ctx).Role }
-					</small>
-				</span><span aria-hidden="true">⌄</span>
+					@WorkspaceRole(Workspace(ctx).Role)
+				</span>
+				<span class="workspace-switcher-chevron">
+					@ChevronDownIcon()
+				</span>
 			</summary>
 			<div class="workspace-switcher-menu">
 				<p class="eyebrow">Switch workspace</p>
 				for _, item := range Workspace(ctx).Items {
-					<form method="post" action={ templ.SafeURL("/workspaces/" + strconv.FormatInt(item.ID, 10) + "/select") }>
+					<form method="post" action={ templ.SafeURL(WorkspaceURL(item.ID, "select")) }>
 						<input type="hidden" name="csrf_token" value={ Workspace(ctx).CSRF }/>
 						<button type="submit" aria-current={ workspaceCurrent(Workspace(ctx).ID, item.ID) }>
-							<span class="workspace-avatar">
-								{ WorkspaceInitial(item.Name) }
-							</span>
+							@WorkspaceAvatar(item.Name, item.ID, item.LogoVersion)
 							<span>
 								<strong>
 									{ item.Name }
 								</strong>
-								<small>
-									{ item.Role }
-								</small>
+								@WorkspaceRole(item.Role)
 							</span>
 							if item.ID == Workspace(ctx).ID {
 								@CheckIcon()
@@ -41,7 +34,22 @@ templ WorkspaceSwitcher() {
 						</button>
 					</form>
 				}
-				<a href="/workspaces">All workspaces · create a workspace</a><a href={ templ.SafeURL("/workspaces/" + strconv.FormatInt(Workspace(ctx).ID, 10) + "/members") }>Manage members & invitations</a>
+				<div class="workspace-switcher-shortcuts">
+					<a href={ templ.SafeURL(WorkspaceURL(Workspace(ctx).ID, "members")) }>
+						@TeamIcon()
+						<span>Members & invitations</span>
+					</a>
+					if CanManage(ctx) {
+						<a href={ templ.SafeURL(WorkspaceURL(Workspace(ctx).ID, "settings")) }>
+							@WrenchIcon()
+							<span>Workspace settings</span>
+						</a>
+					}
+					<a href="/workspaces">
+						@OverviewIcon()
+						<span>All workspaces</span>
+					</a>
+				</div>
 			</div>
 		</details>
 	} else {
@@ -49,8 +57,22 @@ templ WorkspaceSwitcher() {
 	}
 }
 
+templ WorkspaceAvatar(name string, id, version int64) {
+	<span class="workspace-avatar" aria-hidden="true">
+		{ WorkspaceInitial(name) }
+		if version>0 {
+			<img src={ templ.SafeURL(WorkspaceLogoURL(id, version)) } alt="" width="64" height="64" decoding="async"/>
+		}
+	</span>
+}
+
+templ WorkspaceRole(role string) {
+	<span class={ "badge tone-neutral team-role",templ.KV("team-role-owner",role=="owner") } data-workspace-role={ role }>{ RoleName(role) }</span>
+}
+
 func workspaceCurrent(id, want int64) string {
 	if id == want {
+
 		return "true"
 	}
 	return "false"

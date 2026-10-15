@@ -1,16 +1,21 @@
 package components
 
-import "context"
+import (
+	"context"
+	"strconv"
+)
 
 // WorkspaceShell is display data supplied by the authenticated handler.
 type WorkspaceShell struct {
 	ID               int64
+	LogoVersion      int64
 	Name, Role, CSRF string
 	Items            []WorkspaceItem
 }
 type WorkspaceItem struct {
-	ID         int64
-	Name, Role string
+	ID          int64
+	LogoVersion int64
+	Name, Role  string
 }
 type workspaceKey struct{}
 
@@ -40,4 +45,25 @@ func WorkspaceInitial(name string) string {
 		return string(r)
 	}
 	return "P"
+}
+
+func WorkspaceURL(id int64, section string) string {
+	return "/workspaces/" + strconv.FormatInt(id, 10) + "/" + section
+}
+func WorkspaceLogoURL(id, version int64) string {
+	return WorkspaceURL(id, "logo") + "?v=" + strconv.FormatInt(version, 10)
+}
+func RoleName(role string) string {
+	switch role {
+	case "owner":
+		return "Owner"
+	case "admin":
+		return "Admin"
+	case "developer":
+		return "Developer"
+	case "reviewer":
+		return "Reviewer"
+	default:
+		return "Member"
+	}
 }

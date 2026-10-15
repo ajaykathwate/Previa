@@ -1188,8 +1188,8 @@ Start with a smaller version: create `auth`, `environments`, `platform` and `das
 Implement approved Feature 1 of `README-MVP-PRODUCT-EXPANSION.md`: shared teams,
 explicit roles/grants, invitation consent and handover. Connections, serving
 previews, stable URLs and consumption belong to a workspace across staff changes.
-Later native review and account-deletion features remain minimal labelled UI
-boundaries; they are not implemented in this phase.
+Native review and account deletion remain later features; their controls are
+omitted from workspace settings until implemented.
 
 ### Complexity
 
@@ -1216,6 +1216,18 @@ human source authority. Shared modal components provide accessible confirmation.
   `internal/platform/scope` carries selection without becoming authorization.
   Shared shell display data flows through `web/components`; presentation imports
   no backend features. Team pages use database pagination.
+- One workspace is one team; people may belong to multiple workspaces. Members
+  and Workspace settings are separate sidebar destinations. Member/invitation
+  lists have literal username search and database pagination. Previews uses its
+  existing route and scoped query, with a read-only Reviewer presentation; legacy
+  workspace preview URLs redirect there after membership checks.
+- Migration 0031 adds a description and independent profile revision, plus a
+  separate small logo table. Owner/Admin profile mutations serialize on the
+  workspace row and reject stale profile forms without changing authorization
+  revisions or cancelling work. PNG/JPEG uploads are capped at 192 KiB and
+  512 × 512, decoded and re-encoded as PNG to remove metadata. Logos are served
+  only to active members through an authenticated, uncached same-origin endpoint.
+  No asset service, image library or external logo URL is required.
 - Invitations store token digests and immutable intended GitHub IDs, have seven-day
   expiry, exact scope consent, revoke/regenerate, decline and idempotent accept.
   Acceptance cannot replace existing active membership. Removed inviters lose

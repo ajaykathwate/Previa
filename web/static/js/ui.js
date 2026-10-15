@@ -43,6 +43,21 @@
   }
 
   function initNavigation() {
+    const workspaceMenus = [...document.querySelectorAll('[data-workspace-switcher]')];
+    const placeWorkspaceMenus = () => workspaceMenus.forEach(menu => {
+      if (!menu.open) return;
+      const anchor = menu.querySelector('summary').getBoundingClientRect();
+      const panel = menu.querySelector('.workspace-switcher-menu');
+      const width = Math.min(320, innerWidth - 24);
+      const top = Math.max(12, Math.min(anchor.bottom + 8, innerHeight - 180));
+      panel.style.width = `${width}px`;
+      panel.style.left = `${Math.max(12, Math.min(anchor.left, innerWidth - width - 12))}px`;
+      panel.style.top = `${top}px`;
+      panel.style.maxHeight = `${innerHeight - top - 12}px`;
+    });
+    workspaceMenus.forEach(menu => menu.addEventListener('toggle', placeWorkspaceMenus));
+    window.addEventListener('resize', placeWorkspaceMenus, {passive: true});
+    window.addEventListener('scroll', placeWorkspaceMenus, {passive: true, capture: true});
     document.querySelectorAll('[data-mobile-nav] a').forEach(link => {
       link.addEventListener('click', () => { link.closest('details').open = false; });
     });
@@ -62,6 +77,61 @@
     });
     const mac = /Mac|iPhone|iPad/.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
     if (mac) document.querySelectorAll('[data-shortcut-label]').forEach(label => { label.textContent = '⌘K'; });
+  }
+
+  function initWorkspaceForms() {
+    const descriptions = {
+      developer: 'Can build and inspect logs for selected repositories after a GitHub permission check. Code can receive configured runtime secrets.',
+      reviewer: 'Can open selected previews, including private previews. Cannot run builds, inspect logs or manage repository settings.',
+      admin: 'Can access every repository and manage members and repository settings. Only the owner can appoint other admins.',
+    };
+    document.querySelectorAll('[data-role-controls]').forEach(form => {
+      const role = form.querySelector('[data-workspace-role-select]');
+      const choices = form.querySelector('.team-repository-choices');
+      const explain = () => {
+        form.querySelector('[data-workspace-role-description]').textContent = descriptions[role.value] || '';
+        choices.hidden = role.value === 'admin';
+        choices.disabled = role.value === 'admin';
+      };
+      role.addEventListener('change', explain);
+      explain();
+    });
+    document.querySelectorAll('[data-workspace-profile]').forEach(form => {
+      const fields = [...form.querySelectorAll('input:not([type=hidden]), textarea')];
+      const save = form.querySelector('[data-profile-save]');
+      const hint = form.querySelector('[data-profile-dirty]');
+      const update = () => {
+        const changed = fields.some(field => field.value !== field.defaultValue);
+        save.disabled = !changed;
+        hint.textContent = changed ? 'Unsaved changes' : '';
+      };
+      form.addEventListener('input', update);
+      update();
+    });
+    document.querySelectorAll('[data-workspace-logo]').forEach(form => {
+      const input = form.querySelector('input[type=file]');
+      const save = form.querySelector('button[type=submit]');
+      const filename = form.querySelector('[data-logo-filename]');
+      save.disabled = true;
+      input.addEventListener('change', () => {
+        const file = input.files[0];
+        const valid = file && file.size <= 192 * 1024 && ['image/png', 'image/jpeg'].includes(file.type);
+        save.disabled = !valid;
+        input.setCustomValidity(file && !valid ? 'Choose a PNG or JPEG image up to 192 KiB.' : '');
+        filename.textContent = file ? (valid ? `Selected: ${file.name}` : 'Choose a PNG or JPEG image up to 192 KiB.') : '';
+        if (!valid) return;
+        const reader = new FileReader();
+        reader.addEventListener('load', () => {
+          if (input.files[0] !== file) return;
+          const preview = form.closest('.team-branding').querySelector('[data-logo-preview] .workspace-avatar');
+          const image = document.createElement('img');
+          image.alt = ''; image.src = reader.result;
+          preview.querySelector('img')?.remove();
+          preview.append(image);
+        });
+        reader.readAsDataURL(file);
+      });
+    });
   }
 
   // Theme choice is a per-browser preference; without a choice the OS theme applies.
@@ -1571,6 +1641,7 @@
   initMotion();
   initTheme();
   initNavigation();
+  initWorkspaceForms();
   initPrefetch();
   initConfirmationDialogs();
   initAccountMenus();

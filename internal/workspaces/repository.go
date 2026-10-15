@@ -23,7 +23,9 @@ var (
 
 type Workspace struct {
 	ID, OwnerID, Revision, MembershipRevision int64
-	Name, Role                                string
+	ProfileRevision, LogoVersion              int64
+	Name, Role, Description, OwnerLogin       string
+	CreatedAt                                 time.Time
 }
 
 func (w Workspace) Manage() bool { return w.Role == "owner" || w.Role == "admin" }
@@ -45,7 +47,8 @@ func (r *Repository) List(ctx context.Context, user int64) ([]Workspace, error) 
 	}
 	out := make([]Workspace, 0, len(rows))
 	for _, v := range rows {
-		out = append(out, Workspace{v.ID, v.OwnerUserID, v.Revision, v.MembershipRevision, v.Name, v.Role})
+		out = append(out, Workspace{ID: v.ID, OwnerID: v.OwnerUserID, Revision: v.Revision, MembershipRevision: v.MembershipRevision,
+			Name: v.Name, Role: v.Role, Description: v.Description, ProfileRevision: v.ProfileRevision, LogoVersion: v.LogoVersion, OwnerLogin: v.OwnerLogin, CreatedAt: v.CreatedAt.Time})
 	}
 	return out, nil
 }
@@ -54,7 +57,7 @@ func (r *Repository) Read(ctx context.Context, user, id int64) (Workspace, error
 	if err != nil {
 		return Workspace{}, accessError(err)
 	}
-	return Workspace{v.ID, v.OwnerUserID, v.Revision, v.MembershipRevision, v.Name, v.Role}, nil
+	return workspaceFromRow(v), nil
 }
 func (r *Repository) Preference(ctx context.Context, user int64) (int64, error) {
 	id, err := dbgen.New(r.pool).WorkspacePreference(ctx, user)
@@ -97,8 +100,13 @@ func (r *Repository) mutation(ctx context.Context, user, id, revision int64, fn 
 		if _, err := q.LockWorkspaceInstallations(ctx, nullableID(id)); err != nil {
 			return fmt.Errorf("lock workspace installations: %w", err)
 		}
-		return fn(tx, q, Workspace{actor.ID, actor.OwnerUserID, actor.Revision, actor.MembershipRevision, actor.Name, actor.Role})
+		return fn(tx, q, workspaceFromRow(actor))
 	})
+}
+
+func workspaceFromRow(v dbgen.ReadWorkspaceRow) Workspace {
+	return Workspace{ID: v.ID, OwnerID: v.OwnerUserID, Revision: v.Revision, MembershipRevision: v.MembershipRevision,
+		Name: v.Name, Role: v.Role, Description: v.Description, ProfileRevision: v.ProfileRevision, LogoVersion: v.LogoVersion, OwnerLogin: v.OwnerLogin, CreatedAt: v.CreatedAt.Time}
 }
 
 func (r *Repository) mutationForInvitation(ctx context.Context, wid int64, fn func(*dbgen.Queries) error) error {

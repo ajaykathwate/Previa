@@ -1,0 +1,85 @@
+package previews
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
+	"strconv"
+)
+
+templ ReviewerIndex(username, csrf string, p pages.Activity) {
+	@layouts.App("Previews", username, csrf, components.NavPreviews) {
+		<div class="team-page">
+			<header class="team-heading">
+				<div>
+					<span class="eyebrow">Delivery</span>
+					<h1>Previews</h1>
+					<p>
+						Live previews for the repositories shared with you in { components.Workspace(ctx).Name }.
+					</p>
+				</div>
+				<span class="badge tone-neutral">
+					if p.Total == 1 {
+						1 preview
+					} else {
+						{ strconv.FormatInt(p.Total,10) } previews
+					}
+				</span>
+			</header>
+			<section class="workspace-panel team-preview-list" aria-label="Live previews">
+				if len(p.Rows)==0 {
+					<div class="team-empty">
+						<span class="team-empty-icon">
+							@components.EnvironmentIcon()
+						</span>
+						<h2>No live previews yet</h2>
+						<p>A developer can publish a preview for a repository shared with you. Ask an administrator if a repository is missing from your access.</p>
+					</div>
+				}
+				for _,v:=range p.Rows {
+					<article class="team-preview-row">
+						<div>
+							<div class="team-inline"><code class="team-repository-label">{ v.Name }</code><span class="badge tone-neutral">PR #{ strconv.Itoa(int(v.Number)) }</span></div>
+							<h2>{ v.Title }</h2>
+							<p class="team-preview-commits">
+								Serving <code class="badge tone-neutral" title={ v.Deployed }>{ pages.Short(v.Deployed) }</code>
+								if v.OlderPreview {
+									<span class="badge tone-warn">Earlier commit</span>
+								}
+							</p>
+							if v.ExpiresAt!="" {
+								<p class="text-muted">
+									{ "Expires " }
+									@components.Time(v.ExpiresAt, v.ExpiresAt)
+								</p>
+							}
+						</div>
+						<div class="team-preview-actions">
+							if v.Available && v.PreviewURL!="" {
+								{{ label, tone := v.PreviewStatus() }}
+								<span class={ "badge",tone }><span class="badge-dot" aria-hidden="true"></span>{ label }</span>
+								<a class="primary-action" href={ templ.SafeURL(v.PreviewURL) } target="_blank" rel="noopener noreferrer">
+									{ "Open preview " }
+									@components.LinkIcon()
+								</a>
+							} else {
+								<span class="badge tone-neutral">Preview unavailable</span>
+							}
+						</div>
+					</article>
+				}
+			</section>
+			if p.Pages>1 {
+				<nav class="pagination" aria-label="Preview pages">
+					if p.Number>1 {
+						<a class="secondary-action" href={ templ.SafeURL(p.PageURL(p.Number - 1)) }>Previous</a>
+					}
+					<span>Page { strconv.FormatInt(p.Number,10) } of { strconv.FormatInt(p.Pages,10) }</span>
+					if p.Number<p.Pages {
+						<a class="secondary-action" href={ templ.SafeURL(p.PageURL(p.Number + 1)) }>Next</a>
+					}
+				</nav>
+			}
+		</div>
+	}
+}

@@ -1,9 +1,14 @@
 package previews
 
 import pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
+import "github.com/ajaykathwatee/previa/web/components"
 
 // Index renders the Previews page: the owner's live previews, supplied by the
 // workspace handler.
 templ Index(username, csrf string, page pages.Activity) {
-	@pages.ActivityIndex(username, csrf, page)
+	if components.Workspace(ctx).Role=="reviewer" {
+		@ReviewerIndex(username, csrf, page)
+	} else {
+		@pages.ActivityIndex(username, csrf, page)
+	}
 }

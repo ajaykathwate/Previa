@@ -11,6 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const advanceWorkspaceProfile = `-- name: AdvanceWorkspaceProfile :exec
+UPDATE workspaces SET profile_revision=profile_revision+1 WHERE id=$1
+`
+
+func (q *Queries) AdvanceWorkspaceProfile(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, advanceWorkspaceProfile, id)
+	return err
+}
+
 const advanceWorkspaceRevision = `-- name: AdvanceWorkspaceRevision :exec
 UPDATE workspaces SET revision=revision+1 WHERE id=$1
 `
@@ -149,6 +158,39 @@ func (q *Queries) ClearRepositoryGrants(ctx context.Context, arg ClearRepository
 	return err
 }
 
+const countWorkspaceInvitations = `-- name: CountWorkspaceInvitations :one
+SELECT count(*) FROM workspace_invitations WHERE workspace_id=$1 AND state='pending' AND strpos(lower(login),lower($2::text))>0
+`
+
+type CountWorkspaceInvitationsParams struct {
+	WorkspaceID int64
+	Search      string
+}
+
+func (q *Queries) CountWorkspaceInvitations(ctx context.Context, arg CountWorkspaceInvitationsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkspaceInvitations, arg.WorkspaceID, arg.Search)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countWorkspaceMembers = `-- name: CountWorkspaceMembers :one
+SELECT count(*) FROM workspace_memberships m JOIN users u ON u.id=m.user_id
+WHERE m.workspace_id=$1 AND m.state='active' AND strpos(lower(u.username),lower($2::text))>0
+`
+
+type CountWorkspaceMembersParams struct {
+	WorkspaceID int64
+	Search      string
+}
+
+func (q *Queries) CountWorkspaceMembers(ctx context.Context, arg CountWorkspaceMembersParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkspaceMembers, arg.WorkspaceID, arg.Search)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createInvitation = `-- name: CreateInvitation :one
 INSERT INTO workspace_invitations(workspace_id,github_id,login,role,token_hash,expires_at,created_by)
 VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id
@@ -236,6 +278,15 @@ func (q *Queries) CurrentRepositoryGrants(ctx context.Context, arg CurrentReposi
 		return nil, err
 	}
 	return items, nil
+}
+
+const deleteWorkspaceLogo = `-- name: DeleteWorkspaceLogo :exec
+DELETE FROM workspace_logos WHERE workspace_id=$1
+`
+
+func (q *Queries) DeleteWorkspaceLogo(ctx context.Context, workspaceID int64) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceLogo, workspaceID)
+	return err
 }
 
 const deleteWorkspaceTransfer = `-- name: DeleteWorkspaceTransfer :exec
@@ -335,8 +386,10 @@ func (q *Queries) InvitationScope(ctx context.Context, id int64) ([]InvitationSc
 }
 
 const listWorkspaces = `-- name: ListWorkspaces :many
-SELECT w.id,w.name,w.owner_user_id,w.revision,m.role,m.revision AS membership_revision
+SELECT w.id,w.name,w.description,w.owner_user_id,w.revision,w.profile_revision,w.created_at,u.username AS owner_login,
+coalesce(l.version,0)::bigint AS logo_version,m.role,m.revision AS membership_revision
 FROM workspaces w JOIN workspace_memberships m ON m.workspace_id=w.id
+JOIN users u ON u.id=w.owner_user_id LEFT JOIN workspace_logos l ON l.workspace_id=w.id
 WHERE m.user_id=$1::bigint AND m.state='active' AND w.state='active'
 ORDER BY lower(w.name),w.id
 `
@@ -344,8 +397,13 @@ ORDER BY lower(w.name),w.id
 type ListWorkspacesRow struct {
 	ID                 int64
 	Name               string
+	Description        string
 	OwnerUserID        int64
 	Revision           int64
+	ProfileRevision    int64
+	CreatedAt          pgtype.Timestamptz
+	OwnerLogin         string
+	LogoVersion        int64
 	Role               string
 	MembershipRevision int64
 }
@@ -362,8 +420,13 @@ func (q *Queries) ListWorkspaces(ctx context.Context, userID int64) ([]ListWorks
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
+			&i.Description,
 			&i.OwnerUserID,
 			&i.Revision,
+			&i.ProfileRevision,
+			&i.CreatedAt,
+			&i.OwnerLogin,
+			&i.LogoVersion,
 			&i.Role,
 			&i.MembershipRevision,
 		); err != nil {
@@ -425,7 +488,7 @@ func (q *Queries) LockMembership(ctx context.Context, arg LockMembershipParams) 
 }
 
 const lockWorkspace = `-- name: LockWorkspace :one
-SELECT id, name, owner_user_id, legacy_user_id, state, revision, created_at FROM workspaces WHERE id=$1 AND state='active' FOR UPDATE
+SELECT id, name, owner_user_id, legacy_user_id, state, revision, created_at, description, profile_revision FROM workspaces WHERE id=$1 AND state='active' FOR UPDATE
 `
 
 func (q *Queries) LockWorkspace(ctx context.Context, id int64) (Workspace, error) {
@@ -439,6 +502,8 @@ func (q *Queries) LockWorkspace(ctx context.Context, id int64) (Workspace, error
 		&i.State,
 		&i.Revision,
 		&i.CreatedAt,
+		&i.Description,
+		&i.ProfileRevision,
 	)
 	return i, err
 }
@@ -612,8 +677,10 @@ func (q *Queries) ReadRepositoryAccess(ctx context.Context, arg ReadRepositoryAc
 }
 
 const readWorkspace = `-- name: ReadWorkspace :one
-SELECT w.id,w.name,w.owner_user_id,w.revision,m.role,m.revision AS membership_revision
+SELECT w.id,w.name,w.description,w.owner_user_id,w.revision,w.profile_revision,w.created_at,u.username AS owner_login,
+coalesce(l.version,0)::bigint AS logo_version,m.role,m.revision AS membership_revision
 FROM workspaces w JOIN workspace_memberships m ON m.workspace_id=w.id
+JOIN users u ON u.id=w.owner_user_id LEFT JOIN workspace_logos l ON l.workspace_id=w.id
 WHERE w.id=$1::bigint AND m.user_id=$2::bigint AND m.state='active' AND w.state='active'
 `
 
@@ -625,8 +692,13 @@ type ReadWorkspaceParams struct {
 type ReadWorkspaceRow struct {
 	ID                 int64
 	Name               string
+	Description        string
 	OwnerUserID        int64
 	Revision           int64
+	ProfileRevision    int64
+	CreatedAt          pgtype.Timestamptz
+	OwnerLogin         string
+	LogoVersion        int64
 	Role               string
 	MembershipRevision int64
 }
@@ -637,11 +709,39 @@ func (q *Queries) ReadWorkspace(ctx context.Context, arg ReadWorkspaceParams) (R
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
+		&i.Description,
 		&i.OwnerUserID,
 		&i.Revision,
+		&i.ProfileRevision,
+		&i.CreatedAt,
+		&i.OwnerLogin,
+		&i.LogoVersion,
 		&i.Role,
 		&i.MembershipRevision,
 	)
+	return i, err
+}
+
+const readWorkspaceLogo = `-- name: ReadWorkspaceLogo :one
+SELECT l.data,l.version FROM workspace_logos l JOIN workspaces w ON w.id=l.workspace_id
+JOIN workspace_memberships m ON m.workspace_id=w.id
+WHERE w.id=$1 AND m.user_id=$2 AND m.state='active' AND w.state='active'
+`
+
+type ReadWorkspaceLogoParams struct {
+	ID     int64
+	UserID int64
+}
+
+type ReadWorkspaceLogoRow struct {
+	Data    []byte
+	Version int64
+}
+
+func (q *Queries) ReadWorkspaceLogo(ctx context.Context, arg ReadWorkspaceLogoParams) (ReadWorkspaceLogoRow, error) {
+	row := q.db.QueryRow(ctx, readWorkspaceLogo, arg.ID, arg.UserID)
+	var i ReadWorkspaceLogoRow
+	err := row.Scan(&i.Data, &i.Version)
 	return i, err
 }
 
@@ -660,67 +760,6 @@ func (q *Queries) RegenerateInvitation(ctx context.Context, arg RegenerateInvita
 	return err
 }
 
-const reviewerPreviews = `-- name: ReviewerPreviews :many
-SELECT r.id AS repo_id,r.full_name,(r.accessible AND i.status='active')::boolean AS available,p.number,p.title,p.head_sha AS latest_sha,e.head_sha AS deployed_sha,e.subdomain,
-e.status,e.expires_at,e.asleep_at
-FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
-LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
-WHERE i.workspace_id=$1::bigint AND workspace_repository_access(r.id,$2::bigint,'read')
-ORDER BY p.number DESC,r.id LIMIT 20 OFFSET $3::bigint
-`
-
-type ReviewerPreviewsParams struct {
-	WorkspaceID int64
-	UserID      int64
-	PageOffset  int64
-}
-
-type ReviewerPreviewsRow struct {
-	RepoID      int64
-	FullName    string
-	Available   bool
-	Number      int32
-	Title       string
-	LatestSha   string
-	DeployedSha pgtype.Text
-	Subdomain   pgtype.Text
-	Status      pgtype.Text
-	ExpiresAt   pgtype.Timestamptz
-	AsleepAt    pgtype.Timestamptz
-}
-
-func (q *Queries) ReviewerPreviews(ctx context.Context, arg ReviewerPreviewsParams) ([]ReviewerPreviewsRow, error) {
-	rows, err := q.db.Query(ctx, reviewerPreviews, arg.WorkspaceID, arg.UserID, arg.PageOffset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ReviewerPreviewsRow
-	for rows.Next() {
-		var i ReviewerPreviewsRow
-		if err := rows.Scan(
-			&i.RepoID,
-			&i.FullName,
-			&i.Available,
-			&i.Number,
-			&i.Title,
-			&i.LatestSha,
-			&i.DeployedSha,
-			&i.Subdomain,
-			&i.Status,
-			&i.ExpiresAt,
-			&i.AsleepAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const revokeUnauthorizedInvitations = `-- name: RevokeUnauthorizedInvitations :exec
 UPDATE workspace_invitations v SET state='revoked',revision=revision+1
 WHERE v.workspace_id=$1 AND v.state='pending' AND NOT EXISTS(
@@ -730,6 +769,22 @@ WHERE v.workspace_id=$1 AND v.state='pending' AND NOT EXISTS(
 
 func (q *Queries) RevokeUnauthorizedInvitations(ctx context.Context, workspaceID int64) error {
 	_, err := q.db.Exec(ctx, revokeUnauthorizedInvitations, workspaceID)
+	return err
+}
+
+const saveWorkspaceLogo = `-- name: SaveWorkspaceLogo :exec
+INSERT INTO workspace_logos(workspace_id,version,data) VALUES($1,$2,$3)
+ON CONFLICT(workspace_id) DO UPDATE SET version=EXCLUDED.version,data=EXCLUDED.data
+`
+
+type SaveWorkspaceLogoParams struct {
+	WorkspaceID int64
+	Version     int64
+	Data        []byte
+}
+
+func (q *Queries) SaveWorkspaceLogo(ctx context.Context, arg SaveWorkspaceLogoParams) error {
+	_, err := q.db.Exec(ctx, saveWorkspaceLogo, arg.WorkspaceID, arg.Version, arg.Data)
 	return err
 }
 
@@ -800,17 +855,18 @@ func (q *Queries) UpdateInvitationState(ctx context.Context, arg UpdateInvitatio
 	return err
 }
 
-const updateWorkspaceName = `-- name: UpdateWorkspaceName :exec
-UPDATE workspaces SET name=$2,revision=revision+1 WHERE id=$1
+const updateWorkspaceProfile = `-- name: UpdateWorkspaceProfile :exec
+UPDATE workspaces SET name=$2,description=$3,profile_revision=profile_revision+1 WHERE id=$1
 `
 
-type UpdateWorkspaceNameParams struct {
-	ID   int64
-	Name string
+type UpdateWorkspaceProfileParams struct {
+	ID          int64
+	Name        string
+	Description string
 }
 
-func (q *Queries) UpdateWorkspaceName(ctx context.Context, arg UpdateWorkspaceNameParams) error {
-	_, err := q.db.Exec(ctx, updateWorkspaceName, arg.ID, arg.Name)
+func (q *Queries) UpdateWorkspaceProfile(ctx context.Context, arg UpdateWorkspaceProfileParams) error {
+	_, err := q.db.Exec(ctx, updateWorkspaceProfile, arg.ID, arg.Name, arg.Description)
 	return err
 }
 
@@ -858,8 +914,8 @@ func (q *Queries) WorkspaceAdmins(ctx context.Context, workspaceID int64) ([]Wor
 const workspaceCounts = `-- name: WorkspaceCounts :one
 SELECT (SELECT count(*) FROM workspace_memberships WHERE workspace_id=$1::bigint AND state='active')::bigint AS members,
 (SELECT count(*) FROM workspace_invitations WHERE workspace_id=$1::bigint AND state='pending')::bigint AS invitations,
-(SELECT count(*) FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
- WHERE i.workspace_id=$1::bigint AND workspace_repository_access(r.id,$2::bigint,'read'))::bigint AS previews
+(SELECT count(*) FROM repos r JOIN installations i ON i.id=r.installation_id
+ WHERE i.workspace_id=$1::bigint AND workspace_repository_access(r.id,$2::bigint,'read'))::bigint AS repositories
 `
 
 type WorkspaceCountsParams struct {
@@ -868,15 +924,15 @@ type WorkspaceCountsParams struct {
 }
 
 type WorkspaceCountsRow struct {
-	Members     int64
-	Invitations int64
-	Previews    int64
+	Members      int64
+	Invitations  int64
+	Repositories int64
 }
 
 func (q *Queries) WorkspaceCounts(ctx context.Context, arg WorkspaceCountsParams) (WorkspaceCountsRow, error) {
 	row := q.db.QueryRow(ctx, workspaceCounts, arg.WorkspaceID, arg.UserID)
 	var i WorkspaceCountsRow
-	err := row.Scan(&i.Members, &i.Invitations, &i.Previews)
+	err := row.Scan(&i.Members, &i.Invitations, &i.Repositories)
 	return i, err
 }
 
@@ -893,11 +949,14 @@ func (q *Queries) WorkspaceForRepository(ctx context.Context, id int64) (pgtype.
 
 const workspaceInvitations = `-- name: WorkspaceInvitations :many
 SELECT id,github_id,login,role,expires_at,state,revision FROM workspace_invitations
-WHERE workspace_id=$1::bigint AND state='pending' ORDER BY created_at DESC,id DESC LIMIT 20 OFFSET $2::bigint
+WHERE workspace_id=$1::bigint AND state='pending'
+AND strpos(lower(login),lower($2::text))>0
+ORDER BY created_at DESC,id DESC LIMIT 20 OFFSET $3::bigint
 `
 
 type WorkspaceInvitationsParams struct {
 	WorkspaceID int64
+	Search      string
 	PageOffset  int64
 }
 
@@ -912,7 +971,7 @@ type WorkspaceInvitationsRow struct {
 }
 
 func (q *Queries) WorkspaceInvitations(ctx context.Context, arg WorkspaceInvitationsParams) ([]WorkspaceInvitationsRow, error) {
-	rows, err := q.db.Query(ctx, workspaceInvitations, arg.WorkspaceID, arg.PageOffset)
+	rows, err := q.db.Query(ctx, workspaceInvitations, arg.WorkspaceID, arg.Search, arg.PageOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -945,12 +1004,14 @@ SELECT m.user_id,m.role,m.revision,m.joined_at,u.username,u.avatar_url,
 FROM workspace_memberships m JOIN users u ON u.id=m.user_id
 LEFT JOIN repository_memberships g ON g.workspace_id=m.workspace_id AND g.user_id=m.user_id
 WHERE m.workspace_id=$1::bigint AND m.state='active'
+AND strpos(lower(u.username),lower($2::text))>0
 GROUP BY m.workspace_id,m.user_id,u.id ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,lower(u.username),m.user_id
-LIMIT 20 OFFSET $2::bigint
+LIMIT 20 OFFSET $3::bigint
 `
 
 type WorkspaceMembersParams struct {
 	WorkspaceID int64
+	Search      string
 	PageOffset  int64
 }
 
@@ -965,7 +1026,7 @@ type WorkspaceMembersRow struct {
 }
 
 func (q *Queries) WorkspaceMembers(ctx context.Context, arg WorkspaceMembersParams) ([]WorkspaceMembersRow, error) {
-	rows, err := q.db.Query(ctx, workspaceMembers, arg.WorkspaceID, arg.PageOffset)
+	rows, err := q.db.Query(ctx, workspaceMembers, arg.WorkspaceID, arg.Search, arg.PageOffset)
 	if err != nil {
 		return nil, err
 	}

@@ -1,12 +1,16 @@
 -- name: ListWorkspaces :many
-SELECT w.id,w.name,w.owner_user_id,w.revision,m.role,m.revision AS membership_revision
+SELECT w.id,w.name,w.description,w.owner_user_id,w.revision,w.profile_revision,w.created_at,u.username AS owner_login,
+coalesce(l.version,0)::bigint AS logo_version,m.role,m.revision AS membership_revision
 FROM workspaces w JOIN workspace_memberships m ON m.workspace_id=w.id
+JOIN users u ON u.id=w.owner_user_id LEFT JOIN workspace_logos l ON l.workspace_id=w.id
 WHERE m.user_id=sqlc.arg(user_id)::bigint AND m.state='active' AND w.state='active'
 ORDER BY lower(w.name),w.id;
 
 -- name: ReadWorkspace :one
-SELECT w.id,w.name,w.owner_user_id,w.revision,m.role,m.revision AS membership_revision
+SELECT w.id,w.name,w.description,w.owner_user_id,w.revision,w.profile_revision,w.created_at,u.username AS owner_login,
+coalesce(l.version,0)::bigint AS logo_version,m.role,m.revision AS membership_revision
 FROM workspaces w JOIN workspace_memberships m ON m.workspace_id=w.id
+JOIN users u ON u.id=w.owner_user_id LEFT JOIN workspace_logos l ON l.workspace_id=w.id
 WHERE w.id=sqlc.arg(workspace_id)::bigint AND m.user_id=sqlc.arg(user_id)::bigint AND m.state='active' AND w.state='active';
 
 -- name: ReadRepositoryAccess :one
@@ -28,12 +32,22 @@ SELECT m.user_id,m.role,m.revision,m.joined_at,u.username,u.avatar_url,
 FROM workspace_memberships m JOIN users u ON u.id=m.user_id
 LEFT JOIN repository_memberships g ON g.workspace_id=m.workspace_id AND g.user_id=m.user_id
 WHERE m.workspace_id=sqlc.arg(workspace_id)::bigint AND m.state='active'
+AND strpos(lower(u.username),lower(sqlc.arg(search)::text))>0
 GROUP BY m.workspace_id,m.user_id,u.id ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,lower(u.username),m.user_id
 LIMIT 20 OFFSET sqlc.arg(page_offset)::bigint;
 
 -- name: WorkspaceInvitations :many
 SELECT id,github_id,login,role,expires_at,state,revision FROM workspace_invitations
-WHERE workspace_id=sqlc.arg(workspace_id)::bigint AND state='pending' ORDER BY created_at DESC,id DESC LIMIT 20 OFFSET sqlc.arg(page_offset)::bigint;
+WHERE workspace_id=sqlc.arg(workspace_id)::bigint AND state='pending'
+AND strpos(lower(login),lower(sqlc.arg(search)::text))>0
+ORDER BY created_at DESC,id DESC LIMIT 20 OFFSET sqlc.arg(page_offset)::bigint;
+
+-- name: CountWorkspaceMembers :one
+SELECT count(*) FROM workspace_memberships m JOIN users u ON u.id=m.user_id
+WHERE m.workspace_id=sqlc.arg(workspace_id) AND m.state='active' AND strpos(lower(u.username),lower(sqlc.arg(search)::text))>0;
+
+-- name: CountWorkspaceInvitations :one
+SELECT count(*) FROM workspace_invitations WHERE workspace_id=sqlc.arg(workspace_id) AND state='pending' AND strpos(lower(login),lower(sqlc.arg(search)::text))>0;
 
 -- name: WorkspaceTransfer :one
 SELECT t.*,u.username AS target_login FROM workspace_transfers t JOIN users u ON u.id=t.to_user_id WHERE t.workspace_id=$1;
@@ -63,8 +77,23 @@ SELECT id FROM installations WHERE workspace_id=$1 ORDER BY id FOR UPDATE;
 -- name: LockMembership :one
 SELECT * FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE;
 
--- name: UpdateWorkspaceName :exec
-UPDATE workspaces SET name=$2,revision=revision+1 WHERE id=$1;
+-- name: UpdateWorkspaceProfile :exec
+UPDATE workspaces SET name=$2,description=$3,profile_revision=profile_revision+1 WHERE id=$1;
+
+-- name: AdvanceWorkspaceProfile :exec
+UPDATE workspaces SET profile_revision=profile_revision+1 WHERE id=$1;
+
+-- name: SaveWorkspaceLogo :exec
+INSERT INTO workspace_logos(workspace_id,version,data) VALUES($1,$2,$3)
+ON CONFLICT(workspace_id) DO UPDATE SET version=EXCLUDED.version,data=EXCLUDED.data;
+
+-- name: DeleteWorkspaceLogo :exec
+DELETE FROM workspace_logos WHERE workspace_id=$1;
+
+-- name: ReadWorkspaceLogo :one
+SELECT l.data,l.version FROM workspace_logos l JOIN workspaces w ON w.id=l.workspace_id
+JOIN workspace_memberships m ON m.workspace_id=w.id
+WHERE w.id=$1 AND m.user_id=$2 AND m.state='active' AND w.state='active';
 
 -- name: AdvanceWorkspaceRevision :exec
 UPDATE workspaces SET revision=revision+1 WHERE id=$1;
@@ -172,19 +201,11 @@ FROM pull_requests p JOIN build_intents b ON b.pull_request_id=p.id WHERE p.id=$
 SELECT EXISTS(SELECT 1 FROM workspaces w JOIN workspace_memberships m ON m.workspace_id=w.id
 WHERE w.id=$1 AND m.user_id=$2 AND w.state='active' AND m.state='active' AND m.role IN ('owner','admin'))::boolean;
 
--- name: ReviewerPreviews :many
-SELECT r.id AS repo_id,r.full_name,(r.accessible AND i.status='active')::boolean AS available,p.number,p.title,p.head_sha AS latest_sha,e.head_sha AS deployed_sha,e.subdomain,
-e.status,e.expires_at,e.asleep_at
-FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
-LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
-WHERE i.workspace_id=sqlc.arg(workspace_id)::bigint AND workspace_repository_access(r.id,sqlc.arg(user_id)::bigint,'read')
-ORDER BY p.number DESC,r.id LIMIT 20 OFFSET sqlc.arg(page_offset)::bigint;
-
 -- name: WorkspaceCounts :one
 SELECT (SELECT count(*) FROM workspace_memberships WHERE workspace_id=sqlc.arg(workspace_id)::bigint AND state='active')::bigint AS members,
 (SELECT count(*) FROM workspace_invitations WHERE workspace_id=sqlc.arg(workspace_id)::bigint AND state='pending')::bigint AS invitations,
-(SELECT count(*) FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
- WHERE i.workspace_id=sqlc.arg(workspace_id)::bigint AND workspace_repository_access(r.id,sqlc.arg(user_id)::bigint,'read'))::bigint AS previews;
+(SELECT count(*) FROM repos r JOIN installations i ON i.id=r.installation_id
+ WHERE i.workspace_id=sqlc.arg(workspace_id)::bigint AND workspace_repository_access(r.id,sqlc.arg(user_id)::bigint,'read'))::bigint AS repositories;
 
 -- name: WorkspaceAdmins :many
 SELECT m.user_id,u.username FROM workspace_memberships m JOIN users u ON u.id=m.user_id

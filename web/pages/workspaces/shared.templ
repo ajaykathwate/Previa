@@ -1,0 +1,105 @@
+package workspaces
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+templ Hidden(p Page) {
+	<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+	<input type="hidden" name="workspace_revision" value={ ID(p.Revision) }/>
+}
+
+templ Roles(owner bool, selected string) {
+	<option value="developer" selected?={ selected=="developer" }>Developer · operate previews</option>
+	<option value="reviewer" selected?={ selected=="reviewer" }>Reviewer · view permitted previews</option>
+	if owner {
+		<option value="admin" selected?={ selected=="admin" }>Admin · manage workspace</option>
+	}
+}
+
+templ RepositoryChoices(p Page, selected []int64) {
+	<fieldset class="team-repository-choices">
+		<legend>Repository access</legend>
+		<p>Developers and reviewers receive only the repositories you select. Reviewer access includes private previews.</p>
+		if len(p.Repositories)==0 {
+			<p class="text-muted">Connect a repository to assign access. Administrators can connect repositories.</p>
+		}
+		for _,repo:=range p.Repositories {
+			<label>
+				<input type="checkbox" name="repository" value={ ID(repo.ID) } checked?={ HasRepository(selected,repo.ID) }/>
+				<code>
+					{ repo.Name }
+				</code>
+				if !repo.Available {
+					<span class="badge tone-neutral">Unavailable</span>
+				}
+			</label>
+		}
+	</fieldset>
+}
+
+templ AcceptInvitation(username string, p Page) {
+	@layouts.App("Workspace invitation", username, p.CSRF, components.NavWorkspaces) {
+		<div class="team-page team-invitation-page">
+			<section class="workspace-panel team-settings-panel">
+				<span class="workspace-avatar">{ components.WorkspaceInitial(p.Name) }</span>
+				<span class="eyebrow">You're invited</span>
+				<h1>Join { p.Name }</h1>
+				<p class="team-inline">
+					Join as
+					@components.WorkspaceRole(p.Role)
+					using your signed-in GitHub account.
+				</p>
+				if p.Role == "admin" {
+					<p>Administrators can access every repository in this workspace and manage members and repository settings.</p>
+				} else {
+					<p>Your access includes private previews for exactly these repositories:</p>
+					<ul>
+						for _, repo := range p.Repositories {
+							<li><code>{ repo.Name }</code></li>
+						}
+					</ul>
+					if len(p.Repositories) == 0 {
+						<p>No repositories are granted yet. Ask an administrator to assign access after joining.</p>
+					}
+					if p.Role == "developer" {
+						<p>Developers can run repository code and inspect logs after a current GitHub source permission check. Runtime secrets may be available to that code.</p>
+					}
+				}
+				<form method="post" action={ templ.SafeURL(p.InvitationURL) } class="dialog-actions">
+					<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+					<button class="secondary-action" type="submit" name="action" value="decline">Decline</button>
+					<button class="primary-action" type="submit" name="action" value="accept">Join workspace</button>
+				</form>
+			</section>
+		</div>
+	}
+}
+
+templ Failure(username, csrf, message, target, label string) {
+	@layouts.App("Workspace action", username, csrf, components.NavWorkspaces) {
+		<div class="team-page">
+			<section class="workspace-panel team-settings-panel">
+				<h1>Action needs attention</h1>
+				<p role="alert">
+					{ message }
+				</p><a class="secondary-action" href={ templ.SafeURL(target) }>{ label }</a>
+			</section>
+		</div>
+	}
+}
+
+templ Pagination(p Page) {
+	if p.PageCount > 1 {
+		<nav class="pagination" aria-label="Workspace pages">
+			if p.PageNumber > 1 {
+				<a class="secondary-action" href={ templ.SafeURL(p.PageURL(p.PageNumber - 1)) }>Previous</a>
+			}
+			<span>Page { ID(p.PageNumber) } of { ID(p.PageCount) }</span>
+			if p.PageNumber < p.PageCount {
+				<a class="secondary-action" href={ templ.SafeURL(p.PageURL(p.PageNumber + 1)) }>Next</a>
+			}
+		</nav>
+	}
+}

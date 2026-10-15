@@ -51,9 +51,9 @@ func (m *Middleware) Load(next http.Handler) http.Handler {
 			http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
 			return
 		}
-		shell := components.WorkspaceShell{ID: selection.ID, Name: selection.Name, Role: selection.Role, CSRF: m.users.CSRFToken(r.Context())}
+		shell := components.WorkspaceShell{ID: selection.ID, Name: selection.Name, Role: selection.Role, LogoVersion: selection.LogoVersion, CSRF: m.users.CSRFToken(r.Context())}
 		for _, v := range items {
-			shell.Items = append(shell.Items, components.WorkspaceItem{ID: v.ID, Name: v.Name, Role: v.Role})
+			shell.Items = append(shell.Items, components.WorkspaceItem{ID: v.ID, Name: v.Name, Role: v.Role, LogoVersion: v.LogoVersion})
 		}
 		ctx := scope.With(r.Context(), selection.ID, selection.Role)
 		ctx = components.WithWorkspace(ctx, shell)
@@ -117,8 +117,10 @@ func (m *Middleware) guard(w http.ResponseWriter, r *http.Request, user int64, s
 			http.NotFound(w, r)
 			return false
 		}
-		http.Redirect(w, r, "/workspaces/"+strconv.FormatInt(selected.ID, 10)+"/previews", http.StatusSeeOther)
-		return false
+		if r.URL.Path != "/previews" {
+			http.Redirect(w, r, "/previews", http.StatusSeeOther)
+			return false
+		}
 	}
 	if r.URL.Path == "/installations/start" && !selected.Manage() {
 		http.NotFound(w, r)

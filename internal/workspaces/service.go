@@ -38,21 +38,6 @@ func (s *Service) Create(ctx context.Context, user int64, name string) (id int64
 	})
 	return id, err
 }
-func (s *Service) Rename(ctx context.Context, user, id, revision int64, name string) error {
-	name = strings.TrimSpace(name)
-	if !validName(name) || revision <= 0 {
-		return ErrInput
-	}
-	return s.repo.mutation(ctx, user, id, revision, func(_ pgx.Tx, q *dbgen.Queries, actor Workspace) error {
-		if !actor.Manage() {
-			return ErrUnavailable
-		}
-		if err := q.UpdateWorkspaceName(ctx, dbgen.UpdateWorkspaceNameParams{ID: id, Name: name}); err != nil {
-			return fmt.Errorf("rename workspace: %w", err)
-		}
-		return nil
-	})
-}
 
 // Authorize derives tenant and permission from the resource, never the selector.
 func (s *Service) Authorize(ctx context.Context, user, repo int64, ability string, source bool) (dbgen.ReadRepositoryAccessRow, error) {

@@ -62,6 +62,7 @@ type Actions struct {
 
 // WithActions enables Build, Retry, Rebuild and teardown.
 func (h *Handler) WithActions(a Actions) *Handler {
+	h.previewDomain = a.PreviewBaseDomain
 	if a.Builds != nil && a.Verifier != nil && a.Teardowns != nil && a.Capabilities != nil {
 		h.actions = &a
 	}
@@ -172,10 +173,10 @@ func previewDeployed(deployedSHA, environmentStatus string) bool {
 
 // previewURL is a preview's address, or "" without a preview domain.
 func (h *Handler) previewURL(hostname string) string {
-	if h.actions == nil || h.actions.PreviewBaseDomain == "" || hostname == "" {
+	if h.previewDomain == "" || hostname == "" {
 		return ""
 	}
-	return "https://" + hostname + "." + h.actions.PreviewBaseDomain
+	return "https://" + hostname + "." + h.previewDomain
 }
 
 // describePreview adds the deployed preview: whether it serves an older

@@ -354,6 +354,11 @@ the addressed GitHub account. Ownership handover preserves connections, URLs and
 shared workspace quotas. Removal fences unfinished manual builds and revokes
 protected previews and live streams.
 
+A workspace represents one team with multiple members and repositories; nested
+teams are not part of this model. A person can join multiple workspaces. Members
+and Workspace settings have separate direct sidebar destinations. Owners/Admins
+can edit the name, description and logo in Settings; previews stay on Previews.
+
 The detailed contract and current user flows are in
 [Shared team workspaces](docs/28-shared-workspaces.md). References below to a
 GitHub repository owner describe the GitHub connection authority; they do not

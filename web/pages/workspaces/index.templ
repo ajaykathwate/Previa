@@ -3,33 +3,51 @@ package workspaces
 import (
 	"github.com/ajaykathwatee/previa/web/components"
 	"github.com/ajaykathwatee/previa/web/layouts"
-	"strconv"
 )
 
 templ Directory(username string, p Page) {
-	@layouts.App("Your workspaces", username, p.CSRF, workspaceNav(p.Tab)) {
+	@layouts.App("Workspaces", username, p.CSRF, components.NavWorkspaces) {
 		<div class="team-page">
-			<header class="team-heading"><div><span class="eyebrow">Your teams</span><h1>Workspaces</h1><p>A shared home for your repositories, previews, and teammates.</p></div><button class="primary-action" type="button" commandfor="create-workspace" command="show-modal" data-open-dialog="create-workspace" aria-haspopup="dialog">Create workspace</button></header>
+			<header class="team-heading">
+				<div><span class="eyebrow">Your workspaces</span><h1>Choose your workspace</h1><p>Each workspace is one team, with its own people, repositories and settings.</p></div>
+				<button class="primary-action" type="button" commandfor="create-workspace" command="show-modal" data-open-dialog="create-workspace" aria-haspopup="dialog">
+					@components.PlusIcon()
+					Create workspace
+				</button>
+			</header>
 			if len(p.Workspaces)==0 {
-				<section class="workspace-panel team-empty"><h2>Your team starts here</h2><p>Create a workspace, or accept an invitation from your team's administrator.</p></section>
+				<section class="workspace-panel team-empty">
+					<span class="team-empty-icon">
+						@components.TeamIcon()
+					</span>
+					<h2>A shared home for your team</h2>
+					<p>Create a workspace to connect repositories and invite teammates, or open an invitation from your administrator.</p><button class="primary-action" type="button" commandfor="create-workspace" command="show-modal" data-open-dialog="create-workspace" aria-haspopup="dialog">Create your first workspace</button>
+				</section>
 			}
 			<div class="team-workspace-grid">
 				for _,w:=range p.Workspaces {
 					<article class="workspace-panel team-workspace-card">
-						<span class="workspace-avatar">
-							{ components.WorkspaceInitial(w.Name) }
-						</span>
-						<h2>
-							{ w.Name }
-						</h2>
-						<span class="badge tone-neutral">
-							{ w.Role }
-						</span>
-						<form method="post" action={ templ.SafeURL("/workspaces/" + ID(w.ID) + "/select") }><input type="hidden" name="csrf_token" value={ p.CSRF }/><button class="primary-action" type="submit">Open workspace</button></form><a class="text-link" href={ templ.SafeURL("/workspaces/" + ID(w.ID) + "/members") }>View members</a>
+						<div class="team-card-identity">
+							@components.WorkspaceAvatar(w.Name, w.ID, w.LogoVersion)
+							@components.WorkspaceRole(w.Role)
+						</div>
+						<div>
+							<h2>{ w.Name }</h2>
+							if w.Description!="" {
+								<p class="team-description">{ w.Description }</p>
+							}
+						</div>
+						<form method="post" action={ templ.SafeURL(components.WorkspaceURL(w.ID, "select")) }><input type="hidden" name="csrf_token" value={ p.CSRF }/><button class="primary-action" type="submit">Open workspace</button></form>
+						<div class="team-card-links">
+							<a href={ templ.SafeURL(components.WorkspaceURL(w.ID, "members")) }>Members</a>
+							if w.Role=="owner" || w.Role=="admin" {
+								<a href={ templ.SafeURL(components.WorkspaceURL(w.ID, "settings")) }>Settings</a>
+							}
+						</div>
 					</article>
 				}
 			</div>
-			@components.ConfirmationDialog("create-workspace", "Create a workspace", "Give your team a name. You will be its owner and can invite administrators, developers, and reviewers.") {
+			@components.ConfirmationDialog("create-workspace", "Create a workspace", "Give your team a name. You can add a description and logo in workspace settings.") {
 				<form method="post" action="/workspaces" class="team-form"><input type="hidden" name="csrf_token" value={ p.CSRF }/><label for="workspace-name">Workspace name</label><input id="workspace-name" name="name" autofocus maxlength="80" required placeholder="Acme Engineering"/><div class="dialog-actions"><button type="button" class="secondary-action" commandfor="create-workspace" command="close" data-close-dialog>Cancel</button><button class="primary-action" type="submit">Create workspace</button></div></form>
 			}
 		</div>
@@ -37,391 +55,88 @@ templ Directory(username string, p Page) {
 }
 
 templ Index(username string, p Page) {
-	@layouts.AppTrail(p.Name+" · Workspace", components.Crumb{Label: "Workspaces", Href: "/workspaces"}, p.Name, username, p.CSRF, workspaceNav(p.Tab)) {
+	{{
+		title := "Members"
+		nav := components.NavMembers
+		if p.Tab == "settings" {
+			title = "Workspace settings"
+			nav = components.NavWorkspaceSettings
+		}
+	}}
+	@layouts.AppTrail(title+" · "+p.Name, components.Crumb{Label: p.Name, Href: "/workspaces"}, title, username, p.CSRF, nav) {
 		<div class="team-page">
 			<header class="team-heading">
-				<div class="team-identity">
-					<span class="workspace-avatar">
-						{ components.WorkspaceInitial(p.Name) }
-					</span>
-					<div>
-						<span class="eyebrow">Workspace</span>
-						<h1>
-							{ p.Name }
-						</h1>
-						<p>
-							{ "Your role: " }
-							<strong>
-								{ p.Role }
-							</strong>
-						</p>
+				<div class="team-heading-copy">
+					<div class="team-context">
+						@components.WorkspaceAvatar(p.Name, p.ID, p.LogoVersion)
+						<span>{ p.Name }</span>
+						@components.WorkspaceRole(p.Role)
 					</div>
+					<h1>{ title }</h1>
+					if p.Tab=="members" {
+						if p.Manage() {
+							<p>Invite teammates and choose what they can access.</p>
+						} else {
+							<p>See the people in your workspace and their roles.</p>
+						}
+					} else {
+						<p>Manage your workspace identity, details and ownership.</p>
+					}
 				</div>
-				if p.Manage() && p.Tab=="members" {
-					<button type="button" class="primary-action" commandfor="invite-member" command="show-modal" data-open-dialog="invite-member" aria-haspopup="dialog">Invite teammate</button>
-				}
+				<div class="team-heading-actions">
+					if p.Tab=="members" {
+						if p.Manage() {
+							<a class="secondary-action" href={ templ.SafeURL(p.Base() + "/settings") }>
+								@components.WrenchIcon()
+								Settings
+							</a>
+							<button type="button" class="primary-action" commandfor="invite-member" command="show-modal" data-open-dialog="invite-member" aria-haspopup="dialog">
+								@components.PlusIcon()
+								Invite teammate
+							</button>
+						}
+					} else {
+						<a class="secondary-action" href={ templ.SafeURL(p.Base() + "/members") }>
+							@components.TeamIcon()
+							Manage members
+						</a>
+					}
+				</div>
 			</header>
-			<nav class="team-tabs" aria-label="Workspace settings"><a href={ templ.SafeURL(p.Base() + "/members") } aria-current={ current(p.Tab, "members") }>Members</a><a href={ templ.SafeURL(p.Base() + "/previews") } aria-current={ current(p.Tab, "previews") }>Previews</a><a href={ templ.SafeURL(p.Base() + "/settings") } aria-current={ current(p.Tab, "settings") }>Settings</a></nav>
 			if p.Message!="" {
 				<p class="connection-notice tone-ok" role="status">
+					@components.CheckIcon()
 					{ p.Message }
 				</p>
 			}
+			if p.Error!="" {
+				<p class="connection-notice tone-danger" role="alert">{ p.Error }</p>
+			}
 			if p.InvitationURL!="" {
-				<section class="workspace-panel team-link-notice" role="status"><h2>Invitation ready</h2><p>Share this link with the selected GitHub account. It expires in seven days and grants only the selected access.</p><label class="sr-only" for="invitation-link">Invitation link</label><input id="invitation-link" type="text" readonly value={ p.InvitationURL }/><button type="button" class="secondary-action" data-copy-from="#invitation-link"><span data-copy-status>Copy invitation</span></button></section>
+				<section class="workspace-panel team-link-notice" role="status">
+					<div class="team-inline">
+						<span class="team-success-icon">
+							@components.CheckIcon()
+						</span>
+						<h2>Invitation ready</h2><span class="badge tone-ok">Expires in 7 days</span>
+					</div>
+					<p>Share this link with the selected GitHub account. It grants only the role and repositories you selected.</p>
+					<div class="team-copy-row">
+						<label class="sr-only" for="invitation-link">Invitation link</label><input id="invitation-link" type="text" readonly value={ p.InvitationURL }/>
+						<button type="button" class="secondary-action" data-copy-from="#invitation-link">
+							@components.CopyIcon()
+							<span data-copy-status>Copy invitation</span>
+						</button>
+					</div>
+					<p class="team-field-hint">The full link is shown only here. You can generate a replacement from Invitations.</p>
+				</section>
 			}
 			if p.Tab=="members" {
 				@Members(p)
-			}
-			if p.Tab=="settings" {
+				@Pagination(p)
+			} else {
 				@Settings(p)
 			}
-			if p.Tab=="previews" {
-				@Previews(p)
-			}
-			@Pagination(p)
 		</div>
 	}
-}
-
-func current(tab, want string) string {
-	if tab == want {
-		return "page"
-	}
-	return "false"
-}
-
-templ Hidden(p Page) {
-	<input type="hidden" name="csrf_token" value={ p.CSRF }/>
-	<input type="hidden" name="workspace_revision" value={ ID(p.Revision) }/>
-}
-
-templ Roles(owner bool, selected string) {
-	<option value="developer" selected?={ selected=="developer" }>Developer · operate previews</option>
-	<option value="reviewer" selected?={ selected=="reviewer" }>Reviewer · view permitted previews</option>
-	if owner {
-		<option value="admin" selected?={ selected=="admin" }>Admin · manage workspace</option>
-	}
-}
-
-templ RepositoryChoices(p Page, selected []int64) {
-	<fieldset class="team-repository-choices">
-		<legend>Repository access</legend>
-		<p>Developers and reviewers receive only the repositories you select. Reviewer access includes private previews.</p>
-		if len(p.Repositories)==0 {
-			<p class="text-muted">Connect a repository to assign access. Administrators can connect repositories.</p>
-		}
-		for _,repo:=range p.Repositories {
-			<label>
-				<input type="checkbox" name="repository" value={ ID(repo.ID) } checked?={ HasRepository(selected,repo.ID) }/>
-				<code>
-					{ repo.Name }
-				</code>
-				if !repo.Available {
-					<span class="badge tone-neutral">Unavailable</span>
-				}
-			</label>
-		}
-	</fieldset>
-}
-
-templ Members(p Page) {
-	<section class="workspace-panel team-members-panel">
-		<header class="team-panel-header"><div><h2>Members</h2><p>People who can access this workspace. Repository permissions are explicit.</p></div><span class="badge tone-neutral">{ ID(p.MemberCount) } members</span></header>
-		<div class="team-member-list">
-			for _,m:=range p.Members {
-				<article class="team-member-row">
-					<div class="team-person">
-						<span class="team-person-avatar">
-							{ components.WorkspaceInitial(m.Login) }
-						</span>
-						<div>
-							<strong>
-								{ m.Login }
-							</strong>
-							if m.ID==p.ActorID {
-								<span class="team-you">You</span>
-							}
-							<p class="text-muted">GitHub identity</p>
-						</div>
-					</div>
-					<span class="badge tone-neutral">
-						{ m.Role }
-					</span>
-					if m.Role!="owner" && (p.Owner() || p.Manage() && m.Role!="admin") {
-						<details class="team-member-actions">
-							<summary class="text-link">Manage access</summary>
-							<form id={ MemberForm(m.ID) } method="post" action={ templ.SafeURL(p.Base() + "/members/" + ID(m.ID)) } class="team-form">
-								@Hidden(p)
-								<input type="hidden" name="revision" value={ ID(m.Revision) }/><label for={ "role-" + ID(m.ID) }>Role</label>
-								<select id={ "role-" + ID(m.ID) } name="role">
-									@Roles(p.Owner(), m.Role)
-								</select>@RepositoryChoices(p, m.Repositories)
-								<button type="button" class="primary-action" commandfor={ "save-member-" + ID(m.ID) } command="show-modal" data-open-dialog={ "save-member-" + ID(m.ID) } aria-haspopup="dialog">Save access</button>
-							</form><button type="button" class="text-link team-danger" commandfor={ "remove-member-" + ID(m.ID) } command="show-modal" data-open-dialog={ "remove-member-" + ID(m.ID) } aria-haspopup="dialog">Remove from workspace</button>
-						</details>
-						@components.ConfirmationDialog("save-member-"+ID(m.ID), "Update access  for "+m.Login+"?", "This changes their role and selected repositories immediately. Requests made under replaced permissions are cancelled; existing previews remain with the team.") {
-							<div class="dialog-actions"><button type="button" class="secondary-action" data-close-dialog commandfor={ "save-member-" + ID(m.ID) } command="close">Cancel</button><button type="submit" form={ MemberForm(m.ID) } class="primary-action">Update access</button></div>
-						}
-						@RemoveDialog(p, m)
-					} else if m.ID==p.ActorID && m.Role!="owner" {
-						@RemoveDialog(p, m)
-						<button type="button" class="text-link" data-open-dialog={ "remove-member-" + ID(m.ID) } commandfor={ "remove-member-" + ID(m.ID) } command="show-modal" aria-haspopup="dialog">Leave workspace</button>
-					}
-				</article>
-			}
-		</div>
-	</section>
-	if p.Manage() {
-		@components.ConfirmationDialog("invite-member", "Invite a teammate", "Invitations are addressed to one GitHub identity. Share the generated link manually; it does not send an email.") {
-			<form method="post" action={ templ.SafeURL(p.Base() + "/invitations") } class="team-form">
-				@Hidden(p)
-				<label for="invite-login">GitHub username</label><input id="invite-login" name="login" autofocus required maxlength="39" autocomplete="off" placeholder="octocat"/><label for="invite-role">Role</label>
-				<select id="invite-role" name="role">
-					@Roles(p.Owner(), "developer")
-				</select>@RepositoryChoices(p, nil)
-				<div class="dialog-actions"><button type="button" class="secondary-action" data-close-dialog commandfor="invite-member" command="close">Cancel</button><button type="submit" class="primary-action">Create invitation</button></div>
-			</form>
-		}
-		<section class="workspace-panel team-members-panel">
-			<header class="team-panel-header"><div><h2>Pending invitations</h2><p>Regenerating a link immediately invalidates its previous version.</p></div></header>
-			if len(p.Invitations)==0 {
-				<div class="team-empty"><p>No pending invitations.</p></div>
-			}
-			for _,v:=range p.Invitations {
-				<div class="team-invitation-row">
-					<div>
-						<strong>
-							{ v.Login }
-						</strong>
-						<span class="badge tone-neutral">
-							{ v.Role }
-						</span>
-						<p class="text-muted">
-							if v.Expired {
-								Expired
-							} else {
-								{ "Expires " }
-								<time datetime={ v.Expires }>
-									{ v.Expires }
-								</time>
-							}
-						</p>
-					</div>
-					if p.Owner() || v.Role!="admin" {
-						<form method="post" action={ templ.SafeURL(p.Base() + "/invitations/" + ID(v.ID)) }>
-							@Hidden(p)
-							<input type="hidden" name="revision" value={ ID(v.Revision) }/><button type="submit" class="secondary-action" name="action" value="regenerate">Generate new link</button>
-						</form><button type="button" class="text-link team-danger" data-open-dialog={ "revoke-invite-" + ID(v.ID) } commandfor={ "revoke-invite-" + ID(v.ID) } command="show-modal" aria-haspopup="dialog">Revoke</button>
-						@components.ConfirmationDialog("revoke-invite-"+ID(v.ID), "Revoke invitation  for "+v.Login+"?", "The invitation link will stop working immediately.") {
-							<form method="post" action={ templ.SafeURL(p.Base() + "/invitations/" + ID(v.ID)) } class="dialog-actions">
-								@Hidden(p)
-								<input type="hidden" name="revision" value={ ID(v.Revision) }/><input type="hidden" name="action" value="revoke"/><button type="button" class="secondary-action" data-close-dialog commandfor={ "revoke-invite-" + ID(v.ID) } command="close">Cancel</button><button type="submit" class="primary-action">Revoke invitation</button>
-							</form>
-						}
-					}
-				</div>
-			}
-		</section>
-	}
-}
-
-templ RemoveDialog(p Page, m Member) {
-	@components.ConfirmationDialog("remove-member-"+ID(m.ID), "Remove "+m.Login+" from this workspace?", "Access to the dashboard and private previews ends immediately. Their unfinished manual requests are cancelled. Existing previews remain with the workspace.") {
-		<form method="post" action={ templ.SafeURL(p.Base() + "/members/" + ID(m.ID)) } class="dialog-actions">
-			@Hidden(p)
-			<input type="hidden" name="revision" value={ ID(m.Revision) }/><input type="hidden" name="action" value="remove"/><button type="button" class="secondary-action" data-close-dialog commandfor={ "remove-member-" + ID(m.ID) } command="close">Cancel</button><button type="submit" class="primary-action">Confirm removal</button>
-		</form>
-	}
-}
-
-templ Settings(p Page) {
-	<section class="workspace-panel team-settings-panel">
-		<h2>Workspace details</h2>
-		<p>A shared identity for the team's connected repositories.</p>
-		if p.Manage() {
-			<form method="post" action={ templ.SafeURL(p.Base() + "/rename") } class="team-form">
-				@Hidden(p)
-				<label for="rename-workspace">Name</label><input id="rename-workspace" name="name" value={ p.Name } maxlength="80" required/><button type="submit" class="primary-action">Save name</button>
-			</form>
-		} else {
-			<dl>
-				<dt>Name</dt>
-				<dd>
-					{ p.Name }
-				</dd>
-				<dt>Your role</dt>
-				<dd>
-					{ p.Role }
-				</dd>
-			</dl>
-		}
-	</section>
-	if p.Transfer!=nil {
-		<section class="workspace-panel team-settings-panel">
-			<h2>Ownership transfer pending</h2>
-			<p>
-				{ p.Transfer.Login }{ " must accept before " }
-				<time datetime={ p.Transfer.Expires }>
-					{ p.Transfer.Expires }
-				</time>.
-			</p>
-			if p.Transfer.Accept {
-				<button type="button" class="primary-action" data-open-dialog="accept-owner" commandfor="accept-owner" command="show-modal" aria-haspopup="dialog">Accept ownership</button>@components.ConfirmationDialog("accept-owner", "Become the workspace owner?", "You will manage ownership and future account controls. The previous owner becomes an administrator. Repository connections, previews, and usage remain with this workspace.") {
-	<form method="post" action={ templ.SafeURL(p.Base() + "/ownership") } class="dialog-actions">
-		@Hidden(p)
-		<input type="hidden" name="action" value="accept"/><input type="hidden" name="transfer_revision" value={ ID(p.Transfer.Revision) }/><button type="button" class="secondary-action" data-close-dialog commandfor="accept-owner" command="close">Cancel</button><button type="submit" class="primary-action">Accept ownership</button>
-	</form>
-}
-			}
-			if p.Owner() {
-				<form method="post" action={ templ.SafeURL(p.Base() + "/ownership") }>
-					@Hidden(p)
-					<button type="submit" name="action" value="cancel" class="secondary-action">Cancel transfer</button>
-				</form>
-			}
-		</section>
-	}
-	if p.Owner() {
-		<section class="workspace-panel team-settings-panel">
-			<h2>Transfer ownership</h2>
-			<p>Choose an existing administrator. They must accept; you remain the owner until then.</p>
-			<form id="ownership-form" method="post" action={ templ.SafeURL(p.Base() + "/ownership") } class="team-form">
-				@Hidden(p)
-				<input type="hidden" name="action" value="nominate"/><label for="ownership-target">Administrator</label>
-				<select id="ownership-target" name="target" required>
-					<option value="">Choose an administrator</option>
-					for _,m:=range p.Admins {
-						if m.Role=="admin" {
-							<option value={ ID(m.ID) }>
-								{ m.Login }
-							</option>
-						}
-					}
-				</select><button type="button" class="primary-action" data-open-dialog="nominate-owner" commandfor="nominate-owner" command="show-modal" aria-haspopup="dialog">Request handover</button>
-			</form>
-			@components.ConfirmationDialog("nominate-owner", "Request an ownership handover?", "The selected administrator will be able to accept this transfer in workspace settings. Your ownership remains active until they accept.") {
-				<div class="dialog-actions"><button type="button" class="secondary-action" data-close-dialog commandfor="nominate-owner" command="close">Cancel</button><button type="submit" form="ownership-form" class="primary-action">Request transfer</button></div>
-			}
-		</section>
-	}
-	<section class="workspace-panel team-settings-panel"><h2>Account management</h2><p>Workspace billing and deletion are coming with account management. Use ownership transfer before leaving a workspace you own.</p><span class="badge tone-neutral">Coming next</span></section>
-}
-
-templ Previews(p Page) {
-	<section class="workspace-panel team-members-panel">
-		<header class="team-panel-header"><div><h2>Permitted previews</h2><p>Live previews and their exact commits. Native feedback and review decisions are coming next.</p></div></header>
-		if len(p.Previews)==0 {
-			<div class="team-empty"><h3>No pull requests in your scope yet</h3><p>An administrator can grant repository access. A developer can publish a preview for an open pull request.</p></div>
-		}
-		for _,v:=range p.Previews {
-			<article class="team-preview-row">
-				<div>
-					<code>
-						{ v.Repository } #{ strconv.Itoa(int(v.Number)) }
-					</code>
-					<h3>
-						{ v.Title }
-					</h3>
-					<p class="text-muted">
-						{ "Latest " }
-						<code>
-							{ v.Latest }
-						</code>
-						if v.Deployed!="" {
-							{ " · Preview " }
-							<code>
-								{ v.Deployed }
-							</code>
-						}
-					</p>
-					if v.Expires!="" {
-						<p class="text-muted">
-							{ "Expires " }
-							<time datetime={ v.Expires }>
-								{ v.Expires }
-							</time>
-						</p>
-					}
-				</div>
-				<div>
-					if v.URL!="" {
-						<span class="badge tone-ok">
-							{ v.Status }
-						</span><a class="primary-action" href={ templ.SafeURL(v.URL) } target="_blank" rel="noopener noreferrer">Open preview</a>
-					} else {
-						<span class="badge tone-neutral">No live preview</span>
-					}
-				</div>
-			</article>
-		}
-	</section>
-}
-
-templ AcceptInvitation(username string, p Page) {
-	@layouts.App("Workspace invitation", username, p.CSRF, components.NavWorkspaces) {
-		<div class="team-page team-invitation-page">
-			<section class="workspace-panel team-settings-panel">
-				<span class="workspace-avatar">{ components.WorkspaceInitial(p.Name) }</span>
-				<span class="eyebrow">You're invited</span>
-				<h1>Join { p.Name }</h1>
-				<p>Join as <strong>{ p.Role }</strong> using your signed-in GitHub account.</p>
-				if p.Role == "admin" {
-					<p>Administrators can access every repository in this workspace and manage members and repository settings.</p>
-				} else {
-					<p>Your access includes private previews for exactly these repositories:</p>
-					<ul>
-						for _, repo := range p.Repositories {
-							<li><code>{ repo.Name }</code></li>
-						}
-					</ul>
-					if len(p.Repositories) == 0 {
-						<p>No repositories are granted yet. Ask an administrator to assign access after joining.</p>
-					}
-					if p.Role == "developer" {
-						<p>Developers can run repository code and inspect logs after a current GitHub source permission check. Runtime secrets may be available to that code.</p>
-					}
-				}
-				<form method="post" action={ templ.SafeURL(p.InvitationURL) } class="dialog-actions">
-					<input type="hidden" name="csrf_token" value={ p.CSRF }/>
-					<button class="secondary-action" type="submit" name="action" value="decline">Decline</button>
-					<button class="primary-action" type="submit" name="action" value="accept">Join workspace</button>
-				</form>
-			</section>
-		</div>
-	}
-}
-
-templ Failure(username, csrf string, user int64, message string) {
-	@layouts.App("Workspace action", username, csrf, components.NavWorkspaces) {
-		<div class="team-page">
-			<section class="workspace-panel team-settings-panel">
-				<h1>Action needs attention</h1>
-				<p role="alert">
-					{ message }
-				</p><a class="secondary-action" href="/workspaces">Return to workspaces</a>
-			</section>
-		</div>
-	}
-}
-
-templ Pagination(p Page) {
-	if p.PageCount > 1 {
-		<nav class="pagination" aria-label="Workspace pages">
-			if p.PageNumber > 1 {
-				<a class="secondary-action" href={ templ.SafeURL(p.PageURL(p.PageNumber - 1)) }>Previous</a>
-			}
-			<span>Page { ID(p.PageNumber) } of { ID(p.PageCount) }</span>
-			if p.PageNumber < p.PageCount {
-				<a class="secondary-action" href={ templ.SafeURL(p.PageURL(p.PageNumber + 1)) }>Next</a>
-			}
-		</nav>
-	}
-}
-
-func workspaceNav(tab string) components.NavItem {
-	if tab == "previews" {
-		return components.NavPreviews
-	}
-	return components.NavWorkspaces
 }

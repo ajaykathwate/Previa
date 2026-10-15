@@ -4,15 +4,17 @@ package components
 type NavItem string
 
 const (
-	NavNone         NavItem = ""
-	NavOverview     NavItem = "overview"
-	NavRepositories NavItem = "repositories"
-	NavStarterKits  NavItem = "starter-kits"
-	NavPreviews     NavItem = "previews"
-	NavBuilds       NavItem = "builds"
-	NavTools        NavItem = "tools"
-	NavFAQ          NavItem = "faq"
-	NavWorkspaces   NavItem = "workspaces"
+	NavNone              NavItem = ""
+	NavOverview          NavItem = "overview"
+	NavRepositories      NavItem = "repositories"
+	NavStarterKits       NavItem = "starter-kits"
+	NavPreviews          NavItem = "previews"
+	NavBuilds            NavItem = "builds"
+	NavTools             NavItem = "tools"
+	NavFAQ               NavItem = "faq"
+	NavWorkspaces        NavItem = "workspaces"
+	NavMembers           NavItem = "members"
+	NavWorkspaceSettings NavItem = "workspace-settings"
 )
 
 // Crumb is the previous level in the header's trail: the page one step up.

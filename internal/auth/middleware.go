@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"errors"
+	"mime"
 	"net/http"
 	"net/url"
 
@@ -119,9 +120,16 @@ func (h *Handler) CSRF(next http.Handler) http.Handler {
 			provided := r.Header.Get("X-CSRF-Token")
 			if provided == "" {
 				r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-				if err := r.ParseForm(); err != nil {
+				if err := parseCSRFForm(r); err != nil {
 					h.fail(w, r, http.StatusBadRequest, "The form could not be read.")
 					return
+				}
+				if r.MultipartForm != nil {
+					defer func() {
+						if err := r.MultipartForm.RemoveAll(); err != nil {
+							h.logger.WarnContext(r.Context(), "remove multipart form files", "error", err)
+						}
+					}()
 				}
 				provided = r.PostForm.Get("csrf_token")
 			}
@@ -133,6 +141,14 @@ func (h *Handler) CSRF(next http.Handler) http.Handler {
 		r = r.WithContext(context.WithValue(r.Context(), csrfKey, token))
 		next.ServeHTTP(w, r)
 	})
+}
+
+func parseCSRFForm(r *http.Request) error {
+	kind, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err == nil && kind == "multipart/form-data" {
+		return r.ParseMultipartForm(1 << 20)
+	}
+	return r.ParseForm()
 }
 
 // UserIDs supplies scalar identity values to feature-owned authorization boundaries.

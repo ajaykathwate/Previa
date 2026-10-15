@@ -13,14 +13,14 @@ import (
 )
 
 type Handler struct {
-	service        *Service
-	users          UserSession
-	logger         *slog.Logger
-	appURL, domain string
+	service *Service
+	users   UserSession
+	logger  *slog.Logger
+	appURL  string
 }
 
-func NewHandler(s *Service, u UserSession, l *slog.Logger, appURL, domain string) *Handler {
-	return &Handler{s, u, l, strings.TrimSuffix(appURL, "/"), domain}
+func NewHandler(s *Service, u UserSession, l *slog.Logger, appURL string) *Handler {
+	return &Handler{s, u, l, strings.TrimSuffix(appURL, "/")}
 }
 func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handler) {
 	r.Group(func(r chi.Router) {
@@ -30,9 +30,12 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 		r.Get("/workspaces/{workspaceID}", h.page)
 		r.Get("/workspaces/{workspaceID}/members", h.page)
 		r.Get("/workspaces/{workspaceID}/settings", h.page)
-		r.Get("/workspaces/{workspaceID}/previews", h.page)
+		r.Get("/workspaces/{workspaceID}/previews", h.legacyPreviews)
+		r.Post("/workspaces/{workspaceID}/settings", h.updateProfile)
+		r.Get("/workspaces/{workspaceID}/logo", h.logo)
+		r.Post("/workspaces/{workspaceID}/logo", h.uploadLogo)
+		r.Post("/workspaces/{workspaceID}/logo/remove", h.removeLogo)
 		r.Post("/workspaces/{workspaceID}/select", h.selectWorkspace)
-		r.Post("/workspaces/{workspaceID}/rename", h.rename)
 		r.Post("/workspaces/{workspaceID}/members/{userID}", h.changeMember)
 		r.Post("/workspaces/{workspaceID}/invitations", h.invite)
 		r.Post("/workspaces/{workspaceID}/invitations/{invitationID}", h.changeInvitation)
@@ -54,6 +57,8 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	case errors.Is(err, ErrInput):
 		status, message = http.StatusBadRequest, "Check the workspace name, GitHub account, role, and selected repositories."
+	case errors.Is(err, ErrLogo):
+		status, message = http.StatusBadRequest, ErrLogo.Error()
 	case errors.Is(err, ErrConflict):
 		status, message = http.StatusConflict, "The workspace, member, or invitation changed. Reload to see its current state; no change was saved."
 	case errors.Is(err, ErrOwner):
@@ -65,9 +70,16 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		h.logger.ErrorContext(r.Context(), "workspace request failed", "error", err)
 	}
-	user, _, _ := h.users.UserIDs(r.Context())
+	_, id := h.identity(r)
+	target, label := "/workspaces", "Return to workspaces"
+	if id > 0 {
+		target, label = "/workspaces/"+pages.ID(id)+"/members", "Return to members"
+		if strings.HasSuffix(r.URL.Path, "/ownership") {
+			target, label = "/workspaces/"+pages.ID(id)+"/settings", "Return to workspace settings"
+		}
+	}
 	login, _ := h.users.Username(r.Context())
-	templ.Handler(pages.Failure(login, h.users.CSRFToken(r.Context()), user, message), templ.WithStatus(status)).ServeHTTP(w, r)
+	templ.Handler(pages.Failure(login, h.users.CSRFToken(r.Context()), message, target, label), templ.WithStatus(status)).ServeHTTP(w, r)
 }
 func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 	u, _, _ := h.users.UserIDs(r.Context())
@@ -78,7 +90,7 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 	}
 	p := pages.Page{ActorID: u, CSRF: h.users.CSRFToken(r.Context())}
 	for _, v := range items {
-		p.Workspaces = append(p.Workspaces, pages.Workspace{ID: v.ID, Revision: v.Revision, Name: v.Name, Role: v.Role})
+		p.Workspaces = append(p.Workspaces, displayWorkspace(v))
 	}
 	login, _ := h.users.Username(r.Context())
 	templ.Handler(pages.Directory(login, p)).ServeHTTP(w, r)
@@ -92,10 +104,7 @@ func (h *Handler) renderPage(w http.ResponseWriter, r *http.Request, invitationT
 	if strings.HasSuffix(r.URL.Path, "/settings") {
 		tab = "settings"
 	}
-	if strings.HasSuffix(r.URL.Path, "/previews") {
-		tab = "previews"
-	}
-	p, err := h.service.Page(r.Context(), u, id, tab, h.domain, parseID(r.URL.Query().Get("page")))
+	p, err := h.service.Page(r.Context(), u, id, tab, PageQuery{Page: parseID(r.URL.Query().Get("page")), Search: r.URL.Query().Get("q"), Invitations: r.URL.Query().Get("view") == "invitations"})
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -107,10 +116,15 @@ func (h *Handler) renderPage(w http.ResponseWriter, r *http.Request, invitationT
 	if r.URL.Query().Get("saved") == "1" {
 		p.Message = "Workspace updated."
 	}
-	login, _ := h.users.Username(r.Context())
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "same-origin")
-	templ.Handler(pages.Index(login, p)).ServeHTTP(w, r)
+	switch r.URL.Query().Get("saved") {
+	case "details":
+		p.Message = "Workspace details saved."
+	case "logo":
+		p.Message = "Workspace logo updated."
+	case "logo-removed":
+		p.Message = "Workspace logo removed."
+	}
+	h.renderWorkspace(w, r, p, http.StatusOK)
 }
 func (h *Handler) redirect(w http.ResponseWriter, r *http.Request, id int64) {
 	http.Redirect(w, r, "/workspaces/"+pages.ID(id)+"/members?saved=1", http.StatusSeeOther)
@@ -131,15 +145,6 @@ func (h *Handler) selectWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
-}
-func (h *Handler) rename(w http.ResponseWriter, r *http.Request) {
-	u, id := h.identity(r)
-	err := h.service.Rename(r.Context(), u, id, parseID(r.PostFormValue("workspace_revision")), r.PostFormValue("name"))
-	if err != nil {
-		h.fail(w, r, err)
-		return
-	}
-	http.Redirect(w, r, "/workspaces/"+pages.ID(id)+"/settings?saved=1", http.StatusSeeOther)
 }
 func repositoryIDs(r *http.Request) ([]int64, error) {
 	if err := r.ParseForm(); err != nil {
