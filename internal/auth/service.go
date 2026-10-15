@@ -14,11 +14,14 @@ import (
 	githuboauth "golang.org/x/oauth2/github"
 )
 
-// Identity contains only the public GitHub profile needed for local sign-in.
+// Identity holds the GitHub profile refreshed during sign-in; OAuth tokens are never persisted.
 type Identity struct {
-	ID        int64
-	Username  string
-	AvatarURL string
+	ID                                              int64
+	Username                                        string
+	AvatarURL                                       string
+	Name, Email, ProfileURL, Bio, Company, Location string
+	GitHubCreatedAt                                 time.Time
+	EmailSyncError                                  bool
 }
 
 type identityProvider interface {
@@ -38,7 +41,8 @@ func NewGitHubOAuth(cfg config.ServerConfig) *GitHubOAuth {
 			ClientID: cfg.GitHubOAuthClientID, ClientSecret: cfg.GitHubOAuthClientSecret,
 			RedirectURL: strings.TrimSuffix(cfg.AppBaseURL, "/") + "/auth/github/callback",
 			Endpoint:    githuboauth.Endpoint,
-			// No extra scopes: GitHub's public profile supplies ID, login, and avatar.
+			// Read the signed-in account's verified primary email, without repository scopes.
+			Scopes: []string{"user:email"},
 		},
 		client: &http.Client{Timeout: 10 * time.Second},
 	}
@@ -66,5 +70,28 @@ func (g *GitHubOAuth) Authenticate(ctx context.Context, code string) (Identity, 
 		return Identity{}, errors.New("GitHub returned an invalid identity")
 	}
 	// The access token and authenticated client are discarded after this request.
-	return Identity{ID: u.GetID(), Username: u.GetLogin(), AvatarURL: u.GetAvatarURL()}, nil
+	identity := Identity{ID: u.GetID(), Username: u.GetLogin(), AvatarURL: u.GetAvatarURL(), Name: u.GetName(),
+		ProfileURL: "https://github.com/" + u.GetLogin(), Bio: u.GetBio(), Company: u.GetCompany(), Location: u.GetLocation(), GitHubCreatedAt: u.GetCreatedAt().Time}
+	identity.Email, err = primaryEmail(ctx, client)
+	identity.EmailSyncError = err != nil
+	return identity, nil
+}
+
+func primaryEmail(ctx context.Context, client *github.Client) (string, error) {
+	opts := &github.ListOptions{PerPage: 100}
+	for {
+		emails, response, err := client.Users.ListEmails(ctx, opts)
+		if err != nil {
+			return "", fmt.Errorf("fetch primary email: %w", err)
+		}
+		for _, email := range emails {
+			if email.GetPrimary() && email.GetVerified() {
+				return email.GetEmail(), nil
+			}
+		}
+		if response == nil || response.NextPage == 0 {
+			return "", nil
+		}
+		opts.Page = response.NextPage
+	}
 }

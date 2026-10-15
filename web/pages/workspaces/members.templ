@@ -3,22 +3,29 @@ package workspaces
 import "github.com/ajaykathwatee/previa/web/components"
 
 templ Members(p Page) {
+	if p.Invite.Failed {
+		<section id="invite-recovery" class="workspace-panel team-settings-panel" data-invite-recovery>
+			<h2>Invite a teammate</h2>
+			<p>Your invitation was not created. Review the message below; your selections are kept.</p>
+			@InvitationForm(p)
+		</section>
+	}
 	if p.Transfer!=nil && p.Transfer.Accept {
-		<div class="team-inline-notice"><div><strong>You've been nominated as workspace owner</strong><p>Review and accept the handover in workspace settings.</p></div><a class="secondary-action" href={ templ.SafeURL(p.Base() + "/settings#ownership") }>Review handover</a></div>
+		<div class="team-inline-notice"><div><strong>You've been nominated as workspace owner</strong><p>Review and accept the handover in workspace settings.</p></div><a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/settings#ownership") }>Review handover</a></div>
 	}
 	<section class="workspace-panel team-members-panel">
 		<header class="team-people-toolbar">
 			<nav class="team-segmented" aria-label="People">
-				<a href={ templ.SafeURL(p.Base() + "/members") } aria-current={ current(!p.InvitationView) }>Members <span class="team-count">{ ID(p.MemberCount) }</span></a>
+				<a href={ components.PublicURL(ctx, p.Base()+"/members") } aria-current={ current(!p.InvitationView) }>Members <span class="team-count">{ ID(p.MemberCount) }</span></a>
 				if p.Manage() {
-					<a href={ templ.SafeURL(p.Base() + "/members?view=invitations") } aria-current={ current(p.InvitationView) }>Invitations <span class="team-count">{ ID(p.InvitationCount) }</span></a>
+					<a href={ components.PublicURL(ctx, p.Base()+"/members?view=invitations") } aria-current={ current(p.InvitationView) }>Invitations <span class="team-count">{ ID(p.InvitationCount) }</span></a>
 				}
 			</nav>
-			<form method="get" action={ templ.SafeURL(p.Base() + "/members") } class="team-search" role="search">
+			<form method="get" action={ components.PublicURL(ctx, p.Base()+"/members") } class="team-search" role="search">
 				if p.InvitationView {
 					<input type="hidden" name="view" value="invitations"/>
 				}
-				<label class="sr-only" for="team-search">Search by GitHub username</label><input id="team-search" type="search" name="q" value={ p.Search } maxlength="100" placeholder="Search GitHub username"/>
+				<label class="sr-only" for="team-search">Search by name or GitHub username</label><input id="team-search" type="search" name="q" value={ p.Search } maxlength="100" placeholder="Search name or GitHub username"/>
 				<button type="submit" class="secondary-action" aria-label="Search people">
 					@components.SearchIcon()
 				</button>
@@ -34,13 +41,13 @@ templ Members(p Page) {
 			for _,m:=range p.Members {
 				<article class="team-member-row">
 					<div class="team-person">
-						<span class="team-person-avatar" aria-hidden="true">{ components.WorkspaceInitial(m.Login) }</span>
+						@components.UserAvatar(m.AvatarSrc(), m.Name(), "", nil)
 						<div>
-							<strong>{ m.Login }</strong>
+							<strong>{ m.Name() }</strong>
 							if m.ID==p.ActorID {
 								<span class="badge tone-neutral team-you">You</span>
 							}
-							<p>GitHub account</p>
+							<p>{ "@"+m.Login }</p>
 						</div>
 					</div>
 					<div>
@@ -51,17 +58,17 @@ templ Members(p Page) {
 					</div>
 					<div class="team-row-actions">
 						if m.Role!="owner" && (p.Owner() || p.Manage() && m.Role!="admin") {
-							<button type="button" class="secondary-action" commandfor={ "access-member-" + ID(m.ID) } command="show-modal" data-open-dialog={ "access-member-" + ID(m.ID) } aria-haspopup="dialog">Manage access</button>
+							<button type="button" class="secondary-action" commandfor={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" data-open-dialog={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } aria-haspopup="dialog">Manage access</button>
 							@AccessDialog(p, m)
-							<button type="button" class="team-icon-button team-danger" data-open-dialog={ "remove-member-" + ID(m.ID) } commandfor={ "remove-member-" + ID(m.ID) } command="show-modal" aria-haspopup="dialog" aria-label={ "Remove " + m.Login } title={ "Remove " + m.Login }>
+							<button type="button" class="team-icon-button team-danger" data-open-dialog={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } commandfor={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" aria-haspopup="dialog" aria-label={ "Remove " + m.Login } title={ "Remove " + m.Login }>
 								@components.TrashIcon()
 							</button>
 							@RemoveDialog(p, m)
 						} else if m.ID==p.ActorID && m.Role!="owner" {
-							<button type="button" class="secondary-action" data-open-dialog={ "remove-member-" + ID(m.ID) } commandfor={ "remove-member-" + ID(m.ID) } command="show-modal" aria-haspopup="dialog">Leave workspace</button>
+							<button type="button" class="secondary-action" data-open-dialog={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } commandfor={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" aria-haspopup="dialog">Leave workspace</button>
 							@RemoveDialog(p, m)
 						} else if m.Role=="owner" && p.Owner() {
-							<a class="team-text-action" href={ templ.SafeURL(p.Base() + "/settings#ownership") }>Manage ownership</a>
+							<a class="team-text-action" href={ components.PublicURL(ctx, p.Base()+"/settings#ownership") }>Manage ownership</a>
 						}
 					</div>
 				</article>
@@ -75,7 +82,7 @@ templ Members(p Page) {
 			}
 		</footer>
 	</section>
-	if p.Manage() {
+	if p.Manage() && !p.Invite.Failed {
 		@InviteDialog(p)
 	}
 }
@@ -86,7 +93,7 @@ templ PeopleEmpty(p Page) {
 			@components.SearchIcon()
 		</span>
 		<h2>No matching people</h2>
-		<p>Try another GitHub username.</p><a class="secondary-action" href={ templ.SafeURL(p.Base() + "/members") }>Clear search</a>
+		<p>Try another GitHub username.</p><a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members") }>Clear search</a>
 	</div>
 }
 
@@ -102,7 +109,7 @@ templ MemberScope(p Page, m Member) {
 			}
 		}
 		if len(m.Repositories)>2 {
-			<span class="badge tone-neutral">+{ ID(int64(len(m.Repositories)-2)) } more</span>
+			<button type="button" class="badge tone-neutral team-scope-button" data-open-dialog={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } commandfor={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" aria-label={ "View all " + ID(int64(len(m.Repositories))) + " repositories for " + m.Name() }>+{ ID(int64(len(m.Repositories)-2)) } more</button>
 		}
 	} else {
 		<span class="badge tone-neutral">{ CountLabel(int64(len(m.Repositories)),"repository","repositories") }</span>
@@ -110,38 +117,60 @@ templ MemberScope(p Page, m Member) {
 }
 
 templ AccessDialog(p Page, m Member) {
-	@components.ConfirmationDialog("access-member-"+ID(m.ID), "Manage access for "+m.Login, "Changes take effect immediately. Unfinished requests under replaced permissions are cancelled; existing previews stay with the workspace.") {
-		<form id={ MemberForm(m.ID) } method="post" action={ templ.SafeURL(p.Base() + "/members/" + ID(m.ID)) } class="team-form" data-role-controls>
+	@components.FormDialog("access-member-"+components.ResourceToken(ctx, "user", m.ID), "Manage access for "+m.Name(), "Changes take effect immediately. Unfinished requests under replaced permissions are cancelled; existing previews stay with the workspace.") {
+		<form id={ "member-" + components.ResourceToken(ctx, "user", m.ID) } method="post" action={ components.PublicURL(ctx, p.Base()+"/members/"+components.ResourceToken(ctx, "user", m.ID)) } class="team-form" data-role-controls>
 			@Hidden(p)
 			<input type="hidden" name="revision" value={ ID(m.Revision) }/>
-			<label for={ "role-" + ID(m.ID) }>Role</label>
-			<select id={ "role-" + ID(m.ID) } name="role" data-workspace-role-select>
-				@Roles(p.Owner(), m.Role)
-			</select>
+			@RoleChoices("member-"+components.ResourceToken(ctx, "user", m.ID), p.Owner(), m.Role)
 			<p class="team-field-hint" data-workspace-role-description>Developers can run code; reviewers can open permitted previews. Admins can manage every repository.</p>
 			@RepositoryChoices(p, m.Repositories)
-			<div class="dialog-actions"><button type="button" class="secondary-action" commandfor={ "access-member-" + ID(m.ID) } command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Save access</button></div>
+			<div class="dialog-actions"><button type="button" class="secondary-action" commandfor={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Save access</button></div>
 		</form>
 	}
 }
 
 templ InviteDialog(p Page) {
-	@components.ConfirmationDialog("invite-member", "Invite a teammate", "Choose their GitHub account and access. You will get a link to share; no email is sent.") {
-		<form method="post" action={ templ.SafeURL(p.Base() + "/invitations") } class="team-form" data-role-controls>
-			@Hidden(p)
-			<label for="invite-login">GitHub username</label><input id="invite-login" name="login" autofocus required maxlength="39" autocomplete="off" placeholder="octocat"/>
-			<label for="invite-role">Role</label>
-			<select id="invite-role" name="role" data-workspace-role-select>
-				@Roles(p.Owner(), "developer")
-			</select>
-			<p class="team-field-hint" data-workspace-role-description>Developers can run code; reviewers can open permitted previews. Admins can manage every repository.</p>
-			@RepositoryChoices(p, nil)
-			if len(p.Repositories)==0 {
-				<a class="team-text-action" href="/repositories">Connect repositories</a>
-			}
-			<div class="dialog-actions"><button type="button" class="secondary-action" commandfor="invite-member" command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Create invitation</button></div>
-		</form>
+	@components.FormDialog("invite-member", "Invite a teammate", "Choose their GitHub account and access. You will get a link to share; no email is sent.") {
+		@InvitationForm(p)
 	}
+}
+
+templ InvitationForm(p Page) {
+	<form method="post" action={ components.PublicURL(ctx, p.Base()+"/invitations") } class="team-form team-invite-form" data-role-controls>
+		@Hidden(p)
+		<label for="invite-login">GitHub username</label>
+		<input id="invite-login" name="login" value={ p.Invite.Login } required maxlength="39" autocomplete="off" placeholder="octocat" aria-describedby="invite-login-help invite-login-error" aria-invalid={ currentError(p.Invite.LoginError != "") } autofocus/>
+		<p id="invite-login-help" class="team-field-hint">Use the username only. Previa checks the account and existing workspace membership.</p>
+		if p.Invite.LoginError!="" {
+			<p id="invite-login-error" class="team-field-error" role="alert">{ p.Invite.LoginError }</p>
+		} else {
+			<p id="invite-login-error" hidden></p>
+		}
+		@RoleChoices("invite", p.Owner(), p.Invite.SelectedRole())
+		<p class="team-field-hint" data-workspace-role-description>Developers build and inspect logs. Reviewers open shared previews. Admins manage the workspace.</p>
+		@RepositoryChoices(p, p.Invite.Repositories)
+		if p.Invite.FormError!="" {
+			<p class="team-field-error" role="alert">{ p.Invite.FormError }</p>
+		}
+		if len(p.Repositories)==0 {
+			<a class="team-text-action" href="/repositories">Connect repositories</a>
+		}
+		<div class="dialog-actions">
+			if p.Invite.Failed {
+				<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members") }>Cancel</a>
+			} else {
+				<button type="button" class="secondary-action" commandfor="invite-member" command="close" data-close-dialog>Cancel</button>
+			}
+			<button type="submit" class="primary-action">Create invitation</button>
+		</div>
+	</form>
+}
+
+func currentError(invalid bool) string {
+	if invalid {
+		return "true"
+	}
+	return "false"
 }
 
 templ Invitations(p Page) {
@@ -159,7 +188,7 @@ templ Invitations(p Page) {
 			</h2>
 			<p>Invite teammates by GitHub username and share their invitation link.</p>
 			if p.Search!="" {
-				<a class="secondary-action" href={ templ.SafeURL(p.Base() + "/members?view=invitations") }>Clear search</a>
+				<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members?view=invitations") }>Clear search</a>
 			} else {
 				<button type="button" class="secondary-action" commandfor="invite-member" command="show-modal" data-open-dialog="invite-member" aria-haspopup="dialog">Invite teammate</button>
 			}
@@ -168,7 +197,7 @@ templ Invitations(p Page) {
 	for _,v:=range p.Invitations {
 		<div class="team-invitation-row">
 			<div class="team-person">
-				<span class="team-person-avatar" aria-hidden="true">{ components.WorkspaceInitial(v.Login) }</span>
+				@components.UserAvatar("", v.Login, "user-avatar-muted", nil)
 				<div>
 					<div class="team-inline">
 						<strong>{ v.Login }</strong>
@@ -191,18 +220,18 @@ templ Invitations(p Page) {
 			</div>
 			if p.Owner() || v.Role!="admin" {
 				<div class="team-row-actions">
-					<form method="post" action={ templ.SafeURL(p.Base() + "/invitations/" + ID(v.ID)) }>
+					<form method="post" action={ components.PublicURL(ctx, p.Base()+"/invitations/"+components.ResourceToken(ctx, "invitation", v.ID)) }>
 						@Hidden(p)
 						<input type="hidden" name="revision" value={ ID(v.Revision) }/><button type="submit" class="secondary-action" name="action" value="regenerate">Generate new link</button>
 					</form>
-					<button type="button" class="team-icon-button team-danger" data-open-dialog={ "revoke-invite-" + ID(v.ID) } commandfor={ "revoke-invite-" + ID(v.ID) } command="show-modal" aria-label={ "Revoke invitation for " + v.Login } title="Revoke invitation">
+					<button type="button" class="team-icon-button team-danger" data-open-dialog={ "revoke-invite-" + components.ResourceToken(ctx, "invitation", v.ID) } commandfor={ "revoke-invite-" + components.ResourceToken(ctx, "invitation", v.ID) } command="show-modal" aria-label={ "Revoke invitation for " + v.Login } title="Revoke invitation">
 						@components.TrashIcon()
 					</button>
 				</div>
-				@components.ConfirmationDialog("revoke-invite-"+ID(v.ID), "Revoke invitation for "+v.Login+"?", "This invitation link will stop working immediately.") {
-					<form method="post" action={ templ.SafeURL(p.Base() + "/invitations/" + ID(v.ID)) } class="dialog-actions">
+				@components.ConfirmationDialog("revoke-invite-"+components.ResourceToken(ctx, "invitation", v.ID), "Revoke invitation for "+v.Login+"?", "This invitation link will stop working immediately.") {
+					<form method="post" action={ components.PublicURL(ctx, p.Base()+"/invitations/"+components.ResourceToken(ctx, "invitation", v.ID)) } class="dialog-actions">
 						@Hidden(p)
-						<input type="hidden" name="revision" value={ ID(v.Revision) }/><input type="hidden" name="action" value="revoke"/><button type="button" class="secondary-action" commandfor={ "revoke-invite-" + ID(v.ID) } command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Revoke invitation</button>
+						<input type="hidden" name="revision" value={ ID(v.Revision) }/><input type="hidden" name="action" value="revoke"/><button type="button" class="secondary-action" commandfor={ "revoke-invite-" + components.ResourceToken(ctx, "invitation", v.ID) } command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Revoke invitation</button>
 					</form>
 				}
 			}
@@ -219,10 +248,10 @@ templ RemoveDialog(p Page, m Member) {
 			cta = "Leave workspace"
 		}
 	}}
-	@components.ConfirmationDialog("remove-member-"+ID(m.ID), title, "Dashboard and private-preview access ends immediately. Unfinished manual requests are cancelled; published previews stay with the team.") {
-		<form method="post" action={ templ.SafeURL(p.Base() + "/members/" + ID(m.ID)) } class="dialog-actions">
+	@components.ConfirmationDialog("remove-member-"+components.ResourceToken(ctx, "user", m.ID), title, "Dashboard and private-preview access ends immediately. Unfinished manual requests are cancelled; published previews stay with the team.") {
+		<form method="post" action={ components.PublicURL(ctx, p.Base()+"/members/"+components.ResourceToken(ctx, "user", m.ID)) } class="dialog-actions">
 			@Hidden(p)
-			<input type="hidden" name="revision" value={ ID(m.Revision) }/><input type="hidden" name="action" value="remove"/><button type="button" class="secondary-action" commandfor={ "remove-member-" + ID(m.ID) } command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">{ cta }</button>
+			<input type="hidden" name="revision" value={ ID(m.Revision) }/><input type="hidden" name="action" value="remove"/><button type="button" class="secondary-action" commandfor={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">{ cta }</button>
 		</form>
 	}
 }

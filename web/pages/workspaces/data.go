@@ -2,8 +2,10 @@ package workspaces
 
 import (
 	"fmt"
+	"github.com/ajaykathwatee/previa/web/components"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 type Workspace struct {
@@ -13,10 +15,19 @@ type Workspace struct {
 	ProfileRevision, LogoVersion    int64
 }
 type Member struct {
-	ID, Revision        int64
-	Login, Avatar, Role string
-	Repositories        []int64
+	ID, Revision, PhotoVersion               int64
+	Login, Avatar, Role, FirstName, LastName string
+	Repositories                             []int64
 }
+
+// AvatarSrc prefers the member's uploaded photo (PhotoVersion > 0) over GitHub's.
+func (m Member) AvatarSrc() string {
+	if m.PhotoVersion > 0 {
+		return "/avatars/" + ID(m.ID) + "?v=" + ID(m.PhotoVersion)
+	}
+	return m.Avatar
+}
+
 type Repository struct {
 	ID        int64
 	Name      string
@@ -36,6 +47,7 @@ type Page struct {
 	Workspace
 	ActorID, PageNumber, PageCount, MemberCount, RepositoryCount, InvitationCount int64
 	Tab, CSRF, Message, InvitationURL, Error, FormName, FormDescription           string
+	ErrorField                                                                    string // "logo" or "details" places a settings error next to its field
 	Search                                                                        string
 	InvitationView                                                                bool
 	Workspaces                                                                    []Workspace
@@ -44,6 +56,7 @@ type Page struct {
 	Repositories                                                                  []Repository
 	Invitations                                                                   []Invitation
 	Transfer                                                                      *Transfer
+	Invite                                                                        InviteForm
 }
 
 func (p Page) Base() string { return "/workspaces/" + strconv.FormatInt(p.ID, 10) }
@@ -83,4 +96,43 @@ func (p Page) RepositoryName(id int64) string {
 		}
 	}
 	return ""
+}
+
+type InviteForm struct {
+	Login, Role, LoginError, FormError string
+	Repositories                       []int64
+	Failed                             bool
+}
+
+func (f InviteForm) SelectedRole() string {
+	if f.Role == "admin" || f.Role == "reviewer" {
+		return f.Role
+	}
+	return "developer"
+}
+func (m Member) Name() string {
+	if n := strings.TrimSpace(m.FirstName + " " + m.LastName); n != "" {
+		return n
+	}
+	return m.Login
+}
+
+func (p Page) PublicReferences() []components.ResourceRef {
+	refs := components.ResourceRefs("workspace", p.ID)
+	for _, w := range p.Workspaces {
+		refs = append(refs, components.ResourceRef{Kind: "workspace", ID: w.ID})
+	}
+	for _, m := range p.Members {
+		refs = append(refs, components.ResourceRef{Kind: "user", ID: m.ID})
+	}
+	for _, m := range p.Admins {
+		refs = append(refs, components.ResourceRef{Kind: "user", ID: m.ID})
+	}
+	for _, repo := range p.Repositories {
+		refs = append(refs, components.ResourceRef{Kind: "repository", ID: repo.ID})
+	}
+	for _, v := range p.Invitations {
+		refs = append(refs, components.ResourceRef{Kind: "invitation", ID: v.ID})
+	}
+	return refs
 }

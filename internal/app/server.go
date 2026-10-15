@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net"
 	"net/http"
@@ -118,11 +119,13 @@ type serverFeatures struct {
 	kits           *starterkits.Handler
 	workspaces     *workspaces.Handler
 	workspaceScope *workspaces.Middleware
+	publicIDs      *publicid.Catalog
 }
 
 func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
 	f := &serverFeatures{capabilities: workers.NewReader(pool)}
 	f.sessions = auth.NewSessionManager(store, strings.HasPrefix(strings.ToLower(cfg.AppBaseURL), "https://"), logger)
+	f.publicIDs = publicid.New(pool)
 	f.auth = auth.NewHandler(cfg, f.sessions, auth.NewRepository(pool), auth.NewGitHubOAuth(cfg), logger)
 	kits, err := newStarterKits(f.auth, f.capabilities, logger)
 	if err != nil {
@@ -202,6 +205,7 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	}
 	workspaceService := workspaces.NewService(workspaces.NewRepository(pool), workspaceAccess, workspaceAccess, coordinator)
 	f.prs.WithSourceAccess(workspaceService)
+	f.auth.WithAvatarAudience(workspaceService)
 	f.workspaces = workspaces.NewHandler(workspaceService, f.auth, logger, cfg.AppBaseURL)
 	f.workspaceScope = workspaces.NewMiddleware(workspaceService, f.auth, logger)
 	return f, nil
@@ -308,6 +312,9 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 	router.Post(webhookPath, httpx.LimitConcurrency(webhookConcurrency, webhooks.NewHandler(cfg.GitHubWebhookSecret, f.deliveries, logger)).ServeHTTP)
 	router.Group(func(r chi.Router) {
 		r.Use(f.sessions.LoadAndSave, f.auth.LoadUser, f.auth.CSRF)
+		if f.publicIDs != nil {
+			r.Use(f.publicIDs.Middleware)
+		}
 		if f.workspaceScope != nil {
 			r.Use(f.workspaceScope.Load)
 		}

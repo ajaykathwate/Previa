@@ -42,7 +42,7 @@ templ CommandPalette() {
 			<div class="command-group" role="group" aria-label="Account">
 				<p class="command-group-label" aria-hidden="true">Account</p>
 				@CommandItem("cmd-theme", "", "theme", "Switch colour theme", "Light or dark", "dark light mode appearance", SunIcon())
-				@CommandItem("cmd-session", "/protected", "", "View session", "Your GitHub identity", "account profile", UserIcon())
+				@CommandItem("cmd-session", "/protected", "", "Your profile", "Your name, photo and connected GitHub account", "account profile photo session", UserIcon())
 				@CommandItem("cmd-home", "/", "", "Home page", "Public site", "landing marketing", HomeIcon())
 				@CommandItem("cmd-logout", "", "logout", "Log out…", "Confirm before ending", "sign out exit", LogoutIcon())
 			</div>
@@ -62,10 +62,10 @@ templ CommandItem(id, href, action, label, hint, keywords string, icon templ.Com
 		data-command-item
 		data-keywords={ label + " " + hint + " " + keywords }
 		if href != "" {
-			data-href={ href }
+			data-href={ PublicURL(ctx, href) }
 		}
 		if action != "" {
-			data-action={ action }
+			data-action={ PublicURL(ctx, action) }
 		}
 	>
 		<span class="command-item-icon">

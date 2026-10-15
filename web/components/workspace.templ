@@ -6,7 +6,7 @@ templ WorkspaceSwitcher() {
 			<summary title={ Workspace(ctx).Name } aria-label={ "Switch workspace: " + Workspace(ctx).Name }>
 				@WorkspaceAvatar(Workspace(ctx).Name, Workspace(ctx).ID, Workspace(ctx).LogoVersion)
 				<span class="workspace-switcher-label">
-					<strong>
+					<strong data-current-workspace-name>
 						{ Workspace(ctx).Name }
 					</strong>
 					@WorkspaceRole(Workspace(ctx).Role)
@@ -18,7 +18,7 @@ templ WorkspaceSwitcher() {
 			<div class="workspace-switcher-menu">
 				<p class="eyebrow">Switch workspace</p>
 				for _, item := range Workspace(ctx).Items {
-					<form method="post" action={ templ.SafeURL(WorkspaceURL(item.ID, "select")) }>
+					<form method="post" action={ PublicURL(ctx, WorkspaceURL(item.ID, "select")) }>
 						<input type="hidden" name="csrf_token" value={ Workspace(ctx).CSRF }/>
 						<button type="submit" aria-current={ workspaceCurrent(Workspace(ctx).ID, item.ID) }>
 							@WorkspaceAvatar(item.Name, item.ID, item.LogoVersion)
@@ -35,12 +35,12 @@ templ WorkspaceSwitcher() {
 					</form>
 				}
 				<div class="workspace-switcher-shortcuts">
-					<a href={ templ.SafeURL(WorkspaceURL(Workspace(ctx).ID, "members")) }>
+					<a href={ PublicURL(ctx, WorkspaceURL(Workspace(ctx).ID, "members")) }>
 						@TeamIcon()
 						<span>Members & invitations</span>
 					</a>
 					if CanManage(ctx) {
-						<a href={ templ.SafeURL(WorkspaceURL(Workspace(ctx).ID, "settings")) }>
+						<a href={ PublicURL(ctx, WorkspaceURL(Workspace(ctx).ID, "settings")) }>
 							@WrenchIcon()
 							<span>Workspace settings</span>
 						</a>
@@ -61,7 +61,7 @@ templ WorkspaceAvatar(name string, id, version int64) {
 	<span class="workspace-avatar" aria-hidden="true">
 		{ WorkspaceInitial(name) }
 		if version>0 {
-			<img src={ templ.SafeURL(WorkspaceLogoURL(id, version)) } alt="" width="64" height="64" decoding="async"/>
+			<img src={ PublicURL(ctx, WorkspaceLogoURL(id, version)) } alt="" width="64" height="64" decoding="async"/>
 		}
 	</span>
 }

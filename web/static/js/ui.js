@@ -80,59 +80,283 @@
   }
 
   function initWorkspaceForms() {
+    document.querySelectorAll('[data-repository-picker]').forEach(picker => {
+      const search = picker.querySelector('[data-repository-search]');
+      if (!search) return;
+      const rows = [...picker.querySelectorAll('[data-repository-option]')];
+      const count = picker.querySelector('[data-repository-count]');
+      picker.querySelector('[data-repository-enhancement]').hidden = false;
+      const update = () => {
+        const query = search.value.trim().toLocaleLowerCase();
+        let selected = 0, visible = 0;
+        rows.forEach(row => {
+          row.hidden = !row.dataset.repositoryName.toLocaleLowerCase().includes(query);
+          if (!row.hidden) visible++;
+          if (row.querySelector('input').checked) selected++;
+        });
+        count.textContent = `${selected} of ${rows.length} selected`;
+        picker.querySelector('[data-repository-empty]').hidden = visible !== 0;
+      };
+      search.addEventListener('input', update);
+      search.addEventListener('keydown', event => { if (event.key === 'Enter') event.preventDefault(); });
+      picker.addEventListener('change', update);
+      const selectVisible = checked => { rows.filter(row => !row.hidden).forEach(row => { row.querySelector('input').checked = checked; }); update(); };
+      picker.querySelector('[data-repository-select]').addEventListener('click', () => selectVisible(true));
+      picker.querySelector('[data-repository-clear]').addEventListener('click', () => selectVisible(false));
+      update();
+    });
+    const recovery = document.querySelector('[data-invite-recovery]');
+    if (recovery) {
+      const dialog = document.createElement('dialog');
+      dialog.id = 'invite-member'; dialog.className = 'confirmation-dialog team-form-dialog';
+      dialog.dataset.confirmationDialog = '';
+      const close = document.createElement('button'); close.type = 'button'; close.className = 'dialog-close';
+      close.setAttribute('aria-label', 'Close form'); close.dataset.closeDialog = ''; close.textContent = '×';
+      dialog.append(close);
+      const heading = recovery.querySelector('h2'); heading.id = 'invite-member-title';
+      dialog.setAttribute('aria-labelledby', heading.id);
+      recovery.classList.remove('workspace-panel', 'team-settings-panel');
+      recovery.replaceWith(dialog); dialog.append(recovery);
+      dialog.showModal(); dialog.querySelector('[aria-invalid="true"]')?.focus();
+    }
+
     const descriptions = {
       developer: 'Can build and inspect logs for selected repositories after a GitHub permission check. Code can receive configured runtime secrets.',
       reviewer: 'Can open selected previews, including private previews. Cannot run builds, inspect logs or manage repository settings.',
       admin: 'Can access every repository and manage members and repository settings. Only the owner can appoint other admins.',
     };
     document.querySelectorAll('[data-role-controls]').forEach(form => {
-      const role = form.querySelector('[data-workspace-role-select]');
+      const roles = [...form.querySelectorAll('[data-workspace-role-select]')];
+      const selectedRole = () => roles.find(input => input.checked)?.value || 'developer';
       const choices = form.querySelector('.team-repository-choices');
       const explain = () => {
-        form.querySelector('[data-workspace-role-description]').textContent = descriptions[role.value] || '';
-        choices.hidden = role.value === 'admin';
-        choices.disabled = role.value === 'admin';
+        form.querySelector('[data-workspace-role-description]').textContent = descriptions[selectedRole()] || '';
+        choices.hidden = selectedRole() === 'admin';
+        choices.disabled = selectedRole() === 'admin';
       };
-      role.addEventListener('change', explain);
+      roles.forEach(input => input.addEventListener('change', explain));
+      form.addEventListener('submit', event => {
+        if (form.dataset.submitting) { event.preventDefault(); return; }
+        form.dataset.submitting = 'true'; form.setAttribute('aria-busy', 'true');
+        const submit = form.querySelector('button[type=submit]');
+        if (submit) { submit.dataset.idleLabel = submit.textContent; submit.disabled = true; submit.textContent = form.classList.contains('team-invite-form') ? 'Creating invitation…' : 'Saving access…'; }
+      });
       explain();
     });
-    document.querySelectorAll('[data-workspace-profile]').forEach(form => {
-      const fields = [...form.querySelectorAll('input:not([type=hidden]), textarea')];
-      const save = form.querySelector('[data-profile-save]');
-      const hint = form.querySelector('[data-profile-dirty]');
-      const update = () => {
-        const changed = fields.some(field => field.value !== field.defaultValue);
-        save.disabled = !changed;
-        hint.textContent = changed ? 'Unsaved changes' : '';
-      };
-      form.addEventListener('input', update);
-      update();
+  }
+
+  // Small save confirmations. Errors stay next to the control that failed.
+  function toast(message, tone = 'ok') {
+    if (!message) return;
+    let region = document.querySelector('[data-toast-region]');
+    if (!region) {
+      region = document.createElement('div');
+      region.className = 'toast-region'; region.dataset.toastRegion = ''; region.setAttribute('aria-live', 'polite');
+      document.body.append(region);
+    }
+    const item = document.createElement('p');
+    item.className = `toast tone-${tone}`; item.setAttribute('role', tone === 'danger' ? 'alert' : 'status');
+    item.innerHTML = tone === 'danger'
+      ? '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 8v5M12 16.5v.01"></path><circle cx="12" cy="12" r="9"></circle></svg>'
+      : '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"></path></svg>';
+    const text = document.createElement('span'); text.textContent = message; item.append(text);
+    region.querySelectorAll('.toast').forEach(old => old.remove());
+    region.append(item);
+  }
+  function initToasts() {
+    document.addEventListener('animationend', event => {
+      if (event.target.matches?.('.toast') && event.animationName === 'toast-out') event.target.remove();
     });
-    document.querySelectorAll('[data-workspace-logo]').forEach(form => {
-      const input = form.querySelector('input[type=file]');
-      const save = form.querySelector('button[type=submit]');
-      const filename = form.querySelector('[data-logo-filename]');
-      save.disabled = true;
-      input.addEventListener('change', () => {
-        const file = input.files[0];
-        const valid = file && file.size <= 192 * 1024 && ['image/png', 'image/jpeg'].includes(file.type);
-        save.disabled = !valid;
-        input.setCustomValidity(file && !valid ? 'Choose a PNG or JPEG image up to 192 KiB.' : '');
-        filename.textContent = file ? (valid ? `Selected: ${file.name}` : 'Choose a PNG or JPEG image up to 192 KiB.') : '';
-        if (!valid) return;
-        const reader = new FileReader();
-        reader.addEventListener('load', () => {
-          if (input.files[0] !== file) return;
-          const preview = form.closest('.team-branding').querySelector('[data-logo-preview] .workspace-avatar');
-          const image = document.createElement('img');
-          image.alt = ''; image.src = reader.result;
-          preview.querySelector('img')?.remove();
-          preview.append(image);
+    document.addEventListener('click', event => { event.target.closest?.('.toast')?.remove(); });
+    // A confirmation after a plain form redirect should not repeat on reload.
+    const url = new URL(location.href);
+    if (url.searchParams.has('saved')) {
+      url.searchParams.delete('saved');
+      history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+    }
+    // A picture that fails to load leaves the initial underneath visible.
+    document.addEventListener('error', event => {
+      if (event.target instanceof HTMLImageElement && event.target.matches('.user-avatar > img, .workspace-avatar > img')) event.target.remove();
+    }, true);
+  }
+
+  // Enhanced forms post with Accept: application/json and get FormResult back.
+  async function postForm(form, body) {
+    let response;
+    try {
+      response = await fetch(form.action, {method: 'POST', body, credentials: 'same-origin', redirect: 'manual', headers: {Accept: 'application/json'}});
+    } catch {
+      throw new Error('Couldn’t reach Previa. Check your connection and try again.');
+    }
+    if (response.type === 'opaqueredirect') throw new Error('Your session has ended. Sign in again, then retry.');
+    if (response.status === 403) throw new Error('Your session check failed. Refresh the page, then try again.');
+    if (response.status === 413) throw new Error('That file is too large. Choose a smaller image.');
+    let result = {};
+    try { result = await response.json(); } catch { /* a non-JSON refusal keeps the generic message */ }
+    if (!response.ok) throw new Error(result.error || 'This change could not be saved. Please try again.');
+    if (result.revision) document.querySelectorAll('input[name=profile_revision]').forEach(input => { input.value = result.revision; input.defaultValue = String(result.revision); });
+    return result;
+  }
+  const setText = (selector, value) => { if (value) document.querySelectorAll(selector).forEach(el => { el.textContent = value; if (el.title) el.title = value; }); };
+
+  // In-place fields (Jira style): Enter or ✓ saves, Esc or ✕ restores, and
+  // leaving a changed field saves it. Only the edited field changes; the
+  // others are sent with their saved values.
+  function initInlineForms() {
+    document.querySelectorAll('form[data-inline-form]').forEach(form => {
+      const fields = [...form.querySelectorAll('[data-inline-edit] .inline-input')];
+      const error = form.querySelector('[data-inline-error]');
+      const showError = (field, message) => {
+        if (error) { error.textContent = message; error.hidden = !message; }
+        if (field) field.setAttribute('aria-invalid', message ? 'true' : 'false');
+      };
+      const cancel = field => { field.value = field.defaultValue; showError(field, ''); field.blur(); };
+      // A save started by leaving the field reports problems without pulling focus back.
+      const save = async (field, fromBlur = false) => {
+        const group = field.closest('[data-inline-edit]');
+        if (group.dataset.saving) return;
+        if (field.value === field.defaultValue) { showError(field, ''); return; }
+        if (!field.checkValidity()) { showError(field, field.validationMessage); if (!fromBlur) field.focus(); return; }
+        const body = new FormData(form);
+        fields.filter(other => other !== field).forEach(other => body.set(other.name, other.defaultValue));
+        group.dataset.saving = 'true'; field.readOnly = true;
+        try {
+          const result = await postForm(form, body);
+          const saved = result.fields || {};
+          fields.forEach(f => { if (saved[f.name] !== undefined) f.defaultValue = saved[f.name]; });
+          field.defaultValue = saved[field.name] ?? field.value;
+          field.value = field.defaultValue;
+          showError(field, '');
+          setText('[data-viewer-name]', saved.display_name);
+          if (form.matches('[data-workspace-profile]') && field.name === 'name') {
+            setText('[data-current-workspace-name]', saved.name);
+            document.querySelectorAll('.app-breadcrumb-parent .app-breadcrumb-label').forEach(el => { el.textContent = saved.name; });
+          }
+          toast(result.message || 'Saved');
+          if (document.activeElement === field) field.blur();
+        } catch (e) {
+          showError(field, e.message);
+          if (!fromBlur) field.focus();
+        } finally {
+          delete group.dataset.saving; field.readOnly = false;
+        }
+      };
+      fields.forEach(field => {
+        const group = field.closest('[data-inline-edit]');
+        field.addEventListener('keydown', event => {
+          const multiline = field instanceof HTMLTextAreaElement;
+          if (event.key === 'Escape') { event.preventDefault(); cancel(field); }
+          else if (event.key === 'Enter' && (!multiline || event.metaKey || event.ctrlKey)) { event.preventDefault(); save(field); }
         });
-        reader.readAsDataURL(file);
+        group.addEventListener('focusout', event => {
+          if (!group.contains(event.relatedTarget) && field.value !== field.defaultValue && !group.dataset.saving) save(field, true);
+        });
+        group.querySelector('.inline-cancel').addEventListener('click', event => { event.preventDefault(); cancel(field); });
+        // Keep focus in the field while pressing ✓ or ✕ so the controls stay put.
+        group.querySelectorAll('.inline-actions button').forEach(button => button.addEventListener('mousedown', event => event.preventDefault()));
+      });
+      form.addEventListener('submit', event => {
+        event.preventDefault();
+        const field = event.submitter?.closest('[data-inline-edit]')?.querySelector('.inline-input') || fields.find(f => f.value !== f.defaultValue);
+        if (field) save(field);
       });
     });
   }
+
+  // Photos and logos upload as soon as a file is chosen. The browser crops a
+  // profile photo to a square and shrinks large images first, so phone photos
+  // fit the upload limit; the server still validates and re-encodes.
+  const UPLOAD_LIMIT = 190 * 1024;
+  async function prepareImage(file, kind) {
+    if (!['image/png', 'image/jpeg'].includes(file.type)) throw new Error('Choose a PNG or JPEG image.');
+    if (typeof createImageBitmap !== 'function') return file;
+    let bitmap;
+    try { bitmap = await createImageBitmap(file); } catch { throw new Error('This image could not be read. Choose another PNG or JPEG.'); }
+    const avatar = kind === 'avatar';
+    if (!avatar && file.size <= UPLOAD_LIMIT && bitmap.width <= 512 && bitmap.height <= 512) return file;
+    const side = Math.min(bitmap.width, bitmap.height);
+    const encode = async (limit, type) => {
+      const scale = avatar ? Math.min(1, limit / side) : Math.min(1, limit / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round((avatar ? side : bitmap.width) * scale));
+      canvas.height = Math.max(1, Math.round((avatar ? side : bitmap.height) * scale));
+      const context = canvas.getContext('2d');
+      context.imageSmoothingQuality = 'high';
+      if (type === 'image/jpeg') { context.fillStyle = '#fff'; context.fillRect(0, 0, canvas.width, canvas.height); }
+      if (avatar) context.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, canvas.width, canvas.height);
+      else context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      return new Promise(resolve => canvas.toBlob(resolve, type, 0.9));
+    };
+    for (const [limit, type] of avatar ? [[256, 'image/png'], [256, 'image/jpeg']] : [[512, 'image/png'], [256, 'image/png'], [256, 'image/jpeg']]) {
+      const blob = await encode(limit, type);
+      if (blob && blob.size <= UPLOAD_LIMIT) return new File([blob], type === 'image/png' ? `${kind}.png` : `${kind}.jpg`, {type});
+    }
+    throw new Error('This image is too large. Choose a smaller PNG or JPEG.');
+  }
+  function showPicture(targets, src) {
+    targets.forEach(avatar => {
+      let image = avatar.querySelector(':scope > img');
+      if (!src) { image?.remove(); return; }
+      if (!image) {
+        image = document.createElement('img');
+        image.alt = ''; image.width = 64; image.height = 64; image.referrerPolicy = 'no-referrer';
+        avatar.append(image);
+      }
+      image.src = src;
+    });
+  }
+  function initImageEditors() {
+    document.querySelectorAll('form[data-avatar-form]').forEach(form => {
+      const kind = form.dataset.imageKind;
+      const input = form.querySelector('input[type=file]');
+      const remove = form.closest('.photo-field')?.querySelector('form[data-avatar-remove]');
+      const error = document.getElementById('avatar-error');
+      const targets = () => kind === 'avatar'
+        ? document.querySelectorAll('[data-viewer-avatar]')
+        : document.querySelectorAll('[data-logo-preview] .workspace-avatar, .workspace-switcher > summary .workspace-avatar');
+      const fail = message => { if (error && kind === 'avatar') { error.textContent = message; error.hidden = false; } toast(message, 'danger'); };
+      input.addEventListener('change', async () => {
+        const chosen = input.files[0];
+        if (!chosen || form.getAttribute('aria-busy') === 'true') return;
+        form.setAttribute('aria-busy', 'true');
+        if (error) error.hidden = true;
+        try {
+          const file = await prepareImage(chosen, kind);
+          const body = new FormData(form);
+          body.set(input.name, file, file.name);
+          const result = await postForm(form, body);
+          showPicture(targets(), result.fields?.[kind === 'avatar' ? 'avatar' : 'logo']);
+          if (remove) remove.hidden = false;
+          toast(result.message || 'Saved');
+        } catch (e) {
+          fail(e.message);
+        } finally {
+          form.removeAttribute('aria-busy');
+          input.value = '';
+        }
+      });
+      remove?.addEventListener('submit', async event => {
+        event.preventDefault();
+        try {
+          const result = await postForm(remove, new FormData(remove));
+          showPicture(targets(), result.fields?.avatar || '');
+          remove.hidden = true;
+          toast(result.message || 'Removed');
+        } catch (e) {
+          fail(e.message);
+        }
+      });
+    });
+  }
+
+  // Restore forms when navigating back to a page from the browser's cache.
+  window.addEventListener('pageshow', () => {
+    document.querySelectorAll('[data-submitting]').forEach(form => {
+      delete form.dataset.submitting; form.removeAttribute('aria-busy');
+      const submit = form.querySelector('button[type=submit]');
+      if (submit?.dataset.idleLabel) { submit.disabled = false; submit.textContent = submit.dataset.idleLabel; delete submit.dataset.idleLabel; }
+    });
+  });
 
   // Theme choice is a per-browser preference; without a choice the OS theme applies.
   const themeQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -1642,6 +1866,9 @@
   initTheme();
   initNavigation();
   initWorkspaceForms();
+  initToasts();
+  initInlineForms();
+  initImageEditors();
   initPrefetch();
   initConfirmationDialogs();
   initAccountMenus();

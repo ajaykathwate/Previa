@@ -176,7 +176,7 @@ func (q *Queries) CountWorkspaceInvitations(ctx context.Context, arg CountWorksp
 
 const countWorkspaceMembers = `-- name: CountWorkspaceMembers :one
 SELECT count(*) FROM workspace_memberships m JOIN users u ON u.id=m.user_id
-WHERE m.workspace_id=$1 AND m.state='active' AND strpos(lower(u.username),lower($2::text))>0
+WHERE m.workspace_id=$1 AND m.state='active' AND strpos(lower(concat_ws(' ',u.first_name,u.last_name,u.username)),lower($2::text))>0
 `
 
 type CountWorkspaceMembersParams struct {
@@ -313,6 +313,22 @@ func (q *Queries) ExpirePendingInvitation(ctx context.Context, arg ExpirePending
 	return err
 }
 
+const hasPendingInvitation = `-- name: HasPendingInvitation :one
+SELECT EXISTS(SELECT 1 FROM workspace_invitations WHERE workspace_id=$1 AND github_id=$2 AND state='pending' AND expires_at>now())
+`
+
+type HasPendingInvitationParams struct {
+	WorkspaceID int64
+	GithubID    int64
+}
+
+func (q *Queries) HasPendingInvitation(ctx context.Context, arg HasPendingInvitationParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasPendingInvitation, arg.WorkspaceID, arg.GithubID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const invitationCreatorAuthorized = `-- name: InvitationCreatorAuthorized :one
 SELECT EXISTS(SELECT 1 FROM workspace_memberships m WHERE m.workspace_id=$1 AND m.user_id=$2 AND m.state='active'
 AND m.role IN ('owner','admin') AND ($3::text<>'admin' OR m.role='owner'))::boolean
@@ -386,7 +402,7 @@ func (q *Queries) InvitationScope(ctx context.Context, id int64) ([]InvitationSc
 }
 
 const listWorkspaces = `-- name: ListWorkspaces :many
-SELECT w.id,w.name,w.description,w.owner_user_id,w.revision,w.profile_revision,w.created_at,u.username AS owner_login,
+SELECT w.id,w.name,w.description,w.owner_user_id,w.revision,w.profile_revision,w.created_at,coalesce(nullif(trim(u.first_name||' '||u.last_name),''),u.username) AS owner_login,
 coalesce(l.version,0)::bigint AS logo_version,m.role,m.revision AS membership_revision
 FROM workspaces w JOIN workspace_memberships m ON m.workspace_id=w.id
 JOIN users u ON u.id=w.owner_user_id LEFT JOIN workspace_logos l ON l.workspace_id=w.id
@@ -441,7 +457,7 @@ func (q *Queries) ListWorkspaces(ctx context.Context, userID int64) ([]ListWorks
 }
 
 const lockInvitation = `-- name: LockInvitation :one
-SELECT id, workspace_id, github_id, login, role, token_hash, expires_at, state, created_by, revision, created_at FROM workspace_invitations WHERE id=$1 FOR UPDATE
+SELECT id, workspace_id, github_id, login, role, token_hash, expires_at, state, created_by, revision, created_at, public_id FROM workspace_invitations WHERE id=$1 FOR UPDATE
 `
 
 func (q *Queries) LockInvitation(ctx context.Context, id int64) (WorkspaceInvitation, error) {
@@ -459,6 +475,7 @@ func (q *Queries) LockInvitation(ctx context.Context, id int64) (WorkspaceInvita
 		&i.CreatedBy,
 		&i.Revision,
 		&i.CreatedAt,
+		&i.PublicID,
 	)
 	return i, err
 }
@@ -488,7 +505,7 @@ func (q *Queries) LockMembership(ctx context.Context, arg LockMembershipParams) 
 }
 
 const lockWorkspace = `-- name: LockWorkspace :one
-SELECT id, name, owner_user_id, legacy_user_id, state, revision, created_at, description, profile_revision FROM workspaces WHERE id=$1 AND state='active' FOR UPDATE
+SELECT id, name, owner_user_id, legacy_user_id, state, revision, created_at, description, profile_revision, public_id FROM workspaces WHERE id=$1 AND state='active' FOR UPDATE
 `
 
 func (q *Queries) LockWorkspace(ctx context.Context, id int64) (Workspace, error) {
@@ -504,6 +521,7 @@ func (q *Queries) LockWorkspace(ctx context.Context, id int64) (Workspace, error
 		&i.CreatedAt,
 		&i.Description,
 		&i.ProfileRevision,
+		&i.PublicID,
 	)
 	return i, err
 }
@@ -590,7 +608,7 @@ func (q *Queries) PutRepositoryGrant(ctx context.Context, arg PutRepositoryGrant
 }
 
 const readInvitation = `-- name: ReadInvitation :one
-SELECT v.id, v.workspace_id, v.github_id, v.login, v.role, v.token_hash, v.expires_at, v.state, v.created_by, v.revision, v.created_at,w.name,w.state AS workspace_state FROM workspace_invitations v JOIN workspaces w ON w.id=v.workspace_id WHERE token_hash=$1
+SELECT v.id, v.workspace_id, v.github_id, v.login, v.role, v.token_hash, v.expires_at, v.state, v.created_by, v.revision, v.created_at, v.public_id,w.name,w.state AS workspace_state FROM workspace_invitations v JOIN workspaces w ON w.id=v.workspace_id WHERE token_hash=$1
 `
 
 type ReadInvitationRow struct {
@@ -605,6 +623,7 @@ type ReadInvitationRow struct {
 	CreatedBy      int64
 	Revision       int64
 	CreatedAt      pgtype.Timestamptz
+	PublicID       pgtype.UUID
 	Name           string
 	WorkspaceState string
 }
@@ -624,6 +643,7 @@ func (q *Queries) ReadInvitation(ctx context.Context, tokenHash []byte) (ReadInv
 		&i.CreatedBy,
 		&i.Revision,
 		&i.CreatedAt,
+		&i.PublicID,
 		&i.Name,
 		&i.WorkspaceState,
 	)
@@ -677,7 +697,7 @@ func (q *Queries) ReadRepositoryAccess(ctx context.Context, arg ReadRepositoryAc
 }
 
 const readWorkspace = `-- name: ReadWorkspace :one
-SELECT w.id,w.name,w.description,w.owner_user_id,w.revision,w.profile_revision,w.created_at,u.username AS owner_login,
+SELECT w.id,w.name,w.description,w.owner_user_id,w.revision,w.profile_revision,w.created_at,coalesce(nullif(trim(u.first_name||' '||u.last_name),''),u.username) AS owner_login,
 coalesce(l.version,0)::bigint AS logo_version,m.role,m.revision AS membership_revision
 FROM workspaces w JOIN workspace_memberships m ON m.workspace_id=w.id
 JOIN users u ON u.id=w.owner_user_id LEFT JOIN workspace_logos l ON l.workspace_id=w.id
@@ -841,6 +861,26 @@ func (q *Queries) SetWorkspaceOwner(ctx context.Context, arg SetWorkspaceOwnerPa
 	return err
 }
 
+const sharesWorkspace = `-- name: SharesWorkspace :one
+SELECT EXISTS(
+ SELECT 1 FROM workspace_memberships a JOIN workspace_memberships b ON b.workspace_id=a.workspace_id
+ WHERE a.user_id=$1 AND b.user_id=$2 AND a.state='active' AND b.state='active'
+)
+`
+
+type SharesWorkspaceParams struct {
+	ViewerID  int64
+	SubjectID int64
+}
+
+// Uploaded profile pictures are visible to the member and their current teammates.
+func (q *Queries) SharesWorkspace(ctx context.Context, arg SharesWorkspaceParams) (bool, error) {
+	row := q.db.QueryRow(ctx, sharesWorkspace, arg.ViewerID, arg.SubjectID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const updateInvitationState = `-- name: UpdateInvitationState :exec
 UPDATE workspace_invitations SET state=$2,revision=revision+1 WHERE id=$1
 `
@@ -999,12 +1039,12 @@ func (q *Queries) WorkspaceInvitations(ctx context.Context, arg WorkspaceInvitat
 }
 
 const workspaceMembers = `-- name: WorkspaceMembers :many
-SELECT m.user_id,m.role,m.revision,m.joined_at,u.username,u.avatar_url,
+SELECT m.user_id,m.role,m.revision,m.joined_at,u.username,u.avatar_url,u.custom_avatar,u.avatar_version,u.first_name,u.last_name,
        coalesce(array_agg(g.repo_id ORDER BY g.repo_id) FILTER(WHERE g.repo_id IS NOT NULL),'{}'::bigint[])::bigint[] AS repository_ids
 FROM workspace_memberships m JOIN users u ON u.id=m.user_id
 LEFT JOIN repository_memberships g ON g.workspace_id=m.workspace_id AND g.user_id=m.user_id
 WHERE m.workspace_id=$1::bigint AND m.state='active'
-AND strpos(lower(u.username),lower($2::text))>0
+AND strpos(lower(concat_ws(' ',u.first_name,u.last_name,u.username)),lower($2::text))>0
 GROUP BY m.workspace_id,m.user_id,u.id ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,lower(u.username),m.user_id
 LIMIT 20 OFFSET $3::bigint
 `
@@ -1022,6 +1062,10 @@ type WorkspaceMembersRow struct {
 	JoinedAt      pgtype.Timestamptz
 	Username      string
 	AvatarUrl     string
+	CustomAvatar  bool
+	AvatarVersion int64
+	FirstName     string
+	LastName      string
 	RepositoryIds []int64
 }
 
@@ -1041,6 +1085,10 @@ func (q *Queries) WorkspaceMembers(ctx context.Context, arg WorkspaceMembersPara
 			&i.JoinedAt,
 			&i.Username,
 			&i.AvatarUrl,
+			&i.CustomAvatar,
+			&i.AvatarVersion,
+			&i.FirstName,
+			&i.LastName,
 			&i.RepositoryIds,
 		); err != nil {
 			return nil, err

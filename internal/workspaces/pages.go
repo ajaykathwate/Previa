@@ -103,7 +103,11 @@ func (s *Service) membersPage(ctx context.Context, q *dbgen.Queries, p *pages.Pa
 			return fmt.Errorf("list workspace members: %w", err)
 		}
 		for _, v := range members {
-			p.Members = append(p.Members, pages.Member{ID: v.UserID, Revision: v.Revision, Login: v.Username, Avatar: v.AvatarUrl, Role: v.Role, Repositories: v.RepositoryIds})
+			m := pages.Member{ID: v.UserID, Revision: v.Revision, Login: v.Username, Avatar: v.AvatarUrl, Role: v.Role, FirstName: v.FirstName, LastName: v.LastName, Repositories: v.RepositoryIds}
+			if v.CustomAvatar {
+				m.PhotoVersion = v.AvatarVersion
+			}
+			p.Members = append(p.Members, m)
 		}
 	}
 	if !p.Manage() {

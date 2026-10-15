@@ -3,82 +3,97 @@ package workspaces
 import "github.com/ajaykathwatee/previa/web/components"
 
 templ Settings(p Page) {
-	<div class="team-settings-grid">
-		<div class="team-settings-main">
-			<section class="workspace-panel team-settings-panel" aria-labelledby="details-heading">
-				<div class="team-section-heading">
-					<span class="team-section-icon">
-						@components.OverviewIcon()
-					</span>
-					<div><h2 id="details-heading">Workspace details</h2><p>A recognizable name and a short description for your team.</p></div>
-				</div>
-				<form method="post" action={ templ.SafeURL(p.Base() + "/settings") } class="team-form team-profile-form" data-workspace-profile>
-					@ProfileHidden(p)
-					<label for="rename-workspace">Workspace name</label><input id="rename-workspace" name="name" value={ p.FormName } maxlength="80" required aria-describedby="name-help"/>
-					<p id="name-help" class="team-field-hint">Shown in navigation, invitations and the workspace picker.</p>
-					<label for="workspace-description">Description <span class="team-optional">Optional</span></label><textarea id="workspace-description" name="description" maxlength="240" rows="3" placeholder="What does this team work on?" aria-describedby="description-help">{ p.FormDescription }</textarea>
-					<p id="description-help" class="team-field-hint">Up to 240 characters. Visible to workspace members.</p>
-					<div class="team-form-footer"><span class="team-field-hint" data-profile-dirty role="status"></span><button type="submit" class="primary-action" data-profile-save>Save changes</button></div>
-				</form>
-			</section>
-			<section class="workspace-panel team-settings-panel" aria-labelledby="logo-heading">
-				<div class="team-section-heading">
-					<span class="team-section-icon">
-						@components.BrowserIcon()
-					</span>
-					<div><h2 id="logo-heading">Workspace logo</h2><p>Help people recognize the workspace at a glance.</p></div>
-				</div>
-				<div class="team-branding">
-					<div class="team-logo-preview" data-logo-preview>
-						@components.WorkspaceAvatar(p.Name, p.ID, p.LogoVersion)
+	<div class="field-grid field-grid-wide">
+		<section class="workspace-panel field-card" aria-labelledby="details-heading">
+			<header class="field-card-head">
+				<h2 id="details-heading">
+					@components.OverviewIcon()
+					General
+				</h2>
+				<span class="field-card-note">Visible to workspace members</span>
+			</header>
+			<div class="field-list">
+				<div class="field-row">
+					<span class="field-label" id="logo-label">Logo</span>
+					<div class="photo-field">
+						<form method="post" action={ components.PublicURL(ctx, p.Base()+"/logo") } enctype="multipart/form-data" class="avatar-editor" data-avatar-form data-image-kind="logo">
+							@ProfileHidden(p)
+							<label for="workspace-logo" class="avatar-editor-target" title="Change logo" data-logo-preview>
+								@components.WorkspaceAvatar(p.Name, p.ID, p.LogoVersion)
+								<span class="avatar-editor-badge" aria-hidden="true">
+									@components.PencilIcon()
+								</span>
+							</label>
+							<input id="workspace-logo" name="logo" type="file" accept="image/png,image/jpeg" required class="avatar-editor-input" aria-labelledby="logo-label" aria-describedby="logo-help"/>
+							<button type="submit" class="avatar-editor-submit field-card-action">Upload</button>
+						</form>
+						<div class="photo-actions">
+							<label for="workspace-logo" class="text-action">Change logo</label>
+							<form method="post" action={ components.PublicURL(ctx, p.Base()+"/logo/remove") } data-avatar-remove hidden?={ p.LogoVersion==0 }>
+								@ProfileHidden(p)
+								<button type="submit" class="text-action">Remove</button>
+							</form>
+							<span id="logo-help" class="field-meta">PNG or JPEG · square works best</span>
+						</div>
 					</div>
-					<form method="post" action={ templ.SafeURL(p.Base() + "/logo") } enctype="multipart/form-data" class="team-form" data-workspace-logo>
-						@ProfileHidden(p)
-						<label for="workspace-logo">Choose an image</label><input id="workspace-logo" name="logo" type="file" accept="image/png,image/jpeg" required aria-describedby="logo-help"/>
-						<p id="logo-help" class="team-field-hint">PNG or JPEG · up to 192 KiB · maximum 512 × 512 pixels. A square image works best.</p>
-						<p data-logo-filename class="team-field-hint" role="status"></p><button type="submit" class="secondary-action">Upload logo</button>
-					</form>
 				</div>
-				if p.LogoVersion>0 {
-					<form method="post" action={ templ.SafeURL(p.Base() + "/logo/remove") } class="team-logo-remove">
-						@ProfileHidden(p)
-						<button type="submit" class="team-text-action">Remove logo and use initial</button>
-					</form>
+				if p.ErrorField=="logo" {
+					<p class="field-error" role="alert">{ p.Error }</p>
 				}
-			</section>
-			@Ownership(p)
-		</div>
-		<aside class="workspace-panel team-settings-summary" aria-label="Workspace information">
-			<div class="team-summary-identity">
-				@components.WorkspaceAvatar(p.Name, p.ID, p.LogoVersion)
-				<h2>{ p.Name }</h2><span class="badge tone-ok"><span class="badge-dot" aria-hidden="true"></span>Active workspace</span>
 			</div>
-			<dl>
-				<div><dt>Workspace owner</dt><dd>{ p.OwnerName }</dd></div>
-				<div>
-					<dt>Your role</dt>
-					<dd>
-						@components.WorkspaceRole(p.Role)
-					</dd>
+			<form method="post" action={ components.PublicURL(ctx, p.Base()+"/settings") } class="field-list field-list-tight" data-inline-form data-workspace-profile>
+				@ProfileHidden(p)
+				<div class="field-row">
+					<label class="field-label" for="rename-workspace">Name</label>
+					@components.InlineText("rename-workspace", "name", p.FormName, "Workspace name", "workspace name", templ.Attributes{"maxlength": "80", "required": true, "autocomplete": "off", "data-workspace-name-input": true, "aria-describedby": "profile-error"})
 				</div>
-				<div><dt>Members</dt><dd><a href={ templ.SafeURL(p.Base() + "/members") }>{ CountLabel(p.MemberCount,"member","members") }</a></dd></div>
-				<div><dt>Repositories</dt><dd><a href="/repositories">{ CountLabel(p.RepositoryCount,"repository","repositories") }</a></dd></div>
-				<div>
-					<dt>Created</dt>
-					<dd>
-						@components.Time(p.Created, p.Created)
-					</dd>
+				<div class="field-row field-row-top">
+					<label class="field-label" for="workspace-description">Description</label>
+					@components.InlineTextarea("workspace-description", "description", p.FormDescription, "Add a short description of what this team works on", "description", templ.Attributes{"maxlength": "240", "aria-describedby": "profile-error"})
 				</div>
-				<div>
-					<dt>Workspace ID</dt>
-					<dd>
-						<code>{ ID(p.ID) }</code>
-						@components.CopyButton(ID(p.ID), "Copy workspace ID")
+				if p.ErrorField=="details" {
+					<p id="profile-error" class="field-error" role="alert" data-inline-error>{ p.Error }</p>
+				} else {
+					<p id="profile-error" class="field-error" hidden data-inline-error></p>
+				}
+			</form>
+			<dl class="field-list field-list-tight">
+				<div class="field-row">
+					<dt class="field-label">Workspace ID</dt>
+					<dd class="field-value">
+						<code>{ components.PublicValue(ctx,"workspace",p.ID) }</code>
+						@components.CopyButton(components.ResourceToken(ctx, "workspace", p.ID), "Copy workspace ID")
 					</dd>
 				</div>
 			</dl>
-			<p class="team-field-hint">A workspace is one team. Manage people in Members and connected code in Repositories.</p>
-		</aside>
+		</section>
+		<section class="workspace-panel field-card" aria-labelledby="summary-heading">
+			<header class="field-card-head">
+				<h2 id="summary-heading">
+					@components.TeamIcon()
+					Overview
+				</h2>
+			</header>
+			<dl class="field-list">
+				<div class="field-row"><dt class="field-label">Owner</dt><dd class="field-value">{ p.OwnerName }</dd></div>
+				<div class="field-row">
+					<dt class="field-label">Your role</dt>
+					<dd class="field-value">
+						@components.WorkspaceRole(p.Role)
+					</dd>
+				</div>
+				<div class="field-row"><dt class="field-label">Members</dt><dd class="field-value"><a href={ components.PublicURL(ctx, p.Base()+"/members") }>{ CountLabel(p.MemberCount,"member","members") }</a></dd></div>
+				<div class="field-row"><dt class="field-label">Repositories</dt><dd class="field-value"><a href="/repositories">{ CountLabel(p.RepositoryCount,"repository","repositories") }</a></dd></div>
+				<div class="field-row">
+					<dt class="field-label">Created</dt>
+					<dd class="field-value">
+						@components.Time(p.Created, p.Created)
+					</dd>
+				</div>
+			</dl>
+			<p class="field-card-foot">A workspace is one team: people in Members, connected code in Repositories.</p>
+		</section>
+		@Ownership(p)
 	</div>
 }
 
@@ -87,60 +102,66 @@ templ ProfileHidden(p Page) {
 }
 
 templ Ownership(p Page) {
-	<section id="ownership" class="workspace-panel team-settings-panel" aria-labelledby="ownership-heading">
-		<div class="team-section-heading">
-			<span class="team-section-icon">
+	<section id="ownership" class="workspace-panel field-card field-card-span" aria-labelledby="ownership-heading">
+		<header class="field-card-head">
+			<h2 id="ownership-heading">
 				@components.ShieldIcon()
-			</span>
-			<div><h2 id="ownership-heading">Workspace ownership</h2><p>The owner controls handovers and administrator roles.</p></div>
-		</div>
-		if p.Transfer!=nil {
-			<div class="team-ownership-notice">
-				<div class="team-inline"><h3>Ownership transfer pending</h3><span class="badge tone-warn">Awaiting acceptance</span></div>
+				Ownership
+			</h2>
+			if p.Transfer!=nil {
+				<span class="badge tone-warn">Transfer awaiting acceptance</span>
+			}
+		</header>
+		<div class="ownership-row">
+			if p.Transfer!=nil {
 				<p>
 					<strong>{ p.Transfer.Login }</strong>{ " must accept before " }
 					@components.Time(p.Transfer.Expires, p.Transfer.Expires)
-					.
+					{ ". Until then " }<strong>{ p.OwnerName }</strong>{ " stays the owner." }
 				</p>
-				if p.Transfer.Accept {
-					<button type="button" class="primary-action" data-open-dialog="accept-owner" commandfor="accept-owner" command="show-modal" aria-haspopup="dialog">Accept ownership</button>
-					@components.ConfirmationDialog("accept-owner", "Become the workspace owner?", "You become the owner and the previous owner becomes an administrator. Connections, previews and usage stay with this workspace.") {
-						<form method="post" action={ templ.SafeURL(p.Base() + "/ownership") } class="dialog-actions">
+				<div class="ownership-actions">
+					if p.Transfer.Accept {
+						<button type="button" class="primary-action" data-open-dialog="accept-owner" commandfor="accept-owner" command="show-modal" aria-haspopup="dialog">Accept ownership</button>
+						@components.ConfirmationDialog("accept-owner", "Become the workspace owner?", "You become the owner and the previous owner becomes an administrator. Connections, previews and usage stay with this workspace.") {
+							<form method="post" action={ components.PublicURL(ctx, p.Base()+"/ownership") } class="dialog-actions">
+								@Hidden(p)
+								<input type="hidden" name="action" value="accept"/><input type="hidden" name="transfer_revision" value={ ID(p.Transfer.Revision) }/><button type="button" class="secondary-action" commandfor="accept-owner" command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Accept ownership</button>
+							</form>
+						}
+					}
+					if p.Owner() {
+						<form method="post" action={ components.PublicURL(ctx, p.Base()+"/ownership") }>
 							@Hidden(p)
-							<input type="hidden" name="action" value="accept"/><input type="hidden" name="transfer_revision" value={ ID(p.Transfer.Revision) }/><button type="button" class="secondary-action" commandfor="accept-owner" command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Accept ownership</button>
+							<button type="submit" name="action" value="cancel" class="secondary-action">Cancel transfer</button>
 						</form>
 					}
-				}
-				if p.Owner() {
-					<form method="post" action={ templ.SafeURL(p.Base() + "/ownership") }>
-						@Hidden(p)
-						<button type="submit" name="action" value="cancel" class="secondary-action">Cancel transfer</button>
-					</form>
-				}
-			</div>
-		} else if p.Owner() {
-			<h3>Transfer ownership</h3>
-			<p>You remain the owner until an existing admin accepts. You will then become an admin.</p>
-			if len(p.Admins)>0 {
-				<button type="button" class="secondary-action" data-open-dialog="nominate-owner" commandfor="nominate-owner" command="show-modal" aria-haspopup="dialog">Request handover</button>
-				@components.ConfirmationDialog("nominate-owner", "Request an ownership handover?", "Choose an existing administrator. They will have seven days to accept in workspace settings.") {
-					<form id="ownership-form" method="post" action={ templ.SafeURL(p.Base() + "/ownership") } class="team-form">
-						@Hidden(p)
-						<input type="hidden" name="action" value="nominate"/><label for="ownership-target">Administrator</label>
-						<select id="ownership-target" name="target" required>
-							<option value="">Choose an administrator</option>
-							for _,m:=range p.Admins {
-								<option value={ ID(m.ID) }>{ m.Login }</option>
-							}
-						</select>
-						<div class="dialog-actions"><button type="button" class="secondary-action" commandfor="nominate-owner" command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Request transfer</button></div>
-					</form>
-				}
+				</div>
+			} else if p.Owner() {
+				<p><strong>You</strong> own this workspace. To hand it over, choose an admin; you stay the owner until they accept, then become an admin.</p>
+				<div class="ownership-actions">
+					if len(p.Admins)>0 {
+						<button type="button" class="secondary-action" data-open-dialog="nominate-owner" commandfor="nominate-owner" command="show-modal" aria-haspopup="dialog">Request handover</button>
+						@components.ConfirmationDialog("nominate-owner", "Request an ownership handover?", "Choose an existing administrator. They will have seven days to accept in workspace settings.") {
+							<form id="ownership-form" method="post" action={ components.PublicURL(ctx, p.Base()+"/ownership") } class="team-form">
+								@Hidden(p)
+								<input type="hidden" name="action" value="nominate"/><label for="ownership-target">Administrator</label>
+								<select id="ownership-target" name="target" required>
+									<option value="">Choose an administrator</option>
+									for _,m:=range p.Admins {
+										<option value={ components.ResourceToken(ctx, "user", m.ID) }>{ m.Name() }</option>
+									}
+								</select>
+								<div class="dialog-actions"><button type="button" class="secondary-action" commandfor="nominate-owner" command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Request transfer</button></div>
+							</form>
+						}
+					} else {
+						<span class="field-meta">Appoint an admin first</span>
+						<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members") }>Manage members</a>
+					}
+				</div>
 			} else {
-				<div class="team-inline-notice"><p>Appoint an administrator before requesting a handover.</p><a class="secondary-action" href={ templ.SafeURL(p.Base() + "/members") }>Manage members</a></div>
+				<p><strong>{ p.OwnerName }</strong> owns this workspace. Only the owner can hand it over or appoint admins.</p>
 			}
-		} else {
-			<p>Only the workspace owner can request a handover. Contact <strong>{ p.OwnerName }</strong>{ " for ownership changes." }</p>
-		}
+		</div>
 	</section>
 }

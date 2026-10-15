@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/hmac"
 	"errors"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
+	"github.com/ajaykathwatee/previa/web/components"
 	"mime"
 	"net/http"
 	"net/url"
@@ -26,6 +28,13 @@ func CurrentUser(ctx context.Context) (User, bool) {
 
 // Username exposes the session identity to dashboard's small consumer interface.
 func (h *Handler) Username(ctx context.Context) (string, bool) {
+	u, ok := CurrentUser(ctx)
+	return u.DisplayName(), ok
+}
+
+// GitHubUsername is the provider login for source-permission checks. Personal
+// display names must never be sent to GitHub as account identities.
+func (h *Handler) GitHubUsername(ctx context.Context) (string, bool) {
 	u, ok := CurrentUser(ctx)
 	return u.Username, ok
 }
@@ -57,7 +66,7 @@ func (h *Handler) LoadUser(next http.Handler) http.Handler {
 				h.fail(w, r, http.StatusServiceUnavailable, "Your account is unavailable. Please try again.")
 				return
 			default:
-				r = r.WithContext(context.WithValue(r.Context(), userKey, u))
+				r = r.WithContext(components.WithViewer(context.WithValue(r.Context(), userKey, u), components.Viewer{Name: u.DisplayName(), Login: u.Username, Avatar: u.AvatarSrc(), PublicID: u.PublicID}))
 			}
 		}
 		next.ServeHTTP(w, r)
@@ -74,7 +83,7 @@ func RequireUser(next http.Handler) http.Handler {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
-			http.Redirect(w, r, login, http.StatusSeeOther)
+			publicid.Redirect(w, r, login, http.StatusSeeOther)
 			return
 		}
 		next.ServeHTTP(w, r)

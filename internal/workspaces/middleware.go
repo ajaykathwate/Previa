@@ -3,9 +3,9 @@ package workspaces
 import (
 	"context"
 	"errors"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/ajaykathwatee/previa/internal/platform/scope"
@@ -48,7 +48,7 @@ func (m *Middleware) Load(next http.Handler) http.Handler {
 			return
 		}
 		if selection.ID == 0 && needsWorkspace(r.URL.Path) {
-			http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
+			publicid.Redirect(w, r, "/workspaces", http.StatusSeeOther)
 			return
 		}
 		shell := components.WorkspaceShell{ID: selection.ID, Name: selection.Name, Role: selection.Role, LogoVersion: selection.LogoVersion, CSRF: m.users.CSRFToken(r.Context())}
@@ -74,7 +74,7 @@ func (m *Middleware) selectWorkspace(r *http.Request, user int64, items []Worksp
 			return Workspace{}, err
 		}
 	}
-	if repo := repositoryPathID(r.URL.Path); repo > 0 {
+	if repo := repositoryPathID(r); repo > 0 {
 		v, err := m.service.Authorize(r.Context(), user, repo, "read", false)
 		if err != nil {
 			return Workspace{}, err
@@ -83,7 +83,7 @@ func (m *Middleware) selectWorkspace(r *http.Request, user int64, items []Worksp
 	}
 	if strings.HasPrefix(r.URL.Path, "/workspaces/") {
 		part := strings.Split(strings.TrimPrefix(r.URL.Path, "/workspaces/"), "/")[0]
-		if n, e := strconv.ParseInt(part, 10, 64); e == nil && n > 0 {
+		if n, e := publicid.Value(r, "workspace", part, 0); e == nil && n > 0 {
 			id = n
 		}
 	}
@@ -92,7 +92,7 @@ func (m *Middleware) selectWorkspace(r *http.Request, user int64, items []Worksp
 			return item, nil
 		}
 	}
-	if id > 0 && (repositoryPathID(r.URL.Path) > 0 || strings.HasPrefix(r.URL.Path, "/workspaces/")) {
+	if id > 0 && (repositoryPathID(r) > 0 || strings.HasPrefix(r.URL.Path, "/workspaces/")) {
 		return Workspace{}, ErrUnavailable
 	}
 	if len(items) > 0 {
@@ -100,12 +100,16 @@ func (m *Middleware) selectWorkspace(r *http.Request, user int64, items []Worksp
 	}
 	return Workspace{}, nil
 }
-func repositoryPathID(path string) int64 {
+func repositoryPathID(r *http.Request) int64 {
+	path := r.URL.Path
 	if !strings.HasPrefix(path, "/repositories/") {
 		return 0
 	}
 	part := strings.Split(strings.TrimPrefix(path, "/repositories/"), "/")[0]
-	id, _ := strconv.ParseInt(part, 10, 64)
+	id, err := publicid.Value(r, "repository", part, 0)
+	if err != nil {
+		return 0
+	}
 	return id
 }
 func needsWorkspace(path string) bool {
@@ -118,7 +122,7 @@ func (m *Middleware) guard(w http.ResponseWriter, r *http.Request, user int64, s
 			return false
 		}
 		if r.URL.Path != "/previews" {
-			http.Redirect(w, r, "/previews", http.StatusSeeOther)
+			publicid.Redirect(w, r, "/previews", http.StatusSeeOther)
 			return false
 		}
 	}
@@ -130,7 +134,7 @@ func (m *Middleware) guard(w http.ResponseWriter, r *http.Request, user int64, s
 		http.NotFound(w, r)
 		return false
 	}
-	repo := repositoryPathID(r.URL.Path)
+	repo := repositoryPathID(r)
 	if repo == 0 {
 		return true
 	}

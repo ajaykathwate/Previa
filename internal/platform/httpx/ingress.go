@@ -161,7 +161,8 @@ func Nonce(ctx context.Context) string {
 }
 
 // securityHeaders sets a strict policy on every response: scripts and
-// styles only from this origin or with the request's nonce, no framing, no
+// styles only from this origin or with the request's nonce, images from this
+// origin plus GitHub's avatar host (members' profile pictures), no framing, no
 // plugins, forms only to this origin and GitHub (installation and sign-in
 // redirects), and HSTS when the dashboard is HTTPS.
 func securityHeaders(secure bool) func(http.Handler) http.Handler {
@@ -172,7 +173,7 @@ func securityHeaders(secure bool) func(http.Handler) http.Handler {
 			nonce := base64.RawStdEncoding.EncodeToString(raw)
 			h := w.Header()
 			h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'nonce-"+nonce+"' 'inline-speculation-rules'; "+
-				"style-src 'self' 'nonce-"+nonce+"'; img-src 'self' data:; font-src 'self'; connect-src 'self'; "+
+				"style-src 'self' 'nonce-"+nonce+"'; img-src 'self' data: "+GitHubAvatarOrigin+"; font-src 'self'; connect-src 'self'; "+
 				"object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://github.com")
 			h.Set("X-Content-Type-Options", "nosniff")
 			h.Set("X-Frame-Options", "DENY")

@@ -2,6 +2,7 @@ package workspaces
 
 import (
 	"errors"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -47,7 +48,7 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 func parseID(value string) int64 { n, _ := strconv.ParseInt(value, 10, 64); return n }
 func (h *Handler) identity(r *http.Request) (int64, int64) {
 	u, _, _ := h.users.UserIDs(r.Context())
-	return u, parseID(chi.URLParam(r, "workspaceID"))
+	return u, publicid.PathID(r, "workspaceID", "workspace")
 }
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	status, message := http.StatusServiceUnavailable, "Workspace temporarily unavailable. Please try again."
@@ -79,7 +80,7 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		}
 	}
 	login, _ := h.users.Username(r.Context())
-	templ.Handler(pages.Failure(login, h.users.CSRFToken(r.Context()), message, target, label), templ.WithStatus(status)).ServeHTTP(w, r)
+	publicid.Handler(r, pages.Failure(login, h.users.CSRFToken(r.Context()), message, target, label), nil, templ.WithStatus(status)).ServeHTTP(w, r)
 }
 func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 	u, _, _ := h.users.UserIDs(r.Context())
@@ -93,7 +94,7 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 		p.Workspaces = append(p.Workspaces, displayWorkspace(v))
 	}
 	login, _ := h.users.Username(r.Context())
-	templ.Handler(pages.Directory(login, p)).ServeHTTP(w, r)
+	publicid.Handler(r, pages.Directory(login, p), p).ServeHTTP(w, r)
 }
 func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 	h.renderPage(w, r, "")
@@ -114,20 +115,20 @@ func (h *Handler) renderPage(w http.ResponseWriter, r *http.Request, invitationT
 		p.InvitationURL = h.appURL + "/workspace-invitations/" + invitationToken
 	}
 	if r.URL.Query().Get("saved") == "1" {
-		p.Message = "Workspace updated."
+		p.Message = "Workspace updated"
 	}
 	switch r.URL.Query().Get("saved") {
 	case "details":
-		p.Message = "Workspace details saved."
+		p.Message = "Workspace details saved"
 	case "logo":
-		p.Message = "Workspace logo updated."
+		p.Message = "Workspace logo updated"
 	case "logo-removed":
-		p.Message = "Workspace logo removed."
+		p.Message = "Workspace logo removed"
 	}
 	h.renderWorkspace(w, r, p, http.StatusOK)
 }
 func (h *Handler) redirect(w http.ResponseWriter, r *http.Request, id int64) {
-	http.Redirect(w, r, "/workspaces/"+pages.ID(id)+"/members?saved=1", http.StatusSeeOther)
+	publicid.Redirect(w, r, "/workspaces/"+pages.ID(id)+"/members?saved=1", http.StatusSeeOther)
 }
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	u, _, _ := h.users.UserIDs(r.Context())
@@ -144,7 +145,7 @@ func (h *Handler) selectWorkspace(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+	publicid.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }
 func repositoryIDs(r *http.Request) ([]int64, error) {
 	if err := r.ParseForm(); err != nil {
@@ -156,8 +157,8 @@ func repositoryIDs(r *http.Request) ([]int64, error) {
 	}
 	out := make([]int64, 0, len(values))
 	for _, v := range values {
-		id := parseID(v)
-		if id <= 0 {
+		id, err := publicid.Value(r, "repository", v, 0)
+		if err != nil || id <= 0 {
 			return nil, ErrInput
 		}
 		out = append(out, id)
@@ -171,13 +172,13 @@ func (h *Handler) changeMember(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	c := MemberChange{ActorID: u, WorkspaceID: id, WorkspaceRevision: parseID(r.PostFormValue("workspace_revision")), UserID: parseID(chi.URLParam(r, "userID")), Revision: parseID(r.PostFormValue("revision")), Role: r.PostFormValue("role"), Repositories: repos, Remove: r.PostFormValue("action") == "remove"}
+	c := MemberChange{ActorID: u, WorkspaceID: id, WorkspaceRevision: parseID(r.PostFormValue("workspace_revision")), UserID: publicid.PathID(r, "userID", "user"), Revision: parseID(r.PostFormValue("revision")), Role: r.PostFormValue("role"), Repositories: repos, Remove: r.PostFormValue("action") == "remove"}
 	if err := h.service.ChangeMember(r.Context(), c); err != nil {
 		h.fail(w, r, err)
 		return
 	}
 	if c.Remove && c.UserID == u {
-		http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
+		publicid.Redirect(w, r, "/workspaces", http.StatusSeeOther)
 		return
 	}
 	h.redirect(w, r, id)
@@ -186,19 +187,20 @@ func (h *Handler) invite(w http.ResponseWriter, r *http.Request) {
 	u, id := h.identity(r)
 	repos, err := repositoryIDs(r)
 	if err != nil {
-		h.fail(w, r, err)
+		h.invitationFailure(w, r, err, nil)
 		return
 	}
 	token, err := h.service.Invite(r.Context(), InvitationCommand{ActorID: u, WorkspaceID: id, Revision: parseID(r.PostFormValue("workspace_revision")), Login: r.PostFormValue("login"), Role: r.PostFormValue("role"), Repositories: repos})
 	if err != nil {
-		h.fail(w, r, err)
+		h.invitationFailure(w, r, err, repos)
 		return
 	}
 	h.renderPage(w, r, token)
 }
+
 func (h *Handler) changeInvitation(w http.ResponseWriter, r *http.Request) {
 	u, id := h.identity(r)
-	token, err := h.service.ChangeInvitation(r.Context(), u, id, parseID(r.PostFormValue("workspace_revision")), parseID(chi.URLParam(r, "invitationID")), parseID(r.PostFormValue("revision")), r.PostFormValue("action") == "regenerate")
+	token, err := h.service.ChangeInvitation(r.Context(), u, id, parseID(r.PostFormValue("workspace_revision")), publicid.PathID(r, "invitationID", "invitation"), parseID(r.PostFormValue("revision")), r.PostFormValue("action") == "regenerate")
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -219,7 +221,7 @@ func (h *Handler) ownership(w http.ResponseWriter, r *http.Request) {
 	case "cancel":
 		err = h.service.CancelOwnership(r.Context(), u, id, revision)
 	case "nominate":
-		err = h.service.NominateOwner(r.Context(), u, id, revision, parseID(r.PostFormValue("target")))
+		err = h.service.NominateOwner(r.Context(), u, id, revision, publicid.FormID(r, "target", "user"))
 	default:
 		err = ErrInput
 	}
@@ -227,7 +229,7 @@ func (h *Handler) ownership(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/workspaces/"+pages.ID(id)+"/settings?saved=1", http.StatusSeeOther)
+	publicid.Redirect(w, r, "/workspaces/"+pages.ID(id)+"/settings?saved=1", http.StatusSeeOther)
 }
 func (h *Handler) invitation(w http.ResponseWriter, r *http.Request) {
 	u, githubID, _ := h.users.UserIDs(r.Context())
@@ -247,7 +249,7 @@ func (h *Handler) invitation(w http.ResponseWriter, r *http.Request) {
 	login, _ := h.users.Username(r.Context())
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "same-origin")
-	templ.Handler(pages.AcceptInvitation(login, p)).ServeHTTP(w, r)
+	publicid.Handler(r, pages.AcceptInvitation(login, p), p).ServeHTTP(w, r)
 }
 func (h *Handler) respondInvitation(w http.ResponseWriter, r *http.Request) {
 	u, githubID, _ := h.users.UserIDs(r.Context())
@@ -262,7 +264,7 @@ func (h *Handler) respondInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if action == "decline" {
-		http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
+		publicid.Redirect(w, r, "/workspaces", http.StatusSeeOther)
 		return
 	}
 	h.redirect(w, r, id)

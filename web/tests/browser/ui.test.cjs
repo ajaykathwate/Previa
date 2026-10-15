@@ -83,7 +83,7 @@ async function readyPanel(id) {
 }
 async function openLogout() {
   // Real pointer clicks avoid automation scrolling sticky-header elements into view.
-  for (const locator of [page.locator('.account-menu summary'), page.getByRole('button', {name: 'Log out', exact: true})]) {
+  for (const locator of [page.locator('.account-menu summary'), page.locator('.account-menu').getByRole('button', {name: 'Log out', exact: true})]) {
     const box = await locator.boundingBox();
     assert(box, 'logout control must be visible');
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
@@ -1463,9 +1463,13 @@ test('a request that never answers times out with a message and can be retried',
 test('a forged CSRF token is refused and changes nothing', async () => {
   await login();
   await page.goto(`${origin}/repositories/1/pull-requests/11`);
-  await page.locator('form[action$="/pull-requests/11/build"] input[name="csrf_token"]').evaluate(input => { input.value = 'forged'; });
   const response = page.waitForResponse(r => r.url().endsWith('/pull-requests/11/build'));
-  await page.getByRole('button', {name: 'Build latest commit', exact: true}).click();
+  // Submit the forged form atomically so a live refresh cannot replace it
+  // between tampering with the token and dispatching the request.
+  await page.locator('form[action$="/pull-requests/11/build"]').evaluate(form => {
+    form.querySelector('input[name="csrf_token"]').value = 'forged';
+    form.requestSubmit(form.querySelector('button[type="submit"]'));
+  });
   assert.equal((await response).status(), 403);
   await page.waitForFunction(() => document.querySelector('[data-detail-feedback]')?.dataset.error === 'true');
   assert.match(await page.locator('[data-detail-feedback]').innerText(), /could not be verified/);

@@ -1,0 +1,206 @@
+package auth
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+	"strconv"
+)
+
+// MemberProfile puts the editable Previa profile and the read-only GitHub
+// account side by side; each fact appears once, in the section that owns it.
+templ MemberProfile(p Profile) {
+	@layouts.App("Your profile", p.Name, p.CSRF, components.NavNone) {
+		<div class="team-page profile-page">
+			<header class="team-heading">
+				<div class="team-heading-copy"><h1>Your profile</h1><p>How you appear to teammates in Previa, and the GitHub account you sign in with.</p></div>
+			</header>
+			<div class="field-grid">
+				@PreviaProfile(p)
+				@GitHubAccount(p)
+			</div>
+		</div>
+		@components.Toasts(p.Toast)
+	}
+}
+
+templ PreviaProfile(p Profile) {
+	<section class="workspace-panel field-card" aria-labelledby="previa-profile-heading">
+		<header class="field-card-head">
+			<h2 id="previa-profile-heading">
+				@components.UserIcon()
+				Previa profile
+			</h2>
+			<span class="field-card-note">Visible to your teammates</span>
+		</header>
+		<div class="field-list">
+			<div class="field-row">
+				<span class="field-label" id="photo-label">Photo</span>
+				<div class="photo-field">
+					<form method="post" action="/protected/profile/avatar" enctype="multipart/form-data" class="avatar-editor" data-avatar-form data-image-kind="avatar">
+						<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+						<label for="avatar-file" class="avatar-editor-target" title="Change photo">
+							@components.UserAvatar(p.Avatar, p.Name, "user-avatar-xl", templ.Attributes{"data-viewer-avatar": true})
+							<span class="avatar-editor-badge" aria-hidden="true">
+								@components.PencilIcon()
+							</span>
+						</label>
+						<input id="avatar-file" name="avatar" type="file" accept="image/png,image/jpeg" required class="avatar-editor-input" aria-labelledby="photo-label" aria-describedby="avatar-help avatar-error"/>
+						<button type="submit" class="avatar-editor-submit field-card-action">Upload</button>
+					</form>
+					<div class="photo-actions">
+						<label for="avatar-file" class="text-action">Change photo</label>
+						<form method="post" action="/protected/profile/avatar/remove" data-avatar-remove hidden?={ !p.CustomAvatar }>
+							<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+							<button type="submit" class="text-action">Use GitHub picture</button>
+						</form>
+						<span id="avatar-help" class="field-meta">PNG or JPEG</span>
+					</div>
+				</div>
+			</div>
+			if p.AvatarError != "" {
+				<p id="avatar-error" class="field-error" role="alert">{ p.AvatarError }</p>
+			} else {
+				<p id="avatar-error" class="field-error" hidden></p>
+			}
+		</div>
+		<form method="post" action="/protected/profile" class="field-list field-list-tight" data-inline-form>
+			<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+			<input type="hidden" name="profile_revision" value={ strconv.FormatInt(p.Revision, 10) } data-revision/>
+			<div class="field-row">
+				<label class="field-label" for="first-name">First name</label>
+				@components.InlineText("first-name", "first_name", p.FirstName, placeholder(p.FirstHint, "Add first name"), "first name", templ.Attributes{"maxlength": "80", "autocomplete": "given-name", "aria-describedby": "name-help name-error"})
+			</div>
+			<div class="field-row">
+				<label class="field-label" for="last-name">Last name</label>
+				@components.InlineText("last-name", "last_name", p.LastName, placeholder(p.LastHint, "Add last name"), "last name", templ.Attributes{"maxlength": "80", "autocomplete": "family-name", "aria-describedby": "name-help name-error"})
+			</div>
+			<p id="name-help" class="field-note">Leave both blank to appear as @{ p.Login }.</p>
+			if p.NameError != "" {
+				<p id="name-error" class="field-error" role="alert" data-inline-error>{ p.NameError }</p>
+			} else {
+				<p id="name-error" class="field-error" hidden data-inline-error></p>
+			}
+		</form>
+		<dl class="field-list field-list-tight">
+			<div class="field-row">
+				<dt class="field-label">Email</dt>
+				<dd class="field-value">
+					if p.Email != "" {
+						<span>{ p.Email }</span>
+					} else {
+						<span class="text-muted">Not shared by GitHub</span>
+					}
+					<span class="field-meta" title="Your verified primary GitHub email. Only you can see it.">
+						@components.LockIcon()
+						From GitHub · only you
+					</span>
+					if p.EmailSyncError {
+						<small class="field-value-note tone-warn">GitHub couldn't refresh your email at the last sign-in, so this is the last saved address.</small>
+					}
+				</dd>
+			</div>
+			if p.PublicID != "" {
+				<div class="field-row">
+					<dt class="field-label">Member ID</dt>
+					<dd class="field-value">
+						<code>{ p.PublicID }</code>
+						@components.CopyButton(p.PublicID, "Copy member ID")
+					</dd>
+				</div>
+			}
+			if p.Joined != "" {
+				<div class="field-row">
+					<dt class="field-label">Member since</dt>
+					<dd class="field-value">
+						@components.Time(p.Joined, p.Joined)
+					</dd>
+				</div>
+			}
+			<div class="field-row">
+				<dt class="field-label">Session</dt>
+				<dd class="field-value field-value-split">
+					<span>
+						if p.Expires != "" {
+							{ "Expires " }
+							@components.Time(p.Expires, p.Expires)
+						} else {
+							Signed in
+						}
+					</span>
+					<button type="button" class="field-card-action" data-open-dialog="logout-confirmation" commandfor="logout-confirmation" command="show-modal" aria-haspopup="dialog">
+						@components.LogoutIcon()
+						Log out
+					</button>
+				</dd>
+			</div>
+		</dl>
+	</section>
+}
+
+templ GitHubAccount(p Profile) {
+	<section class="workspace-panel field-card" aria-labelledby="github-account-heading">
+		<header class="field-card-head">
+			<h2 id="github-account-heading">
+				@components.GitHubMark()
+				GitHub account
+			</h2>
+			<a class="field-card-action" href="/auth/github/login?next=%2Fprotected" title="Sign in again to fetch your latest GitHub details">
+				@components.SyncIcon()
+				Refresh
+			</a>
+		</header>
+		<dl class="field-list">
+			@Fact("Username", "@"+p.Login, true)
+			@Fact("GitHub ID", strconv.FormatInt(p.GitHubID, 10), true)
+			if p.GitHubName != "" {
+				@Fact("Name", p.GitHubName, false)
+			}
+			if p.ProfileURL != "" {
+				<div class="field-row">
+					<dt class="field-label">Profile</dt>
+					<dd class="field-value"><a href={ components.PublicURL(ctx, p.ProfileURL) } target="_blank" rel="noopener noreferrer">{ displayURL(p.ProfileURL) }</a></dd>
+				</div>
+			}
+			if p.Company != "" {
+				@Fact("Company", p.Company, false)
+			}
+			if p.Location != "" {
+				@Fact("Location", p.Location, false)
+			}
+			if p.Bio != "" {
+				@Fact("Bio", p.Bio, false)
+			}
+			if p.GitHubJoined != "" {
+				@DateFact("Joined GitHub", p.GitHubJoined)
+			}
+			if p.Synced != "" {
+				@DateFact("Last refreshed", p.Synced)
+			} else {
+				@Fact("Last refreshed", "Not yet — use Refresh to fetch your details", false)
+			}
+		</dl>
+		<p class="field-card-foot">Read-only. Previa refreshes these details each time you sign in and doesn't keep your GitHub sign-in token. Logging out of Previa leaves your GitHub session as it is.</p>
+	</section>
+}
+
+templ Fact(label, value string, code bool) {
+	<div class="field-row">
+		<dt class="field-label">{ label }</dt>
+		<dd class="field-value">
+			if code {
+				<code>{ value }</code>
+			} else {
+				{ value }
+			}
+		</dd>
+	</div>
+}
+
+templ DateFact(label, value string) {
+	<div class="field-row">
+		<dt class="field-label">{ label }</dt>
+		<dd class="field-value">
+			@components.Time(value, value)
+		</dd>
+	</div>
+}

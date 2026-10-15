@@ -14,8 +14,8 @@ const (
 	LabelRevision    = "io.previa.revision"
 	LabelSHA         = "io.previa.head-sha"
 	LabelBaseRepo    = "io.previa.base-repository-id"
-	LabelWorkspace = "io.previa.workspace-id" // stable workspace identity; distinguishes legacy user labels
- LabelAccount     = "io.previa.account-id" // legacy account label, retained for inventory compatibility
+	LabelWorkspace   = "io.previa.workspace-id" // stable workspace identity; distinguishes legacy user labels
+	LabelAccount     = "io.previa.account-id"   // legacy account label, retained for inventory compatibility
 	LabelHeadRepo    = "io.previa.head-repository-id"
 	LabelEnvironment = "io.previa.environment-id"
 	LabelImage       = "io.previa.image"        // a preview's image reference

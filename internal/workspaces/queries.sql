@@ -1,5 +1,5 @@
 -- name: ListWorkspaces :many
-SELECT w.id,w.name,w.description,w.owner_user_id,w.revision,w.profile_revision,w.created_at,u.username AS owner_login,
+SELECT w.id,w.name,w.description,w.owner_user_id,w.revision,w.profile_revision,w.created_at,coalesce(nullif(trim(u.first_name||' '||u.last_name),''),u.username) AS owner_login,
 coalesce(l.version,0)::bigint AS logo_version,m.role,m.revision AS membership_revision
 FROM workspaces w JOIN workspace_memberships m ON m.workspace_id=w.id
 JOIN users u ON u.id=w.owner_user_id LEFT JOIN workspace_logos l ON l.workspace_id=w.id
@@ -7,7 +7,7 @@ WHERE m.user_id=sqlc.arg(user_id)::bigint AND m.state='active' AND w.state='acti
 ORDER BY lower(w.name),w.id;
 
 -- name: ReadWorkspace :one
-SELECT w.id,w.name,w.description,w.owner_user_id,w.revision,w.profile_revision,w.created_at,u.username AS owner_login,
+SELECT w.id,w.name,w.description,w.owner_user_id,w.revision,w.profile_revision,w.created_at,coalesce(nullif(trim(u.first_name||' '||u.last_name),''),u.username) AS owner_login,
 coalesce(l.version,0)::bigint AS logo_version,m.role,m.revision AS membership_revision
 FROM workspaces w JOIN workspace_memberships m ON m.workspace_id=w.id
 JOIN users u ON u.id=w.owner_user_id LEFT JOIN workspace_logos l ON l.workspace_id=w.id
@@ -27,12 +27,12 @@ WHERE i.workspace_id=sqlc.arg(workspace_id)::bigint
 ORDER BY lower(r.full_name),r.id;
 
 -- name: WorkspaceMembers :many
-SELECT m.user_id,m.role,m.revision,m.joined_at,u.username,u.avatar_url,
+SELECT m.user_id,m.role,m.revision,m.joined_at,u.username,u.avatar_url,u.custom_avatar,u.avatar_version,u.first_name,u.last_name,
        coalesce(array_agg(g.repo_id ORDER BY g.repo_id) FILTER(WHERE g.repo_id IS NOT NULL),'{}'::bigint[])::bigint[] AS repository_ids
 FROM workspace_memberships m JOIN users u ON u.id=m.user_id
 LEFT JOIN repository_memberships g ON g.workspace_id=m.workspace_id AND g.user_id=m.user_id
 WHERE m.workspace_id=sqlc.arg(workspace_id)::bigint AND m.state='active'
-AND strpos(lower(u.username),lower(sqlc.arg(search)::text))>0
+AND strpos(lower(concat_ws(' ',u.first_name,u.last_name,u.username)),lower(sqlc.arg(search)::text))>0
 GROUP BY m.workspace_id,m.user_id,u.id ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,lower(u.username),m.user_id
 LIMIT 20 OFFSET sqlc.arg(page_offset)::bigint;
 
@@ -44,7 +44,7 @@ ORDER BY created_at DESC,id DESC LIMIT 20 OFFSET sqlc.arg(page_offset)::bigint;
 
 -- name: CountWorkspaceMembers :one
 SELECT count(*) FROM workspace_memberships m JOIN users u ON u.id=m.user_id
-WHERE m.workspace_id=sqlc.arg(workspace_id) AND m.state='active' AND strpos(lower(u.username),lower(sqlc.arg(search)::text))>0;
+WHERE m.workspace_id=sqlc.arg(workspace_id) AND m.state='active' AND strpos(lower(concat_ws(' ',u.first_name,u.last_name,u.username)),lower(sqlc.arg(search)::text))>0;
 
 -- name: CountWorkspaceInvitations :one
 SELECT count(*) FROM workspace_invitations WHERE workspace_id=sqlc.arg(workspace_id) AND state='pending' AND strpos(lower(login),lower(sqlc.arg(search)::text))>0;
@@ -221,3 +221,13 @@ AND m.role IN ('owner','admin') AND ($3::text<>'admin' OR m.role='owner'))::bool
 
 -- name: CurrentRepositoryGrants :many
 SELECT repo_id FROM repository_memberships WHERE workspace_id=$1 AND user_id=$2 ORDER BY repo_id;
+
+-- name: HasPendingInvitation :one
+SELECT EXISTS(SELECT 1 FROM workspace_invitations WHERE workspace_id=$1 AND github_id=$2 AND state='pending' AND expires_at>now());
+
+-- name: SharesWorkspace :one
+-- Uploaded profile pictures are visible to the member and their current teammates.
+SELECT EXISTS(
+ SELECT 1 FROM workspace_memberships a JOIN workspace_memberships b ON b.workspace_id=a.workspace_id
+ WHERE a.user_id=sqlc.arg(viewer_id) AND b.user_id=sqlc.arg(subject_id) AND a.state='active' AND b.state='active'
+);

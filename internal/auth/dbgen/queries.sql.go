@@ -7,10 +7,12 @@ package dbgen
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const getSession = `-- name: GetSession :one
-SELECT token, data, expiry FROM sessions WHERE token = $1
+SELECT token,data,expiry FROM sessions WHERE token=$1
 `
 
 // Session CRUD is owned by SCS pgxstore. This query verifies persisted sessions.
@@ -22,57 +24,174 @@ func (q *Queries) GetSession(ctx context.Context, token string) (Session, error)
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, github_id, username, avatar_url FROM users WHERE id = $1
+SELECT id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar FROM users WHERE id=$1
 `
 
-type GetUserRow struct {
-	ID        int64
-	GithubID  int64
-	Username  string
-	AvatarUrl string
-}
-
-func (q *Queries) GetUser(ctx context.Context, id int64) (GetUserRow, error) {
+func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
 	row := q.db.QueryRow(ctx, getUser, id)
-	var i GetUserRow
+	var i User
 	err := row.Scan(
 		&i.ID,
 		&i.GithubID,
 		&i.Username,
+		&i.CreatedAt,
 		&i.AvatarUrl,
+		&i.FirstName,
+		&i.LastName,
+		&i.ProfileRevision,
+		&i.GithubName,
+		&i.Email,
+		&i.EmailSyncError,
+		&i.GithubProfileUrl,
+		&i.GithubBio,
+		&i.GithubCompany,
+		&i.GithubLocation,
+		&i.GithubCreatedAt,
+		&i.ProfileSyncedAt,
+		&i.PublicID,
+		&i.AvatarVersion,
+		&i.CustomAvatar,
 	)
 	return i, err
 }
 
+const readAvatar = `-- name: ReadAvatar :one
+SELECT a.data,u.avatar_version FROM user_avatars a JOIN users u ON u.id=a.user_id WHERE a.user_id=$1 AND u.custom_avatar
+`
+
+type ReadAvatarRow struct {
+	Data          []byte
+	AvatarVersion int64
+}
+
+func (q *Queries) ReadAvatar(ctx context.Context, userID int64) (ReadAvatarRow, error) {
+	row := q.db.QueryRow(ctx, readAvatar, userID)
+	var i ReadAvatarRow
+	err := row.Scan(&i.Data, &i.AvatarVersion)
+	return i, err
+}
+
+const removeAvatar = `-- name: RemoveAvatar :exec
+WITH removed AS (DELETE FROM user_avatars WHERE user_id=$1)
+UPDATE users SET custom_avatar=false WHERE id=$1
+`
+
+func (q *Queries) RemoveAvatar(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, removeAvatar, id)
+	return err
+}
+
+const saveAvatar = `-- name: SaveAvatar :one
+WITH saved AS (
+ INSERT INTO user_avatars(user_id,data) VALUES($1,$2)
+ ON CONFLICT(user_id) DO UPDATE SET data=EXCLUDED.data RETURNING user_id
+)
+UPDATE users u SET avatar_version=u.avatar_version+1,custom_avatar=true FROM saved WHERE u.id=saved.user_id RETURNING u.avatar_version
+`
+
+type SaveAvatarParams struct {
+	UserID int64
+	Data   []byte
+}
+
+func (q *Queries) SaveAvatar(ctx context.Context, arg SaveAvatarParams) (int64, error) {
+	row := q.db.QueryRow(ctx, saveAvatar, arg.UserID, arg.Data)
+	var avatar_version int64
+	err := row.Scan(&avatar_version)
+	return avatar_version, err
+}
+
+const updatePersonalName = `-- name: UpdatePersonalName :execrows
+UPDATE users SET first_name=$2,last_name=$3,profile_revision=profile_revision+1 WHERE id=$1 AND profile_revision=$4
+`
+
+type UpdatePersonalNameParams struct {
+	ID              int64
+	FirstName       string
+	LastName        string
+	ProfileRevision int64
+}
+
+func (q *Queries) UpdatePersonalName(ctx context.Context, arg UpdatePersonalNameParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updatePersonalName,
+		arg.ID,
+		arg.FirstName,
+		arg.LastName,
+		arg.ProfileRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const upsertUser = `-- name: UpsertUser :one
-INSERT INTO users (github_id, username, avatar_url)
-VALUES ($1, $2, $3)
-ON CONFLICT (github_id) DO UPDATE
-SET username = EXCLUDED.username, avatar_url = EXCLUDED.avatar_url
-RETURNING id, github_id, username, avatar_url
+INSERT INTO users(github_id,username,avatar_url,first_name,last_name,github_name,email,email_sync_error,github_profile_url,github_bio,github_company,github_location,github_created_at,profile_synced_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now())
+ON CONFLICT(github_id) DO UPDATE SET username=EXCLUDED.username,avatar_url=EXCLUDED.avatar_url,github_name=EXCLUDED.github_name,
+first_name=CASE WHEN users.profile_revision=1 AND users.first_name='' AND users.last_name='' THEN EXCLUDED.first_name ELSE users.first_name END,
+last_name=CASE WHEN users.profile_revision=1 AND users.first_name='' AND users.last_name='' THEN EXCLUDED.last_name ELSE users.last_name END,
+email=CASE WHEN EXCLUDED.email_sync_error THEN users.email ELSE EXCLUDED.email END,email_sync_error=EXCLUDED.email_sync_error,
+github_profile_url=EXCLUDED.github_profile_url,github_bio=EXCLUDED.github_bio,github_company=EXCLUDED.github_company,github_location=EXCLUDED.github_location,
+github_created_at=EXCLUDED.github_created_at,profile_synced_at=EXCLUDED.profile_synced_at
+RETURNING id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar
 `
 
 type UpsertUserParams struct {
-	GithubID  int64
-	Username  string
-	AvatarUrl string
+	GithubID         int64
+	Username         string
+	AvatarUrl        string
+	FirstName        string
+	LastName         string
+	GithubName       string
+	Email            string
+	EmailSyncError   bool
+	GithubProfileUrl string
+	GithubBio        string
+	GithubCompany    string
+	GithubLocation   string
+	GithubCreatedAt  pgtype.Timestamptz
 }
 
-type UpsertUserRow struct {
-	ID        int64
-	GithubID  int64
-	Username  string
-	AvatarUrl string
-}
-
-func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) (UpsertUserRow, error) {
-	row := q.db.QueryRow(ctx, upsertUser, arg.GithubID, arg.Username, arg.AvatarUrl)
-	var i UpsertUserRow
+// Prefill a never-edited, still-blank name from GitHub; a saved choice is kept.
+func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, upsertUser,
+		arg.GithubID,
+		arg.Username,
+		arg.AvatarUrl,
+		arg.FirstName,
+		arg.LastName,
+		arg.GithubName,
+		arg.Email,
+		arg.EmailSyncError,
+		arg.GithubProfileUrl,
+		arg.GithubBio,
+		arg.GithubCompany,
+		arg.GithubLocation,
+		arg.GithubCreatedAt,
+	)
+	var i User
 	err := row.Scan(
 		&i.ID,
 		&i.GithubID,
 		&i.Username,
+		&i.CreatedAt,
 		&i.AvatarUrl,
+		&i.FirstName,
+		&i.LastName,
+		&i.ProfileRevision,
+		&i.GithubName,
+		&i.Email,
+		&i.EmailSyncError,
+		&i.GithubProfileUrl,
+		&i.GithubBio,
+		&i.GithubCompany,
+		&i.GithubLocation,
+		&i.GithubCreatedAt,
+		&i.ProfileSyncedAt,
+		&i.PublicID,
+		&i.AvatarVersion,
+		&i.CustomAvatar,
 	)
 	return i, err
 }

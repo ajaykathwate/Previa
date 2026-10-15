@@ -11,12 +11,9 @@ templ ReviewerIndex(username, csrf string, p pages.Activity) {
 	@layouts.App("Previews", username, csrf, components.NavPreviews) {
 		<div class="team-page">
 			<header class="team-heading">
-				<div>
-					<span class="eyebrow">Delivery</span>
+				<div class="team-heading-copy">
 					<h1>Previews</h1>
-					<p>
-						Live previews for the repositories shared with you in { components.Workspace(ctx).Name }.
-					</p>
+					<p>Live previews for the repositories shared with you.</p>
 				</div>
 				<span class="badge tone-neutral">
 					if p.Total == 1 {
@@ -58,7 +55,7 @@ templ ReviewerIndex(username, csrf string, p pages.Activity) {
 							if v.Available && v.PreviewURL!="" {
 								{{ label, tone := v.PreviewStatus() }}
 								<span class={ "badge",tone }><span class="badge-dot" aria-hidden="true"></span>{ label }</span>
-								<a class="primary-action" href={ templ.SafeURL(v.PreviewURL) } target="_blank" rel="noopener noreferrer">
+								<a class="primary-action" href={ components.PublicURL(ctx, v.PreviewURL) } target="_blank" rel="noopener noreferrer">
 									{ "Open preview " }
 									@components.LinkIcon()
 								</a>
@@ -72,11 +69,11 @@ templ ReviewerIndex(username, csrf string, p pages.Activity) {
 			if p.Pages>1 {
 				<nav class="pagination" aria-label="Preview pages">
 					if p.Number>1 {
-						<a class="secondary-action" href={ templ.SafeURL(p.PageURL(p.Number - 1)) }>Previous</a>
+						<a class="secondary-action" href={ components.PublicURL(ctx, p.PageURL(p.Number-1)) }>Previous</a>
 					}
 					<span>Page { strconv.FormatInt(p.Number,10) } of { strconv.FormatInt(p.Pages,10) }</span>
 					if p.Number<p.Pages {
-						<a class="secondary-action" href={ templ.SafeURL(p.PageURL(p.Number + 1)) }>Next</a>
+						<a class="secondary-action" href={ components.PublicURL(ctx, p.PageURL(p.Number+1)) }>Next</a>
 					}
 				</nav>
 			}

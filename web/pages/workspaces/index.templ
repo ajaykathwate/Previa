@@ -9,7 +9,7 @@ templ Directory(username string, p Page) {
 	@layouts.App("Workspaces", username, p.CSRF, components.NavWorkspaces) {
 		<div class="team-page">
 			<header class="team-heading">
-				<div><span class="eyebrow">Your workspaces</span><h1>Choose your workspace</h1><p>Each workspace is one team, with its own people, repositories and settings.</p></div>
+				<div class="team-heading-copy"><h1>Choose your workspace</h1><p>Each workspace is one team, with its own people, repositories and settings.</p></div>
 				<button class="primary-action" type="button" commandfor="create-workspace" command="show-modal" data-open-dialog="create-workspace" aria-haspopup="dialog">
 					@components.PlusIcon()
 					Create workspace
@@ -37,11 +37,11 @@ templ Directory(username string, p Page) {
 								<p class="team-description">{ w.Description }</p>
 							}
 						</div>
-						<form method="post" action={ templ.SafeURL(components.WorkspaceURL(w.ID, "select")) }><input type="hidden" name="csrf_token" value={ p.CSRF }/><button class="primary-action" type="submit">Open workspace</button></form>
+						<form method="post" action={ components.PublicURL(ctx, components.WorkspaceURL(w.ID, "select")) }><input type="hidden" name="csrf_token" value={ p.CSRF }/><button class="primary-action" type="submit">Open workspace</button></form>
 						<div class="team-card-links">
-							<a href={ templ.SafeURL(components.WorkspaceURL(w.ID, "members")) }>Members</a>
+							<a href={ components.PublicURL(ctx, components.WorkspaceURL(w.ID, "members")) }>Members</a>
 							if w.Role=="owner" || w.Role=="admin" {
-								<a href={ templ.SafeURL(components.WorkspaceURL(w.ID, "settings")) }>Settings</a>
+								<a href={ components.PublicURL(ctx, components.WorkspaceURL(w.ID, "settings")) }>Settings</a>
 							}
 						</div>
 					</article>
@@ -67,26 +67,21 @@ templ Index(username string, p Page) {
 		<div class="team-page">
 			<header class="team-heading">
 				<div class="team-heading-copy">
-					<div class="team-context">
-						@components.WorkspaceAvatar(p.Name, p.ID, p.LogoVersion)
-						<span>{ p.Name }</span>
-						@components.WorkspaceRole(p.Role)
-					</div>
 					<h1>{ title }</h1>
 					if p.Tab=="members" {
 						if p.Manage() {
 							<p>Invite teammates and choose what they can access.</p>
 						} else {
-							<p>See the people in your workspace and their roles.</p>
+							<p>The people in this workspace and their roles.</p>
 						}
 					} else {
-						<p>Manage your workspace identity, details and ownership.</p>
+						<p>Name, description, logo and ownership for this team.</p>
 					}
 				</div>
 				<div class="team-heading-actions">
 					if p.Tab=="members" {
 						if p.Manage() {
-							<a class="secondary-action" href={ templ.SafeURL(p.Base() + "/settings") }>
+							<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/settings") }>
 								@components.WrenchIcon()
 								Settings
 							</a>
@@ -96,39 +91,34 @@ templ Index(username string, p Page) {
 							</button>
 						}
 					} else {
-						<a class="secondary-action" href={ templ.SafeURL(p.Base() + "/members") }>
+						<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members") }>
 							@components.TeamIcon()
-							Manage members
+							Members
 						</a>
 					}
 				</div>
 			</header>
-			if p.Message!="" {
-				<p class="connection-notice tone-ok" role="status">
-					@components.CheckIcon()
-					{ p.Message }
-				</p>
-			}
-			if p.Error!="" {
+			if p.Error!="" && p.ErrorField=="" {
 				<p class="connection-notice tone-danger" role="alert">{ p.Error }</p>
 			}
 			if p.InvitationURL!="" {
 				<section class="workspace-panel team-link-notice" role="status">
-					<div class="team-inline">
-						<span class="team-success-icon">
-							@components.CheckIcon()
-						</span>
-						<h2>Invitation ready</h2><span class="badge tone-ok">Expires in 7 days</span>
+					<div class="team-link-copy">
+						<h2>
+							<span class="team-success-icon">
+								@components.CheckIcon()
+							</span>
+							Invitation ready
+						</h2>
+						<p>Share it with the invited GitHub account. Shown only once · expires in 7 days.</p>
 					</div>
-					<p>Share this link with the selected GitHub account. It grants only the role and repositories you selected.</p>
 					<div class="team-copy-row">
 						<label class="sr-only" for="invitation-link">Invitation link</label><input id="invitation-link" type="text" readonly value={ p.InvitationURL }/>
 						<button type="button" class="secondary-action" data-copy-from="#invitation-link">
 							@components.CopyIcon()
-							<span data-copy-status>Copy invitation</span>
+							<span data-copy-status>Copy link</span>
 						</button>
 					</div>
-					<p class="team-field-hint">The full link is shown only here. You can generate a replacement from Invitations.</p>
 				</section>
 			}
 			if p.Tab=="members" {
@@ -138,5 +128,6 @@ templ Index(username string, p Page) {
 				@Settings(p)
 			}
 		</div>
+		@components.Toasts(p.Message)
 	}
 }

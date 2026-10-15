@@ -198,7 +198,7 @@ func TestWorkspaceProfileFormsAndMultipartCSRF(t *testing.T) {
 		t.Fatal(err)
 	}
 	r = b.upload(t, base+"/logo", token, strconv.FormatInt(w.ProfileRevision, 10), []byte("svg"), "")
-	if r.Code != 400 || !strings.Contains(r.Body.String(), "Workspace logo") {
+	if r.Code != 400 || !strings.Contains(r.Body.String(), "PNG or JPEG logo") || strings.Count(r.Body.String(), "PNG or JPEG logo") != 1 {
 		t.Fatal("invalid upload lost page context", r.Code)
 	}
 	r = b.request(http.MethodPost, base+"/settings", url.Values{"csrf_token": {token}, "profile_revision": {strconv.FormatInt(w.ProfileRevision, 10)}, "name": {""}, "description": {"Keep my description"}})

@@ -15,6 +15,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"github.com/ajaykathwatee/previa/internal/platform/scope"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/alexedwards/scs/v2/memstore"
@@ -29,6 +30,11 @@ func (testIdentity) AuthCodeURL(state string) string {
 func (testIdentity) Authenticate(_ context.Context, code string) (auth.Identity, error) {
 	for _, v := range []auth.Identity{{ID: 101, Username: "owner"}, {ID: 102, Username: "admin"}, {ID: 103, Username: "dev"}, {ID: 104, Username: "reviewer"}, {ID: 105, Username: "outsider"}, {ID: 106, Username: "newbie"}} {
 		if v.Username == code {
+			v.Email = v.Username + "@example.com"
+			v.ProfileURL = "https://github.com/" + v.Username
+			v.AvatarURL = "/static/brand/favicon.svg"
+			v.Company = "Fixture company"
+			v.Location = "Remote"
 			return v, nil
 		}
 	}
@@ -79,23 +85,34 @@ func fixtureRouter(t *testing.T, f fixture, origins ...string) http.Handler {
 	if len(origins) > 0 {
 		origin = origins[0]
 	}
+	return configuredFixtureRouter(t, f, origin, false)
+}
+func configuredFixtureRouter(t *testing.T, f fixture, origin string, strict bool) http.Handler {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	store := memstore.NewWithCleanupInterval(0)
 	t.Cleanup(store.StopCleanup)
 	sessions := auth.NewSessionManager(store, false, logger)
 	users := auth.NewHandler(config.ServerConfig{AppBaseURL: origin, SessionSecret: strings.Repeat("s", 32)}, sessions, auth.NewRepository(f.pool), testIdentity{}, logger)
+	users.WithAvatarAudience(f.service)
 	router := chi.NewRouter()
-	router.Use(sessions.LoadAndSave, users.LoadUser, users.CSRF, NewMiddleware(f.service, users, logger).Load)
+	router.Use(sessions.LoadAndSave, users.LoadUser, users.CSRF)
+	if strict {
+		router.Use(publicid.New(f.pool).Middleware)
+	}
+	router.Use(NewMiddleware(f.service, users, logger).Load)
 	users.Mount(router)
 	NewHandler(f.service, users, logger, origin).Mount(router, auth.RequireUser)
 	pullrequests.NewHandler(pullrequests.NewRepository(f.pool), nil, nil, users, logger, false).WithPreviewDomain("preview.test").Mount(router, auth.RequireUser)
 	buildlogs.NewHandler(buildlogs.NewStore(f.pool), users, logger).Mount(router, auth.RequireUser)
-	router.With(auth.RequireUser).Get("/repositories/{repoID}", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	router.With(auth.RequireUser).Post("/repositories/{repoID}/policy", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	if !strict {
+		router.With(auth.RequireUser).Get("/repositories/{repoID}", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+		router.With(auth.RequireUser).Post("/repositories/{repoID}/policy", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	}
 	router.With(auth.RequireUser).Get("/dashboard", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, fmt.Sprintf("/workspaces/%d/members", scope.WorkspaceID(r.Context())), http.StatusSeeOther)
+		publicid.Redirect(w, r, fmt.Sprintf("/workspaces/%d/members", scope.WorkspaceID(r.Context())), http.StatusSeeOther)
 	})
+	router.With(auth.RequireUser).Get("/protected", users.ServeProfile)
 	return router
 }
 func TestWorkspaceRoutesRespectRoleScopeAndCSRF(t *testing.T) {

@@ -19,6 +19,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+var (
+	ErrInvalidLogin          = errors.New("enter a valid GitHub username, without @ or a profile URL")
+	ErrGitHubAccountNotFound = errors.New("no personal GitHub account was found with that username; check the spelling")
+	ErrAlreadyMember         = errors.New("this GitHub account is already a workspace member; update their access from Members")
+	ErrPendingInvitation     = errors.New("this GitHub account already has a pending invitation; manage it from Invitations")
+)
+
 var githubLoginPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$`)
 
 type InvitationCommand struct {
@@ -49,7 +56,10 @@ func tokenHash(token string) ([]byte, error) {
 }
 func (s *Service) Invite(ctx context.Context, c InvitationCommand) (token string, err error) {
 	c.Login = strings.TrimSpace(c.Login)
-	if !githubLoginPattern.MatchString(c.Login) || strings.Contains(c.Login, "--") || !validRole(c.Role) || c.Revision <= 0 || len(c.Repositories) > 500 {
+	if !githubLoginPattern.MatchString(c.Login) || strings.Contains(c.Login, "--") {
+		return "", ErrInvalidLogin
+	}
+	if !validRole(c.Role) || c.Revision <= 0 || len(c.Repositories) > 500 {
 		return "", ErrInput
 	}
 	actor, err := s.Read(ctx, c.ActorID, c.WorkspaceID)
@@ -67,7 +77,7 @@ func (s *Service) Invite(ctx context.Context, c InvitationCommand) (token string
 		return "", fmt.Errorf("resolve invitation identity: %w", errors.Join(ErrSourceUnavailable, err))
 	}
 	if id <= 0 || login == "" {
-		return "", ErrInput
+		return "", ErrGitHubAccountNotFound
 	}
 	token, hash, err := invitationToken()
 	if err != nil {
@@ -80,6 +90,9 @@ func (s *Service) Invite(ctx context.Context, c InvitationCommand) (token string
 		if err := checkInvitable(ctx, q, w.ID, id); err != nil {
 			return err
 		}
+		if err := checkPendingInvitation(ctx, q, w.ID, id); err != nil {
+			return err
+		}
 		if err := q.ExpirePendingInvitation(ctx, dbgen.ExpirePendingInvitationParams{WorkspaceID: w.ID, GithubID: id}); err != nil {
 			return fmt.Errorf("expire prior invitation: %w", err)
 		}
@@ -88,7 +101,7 @@ func (s *Service) Invite(ctx context.Context, c InvitationCommand) (token string
 		if e != nil {
 			var pgerr *pgconn.PgError
 			if errors.As(e, &pgerr) && pgerr.Code == "23505" {
-				return ErrConflict
+				return ErrPendingInvitation
 			}
 			return fmt.Errorf("save invitation: %w", e)
 		}
@@ -258,7 +271,7 @@ func checkInvitable(ctx context.Context, q *dbgen.Queries, wid, githubID int64) 
 		return fmt.Errorf("read existing invited member: %w", err)
 	}
 	if m.State == "active" {
-		return ErrConflict
+		return errors.Join(ErrConflict, ErrAlreadyMember)
 	}
 	return nil
 }
@@ -304,6 +317,17 @@ func (s *Service) acceptInvitation(ctx context.Context, q *dbgen.Queries, inv db
 	}
 	if err := q.SaveWorkspacePreference(ctx, dbgen.SaveWorkspacePreferenceParams{UserID: user, WorkspaceID: nullableID(inv.WorkspaceID)}); err != nil {
 		return fmt.Errorf("select joined workspace: %w", err)
+	}
+	return nil
+}
+
+func checkPendingInvitation(ctx context.Context, q *dbgen.Queries, workspaceID, githubID int64) error {
+	pending, err := q.HasPendingInvitation(ctx, dbgen.HasPendingInvitationParams{WorkspaceID: workspaceID, GithubID: githubID})
+	if err != nil {
+		return fmt.Errorf("check pending invitation: %w", err)
+	}
+	if pending {
+		return ErrPendingInvitation
 	}
 	return nil
 }

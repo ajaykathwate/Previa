@@ -81,6 +81,12 @@ func (g *testGitHub) LookupGitHubUser(_ context.Context, login string) (int64, s
 		return 0, "", errors.New("GitHub unavailable")
 	}
 	switch login {
+	case "missing-user":
+		return 0, "", nil
+	case "provider-down":
+		return 0, "", errors.New("GitHub unavailable")
+	case "owner":
+		return 101, login, nil
 	case "admin":
 		return 102, login, nil
 	case "dev":

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -24,6 +25,7 @@ type userRepository interface {
 type Handler struct {
 	sessions *scs.SessionManager
 	users    userRepository
+	audience AvatarAudience
 	provider identityProvider
 	logger   *slog.Logger
 	stateKey []byte
@@ -45,7 +47,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		h.sessions.Put(r.Context(), "after_login", next)
 	}
 	http.SetCookie(w, h.stateCookie(h.signState(state), int(stateLifetime.Seconds())))
-	http.Redirect(w, r, h.provider.AuthCodeURL(state), http.StatusSeeOther)
+	publicid.Redirect(w, r, h.provider.AuthCodeURL(state), http.StatusSeeOther)
 }
 
 func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +92,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 	if !LocalPath(next) {
 		next = "/dashboard"
 	}
-	http.Redirect(w, r, next, http.StatusSeeOther)
+	publicid.Redirect(w, r, next, http.StatusSeeOther)
 }
 
 // LocalPath reports whether next is a path on this server to return to
@@ -110,7 +112,7 @@ func LocalPath(next string) bool {
 
 // logoutConfirmation preserves old links without rendering a separate screen.
 func (h *Handler) logoutConfirmation(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/dashboard?confirm=logout", http.StatusSeeOther)
+	publicid.Redirect(w, r, "/dashboard?confirm=logout", http.StatusSeeOther)
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +122,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, h.stateCookie("", -1))
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	publicid.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, status int, message string) {

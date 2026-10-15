@@ -66,7 +66,7 @@ templ Sidebar(active NavItem) {
 // WorkspaceLink renders identical desktop/mobile navigation with explicit selection.
 templ WorkspaceLink(href string, label string, icon templ.Component, item NavItem, active NavItem) {
 	<a
-		href={ href }
+		href={ PublicURL(ctx, href) }
 		class="nav-link"
 		title={ label }
 		if active==item {

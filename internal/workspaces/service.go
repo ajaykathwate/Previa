@@ -135,3 +135,13 @@ func (s *Service) CanReadSource(ctx context.Context, user, repo int64) (bool, er
 	}
 	return err == nil, err
 }
+
+// SharesWorkspace reports whether two people are active members of a common
+// workspace; auth uses it to show uploaded profile pictures to teammates.
+func (s *Service) SharesWorkspace(ctx context.Context, viewer, subject int64) (bool, error) {
+	shared, err := dbgen.New(s.repo.pool).SharesWorkspace(ctx, dbgen.SharesWorkspaceParams{ViewerID: viewer, SubjectID: subject})
+	if err != nil {
+		return false, fmt.Errorf("check shared workspace: %w", err)
+	}
+	return shared, nil
+}
