@@ -128,8 +128,8 @@ templ DeleteWorkspace(p Page) {
 					</div>
 					<form method="post" action={ components.PublicURL(ctx, p.Base()+"/delete") } class="team-form">
 						@Hidden(p)
-						<label for="confirm-delete-name">{ "Type " + p.Name + " to confirm" }</label>
-						<input id="confirm-delete-name" name="confirm_name" required autocomplete="off" spellcheck="false" data-confirm-match={ p.Name }/>
+						<label for="confirm-delete-name">Type <code class="delete-word">{ DeleteConfirmation }</code> to confirm</label>
+						<input id="confirm-delete-name" name="confirm" required autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder={ DeleteConfirmation } pattern={ DeleteConfirmation } title="Type DELETE in capital letters" aria-describedby="delete-workspace-description" data-confirm-match={ DeleteConfirmation }/>
 						<div class="dialog-actions">
 							<button type="button" class="secondary-action" commandfor="delete-workspace" command="close" data-close-dialog>Cancel</button>
 							<button type="submit" class="primary-action danger-action" data-confirm-submit>Delete workspace</button>

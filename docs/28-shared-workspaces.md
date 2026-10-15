@@ -96,8 +96,9 @@ steps reflect real state.
 active member and no GitHub App installation is still connected (uninstalling the
 App lets Previa tear down that workspace's previews first). The confirmation
 suggests inviting a teammate and handing over ownership instead, and requires the
-exact workspace name. Deletion is a soft delete: access ends immediately, pending
-invitations are revoked and the logo is removed; usage records stay.
+owner to type `DELETE` in capital letters. Deletion is a soft delete: access ends
+immediately, pending invitations are revoked and the logo is removed; usage records
+stay.
 
 The primary CTA on Members is Invite teammate; Settings links back to Members.
 The command palette exposes both pages. **Previews** is the sole preview listing;

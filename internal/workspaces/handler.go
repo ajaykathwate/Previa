@@ -340,7 +340,7 @@ func (h *Handler) memberProfile(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	u, id := h.identity(r)
-	if err := h.service.Delete(r.Context(), u, id, parseID(r.PostFormValue("workspace_revision")), r.PostFormValue("confirm_name")); err != nil {
+	if err := h.service.Delete(r.Context(), u, id, parseID(r.PostFormValue("workspace_revision")), r.PostFormValue("confirm")); err != nil {
 		h.fail(w, r, err)
 		return
 	}

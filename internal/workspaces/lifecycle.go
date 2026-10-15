@@ -17,7 +17,7 @@ import (
 var (
 	ErrDeleteMembers      = errors.New("a workspace can be deleted only when its owner is the only member")
 	ErrDeleteInstallation = errors.New("uninstall the connected GitHub App first; Previa then removes its previews")
-	ErrDeleteConfirmation = errors.New("type the workspace name exactly to confirm")
+	ErrDeleteConfirmation = errors.New("type DELETE in capital letters to confirm")
 )
 
 func stamp(t pgtype.Timestamptz) string {
@@ -138,7 +138,7 @@ func (s *Service) Delete(ctx context.Context, user, wid, revision int64, confirm
 		if w.Role != "owner" {
 			return ErrUnavailable
 		}
-		if strings.TrimSpace(confirm) != w.Name {
+		if strings.TrimSpace(confirm) != pages.DeleteConfirmation {
 			return ErrDeleteConfirmation
 		}
 		counts, err := q.WorkspaceCounts(ctx, dbgen.WorkspaceCountsParams{WorkspaceID: wid, UserID: user})

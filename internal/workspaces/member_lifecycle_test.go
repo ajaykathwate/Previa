@@ -134,10 +134,10 @@ func TestWorkspaceDeletionNeedsASoleOwnerWithoutConnections(t *testing.T) {
 	ctx := t.Context()
 	f.invite(t, "admin", "admin", f.admin, 102, nil)
 	w, _ := f.service.Read(ctx, f.owner, f.wid)
-	if err := f.service.Delete(ctx, f.owner, f.wid, w.Revision, w.Name); !errors.Is(err, ErrDeleteMembers) {
+	if err := f.service.Delete(ctx, f.owner, f.wid, w.Revision, "DELETE"); !errors.Is(err, ErrDeleteMembers) {
 		t.Fatalf("deleted a shared workspace: %v", err)
 	}
-	if err := f.service.Delete(ctx, f.admin, f.wid, w.Revision, w.Name); !errors.Is(err, ErrUnavailable) {
+	if err := f.service.Delete(ctx, f.admin, f.wid, w.Revision, "DELETE"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("an admin deleted the workspace: %v", err)
 	}
 	solo, err := f.service.Create(ctx, f.owner, "Solo team")
@@ -145,20 +145,22 @@ func TestWorkspaceDeletionNeedsASoleOwnerWithoutConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	s, _ := f.service.Read(ctx, f.owner, solo)
-	if err := f.service.Delete(ctx, f.owner, f.wid, w.Revision, w.Name); !errors.Is(err, ErrDeleteMembers) {
+	if err := f.service.Delete(ctx, f.owner, f.wid, w.Revision, "DELETE"); !errors.Is(err, ErrDeleteMembers) {
 		t.Fatal("membership check skipped", err)
 	}
 	if _, err := f.pool.Exec(ctx, "UPDATE installations SET workspace_id=$1 WHERE workspace_id=$2", solo, f.wid); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.service.Delete(ctx, f.owner, solo, s.Revision, "Solo team"); !errors.Is(err, ErrDeleteInstallation) {
+	if err := f.service.Delete(ctx, f.owner, solo, s.Revision, "DELETE"); !errors.Is(err, ErrDeleteInstallation) {
 		t.Fatalf("deleted a workspace with a connected installation: %v", err)
 	}
 	if _, err := f.pool.Exec(ctx, "UPDATE installations SET workspace_id=$1 WHERE workspace_id=$2", f.wid, solo); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.service.Delete(ctx, f.owner, solo, s.Revision, "solo team"); !errors.Is(err, ErrDeleteConfirmation) {
-		t.Fatalf("confirmation must match exactly: %v", err)
+	for _, typed := range []string{"delete", "Delete", "Solo team", ""} {
+		if err := f.service.Delete(ctx, f.owner, solo, s.Revision, typed); !errors.Is(err, ErrDeleteConfirmation) {
+			t.Fatalf("confirmation %q must be DELETE in capitals: %v", typed, err)
+		}
 	}
 	router := configuredFixtureRouter(t, f, "http://localhost", true)
 	owner := testBrowser{router: router, cookies: map[string]*http.Cookie{}}
@@ -171,7 +173,7 @@ func TestWorkspaceDeletionNeedsASoleOwnerWithoutConnections(t *testing.T) {
 	if shared := owner.request("GET", "/workspaces/"+publicWorkspace(t, f)+"/settings", nil).Body.String(); strings.Contains(shared, "Delete workspace…") {
 		t.Fatal("deletion offered while other members exist")
 	}
-	deleted := owner.request("POST", "/workspaces/"+id+"/delete", url.Values{"csrf_token": {owner.csrf(t)}, "workspace_revision": {strconv.FormatInt(s.Revision, 10)}, "confirm_name": {"Solo team"}})
+	deleted := owner.request("POST", "/workspaces/"+id+"/delete", url.Values{"csrf_token": {owner.csrf(t)}, "workspace_revision": {strconv.FormatInt(s.Revision, 10)}, "confirm": {"DELETE"}})
 	if deleted.Code != http.StatusSeeOther || deleted.Header().Get("Location") != "/workspaces?saved=deleted" {
 		t.Fatalf("delete workspace: %d %s", deleted.Code, deleted.Header().Get("Location"))
 	}

@@ -32,7 +32,7 @@ Last updated: 2026-10-15
   `WorkspaceShell.Invitations`); member activity query `MemberActivity` (builds,
   joined/created, invited, left/removed; filtered by viewer access); soft workspace
   delete (`Service.Delete`: owner, sole active member, no active/suspended
-  installation, exact name). Create redirects to `/workspaces/{id}/setup`.
+  installation, typed `DELETE`). Create redirects to `/workspaces/{id}/setup`.
 - Member profile page: GET `/workspaces/{id}/members/{user}` (deactivated profiles
   managers only). Own profile shows Recent activity (auth `ActivityFeed` interface).
 - 0037 PR head commit cache (`pullrequests/commits.go`, `GitHubSource.Commit`,

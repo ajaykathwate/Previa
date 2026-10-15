@@ -264,3 +264,4 @@ a.team-person-link:hover strong { text-decoration: underline; text-decoration-co
 .commit-body > summary:hover { color: var(--ink-soft); }
 .commit-body pre { max-height: 12rem; margin: 6px 0 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-muted); color: var(--ink-soft); font-family: var(--font-code); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .commit-meta { margin: 0; color: var(--text-muted); font-size: 12px; }
+.delete-word { padding: 1px 5px; border-radius: 5px; background: var(--danger-soft); color: var(--danger-ink); font-family: var(--font-code); font-size: 12px; font-weight: 700; letter-spacing: .04em; }

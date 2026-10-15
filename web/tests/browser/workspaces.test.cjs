@@ -512,7 +512,11 @@ test('a sole owner can delete a workspace after seeing the handover alternative'
   assert.ok((await dialog.textContent()).includes('hand over ownership'));
   const submit=dialog.getByRole('button',{name:'Delete workspace',exact:true});
   assert.ok(await submit.isDisabled());
-  await dialog.locator('#confirm-delete-name').fill('Throwaway team');
+  for(const typed of ['delete','Delete','Throwaway team']){
+   await dialog.locator('#confirm-delete-name').fill(typed);
+   assert.ok(await submit.isDisabled(),`"${typed}" does not confirm`);
+  }
+  await dialog.locator('#confirm-delete-name').fill('DELETE');
   assert.ok(await submit.isEnabled());
   await snap(page,'delete-workspace');
   await submit.click();

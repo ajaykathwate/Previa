@@ -179,6 +179,9 @@ func (p Page) PublicReferences() []components.ResourceRef {
 	return refs
 }
 
+// DeleteConfirmation is what an owner types, in capitals, to delete a workspace.
+const DeleteConfirmation = "DELETE"
+
 // CanManageMember reports whether the viewer may change or remove an active
 // member: never the owner, and admins only by the owner.
 func (p Page) CanManageMember(m Member) bool {
