@@ -855,6 +855,8 @@ preview/
 │   ├── workspaces/                 # FEATURE: shared teams, grants, invitations, handover
 │   │   ├── handler.go  middleware.go  repository.go  service.go
 │   │   ├── membership.go  invitations.go  pages.go  queries.sql
+│   │   ├── profile.go  profile_handler.go  invitation_handler.go
+│   │   ├── lifecycle.go            # activity, member profiles, re-invite, received invitations, delete
 │   │   └── dbgen/
 │   ├── app/                        # composition root: builds and wires everything
 │   │   ├── server.go               # creates features, mounts routes, starts HTTP
@@ -902,6 +904,7 @@ preview/
 │   │   ├── handler.go  repository.go  queries.sql  dbgen/
 │   │   ├── actions.go              # owner actions: Build/Retry/Rebuild, teardown
 │   │   ├── observation.go  github.go  sync.go
+│   │   ├── commits.go              # cached head-commit message for the PR page
 │   │
 │   ├── repoconfig/                 # FEATURE: .previewrc.yaml parse + validate
 │   │   ├── config.go               # typed struct + defaults
@@ -1263,6 +1266,25 @@ human source authority. Shared modal components provide accessible confirmation.
   private one-hour cache and ETag. GitHub pictures load directly from
   `https://avatars.githubusercontent.com`, the CSP's only external image origin,
   without a referrer; a failed image falls back to the initial.
+- Migration 0036: removal stays a soft delete (`state='removed'`) and now records
+  `removed_by` and the repositories held, so managers see a Deactivated list and a
+  re-invitation preselects previous access; acceptance reactivates the same row.
+  Invitations stay addressed to an immutable GitHub ID, which also lets a signed-in
+  person answer from Previa (Invitations for you, switcher badge) without the link
+  token; the same creator/expiry/identity checks apply. Member activity is derived
+  from existing records (manual build requests, memberships, invitations,
+  removals) — no audit table — and filtered by the viewer's repository access and
+  manager role. Workspace deletion is a soft delete limited to a sole owner with no
+  connected installation, because preview teardown follows installation lifecycle
+  events; DESIGN's account deletion remains a later feature.
+- Migration 0037 caches the PR head commit's message/author per head SHA: the PR
+  page fetches it once (2.5 s cap, retried after 10 minutes on failure) because
+  GitHub's pull request payloads omit it. The description sits under the build
+  status; the commit message sits with the SHA in Details.
+- App pages share one compact heading (`components.PageTitle`): the title plus an
+  info tooltip holding the page's explanation (hover/focus, Escape dismisses).
+  "Create workspace" is a shell-level dialog that never navigates until submit;
+  menus and dialogs close before navigation so view transitions show no overlay.
 - Profile and workspace settings use compact side-by-side cards of label/value
   rows edited in place: Enter/✓ saves, Esc/✕ restores, leaving a changed field
   saves, and a small toast confirms (errors stay inline). Enhanced saves send

@@ -199,6 +199,12 @@ only to the member and people who currently share an active workspace with them;
 anyone else, and numeric addresses, get a 404. Without JavaScript, the same forms
 post normally and redirect back with the toast.
 
+**Recent activity** sits below both sections: builds you requested, workspaces you
+created or joined, invitations you sent and members you removed, newest first and
+limited to workspaces you're currently in. It is derived from those records; no
+separate activity log exists. Only you see your own list; teammates see a
+workspace-scoped version on your member profile.
+
 Members cannot change another person’s name, photo or immutable GitHub identity.
 Full names are primary in the navbar and member list; the GitHub username remains
 visible as a secondary identity. Email appears only on the signed-in member’s own

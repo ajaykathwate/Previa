@@ -13,7 +13,9 @@ router now serves request counts for "Last opened" and idle previews).
 This update adds member names/GitHub profile metadata (0032) and stable random
 public UUIDs (0033). It needs no new environment variables or Docker image rebuild.
 PR descriptions and execution health are added by 0034, and uploaded profile
-photos (with GitHub-name prefill for never-edited blank names) by 0035. Internal
+photos (with GitHub-name prefill for never-edited blank names) by 0035, deactivated
+members, in-app invitations, activity and workspace deletion by 0036, and cached
+head-commit messages for the PR page by 0037. Internal
 database keys and stored jobs remain unchanged. Apply migrations before
 starting the new binaries; old numeric HTML bookmarks redirect after access checks.
 Use UUIDs for forms, streams and downloads.
@@ -24,9 +26,9 @@ make run-server          # automatically loads .env; exported values win
 make run-worker          # restart separately after migration
 ```
 
-**Expected:** Goose reaches **35**, River stays **007**, and the new server accepts
-the schema (a server built for 35 refuses to start on 34 with "run migrations
-first"). Sign in again (or use Your profile → GitHub account → Refresh)
+**Expected:** Goose reaches **37**, River stays **007**, and the new server accepts
+the schema (a server built for 37 refuses to start on an older schema with "run
+migrations first"). Sign in again (or use Your profile → GitHub account → Refresh)
 to populate GitHub metadata. Login requests the read-only `user:email` OAuth scope
 for the verified primary email; tokens are still discarded. No repository OAuth
 scope is added. The account's first/last name is editable independently; refreshed
@@ -240,6 +242,8 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0033 | Persisted random public UUID aliases for existing resources; internal relational keys and jobs stay stable. |
 | 0034 | Persisted PR descriptions and revision-bound execution-job health; failed/exhausted workers no longer leave active build requests spinning. |
 | 0035 | Uploaded profile photos (`user_avatars`, `users.avatar_version`, `users.custom_avatar`); never-edited blank names are filled from the cached GitHub name. No new configuration; the CSP now also allows images from `https://avatars.githubusercontent.com`. |
+| 0036 | Member lifecycle: `workspace_memberships.removed_by`/`removed_repository_ids` (Deactivated list and re-invitation with previous access), an index for invitations addressed to a GitHub account (in-app Invitations), an index for per-member build activity, and `workspaces.deleted_at` (soft delete). |
+| 0037 | `pull_requests.head_commit_*`: the PR page caches the head commit's message, author and time, fetched once per head SHA (GitHub's PR payloads omit them). Needs the GitHub App; without it the section is simply absent. |
 
 
 ### Shared workspace cutover
@@ -982,6 +986,21 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
   `make test-e2e` lower the floor to 1 GiB for their tiny images, so they run on a
   machine or CI runner with about 10 GiB free; the worker keeps your values. Repeated pull
   failures for public images can be Docker Hub's anonymous rate limit ([09](09-image-builds.md)).
+- **Removing a member shows "temporarily unavailable" and the server log says
+  `function workspace_request_published(bigint) does not exist` (or River build jobs
+  fail with `workspace_publication_authorized`):** the database applied an early
+  draft of migration 0030 that lacked those two functions; Goose never re-runs an
+  applied migration. Compare with a fresh schema, then recreate only the missing
+  functions from `db/migrations/0030_workspaces.sql`:
+
+  ```sh
+  psql "$DATABASE_URL" -tAc "SELECT proname FROM pg_proc WHERE proname IN ('workspace_request_published','workspace_publication_authorized')"
+  ```
+
+  **Expected:** both names are listed. If either is missing, run the two
+  `CREATE FUNCTION workspace_request_published…` and
+  `CREATE FUNCTION workspace_publication_authorized…` statements from 0030 (as
+  `CREATE OR REPLACE FUNCTION`) against that database, then retry the removal.
 - **Editor says templ components are undefined:** run `make generate && go build ./...`;
   generated `*_templ.go` files are ignored and must exist locally. If the build
   passes, restart the Go/templ language servers. `make watch-templates` regenerates
@@ -990,7 +1009,7 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
 ### Fresh local setup after deleting Docker data
 
 A new database can run all migrations from scratch, including workspace migrations
-0030–0035. Deleting the PostgreSQL volume erases users/sessions, workspace memberships,
+0030–0037. Deleting the PostgreSQL volume erases users/sessions, workspace memberships,
 invitations, repository links, stored secrets, preview history and usage. Remove
 data only if you intend to discard it, or take a database backup first. Restrict
 cleanup to Previa resources; global Docker cleanup can erase other projects.

@@ -62,10 +62,42 @@ inaccessible to Developers/Reviewers. A nominated Admin gets a handover link on
 Members; the nomination and acceptance controls live under Settings → Ownership.
 
 **Members** lists people in dense rows (photo, name and @username, role,
-repository access, actions) with Members/Invitations switching and search in one
-toolbar. Saves elsewhere on the page (access changes, removals) confirm with the
-same toast. The workspace name is not repeated in the page heading — the
+repository access, actions) with Members/Invitations/Deactivated switching and
+search in one toolbar. Saves elsewhere on the page (access changes, removals)
+confirm with the same toast; a refused change stays on Members with the reason
+above the list. The workspace name is not repeated in the page heading — the
 breadcrumb and switcher already show it.
+
+- **Member profiles.** Clicking a person opens `/workspaces/{id}/members/{user}`:
+  photo, @username, status, role, repository access, membership date, public GitHub
+  details, and their recent activity in this workspace — only build requests in
+  repositories the viewer can read, plus membership events; invitations they sent
+  and removals they made are shown to managers only. Email is never shown there.
+  Managers can manage access or remove the person from the profile too.
+- **Deactivated.** Removing a member (or leaving) is a soft delete: the membership
+  keeps its role, who removed them and the repositories they had, while all access
+  ends at once. Deactivated people are listed on their own tab (managers only),
+  with no access controls. **Re-invite** opens the invitation form preselected with
+  their previous role and repositories; accepting reactivates the same membership.
+- **Invitations inside Previa.** An invitation is addressed to a GitHub account,
+  so a person who already uses Previa sees it under **Invitations for you** on the
+  Workspaces page and as a badge on the workspace switcher, with the inviter, role,
+  exact repositories and expiry; **Join workspace** or **Decline** answers it
+  without the link. The one-time link still works for people who haven't signed in
+  yet. Only the addressed GitHub account can answer either way.
+
+**Creating a workspace.** "Create workspace" (switcher or Workspaces page) opens a
+dialog over the current page; nothing navigates until it is created. The new
+workspace opens on a setup checklist — invite teammates (inline invitation
+form), connect repositories (GitHub App install), describe the workspace — whose
+steps reflect real state.
+
+**Deleting a workspace.** Owners can delete a workspace only when they are its only
+active member and no GitHub App installation is still connected (uninstalling the
+App lets Previa tear down that workspace's previews first). The confirmation
+suggests inviting a teammate and handing over ownership instead, and requires the
+exact workspace name. Deletion is a soft delete: access ends immediately, pending
+invitations are revoked and the logo is removed; usage records stay.
 
 The primary CTA on Members is Invite teammate; Settings links back to Members.
 The command palette exposes both pages. **Previews** is the sole preview listing;

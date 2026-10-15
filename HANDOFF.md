@@ -2,73 +2,67 @@
 Last updated: 2026-10-15
 
 ## Current state
-- Branch `mvp-complete`, baseline commit 2b112db. All work below is uncommitted;
-  the user has not asked for a commit or push.
-- Codex's member/workspace task (names, invitation errors, 25+ repo picker, public
-  UUIDs, PR descriptions, execution health) is finished and verified, together
-  with the compact profile/settings/members redesign and editable profile photos.
-- README/DESIGN remain source of truth (DESIGN workspace bullets now cover 0035,
-  photos, the CSP image origin and in-place editing). No subagents authorized.
+- Branch `mvp-complete`, all work committed (not pushed). Earlier: b863def (UUIDs,
+  PR descriptions, execution health), 380b3d5 (profile/settings/members + photos),
+  5de8338 (docs). Then: UI shell (headings, sidebar, create dialog), member
+  lifecycle (0036), PR head commit (0037), docs. Commit only when the user asks.
+- README/DESIGN remain source of truth (DESIGN §21 bullets cover 0035–0037,
+  deletion scope, in-app invitations, derived activity, heading pattern).
 
-## UI direction (user requirement, also in memory)
-- Pages must be compact and use horizontal space well (Jira-like density):
-  side-by-side cards of label/value rows, in-place editing, small toast on save,
-  errors inline, no tabs for related details, each fact shown once. Check
-  1440px and 390px screenshots before calling UI work done.
-- Shared pieces: `web/components/inline_edit.templ` (UserAvatar, Toasts,
-  InlineText/InlineTextarea), `web/styles/fields.css`, ui.js `toast()`,
-  `initInlineForms`, `initImageEditors`. Inline focus follows base.css quiet focus
-  (ink-soft border, no glow). Team page spacing lives in `web/styles/teams.css`.
-- Profile (`/protected`): Previa profile (photo, names, email read-only, member ID,
-  joined, session/logout) beside GitHub account (username, ID, name, profile,
-  company, location, bio, joined GitHub, last refreshed, Refresh).
-- Settings: General (logo, name, description, ID) beside Overview; Ownership is a
-  full-width row. Members: dense rows, no repeated workspace context line.
+## UI direction (user requirements; also saved in memory)
+- Compact, Jira-like pages: side-by-side label/value cards, in-place editing with
+  a toast, inline errors, no tabs for related details, each fact shown once.
+- Page headings: `components.PageTitle(title, info)` — 22px title plus an info
+  tooltip holding the description (no eyebrow, no paragraph). Used on Overview,
+  Repositories, Builds, Previews, Starter kits, Developer tools, FAQ and team pages.
+- Interactions: modals open over the current page (create-workspace dialog lives in
+  the app shell, `components.CreateWorkspaceDialog`); navigation only after submit;
+  ui.js closes menus on link click/submit and closes menus + dialogs on `pageswap`.
+- Sidebar: brand, workspace switcher (pinned, absolute menu; rail menu opens beside
+  the rail), primary nav, "Workspace" group (Members, Settings), Developer tools and
+  Help & FAQ at the bottom. Quick jump and "Preview control plane" were removed.
 
-## Backend added this session
-- Migration 0035: `user_avatars`, `users.avatar_version` (monotonic) and
-  `users.custom_avatar`; backfills never-edited blank names from GitHub name.
-  UpsertUser also prefills when profile_revision=1 and names are blank.
-  `database.SchemaVersion` = 35.
-- CSP img-src adds `https://avatars.githubusercontent.com` (root cause of the
-  missing profile picture). Constant: `httpx.GitHubAvatarOrigin`.
-- auth: `/protected/profile/avatar` (multipart upload), `/avatar/remove`,
-  `GET /avatars/{userUUID}` (self or current teammates via consumer interface
-  `AvatarAudience.SharesWorkspace`, wired in server.go; others 404).
-- In-place saves: `Accept: application/json` → `httpx.FormResult` (message,
-  error, revision, fields) from profile name, photo, workspace details/logo.
-  Plain forms still redirect with `?saved=` (ui.js strips it after the toast).
-- Settings no-JS errors carry `Page.ErrorField` ("logo"/"details") so they render
-  once beside their field.
+## This session's backend
+- 0035 photos (`user_avatars`, `users.avatar_version/custom_avatar`), CSP allows
+  `https://avatars.githubusercontent.com`; `/avatars/{uuid}` for self + teammates.
+- 0036 member lifecycle: removal records `removed_by` + `removed_repository_ids`
+  (Deactivated tab, re-invite prefill via `?view=deactivated&reinvite=<uuid>`);
+  in-app invitations (`ReceivedInvitations`, POST
+  `/workspace-invitations/received/{invitation uuid}`, switcher badge via
+  `WorkspaceShell.Invitations`); member activity query `MemberActivity` (builds,
+  joined/created, invited, left/removed; filtered by viewer access); soft workspace
+  delete (`Service.Delete`: owner, sole active member, no active/suspended
+  installation, exact name). Create redirects to `/workspaces/{id}/setup`.
+- Member profile page: GET `/workspaces/{id}/members/{user}` (deactivated profiles
+  managers only). Own profile shows Recent activity (auth `ActivityFeed` interface).
+- 0037 PR head commit cache (`pullrequests/commits.go`, `GitHubSource.Commit`,
+  2.5 s cap, 10 min retry back-off). PR page: Description under status; commit
+  message under Latest commit in Details. `SchemaVersion` = 37.
+- Member changes that fail re-render Members with an inline error (no dead-end page).
+
+## Dev database (repaired 2026-10-15, with the user's go-ahead)
+- previa-postgres-1 had applied an early draft of 0030 and lacked
+  `workspace_request_published` / `workspace_publication_authorized` (broke member
+  removal and River builds). Both were recreated from 0030; its public schema now
+  matches a fresh migration exactly at version 37. 26 earlier `build` jobs stay
+  discarded (not touched); Retry build on those PRs re-queues them.
+- Two leftover `ordering_test_*` schemas remain in the dev DB (not touched).
 
 ## Environments and verification
-- Dev DB (previa-postgres-1) reached 0035 at 13:53 via the user's own `make dev`
-  restart; do not run migrations on it yourself.
-- Dedicated test DB container `previa-member-ux-test-postgres` (loopback 55439,
-  db previa_ux_test, user previa/previa-test) is migrated to 35. The auth
-  persistence test uses its public schema, so keep it migrated. Stop/remove only
-  this container when the user is done with it.
-- Browser: `UI_BROWSER_EXECUTABLE=/snap/bin/chromium` (Playwright's own cache is
-  incomplete). GOCACHE=/tmp/previa-product-spec-go-cache.
-- Verified this session: go build, go vet, golangci-lint (0 issues), full Go suite
-  with TEST_DATABASE_URL, workspace browser suite 11/11 with screenshots, UI
-  browser suite (see final summary for counts).
-- Screenshots: web/tests/browser/artifacts/workspace-{member-profile*,logo,
-  inline-edit,toast,members-*,settings-*,directory}.png.
+- Test DB container `previa-member-ux-test-postgres` (127.0.0.1:55439,
+  previa_ux_test, previa/previa-test), migrated to 37; the auth persistence test
+  uses its public schema. Remove only this container when the user is done.
+- Browser: `UI_BROWSER_EXECUTABLE=/snap/bin/chromium`. GOCACHE=/tmp/previa-product-spec-go-cache.
+- Verified: build, vet, golangci-lint (0 issues), full Go suite, workspace browser
+  suite (14 scenarios) and UI browser suite (55) — see final summary for counts.
 
-## Existing access invariants (unchanged)
-- Active workspace membership is authoritative. Owner/Admin span all repositories;
-  Developer/Reviewer require explicit grants. Sessions remember selection, not roles.
-- Source-sensitive operations check fresh GitHub numeric identity and readable
-  permission; GitHub permission checks use the GitHub login, never display names.
-- Membership mutations serialize workspace → installations → PRs, fence unfinished
-  manual candidates and revoke private cookies/streams.
-- Invitations use digest-only, addressed seven-day consent/revoke/regenerate flows.
-  Only Owner appoints/demotes Admins; ownership handover requires acceptance.
-- Profile/logo/photo edits never change authorization revisions or cancel work.
+## Access invariants (unchanged)
+- Active workspace membership is authoritative; Owner/Admin span all repositories;
+  Developer/Reviewer need explicit grants. GitHub checks use the GitHub login.
+- Membership mutations serialize workspace → installations → PRs and revoke
+  private cookies/streams; invitations are digest-only, addressed, seven-day.
+- Profile/logo/photo edits never change authorization revisions.
 - Do not edit technical-docs/inside-previa.md unless asked. No deployment/push.
 
 ## Next steps
-- User review of the redesigned pages; apply the same density rules to any other
-  page they flag (Overview, Repositories, Builds were not part of this pass).
-- Commit only when asked, on the current branch (see memory for push rules).
+- User review of the latest UI; push only when asked (to `main`, never `master`).

@@ -367,6 +367,11 @@ A workspace represents one team with multiple members and repositories; nested
 teams are not part of this model. A person can join multiple workspaces. Members
 and Workspace settings have separate direct sidebar destinations. Owners/Admins
 can edit the name, description and logo in Settings; previews stay on Previews.
+People open as member profiles with workspace-scoped recent activity; removed
+members stay on a Deactivated tab and can be re-invited with their previous
+access. Invitations also appear inside Previa for the invited GitHub account. A new
+workspace opens on a setup checklist, and a sole owner can delete a workspace that
+has no connected GitHub App installation.
 
 The detailed contract and current user flows are in
 [Shared team workspaces](docs/28-shared-workspaces.md). References below to a
