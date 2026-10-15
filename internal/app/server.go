@@ -205,7 +205,7 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	}
 	workspaceService := workspaces.NewService(workspaces.NewRepository(pool), workspaceAccess, workspaceAccess, coordinator)
 	f.prs.WithSourceAccess(workspaceService)
-	f.auth.WithAvatarAudience(workspaceService)
+	f.auth.WithAvatarAudience(workspaceService).WithActivity(workspaceService)
 	f.workspaces = workspaces.NewHandler(workspaceService, f.auth, logger, cfg.AppBaseURL)
 	f.workspaceScope = workspaces.NewMiddleware(workspaceService, f.auth, logger)
 	return f, nil

@@ -164,35 +164,72 @@ func (s *Service) RespondInvitation(ctx context.Context, user, githubID int64, t
 		if e != nil || inv.GithubID != githubID || !hmac.Equal(inv.TokenHash, hash) {
 			return ErrInvitation
 		}
-		if err := checkInvitationIdentity(ctx, q, user, githubID); err != nil {
-			return err
-		}
-		if inv.State == "accepted" && accept {
-			return acceptedInvitationMembership(ctx, q, wid, user)
-		}
-		if inv.State != "pending" || !s.now().Before(inv.ExpiresAt.Time) {
-			return ErrInvitation
-		}
-		allowed, e := q.InvitationCreatorAuthorized(ctx, dbgen.InvitationCreatorAuthorizedParams{WorkspaceID: wid, UserID: inv.CreatedBy, Column3: inv.Role})
-		if e != nil {
-			return fmt.Errorf("verify invitation creator: %w", e)
-		}
-		if !allowed {
-			return ErrInvitation
-		}
-		state := "declined"
-		if accept {
-			if err := s.acceptInvitation(ctx, q, inv, user); err != nil {
-				return err
-			}
-			state = "accepted"
-		}
-		if e = q.UpdateInvitationState(ctx, dbgen.UpdateInvitationStateParams{ID: inv.ID, State: state}); e != nil {
-			return e
-		}
-		return q.AdvanceWorkspaceRevision(ctx, wid)
+		return s.respondLocked(ctx, q, inv, user, githubID, accept)
 	})
 	return wid, err
+}
+
+// RespondReceivedInvitation answers an invitation from inside Previa. The
+// invitation is addressed to a GitHub account, so the signed-in identity
+// replaces the link token; all other acceptance checks are the same.
+func (s *Service) RespondReceivedInvitation(ctx context.Context, user, githubID, id int64, accept bool) (wid int64, err error) {
+	if id <= 0 || githubID <= 0 {
+		return 0, ErrInvitation
+	}
+	v, err := dbgen.New(s.repo.pool).LockInvitation(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrInvitation
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read received invitation: %w", err)
+	}
+	if v.GithubID != githubID {
+		return 0, ErrInvitation
+	}
+	wid = v.WorkspaceID
+	err = s.repo.mutationForInvitation(ctx, wid, func(q *dbgen.Queries) error {
+		inv, e := q.LockInvitation(ctx, id)
+		if e != nil && !errors.Is(e, pgx.ErrNoRows) {
+			return fmt.Errorf("lock invitation: %w", e)
+		}
+		if e != nil || inv.GithubID != githubID {
+			return ErrInvitation
+		}
+		return s.respondLocked(ctx, q, inv, user, githubID, accept)
+	})
+	return wid, err
+}
+
+// respondLocked applies the recipient's answer to a locked invitation.
+func (s *Service) respondLocked(ctx context.Context, q *dbgen.Queries, inv dbgen.WorkspaceInvitation, user, githubID int64, accept bool) error {
+	wid := inv.WorkspaceID
+	if err := checkInvitationIdentity(ctx, q, user, githubID); err != nil {
+		return err
+	}
+	if inv.State == "accepted" && accept {
+		return acceptedInvitationMembership(ctx, q, wid, user)
+	}
+	if inv.State != "pending" || !s.now().Before(inv.ExpiresAt.Time) {
+		return ErrInvitation
+	}
+	allowed, e := q.InvitationCreatorAuthorized(ctx, dbgen.InvitationCreatorAuthorizedParams{WorkspaceID: wid, UserID: inv.CreatedBy, Column3: inv.Role})
+	if e != nil {
+		return fmt.Errorf("verify invitation creator: %w", e)
+	}
+	if !allowed {
+		return ErrInvitation
+	}
+	state := "declined"
+	if accept {
+		if err := s.acceptInvitation(ctx, q, inv, user); err != nil {
+			return err
+		}
+		state = "accepted"
+	}
+	if e = q.UpdateInvitationState(ctx, dbgen.UpdateInvitationStateParams{ID: inv.ID, State: state}); e != nil {
+		return e
+	}
+	return q.AdvanceWorkspaceRevision(ctx, wid)
 }
 
 func acceptedInvitationMembership(ctx context.Context, q *dbgen.Queries, wid, user int64) error {

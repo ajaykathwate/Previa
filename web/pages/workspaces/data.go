@@ -46,15 +46,18 @@ type Transfer struct {
 type Page struct {
 	Workspace
 	ActorID, PageNumber, PageCount, MemberCount, RepositoryCount, InvitationCount int64
+	DeactivatedCount, InstallationCount                                           int64
 	Tab, CSRF, Message, InvitationURL, Error, FormName, FormDescription           string
 	ErrorField                                                                    string // "logo" or "details" places a settings error next to its field
 	Search                                                                        string
-	InvitationView                                                                bool
+	InvitationView, DeactivatedView                                               bool
 	Workspaces                                                                    []Workspace
 	Members                                                                       []Member
 	Admins                                                                        []Member
 	Repositories                                                                  []Repository
 	Invitations                                                                   []Invitation
+	Deactivated                                                                   []DeactivatedMember
+	Received                                                                      []ReceivedInvitation
 	Transfer                                                                      *Transfer
 	Invite                                                                        InviteForm
 }
@@ -81,6 +84,9 @@ func (p Page) PageURL(page int64) string {
 	if p.InvitationView {
 		q.Set("view", "invitations")
 	}
+	if p.DeactivatedView {
+		q.Set("view", "deactivated")
+	}
 	return p.Base() + "/members?" + q.Encode()
 }
 func CountLabel(count int64, singular, plural string) string {
@@ -101,7 +107,37 @@ func (p Page) RepositoryName(id int64) string {
 type InviteForm struct {
 	Login, Role, LoginError, FormError string
 	Repositories                       []int64
-	Failed                             bool
+	Failed, Reinvite                   bool // Reinvite prefills a deactivated member's previous access
+}
+
+// DeactivatedMember was removed or left; they have no access until they accept
+// a new invitation, which can offer their previous role and repositories.
+type DeactivatedMember struct {
+	Member
+	RemovedAt, RemovedBy string
+	Left, Invited        bool
+}
+
+// ReceivedInvitation is a pending invitation addressed to the signed-in person.
+type ReceivedInvitation struct {
+	ID                                int64
+	Workspace, Role, Inviter, Expires string
+	Repositories                      []string
+}
+
+// MemberDetail is a member's profile as seen by a teammate in one workspace.
+type MemberDetail struct {
+	Page
+	Member                                                         Member
+	Active, Left                                                   bool
+	Joined, Removed, RemovedBy, ProfileURL, Company, Location, Bio string
+	Previous                                                       []int64
+	Activity                                                       []components.ActivityItem
+}
+
+func (d MemberDetail) PublicReferences() []components.ResourceRef {
+	refs := append(d.Page.PublicReferences(), components.ResourceRef{Kind: "user", ID: d.Member.ID})
+	return append(refs, components.ActivityRefs(d.Activity)...)
 }
 
 func (f InviteForm) SelectedRole() string {
@@ -134,5 +170,41 @@ func (p Page) PublicReferences() []components.ResourceRef {
 	for _, v := range p.Invitations {
 		refs = append(refs, components.ResourceRef{Kind: "invitation", ID: v.ID})
 	}
+	for _, m := range p.Deactivated {
+		refs = append(refs, components.ResourceRef{Kind: "user", ID: m.ID})
+	}
+	for _, v := range p.Received {
+		refs = append(refs, components.ResourceRef{Kind: "invitation", ID: v.ID})
+	}
 	return refs
+}
+
+// CanManageMember reports whether the viewer may change or remove an active
+// member: never the owner, and admins only by the owner.
+func (p Page) CanManageMember(m Member) bool {
+	return m.Role != "owner" && (p.Owner() || p.Manage() && m.Role != "admin")
+}
+
+// SetupDone counts the finished steps of a new workspace's checklist.
+func (p Page) SetupDone() int64 {
+	done := int64(1)
+	for _, ok := range []bool{p.MemberCount > 1 || p.InvitationCount > 0, p.RepositoryCount > 0 || p.InstallationCount > 0, p.Description != "" || p.LogoVersion > 0} {
+		if ok {
+			done++
+		}
+	}
+	return done
+}
+
+// JoinNames lists repository names compactly, naming at most three.
+func JoinNames(names []string) string {
+	if len(names) <= 3 {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:3], ", ") + " and " + CountLabel(int64(len(names)-3), "more", "more")
+}
+
+// displayURL drops the scheme from a profile link for a compact label.
+func displayURL(raw string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(raw, "https://"), "http://"), "/")
 }

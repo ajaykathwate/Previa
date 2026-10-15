@@ -13,6 +13,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/publicid"
+	"github.com/ajaykathwatee/previa/web/components"
 	pages "github.com/ajaykathwatee/previa/web/pages/auth"
 	"github.com/jackc/pgx/v5"
 )
@@ -30,6 +31,17 @@ type avatarStore interface {
 // AvatarAudience decides who besides the member may see their uploaded picture.
 type AvatarAudience interface {
 	SharesWorkspace(ctx context.Context, viewer, subject int64) (bool, error)
+}
+
+// ActivityFeed supplies the signed-in person's recent actions for their profile.
+type ActivityFeed interface {
+	RecentActivity(ctx context.Context, user int64) ([]components.ActivityItem, error)
+}
+
+// WithActivity shows recent activity on the profile page.
+func (h *Handler) WithActivity(a ActivityFeed) *Handler {
+	h.activity = a
+	return h
 }
 
 // WithAvatarAudience lets current teammates see uploaded profile pictures.
@@ -68,8 +80,15 @@ func (h *Handler) renderProfile(w http.ResponseWriter, r *http.Request, status i
 	if keepInput {
 		p.FirstName, p.LastName = r.PostFormValue("first_name"), r.PostFormValue("last_name")
 	}
+	if h.activity != nil {
+		var err error
+		if p.Activity, err = h.activity.RecentActivity(r.Context(), u.ID); err != nil {
+			h.logger.ErrorContext(r.Context(), "load profile activity", "error", err)
+			p.Activity, p.ActivityUnavailable = nil, true
+		}
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	publicid.Handler(r, pages.MemberProfile(p), nil, templ.WithStatus(status)).ServeHTTP(w, r)
+	publicid.Handler(r, pages.MemberProfile(p), p, templ.WithStatus(status)).ServeHTTP(w, r)
 }
 
 // profileError answers an in-place save with JSON, or re-renders the page

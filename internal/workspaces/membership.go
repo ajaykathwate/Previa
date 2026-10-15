@@ -57,6 +57,10 @@ func (s *Service) changeMemberTx(ctx context.Context, tx pgx.Tx, q *dbgen.Querie
 	role, state := c.Role, "active"
 	if c.Remove {
 		role, state = member.Role, "removed"
+		// Keep who removed them and what they had, for the Deactivated list and re-invitation.
+		if err := q.RecordMemberRemoval(ctx, dbgen.RecordMemberRemovalParams{RemovedBy: c.ActorID, WorkspaceID: c.WorkspaceID, UserID: c.UserID}); err != nil {
+			return fmt.Errorf("record member removal: %w", err)
+		}
 	}
 	if err := q.ChangeMembership(ctx, dbgen.ChangeMembershipParams{WorkspaceID: c.WorkspaceID, UserID: c.UserID, Role: role, State: state}); err != nil {
 		return fmt.Errorf("change member: %w", err)

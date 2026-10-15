@@ -12,7 +12,11 @@ func (h *Handler) invitationFailure(w http.ResponseWriter, r *http.Request, err 
 		return
 	}
 	u, id := h.identity(r)
-	p, loadErr := h.service.Page(r.Context(), u, id, "members", PageQuery{Page: 1})
+	tab := "members"
+	if r.PostFormValue("return") == "setup" {
+		tab = "setup"
+	}
+	p, loadErr := h.service.Page(r.Context(), u, id, tab, PageQuery{Page: 1})
 	if loadErr != nil {
 		h.fail(w, r, loadErr)
 		return

@@ -1,0 +1,162 @@
+package workspaces
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+// MemberPage is a teammate's profile inside one workspace: who they are, the
+// access they have here, and what they recently did that the viewer may see.
+templ MemberPage(username string, d MemberDetail) {
+	{{ m := d.Member }}
+	@layouts.AppTrail(m.Name()+" · "+d.Name, components.Crumb{Label: "Members", Href: d.Base() + "/members"}, m.Name(), username, d.CSRF, components.NavMembers) {
+		<div class="team-page member-page">
+			<header class="member-hero">
+				@components.UserAvatar(m.AvatarSrc(), m.Name(), "user-avatar-xl", nil)
+				<div class="member-hero-text">
+					<h1>
+						{ m.Name() }
+						if m.ID == d.ActorID {
+							<span class="badge tone-neutral team-you">You</span>
+						}
+					</h1>
+					<p>
+						<span>{ "@" + m.Login }</span>
+						if d.Active {
+							<span class="badge tone-ok"><span class="badge-dot" aria-hidden="true"></span>Active</span>
+						} else {
+							<span class="badge tone-neutral">Deactivated</span>
+						}
+					</p>
+				</div>
+				<div class="team-heading-actions">
+					if d.Active && d.CanManageMember(m) {
+						<button type="button" class="secondary-action" commandfor={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" data-open-dialog={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } aria-haspopup="dialog">Manage access</button>
+						@AccessDialog(d.Page, m)
+						<button type="button" class="secondary-action team-danger" data-open-dialog={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } commandfor={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" aria-haspopup="dialog">Remove</button>
+						@RemoveDialog(d.Page, m)
+					} else if d.Active && m.ID == d.ActorID && m.Role != "owner" {
+						<button type="button" class="secondary-action" data-open-dialog={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } commandfor={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" aria-haspopup="dialog">Leave workspace</button>
+						@RemoveDialog(d.Page, m)
+					} else if !d.Active && d.Manage() {
+						<a class="primary-action" href={ components.PublicURL(ctx, d.Base()+"/members?view=deactivated&reinvite="+components.ResourceToken(ctx, "user", m.ID)) }>
+							@components.SendIcon()
+							Re-invite
+						</a>
+					}
+				</div>
+			</header>
+			if !d.Active {
+				<p class="team-inline-notice member-deactivated-notice">
+					<span>
+						if d.Left {
+							<strong>{ m.Name() }</strong>{ " left this workspace " }
+						} else if d.RemovedBy != "" {
+							<strong>{ m.Name() }</strong>{ " was removed by " + d.RemovedBy + " " }
+						} else {
+							<strong>{ m.Name() }</strong>{ " was removed " }
+						}
+						@components.Time(d.Removed, d.Removed)
+						{ ". All access to this workspace is revoked and their access can't be changed. Re-invite them to restore it; their previous role and repositories are preselected." }
+					</span>
+				</p>
+			}
+			<div class="field-grid member-grid">
+				<section class="workspace-panel field-card" aria-labelledby="member-details-heading">
+					<header class="field-card-head">
+						<h2 id="member-details-heading">
+							@components.UserIcon()
+							Details
+						</h2>
+					</header>
+					<dl class="field-list">
+						<div class="field-row">
+							<dt class="field-label">Role</dt>
+							<dd class="field-value">
+								@components.WorkspaceRole(m.Role)
+								if !d.Active {
+									<span class="field-meta">before deactivation</span>
+								}
+							</dd>
+						</div>
+						<div class="field-row field-row-top">
+							<dt class="field-label">
+								if d.Active {
+									Repository access
+								} else {
+									Previous access
+								}
+							</dt>
+							<dd class="field-value">
+								@MemberAccess(d)
+							</dd>
+						</div>
+						if d.Active && d.Joined != "" {
+							<div class="field-row">
+								<dt class="field-label">Member since</dt>
+								<dd class="field-value">
+									@components.Time(d.Joined, d.Joined)
+								</dd>
+							</div>
+						}
+						if !d.Active && d.Removed != "" {
+							<div class="field-row">
+								<dt class="field-label">Deactivated</dt>
+								<dd class="field-value">
+									@components.Time(d.Removed, d.Removed)
+								</dd>
+							</div>
+						}
+						if d.ProfileURL != "" {
+							<div class="field-row">
+								<dt class="field-label">GitHub profile</dt>
+								<dd class="field-value"><a href={ components.PublicURL(ctx, d.ProfileURL) } target="_blank" rel="noopener noreferrer">{ displayURL(d.ProfileURL) }</a></dd>
+							</div>
+						}
+						if d.Company != "" {
+							<div class="field-row"><dt class="field-label">Company</dt><dd class="field-value">{ d.Company }</dd></div>
+						}
+						if d.Location != "" {
+							<div class="field-row"><dt class="field-label">Location</dt><dd class="field-value">{ d.Location }</dd></div>
+						}
+						if d.Bio != "" {
+							<div class="field-row field-row-top"><dt class="field-label">Bio</dt><dd class="field-value">{ d.Bio }</dd></div>
+						}
+					</dl>
+				</section>
+				<section class="workspace-panel field-card" aria-labelledby="member-activity-heading">
+					<header class="field-card-head">
+						<h2 id="member-activity-heading">
+							@components.ClockIcon()
+							Recent activity
+						</h2>
+						<span class="field-card-note">In this workspace</span>
+					</header>
+					@components.ActivityFeed(d.Activity, false, "No recent activity in this workspace that you can see.")
+				</section>
+			</div>
+		</div>
+	}
+}
+
+templ MemberAccess(d MemberDetail) {
+	{{ ids := d.Member.Repositories }}
+	if !d.Active {
+		{{ ids = d.Previous }}
+	}
+	if d.Member.Role == "owner" || d.Member.Role == "admin" {
+		<span class="badge tone-neutral">All repositories</span>
+	} else if len(ids) == 0 {
+		<span class="text-muted">No repositories</span>
+	} else if d.Manage() {
+		<span class="member-access-chips">
+			for _, id := range ids {
+				if d.RepositoryName(id) != "" {
+					<code class="team-repository-chip" title={ d.RepositoryName(id) }>{ d.RepositoryName(id) }</code>
+				}
+			}
+		</span>
+	} else {
+		{ CountLabel(int64(len(ids)), "repository", "repositories") }
+	}
+}

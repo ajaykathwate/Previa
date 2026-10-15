@@ -94,7 +94,51 @@ templ Settings(p Page) {
 			<p class="field-card-foot">A workspace is one team: people in Members, connected code in Repositories.</p>
 		</section>
 		@Ownership(p)
+		if p.Owner() {
+			@DeleteWorkspace(p)
+		}
 	</div>
+}
+
+// DeleteWorkspace is offered only to an owner who is the workspace's only
+// member; otherwise it explains what has to happen first.
+templ DeleteWorkspace(p Page) {
+	<section id="delete-workspace-section" class="workspace-panel field-card field-card-span" aria-labelledby="delete-heading">
+		<header class="field-card-head">
+			<h2 id="delete-heading">
+				@components.TrashIcon()
+				Delete workspace
+			</h2>
+		</header>
+		<div class="ownership-row">
+			if p.MemberCount > 1 {
+				<p>Available only when you're the workspace's only member. Hand it over under Ownership, or remove the other members first.</p>
+			} else if p.InstallationCount > 0 {
+				<p>Uninstall the Previa GitHub App from the connected account first. Previa then removes this workspace's previews, and you can delete the workspace.</p>
+				<div class="ownership-actions"><a class="secondary-action" href="/repositories">Repositories</a></div>
+			} else {
+				<p>You're the only member. Deleting ends access immediately and cancels pending invitations. It can't be undone.</p>
+				<div class="ownership-actions">
+					<button type="button" class="secondary-action team-danger" data-open-dialog="delete-workspace" commandfor="delete-workspace" command="show-modal" aria-haspopup="dialog">Delete workspace…</button>
+				</div>
+				@components.ConfirmationDialog("delete-workspace", "Delete "+p.Name+"?", "Access ends immediately and pending invitations are cancelled. This can't be undone.") {
+					<div class="team-inline-notice delete-alternative">
+						<p>Want to keep it? Invite a teammate, make them an admin, then hand over ownership.</p>
+						<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members") }>Invite a teammate</a>
+					</div>
+					<form method="post" action={ components.PublicURL(ctx, p.Base()+"/delete") } class="team-form">
+						@Hidden(p)
+						<label for="confirm-delete-name">{ "Type " + p.Name + " to confirm" }</label>
+						<input id="confirm-delete-name" name="confirm_name" required autocomplete="off" spellcheck="false" data-confirm-match={ p.Name }/>
+						<div class="dialog-actions">
+							<button type="button" class="secondary-action" commandfor="delete-workspace" command="close" data-close-dialog>Cancel</button>
+							<button type="submit" class="primary-action danger-action" data-confirm-submit>Delete workspace</button>
+						</div>
+					</form>
+				}
+			}
+		</div>
+	</section>
 }
 
 templ ProfileHidden(p Page) {

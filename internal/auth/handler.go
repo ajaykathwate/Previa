@@ -26,6 +26,7 @@ type Handler struct {
 	sessions *scs.SessionManager
 	users    userRepository
 	audience AvatarAudience
+	activity ActivityFeed
 	provider identityProvider
 	logger   *slog.Logger
 	stateKey []byte

@@ -94,7 +94,7 @@ func configuredFixtureRouter(t *testing.T, f fixture, origin string, strict bool
 	t.Cleanup(store.StopCleanup)
 	sessions := auth.NewSessionManager(store, false, logger)
 	users := auth.NewHandler(config.ServerConfig{AppBaseURL: origin, SessionSecret: strings.Repeat("s", 32)}, sessions, auth.NewRepository(f.pool), testIdentity{}, logger)
-	users.WithAvatarAudience(f.service)
+	users.WithAvatarAudience(f.service).WithActivity(f.service)
 	router := chi.NewRouter()
 	router.Use(sessions.LoadAndSave, users.LoadUser, users.CSRF)
 	if strict {

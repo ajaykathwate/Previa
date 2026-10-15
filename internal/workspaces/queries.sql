@@ -106,7 +106,8 @@ WHERE v.workspace_id=$1 AND v.state='pending' AND NOT EXISTS(
 
 -- name: PutMembership :exec
 INSERT INTO workspace_memberships(workspace_id,user_id,role) VALUES($1,$2,$3)
-ON CONFLICT(workspace_id,user_id) DO UPDATE SET role=EXCLUDED.role,state='active',revision=workspace_memberships.revision+1,removed_at=NULL,joined_at=clock_timestamp();
+ON CONFLICT(workspace_id,user_id) DO UPDATE SET role=EXCLUDED.role,state='active',revision=workspace_memberships.revision+1,removed_at=NULL,joined_at=clock_timestamp(),
+removed_by=NULL,removed_repository_ids='{}';
 
 -- name: ChangeMembership :exec
 UPDATE workspace_memberships SET role=$3,state=$4,revision=revision+1,
@@ -203,6 +204,8 @@ WHERE w.id=$1 AND m.user_id=$2 AND w.state='active' AND m.state='active' AND m.r
 
 -- name: WorkspaceCounts :one
 SELECT (SELECT count(*) FROM workspace_memberships WHERE workspace_id=sqlc.arg(workspace_id)::bigint AND state='active')::bigint AS members,
+(SELECT count(*) FROM workspace_memberships WHERE workspace_id=sqlc.arg(workspace_id)::bigint AND state='removed')::bigint AS deactivated,
+(SELECT count(*) FROM installations WHERE workspace_id=sqlc.arg(workspace_id)::bigint AND status IN ('active','suspended'))::bigint AS installations,
 (SELECT count(*) FROM workspace_invitations WHERE workspace_id=sqlc.arg(workspace_id)::bigint AND state='pending')::bigint AS invitations,
 (SELECT count(*) FROM repos r JOIN installations i ON i.id=r.installation_id
  WHERE i.workspace_id=sqlc.arg(workspace_id)::bigint AND workspace_repository_access(r.id,sqlc.arg(user_id)::bigint,'read'))::bigint AS repositories;
@@ -231,3 +234,90 @@ SELECT EXISTS(
  SELECT 1 FROM workspace_memberships a JOIN workspace_memberships b ON b.workspace_id=a.workspace_id
  WHERE a.user_id=sqlc.arg(viewer_id) AND b.user_id=sqlc.arg(subject_id) AND a.state='active' AND b.state='active'
 );
+
+-- name: RecordMemberRemoval :exec
+-- Kept so a re-invitation can offer the access the person had before.
+UPDATE workspace_memberships SET removed_by=sqlc.arg(removed_by)::bigint,
+ removed_repository_ids=coalesce((SELECT array_agg(g.repo_id ORDER BY g.repo_id) FROM repository_memberships g
+  WHERE g.workspace_id=sqlc.arg(workspace_id)::bigint AND g.user_id=sqlc.arg(user_id)::bigint),'{}')::bigint[]
+WHERE workspace_id=sqlc.arg(workspace_id)::bigint AND user_id=sqlc.arg(user_id)::bigint;
+
+-- name: DeactivatedMembers :many
+SELECT m.user_id,m.role,m.removed_at,m.removed_repository_ids,coalesce(m.removed_by=m.user_id,false)::boolean AS left_workspace,
+ u.username,u.avatar_url,u.custom_avatar,u.avatar_version,u.first_name,u.last_name,
+ coalesce(nullif(trim(rb.first_name||' '||rb.last_name),''),rb.username,'')::text AS removed_by_name,
+ EXISTS(SELECT 1 FROM workspace_invitations v WHERE v.workspace_id=m.workspace_id AND v.github_id=u.github_id
+  AND v.state='pending' AND v.expires_at>clock_timestamp())::boolean AS invited
+FROM workspace_memberships m JOIN users u ON u.id=m.user_id LEFT JOIN users rb ON rb.id=m.removed_by
+WHERE m.workspace_id=sqlc.arg(workspace_id)::bigint AND m.state='removed'
+AND strpos(lower(concat_ws(' ',u.first_name,u.last_name,u.username)),lower(sqlc.arg(search)::text))>0
+ORDER BY m.removed_at DESC NULLS LAST,m.user_id LIMIT 20 OFFSET sqlc.arg(page_offset)::bigint;
+
+-- name: CountDeactivatedMembers :one
+SELECT count(*) FROM workspace_memberships m JOIN users u ON u.id=m.user_id
+WHERE m.workspace_id=sqlc.arg(workspace_id) AND m.state='removed' AND strpos(lower(concat_ws(' ',u.first_name,u.last_name,u.username)),lower(sqlc.arg(search)::text))>0;
+
+-- name: WorkspaceMember :one
+SELECT m.user_id,m.role,m.state,m.revision,m.joined_at,m.removed_at,m.removed_repository_ids,coalesce(m.removed_by=m.user_id,false)::boolean AS left_workspace,
+ u.username,u.avatar_url,u.custom_avatar,u.avatar_version,u.first_name,u.last_name,u.github_profile_url,u.github_company,u.github_location,u.github_bio,
+ coalesce(nullif(trim(rb.first_name||' '||rb.last_name),''),rb.username,'')::text AS removed_by_name,
+ coalesce((SELECT array_agg(g.repo_id ORDER BY g.repo_id) FROM repository_memberships g WHERE g.workspace_id=m.workspace_id AND g.user_id=m.user_id),'{}')::bigint[] AS repository_ids
+FROM workspace_memberships m JOIN users u ON u.id=m.user_id LEFT JOIN users rb ON rb.id=m.removed_by
+WHERE m.workspace_id=sqlc.arg(workspace_id)::bigint AND m.user_id=sqlc.arg(user_id)::bigint;
+
+-- name: MemberActivity :many
+-- A person's recent actions, limited to what the viewer may already see: build
+-- requests in repositories the viewer can read, membership events in workspaces
+-- they share, and invitations or removals only for that workspace's managers.
+SELECT 'build'::text AS kind,b.requested_at AS at,w.id AS workspace_id,w.name AS workspace_name,r.id AS repo_id,r.full_name AS repo_name,
+ p.number AS pr_number,p.title AS pr_title,b.request_action AS detail,''::text AS login
+FROM build_intents b JOIN pull_requests p ON p.id=b.pull_request_id JOIN repos r ON r.id=p.repo_id
+JOIN installations i ON i.id=r.installation_id JOIN workspaces w ON w.id=i.workspace_id AND w.state='active'
+WHERE b.requested_by=sqlc.arg(subject_id)::bigint AND b.source='manual'
+AND (sqlc.arg(workspace_id)::bigint=0 OR w.id=sqlc.arg(workspace_id)::bigint)
+AND workspace_repository_access(r.id,sqlc.arg(viewer_id)::bigint,'read')
+UNION ALL
+SELECT CASE WHEN m.role='owner' AND m.joined_at<=w.created_at+interval '5 seconds' THEN 'created' ELSE 'joined' END,m.joined_at,w.id,w.name,0::bigint,''::text,0::int,''::text,m.role,''::text
+FROM workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id AND w.state='active'
+WHERE m.user_id=sqlc.arg(subject_id)::bigint AND m.state='active' AND (sqlc.arg(workspace_id)::bigint=0 OR w.id=sqlc.arg(workspace_id)::bigint)
+AND EXISTS(SELECT 1 FROM workspace_memberships v WHERE v.workspace_id=w.id AND v.user_id=sqlc.arg(viewer_id)::bigint AND v.state='active')
+UNION ALL
+SELECT 'invited',v.created_at,w.id,w.name,0::bigint,''::text,0::int,''::text,v.role,v.login
+FROM workspace_invitations v JOIN workspaces w ON w.id=v.workspace_id AND w.state='active'
+WHERE v.created_by=sqlc.arg(subject_id)::bigint AND (sqlc.arg(workspace_id)::bigint=0 OR w.id=sqlc.arg(workspace_id)::bigint)
+AND EXISTS(SELECT 1 FROM workspace_memberships a WHERE a.workspace_id=w.id AND a.user_id=sqlc.arg(viewer_id)::bigint AND a.state='active' AND a.role IN ('owner','admin'))
+UNION ALL
+SELECT CASE WHEN m.removed_by=m.user_id THEN 'left' ELSE 'removed' END,m.removed_at,w.id,w.name,0::bigint,''::text,0::int,''::text,m.role,
+ CASE WHEN m.removed_by=m.user_id THEN ''::text ELSE u.username END
+FROM workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id AND w.state='active' JOIN users u ON u.id=m.user_id
+WHERE m.state='removed' AND m.removed_at IS NOT NULL AND (m.removed_by=sqlc.arg(subject_id)::bigint OR m.user_id=sqlc.arg(subject_id)::bigint)
+AND (sqlc.arg(workspace_id)::bigint=0 OR w.id=sqlc.arg(workspace_id)::bigint)
+AND EXISTS(SELECT 1 FROM workspace_memberships a WHERE a.workspace_id=w.id AND a.user_id=sqlc.arg(viewer_id)::bigint AND a.state='active' AND a.role IN ('owner','admin'))
+ORDER BY at DESC LIMIT 12;
+
+-- name: ReceivedInvitations :many
+-- Pending invitations addressed to a signed-in person's GitHub account.
+SELECT v.id,v.role,v.expires_at,v.created_at,w.id AS workspace_id,w.name AS workspace_name,
+ coalesce(nullif(trim(u.first_name||' '||u.last_name),''),u.username)::text AS inviter,
+ coalesce((SELECT array_agg(r.full_name ORDER BY lower(r.full_name)) FROM workspace_invitation_repositories g JOIN repos r ON r.id=g.repo_id
+  WHERE g.invitation_id=v.id),'{}')::text[] AS repositories
+FROM workspace_invitations v JOIN workspaces w ON w.id=v.workspace_id AND w.state='active' JOIN users u ON u.id=v.created_by
+WHERE v.github_id=sqlc.arg(github_id)::bigint AND v.state='pending' AND v.expires_at>clock_timestamp()
+AND NOT EXISTS(SELECT 1 FROM workspace_memberships m JOIN users me ON me.id=m.user_id
+ WHERE m.workspace_id=w.id AND me.github_id=v.github_id AND m.state='active')
+ORDER BY v.created_at DESC,v.id DESC LIMIT 20;
+
+-- name: CountReceivedInvitations :one
+SELECT count(*) FROM workspace_invitations v JOIN workspaces w ON w.id=v.workspace_id AND w.state='active'
+WHERE v.github_id=sqlc.arg(github_id)::bigint AND v.state='pending' AND v.expires_at>clock_timestamp()
+AND NOT EXISTS(SELECT 1 FROM workspace_memberships m JOIN users me ON me.id=m.user_id
+ WHERE m.workspace_id=w.id AND me.github_id=v.github_id AND m.state='active');
+
+-- name: DeleteWorkspace :execrows
+UPDATE workspaces SET state='deleted',deleted_at=clock_timestamp(),revision=revision+1 WHERE id=$1 AND state='active';
+
+-- name: RevokeWorkspaceInvitations :exec
+UPDATE workspace_invitations SET state='revoked',revision=revision+1 WHERE workspace_id=$1 AND state='pending';
+
+-- name: ClearWorkspacePreferences :exec
+UPDATE workspace_preferences SET workspace_id=NULL WHERE workspace_id=$1;

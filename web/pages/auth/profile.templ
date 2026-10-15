@@ -19,6 +19,20 @@ templ MemberProfile(p Profile) {
 			<div class="field-grid">
 				@PreviaProfile(p)
 				@GitHubAccount(p)
+				<section class="workspace-panel field-card field-card-span" aria-labelledby="activity-heading">
+					<header class="field-card-head">
+						<h2 id="activity-heading">
+							@components.ClockIcon()
+							Recent activity
+						</h2>
+						<span class="field-card-note">Only you see this list</span>
+					</header>
+					if p.ActivityUnavailable {
+						<p class="activity-empty">Recent activity couldn't be loaded right now. Refresh to try again.</p>
+					} else {
+						@components.ActivityFeed(p.Activity, true, "Nothing yet. Builds you request, workspaces you join or create, and invitations you send appear here.")
+					}
+				</section>
 			</div>
 		</div>
 		@components.Toasts(p.Toast)

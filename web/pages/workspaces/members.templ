@@ -3,13 +3,7 @@ package workspaces
 import "github.com/ajaykathwatee/previa/web/components"
 
 templ Members(p Page) {
-	if p.Invite.Failed {
-		<section id="invite-recovery" class="workspace-panel team-settings-panel" data-invite-recovery>
-			<h2>Invite a teammate</h2>
-			<p>Your invitation was not created. Review the message below; your selections are kept.</p>
-			@InvitationForm(p)
-		</section>
-	}
+	@InviteRecovery(p)
 	if p.Transfer!=nil && p.Transfer.Accept {
 		<div class="team-inline-notice"><div><strong>You've been nominated as workspace owner</strong><p>Review and accept the handover in workspace settings.</p></div><a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/settings#ownership") }>Review handover</a></div>
 	}
@@ -19,11 +13,15 @@ templ Members(p Page) {
 				<a href={ components.PublicURL(ctx, p.Base()+"/members") } aria-current={ current(!p.InvitationView) }>Members <span class="team-count">{ ID(p.MemberCount) }</span></a>
 				if p.Manage() {
 					<a href={ components.PublicURL(ctx, p.Base()+"/members?view=invitations") } aria-current={ current(p.InvitationView) }>Invitations <span class="team-count">{ ID(p.InvitationCount) }</span></a>
+					<a href={ components.PublicURL(ctx, p.Base()+"/members?view=deactivated") } aria-current={ current(p.DeactivatedView) }>Deactivated <span class="team-count">{ ID(p.DeactivatedCount) }</span></a>
 				}
 			</nav>
 			<form method="get" action={ components.PublicURL(ctx, p.Base()+"/members") } class="team-search" role="search">
 				if p.InvitationView {
 					<input type="hidden" name="view" value="invitations"/>
+				}
+				if p.DeactivatedView {
+					<input type="hidden" name="view" value="deactivated"/>
 				}
 				<label class="sr-only" for="team-search">Search by name or GitHub username</label><input id="team-search" type="search" name="q" value={ p.Search } maxlength="100" placeholder="Search name or GitHub username"/>
 				<button type="submit" class="secondary-action" aria-label="Search people">
@@ -33,6 +31,8 @@ templ Members(p Page) {
 		</header>
 		if p.InvitationView {
 			@Invitations(p)
+		} else if p.DeactivatedView {
+			@DeactivatedMembers(p)
 		} else {
 			<div class="team-table-heading" aria-hidden="true"><span>Person</span><span>Role</span><span>Repository access</span><span></span></div>
 			if len(p.Members)==0 {
@@ -40,7 +40,7 @@ templ Members(p Page) {
 			}
 			for _,m:=range p.Members {
 				<article class="team-member-row">
-					<div class="team-person">
+					<a class="team-person team-person-link" href={ components.PublicURL(ctx, p.Base()+"/members/"+ID(m.ID)) }>
 						@components.UserAvatar(m.AvatarSrc(), m.Name(), "", nil)
 						<div>
 							<strong>{ m.Name() }</strong>
@@ -49,7 +49,7 @@ templ Members(p Page) {
 							}
 							<p>{ "@"+m.Login }</p>
 						</div>
-					</div>
+					</a>
 					<div>
 						@components.WorkspaceRole(m.Role)
 					</div>
@@ -57,7 +57,7 @@ templ Members(p Page) {
 						@MemberScope(p, m)
 					</div>
 					<div class="team-row-actions">
-						if m.Role!="owner" && (p.Owner() || p.Manage() && m.Role!="admin") {
+						if p.CanManageMember(m) {
 							<button type="button" class="secondary-action" commandfor={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" data-open-dialog={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } aria-haspopup="dialog">Manage access</button>
 							@AccessDialog(p, m)
 							<button type="button" class="team-icon-button team-danger" data-open-dialog={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } commandfor={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" aria-haspopup="dialog" aria-label={ "Remove " + m.Login } title={ "Remove " + m.Login }>
@@ -76,7 +76,9 @@ templ Members(p Page) {
 		}
 		<footer class="team-panel-footer">
 			if p.InvitationView {
-				<p>Only the addressed GitHub account can accept. Links expire after seven days.</p>
+				<p>Only the addressed GitHub account can accept, from the link or inside Previa. Invitations expire after seven days.</p>
+			} else if p.DeactivatedView {
+				<p>Deactivated people have no access. Re-inviting offers their previous role and repositories; they rejoin after accepting.</p>
 			} else {
 				<p>Owners and admins access all repositories. Developers and reviewers receive explicit grants.</p>
 			}
@@ -138,6 +140,9 @@ templ InviteDialog(p Page) {
 templ InvitationForm(p Page) {
 	<form method="post" action={ components.PublicURL(ctx, p.Base()+"/invitations") } class="team-form team-invite-form" data-role-controls>
 		@Hidden(p)
+		if p.Tab=="setup" {
+			<input type="hidden" name="return" value="setup"/>
+		}
 		<label for="invite-login">GitHub username</label>
 		<input id="invite-login" name="login" value={ p.Invite.Login } required maxlength="39" autocomplete="off" placeholder="octocat" aria-describedby="invite-login-help invite-login-error" aria-invalid={ currentError(p.Invite.LoginError != "") } autofocus/>
 		<p id="invite-login-help" class="team-field-hint">Use the username only. Previa checks the account and existing workspace membership.</p>
@@ -157,7 +162,7 @@ templ InvitationForm(p Page) {
 		}
 		<div class="dialog-actions">
 			if p.Invite.Failed {
-				<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members") }>Cancel</a>
+				<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/"+cancelTab(p)) }>Cancel</a>
 			} else {
 				<button type="button" class="secondary-action" commandfor="invite-member" command="close" data-close-dialog>Cancel</button>
 			}
@@ -261,4 +266,73 @@ func current(active bool) string {
 		return "page"
 	}
 	return "false"
+}
+
+templ DeactivatedMembers(p Page) {
+	if len(p.Deactivated)==0 {
+		<div class="team-empty">
+			<span class="team-empty-icon">
+				@components.TeamIcon()
+			</span>
+			<h2>No deactivated members</h2>
+			<p>People who leave or are removed appear here, so you can bring them back with their previous access.</p>
+		</div>
+	}
+	for _,m:=range p.Deactivated {
+		<div class="team-invitation-row team-deactivated-row">
+			<a class="team-person team-person-link" href={ components.PublicURL(ctx, p.Base()+"/members/"+ID(m.ID)) }>
+				@components.UserAvatar(m.AvatarSrc(), m.Name(), "user-avatar-muted", nil)
+				<div>
+					<div class="team-inline">
+						<strong>{ m.Name() }</strong>
+						if m.Invited {
+							<span class="badge tone-info">Re-invited</span>
+						}
+					</div>
+					<p>
+						{ "@" + m.Login + " · was " + components.RoleName(m.Role) + " · " }
+						if m.Left {
+							{ "left " }
+						} else if m.RemovedBy != "" {
+							{ "removed by " + m.RemovedBy + " " }
+						} else {
+							{ "removed " }
+						}
+						@components.Time(m.RemovedAt, m.RemovedAt)
+					</p>
+				</div>
+			</a>
+			if !m.Invited && (p.Owner() || m.Role!="admin") {
+				<div class="team-row-actions">
+					<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members?view=deactivated&reinvite="+components.ResourceToken(ctx, "user", m.ID)) }>
+						@components.SendIcon()
+						Re-invite
+					</a>
+				</div>
+			}
+		</div>
+	}
+}
+
+// InviteRecovery shows a refused or prefilled invitation inline; ui.js reopens it as the modal.
+templ InviteRecovery(p Page) {
+	if p.Invite.Failed {
+		<section id="invite-recovery" class="workspace-panel team-settings-panel" data-invite-recovery>
+			if p.Invite.Reinvite {
+				<h2>{ "Re-invite @" + p.Invite.Login }</h2>
+				<p>Their previous role and repositories are selected. Adjust them if needed; they rejoin after accepting.</p>
+			} else {
+				<h2>Invite a teammate</h2>
+				<p>Your invitation was not created. Review the message below; your selections are kept.</p>
+			}
+			@InvitationForm(p)
+		</section>
+	}
+}
+
+func cancelTab(p Page) string {
+	if p.Tab == "setup" {
+		return "setup"
+	}
+	return "members"
 }

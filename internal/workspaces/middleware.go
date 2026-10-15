@@ -32,7 +32,7 @@ func NewMiddleware(s *Service, u UserSession, l *slog.Logger) *Middleware {
 
 func (m *Middleware) Load(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, _, ok := m.users.UserIDs(r.Context())
+		user, githubID, ok := m.users.UserIDs(r.Context())
 		if !ok {
 			next.ServeHTTP(w, r)
 			return
@@ -51,7 +51,12 @@ func (m *Middleware) Load(next http.Handler) http.Handler {
 			publicid.Redirect(w, r, "/workspaces", http.StatusSeeOther)
 			return
 		}
-		shell := components.WorkspaceShell{ID: selection.ID, Name: selection.Name, Role: selection.Role, LogoVersion: selection.LogoVersion, CSRF: m.users.CSRFToken(r.Context())}
+		invitations, err := m.service.CountReceivedInvitations(r.Context(), githubID)
+		if err != nil {
+			m.fail(w, r, err)
+			return
+		}
+		shell := components.WorkspaceShell{ID: selection.ID, Name: selection.Name, Role: selection.Role, LogoVersion: selection.LogoVersion, Invitations: invitations, CSRF: m.users.CSRFToken(r.Context())}
 		for _, v := range items {
 			shell.Items = append(shell.Items, components.WorkspaceItem{ID: v.ID, Name: v.Name, Role: v.Role, LogoVersion: v.LogoVersion})
 		}
