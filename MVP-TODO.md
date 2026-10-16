@@ -1,0 +1,555 @@
+# Previa MVP: remaining work and deployment checklist
+
+This file turns the release plan agreed on 16 October 2026 into checklists: what is
+left to build, how each part is accepted, and how Previa gets deployed. It sets no
+dates or deadlines.
+
+The product's source of truth stays
+[README-MVP-PRODUCT-EXPANSION.md](README-MVP-PRODUCT-EXPANSION.md) (cited below as
+"spec §…"), [README.md](README.md) and [DESIGN.md](DESIGN.md); deployment follows
+[docs/25](docs/25-production-deployment.md) and [docs/22](docs/22-mvp-operations.md).
+If this file and those documents disagree, they win and this file is corrected.
+
+## How to use this file
+
+- Work from top to bottom: **Part 1 Features → Part 2 Release acceptance → Part 3
+  Deployment.** Deployment starts only after every feature is built, tested by
+  Claude and tested manually by the owner (the gate at the end of Part 2).
+- Tick a box only when its evidence exists: a passing test or command, a reviewed
+  screenshot, or the owner's manual test.
+- **Owner** marks work only the owner can do. **Decision (owner)** marks a choice
+  that blocks the item until it is answered. **Proposed** marks an idea that is not
+  in the spec; it is built only after the owner approves it and it is specified.
+- Working rules ([AGENTS.md](AGENTS.md) and standing instructions):
+  - Claude commits only when the owner asks, on the checked-out branch. Work is
+    pushed to `main`, never `master`; the owner merges `main` into `master`.
+  - The UI stays compact: modals open in place, new screens are screenshotted at
+    1440 and 390 px in light and dark.
+  - docs/02 is updated whenever configuration, migrations or commands change, and
+    HANDOFF.md stays under 100 lines.
+
+## Where things stand
+
+| Item | State | Evidence |
+| --- | --- | --- |
+| Feature 1: shared team workspaces | Done, committed (`adfef83` and follow-ups) | [docs/28](docs/28-shared-workspaces.md) |
+| Feature 2: guided onboarding | Done, committed (`3562a78`) | [docs/29](docs/29-guided-onboarding.md) |
+| Feature 3: native review and feedback | Done, committed (`2ddaaef`) | [docs/30](docs/30-reviews.md), [report](test-docs/2026-10-16-review-feedback-report.md) |
+| Feature 5: ready-to-test sample data | Done, committed (`ea87e60`); the owner's manual test is pending (F0) | [docs/31](docs/31-test-data.md), [report](test-docs/2026-10-16-test-data-report.md) |
+| Code on GitHub | Not pushed: all of the above is on the local `mvp-complete` branch; GitHub's `main` is at `6b07c5b` | `git log origin/main..mvp-complete` |
+| Out of this release | Feature 4, GitHub review-status projection (step E), paid subscriptions (§9.4, step J), the third reference journey, notification integrations | spec §1.2 |
+
+Order of the remaining work, as agreed: F0 → F1 → **F2 Feature 5B** → **F3 and F4
+Feature 6 (free plan)** → F5 missed-uninstall detection → F6 the early-access
+decision → Part 2 → Part 3.
+
+---
+
+## Part 1 · Features
+
+### F0 · Close out Feature 5
+
+**Outcome:** Feature 5 is confirmed by the owner's own test, not only by Claude's.
+
+- [ ] **Owner:** apply the new migration to the local development database:
+  `make migrate-up` (Goose 40), then restart the server and the worker.
+- [ ] **Owner:** run the manual tests in
+  [technical-docs/user-guide.md](technical-docs/user-guide.md), checklist section F2,
+  rows R12–R18. Storing a test-access password needs `SECRETS_ENCRYPTION_KEYS` in
+  `.env`.
+- [ ] **Claude:** fix anything the manual test finds; the owner asks for the commit.
+
+### F1 · Spec corrections and a known fix
+
+**Outcome:** 5B no longer depends on the deferred Feature 4, and the pull request
+page agrees with the review page after a failed update.
+
+- [ ] Remove Feature 4 dependencies from the 5B specification:
+  - §11.2, the step G explanation ("needs Features 3/4 publications and review
+    rounds");
+  - §8B.9 ("Reviews and activity (Features 3/4)");
+  - §8B.13 ("a new review round").
+
+  Keep the publication and activity references, which exist.
+- [ ] Pull request page: after a failed update, *Runs with* and the docs link
+  disappear, because they read the environment's applied revision (the failed
+  attempt). Read the serving deployment (the newest publication), as the review
+  page already does. **Evidence:** a test with a failed update; the PR page and the
+  review page show the same setup, services and docs.
+
+### F2 · Feature 5B: persistent test data (spec §8B, delivery step G)
+
+**Outcome:**
+- Previews open with useful data, and reviewers' records survive new commits and
+  Rebuilds.
+- Starting data is prepared once per repository instead of in every pull request,
+  and pull request migrations run against existing rows.
+- No database is ever shared between pull requests.
+
+Scope:
+
+- [ ] **Test data tab** for Owners and Admins, CSRF-protected and closed to
+  repository YAML. Its settings and defaults:
+  - Test data: off;
+  - Keep test data between builds: on;
+  - Use repository baseline: on;
+  - Baseline branch: the repository's GitHub default branch;
+  - Refresh baseline automatically: on.
+
+  (§8B.3 item 1)
+- [ ] **`seed` key** in `.previewrc.yaml`:
+  - argv, with the same limits as `setup`;
+  - needs a PostgreSQL or MySQL service;
+  - runs only on an empty database and in baseline builds;
+  - part of the configuration hash.
+
+  (§8B.8)
+- [ ] **Repository baseline** (§8B.4):
+  - a build that belongs to the repository, not a pull request, following build
+    steps 1–8;
+  - triggers: Test data turned on, a merge into the baseline branch (the existing
+    `closed` webhook), the **Refresh baseline** button (confirmed in a modal), a
+    daily freshness check, and an unusable baseline;
+  - one refresh at a time, ordered by a refresh-sequence fence, with a minimum
+    interval between automatic refreshes;
+  - safe failure categories;
+  - dumps encrypted with the platform keyring, size-limited and checksummed.
+
+  A failed refresh keeps the previous baseline and affects no pull request.
+- [ ] **Kept PR data** (§8B.5):
+  - copied from the pull request's serving candidate just before `setup`, streamed
+    container to container;
+  - per service kind, only into the same or a newer major version;
+  - never stored by Previa.
+- [ ] **Starting-data selection with fallback** (§8B.6):
+  - sources tried in order: kept data, then baseline, then empty;
+  - `seed` runs only on an empty database;
+  - at most two fallbacks, and copy failure categories are recorded;
+  - the source used is stored on the candidate and referenced by its publication.
+- [ ] **Reset test data gains a source choice**: repository baseline, or empty
+  database and seed. The choice is recorded on the activity event (§8B.7).
+- [ ] **Visible outcomes** (§8B.3 items 7–9):
+  - the PR page shows the source, any fallback and its reason, and the Setup and
+    Seed outcomes;
+  - the review page shows a one-line reviewer version;
+  - the Rebuild modal says data is kept and points to Reset;
+  - the GitHub comment gets one source line;
+  - the Test data tab shows status, **Refresh baseline** and **Delete baseline**
+    (confirmed in a modal).
+- [ ] **Data and access rules** (§8B.10):
+  - Redis always starts fresh;
+  - baseline builds get no secrets and no outbound approvals;
+  - Owners and Admins change settings; Developers with a grant refresh and reset;
+    Reviewers see the source line only;
+  - turning Test data off deletes baselines after a confirmation.
+- [ ] **MySQL** as well as PostgreSQL (§8B.4 step 6, §8B.13).
+- [ ] **Housekeeping and crash cleanup** for baseline containers, networks and files
+  (§8B.9, §8B.11).
+- [ ] **Starter kits and the reference journeys** show the setup/seed split for
+  Node.js (Prisma), Rails, Django and Go (goose) (§8B.8).
+- [ ] **Operator settings**: `PREVIEW_BASELINE_DIR`, `PREVIEW_BASELINE_MAX_SIZE`,
+  `PREVIEW_DATA_COPY_TIMEOUT` and `PREVIEW_BASELINE_MIN_INTERVAL` (§8B.8). The spec
+  proposes defaults. **Decision (owner):** confirm them or choose others (spec §13,
+  "Test-data storage and defaults").
+- [ ] Until F3 exists, baseline builds use today's admission (host capacity and the
+  existing operator limits). F3 must count them (§8B.4 step 3, §9.3).
+
+**Done when:** every §8B.13 completion criterion holds:
+- the baseline is built from the default branch and from a chosen branch;
+- it refreshes on merge, the button and the daily check, coalesced and fenced;
+- a pull request's first build restores it and runs only new migrations;
+- reviewer records survive a new commit and a Rebuild, while a parallel PR and a
+  fork never see them;
+- both Reset choices work;
+- incompatible histories fall back with their reason;
+- crash injection leaves nothing behind, and disconnecting deletes baselines (after
+  F4);
+- no data, credentials or dump output reach logs, live streams, activity or GitHub;
+- the reference journeys pass with Test data on (PostgreSQL and MySQL) and off.
+
+The common gate below must also pass.
+
+### F3 · Feature 6, free plan, part H: usage and free limits (spec §9.3, §9.7, step H)
+
+**Outcome:**
+- Every workspace has finite free limits it can see.
+- Real build execution is counted exactly once.
+- Blocked work says why, until when, and what to do.
+- Existing previews, reading and feedback are never cut off by a limit.
+
+Today's limits are operator settings keyed to the installing account
+(`BUILDS_PER_ACCOUNT`, `BUILD_MINUTES_PER_ACCOUNT_DAY`); part H makes them
+per-workspace and visible (§9.1).
+
+- [ ] **Free plan entitlements** per workspace (`workspace_entitlements`): finite
+  limits, no purchase controls and no paid states (§9.1, §9.3).
+- [ ] **Execution accounting** (§9.7):
+  - reservations at admission, at most 60 seconds per slice (spec §13);
+  - execution segments with a key per attempt, so a replay never double-counts;
+  - crash reconciliation, and splitting at UTC boundaries;
+  - limits re-checked before execution and before publication.
+
+  The existing `account_build_usage` is labelled legacy and never billed. A
+  documented cutover starts the new accounting.
+- [ ] **Limits** (§9.3 table):
+  - concurrent builds per workspace;
+  - included build minutes, counting failed and superseded work and F2's baseline
+    builds and fallback attempts;
+  - the operator's daily ceiling;
+  - active preview slots, where a same-PR replacement reuses its slot.
+
+  Host capacity and preview lifetimes stay as they are.
+- [ ] **Usage page** (§9.3):
+  - plan and period;
+  - consumed and reserved minutes;
+  - the running-build limit and preview slots;
+  - the retention and expiry policy;
+  - blocked work;
+  - measured timestamps and pending reconciliation.
+
+  Authorized developers also see a breakdown per repository.
+- [ ] **Behavior at a limit:** only compute is blocked. Reads, feedback, account
+  access, cancellation and teardown keep working, and no data is deleted (§9.3).
+- [ ] **Decision (owner):** the free plan's numbers: build minutes and their
+  period, concurrent builds, active preview slots (spec §13, "Free early-access
+  allowance amounts").
+- [ ] **Decision (owner):** the migration entitlement policy for existing hosted
+  users (spec §13). Confirm whether any exist before the first deployment.
+
+**Done when:** spec §9.10's first three criteria hold:
+- totals reconcile with attempt records, and replays never count twice;
+- concurrent members cannot exceed reservations, slots or global ceilings;
+- running out and the reset reach the specified state.
+
+The common gate must also pass.
+
+### F4 · Feature 6, free plan, part I: accounts, exits, support, status and policies (spec §9.5, §9.6, §9.8, step I)
+
+**Outcome:** people can leave Previa and remove their data completely, reach
+support, see whether the service works, and read in plain language what Previa
+stores and why.
+
+| Item | Today |
+| --- | --- |
+| End other sessions | Missing: only the current session signs out |
+| Leave workspace | Exists after handover ([docs/28](docs/28-shared-workspaces.md)) |
+| Disconnect a repository or installation in Previa | Missing: only by removing access on GitHub |
+| Delete workspace | Soft delete only, when the owner is the only active member and no installation is connected |
+| Delete personal account | Missing |
+| Help and support | An FAQ page only |
+| Status page, policy pages | Missing |
+
+- [ ] **End other sessions:** a user-to-session index or authorization epoch,
+  rechecked on requests and live streams (§9.5, §9.7).
+- [ ] **Leave workspace:** confirm it revokes grants, streams and cookies as §9.5
+  requires.
+- [ ] **Disconnect a repository** (§9.5):
+  - it becomes unavailable at once, and cleanup progress is visible;
+  - new work is fenced, and intents and baseline refreshes are cancelled;
+  - routes, containers and services are removed;
+  - secrets, test-data baselines and settings are deleted;
+  - a later webhook cannot reconnect it.
+- [ ] **Disconnect an installation:** the same cleanup for each of its
+  repositories. Explain that uninstalling the GitHub App is a separate step on
+  GitHub.
+- [ ] **Delete workspace:** an ordered, resumable operation with visible
+  progress. It records intent and denies new writes, fences work, and removes
+  routes and previews. It revokes grants and sessions, and deletes secrets,
+  configuration, baselines and review content. The free plan has no provider
+  subscription step (§9.5).
+- [ ] **Delete personal account:**
+  - allowed only after the user's owned workspaces are handed over or deleted;
+  - erases personal fields and revokes sessions;
+  - keeps shared attribution under a pseudonym;
+  - never removes other people's team data (§9.5).
+- [ ] **Optional (§10.3):** a final "Disconnected" GitHub comment while App access
+  still allows it, with finite retries.
+- [ ] **Help and support** (§9.6):
+  - a support contact, FAQ links, service availability and a copyable diagnostic
+    reference;
+  - a persisted support request form;
+  - an operator-only page to read and resolve requests;
+  - the support operator role comes from configured identities, and operator
+    actions are recorded.
+- [ ] **Status page** (§9.6): real build and routing availability with the time it
+  was checked, an operator-only form for incidents, and unknown states shown as
+  unknown.
+- [ ] **Policy pages** in plain language (§9.6): stored data, retention, GitHub
+  permissions, what disconnecting and deleting do, and the usage limits. Paid
+  cancellation terms are deferred with §9.4.
+- [ ] **Restore-safe deletion** (§9.8): an encrypted, bounded deletion journal sent
+  through the backup channel. The restore procedure applies it before serving
+  again, which updates [docs/25](docs/25-production-deployment.md) (B5 and B6) and
+  [docs/24](docs/24-incident-runbook.md).
+- [ ] **Decision (owner):** the support contact (email address) shown to users.
+- [ ] **Decision (owner):** the GitHub identities of support operators.
+- [ ] **Decision (owner):** approve the privacy and terms text. Claude drafts it
+  from the actual behavior; the owner approves or has it reviewed (spec §13).
+- [ ] **Decision (owner):** limits for support requests. Spec §13 recommends 16 KiB
+  per message and keeping resolved requests 90 days.
+
+**Done when:** spec §9.10's last three criteria hold:
+- leaving or removal revokes access at once;
+- personal deletion keeps others' work;
+- repository and workspace deletion survive crashes until every step finishes;
+- a webhook cannot undo a disconnection;
+- a deleting workspace cannot create work or accept an invitation;
+- help, support, status, retention pages and delete controls are real and
+  reachable.
+
+The common gate must also pass.
+
+### F5 · Detect missed GitHub App uninstalls ([docs/27](docs/27-roadmap.md), Prompt 14)
+
+**Outcome:** previews still come down when Previa misses a webhook for an
+uninstall, a suspension or a removed repository (for example while it was offline),
+and reinstalling works.
+
+- [ ] A periodic reconciliation job using App (JWT) authentication. It only
+  removes access, through the existing revocation path, in one short transaction
+  with the existing fences.
+- [ ] **Fail safe:**
+  - outages, 5xx responses, rate limits and partial listings change nothing;
+  - a 401 or a wrong App ID stops the pass and alerts;
+  - a circuit breaker stops a pass that would revoke too much.
+- [ ] Faster detection when creating an installation token reports the
+  installation gone or suspended. This wakes the reconciler; nothing is revoked
+  from the request path.
+- [ ] Reinstalling works after a missed deletion, for the same owner only.
+- [ ] Metrics with bounded labels, an alert whenever reconciliation finds a change,
+  and a runbook entry for webhook delivery outages.
+- [ ] Every test listed in Prompt 14, plus a `make test-e2e` phase that drops the
+  uninstall webhook.
+- [ ] Docs: docs/04, 05, 12 and 14, docs/02 if configuration changes, the user
+  guide's section 19 and checklist, the tech stack, and the schema diagram if the
+  schema changes.
+
+**Done when:** the reconciliation is enabled and documented, and every test above
+passes. The common gate must also pass.
+
+### F6 · Early-access gate (Proposed, not in the spec)
+
+**Why it was raised:** Previa builds and runs code from the repositories of anyone
+who signs in, on one server, and nothing limits who can sign up today.
+[docs/25 "Account safety"](docs/25-production-deployment.md#account-safety-abuse-reports)
+explains that abuse reports about previews go to the host.
+
+- [ ] **Decision (owner):** one of:
+  - (a) the operator approves each new workspace before it can connect
+    repositories or build;
+  - (b) an operator allowlist of GitHub accounts or organizations;
+  - (c) no gate, relying on F3's free limits and docs/25's abuse controls.
+
+  For (a) or (b), Claude first adds it to the spec, then builds it like any feature.
+
+### The common gate (every feature)
+
+- [ ] **Claude:** `make build`; `make lint` with 0 issues; `go test ./...` against
+  PostgreSQL. A new migration is applied, rolled back and re-applied in a scratch
+  schema.
+- [ ] **Claude:** the browser suites: `make test-browser`, `test-workspace-browser`,
+  `test-setup-browser`, `test-review-browser`, plus any new suite. These run with
+  and without JavaScript and must show no CSP errors.
+- [ ] **Claude:** the affected real-Docker suites: `make test-e2e` (which includes
+  `make test-reference`), and `make test-runtime`, `test-routing` and
+  `test-housekeeping` as affected.
+- [ ] **Claude:** screenshots of every new or changed screen at 1440 and 390 px,
+  light and dark, reviewed.
+- [ ] **Claude:** documentation updated:
+  - the DESIGN section and the feature's document in `docs/`;
+  - docs/02 for migrations, configuration and commands;
+  - the user guide and its manual checklist rows;
+  - a test report in `test-docs/`;
+  - HANDOFF.md and this file.
+- [ ] **Owner:** the manual test, using the new checklist rows.
+- [ ] **Owner:** asks for the commit; Claude commits on `mvp-complete`.
+
+---
+
+## Part 2 · Release acceptance (after every feature, before deployment)
+
+**Outcome:** the release is shown to be complete on local and staging resources,
+and both of us agree it is ready to deploy.
+
+- [ ] **Claude:** a full automated regression cycle as described in
+  [test-docs/README.md](test-docs/README.md), recorded in a new dated report.
+- [ ] **Owner:** a full manual pass through the user guide's
+  [Manual test checklist](technical-docs/user-guide.md#manual-test-checklist),
+  including the rows added by F2–F5.
+- [ ] The product journeys of spec §12.2 that can be proven before deployment:
+  - new small team;
+  - complete review;
+  - deployment freshness;
+  - offboarding and handover;
+  - useful seed and reset;
+  - persistent test data;
+  - shared quota;
+  - exit;
+  - support and status;
+  - retention and restore.
+
+  The GitHub integration journey needs real GitHub and is proven in Part 3 (D7).
+- [ ] Spec §12.3 product measurements: confirm each one can be read from recorded
+  data. **Decision (owner):** whether a small read-only report is needed to read
+  them. If so, it is specified and built first.
+- [ ] Spec §12.4: no placeholder actions or undisclosed manual steps; deferred
+  items are labelled as not available; documents describe shipped behavior.
+- [ ] Spec §1.2 status table updated: every row done except deployment.
+- [ ] **Owner and Claude:** sign off "ready to deploy".
+
+---
+
+## Part 3 · Deployment
+
+Deployment follows [docs/25](docs/25-production-deployment.md) step by step: one
+OVHcloud VPS-2 (4 vCores, 8 GB RAM, 75 GB NVMe) running Ubuntu 24.04, PostgreSQL 17
+on that server, Cloudflare DNS and Cloudflare R2 for encrypted backups. It then
+works through the live proofs of
+[docs/22](docs/22-mvp-operations.md#live-proofs-still-required-before-a-public-rollout).
+Choosing other providers means adapting those steps first, as docs/25 explains.
+
+### 3.1 What Claude needs from the owner, and how to give it
+
+The owner provides these during the deployment phase, not before.
+
+**How to hand things over safely:**
+- **Non-secret values** (names, IDs, IP addresses, email addresses): tell Claude in
+  the chat.
+- **Secrets** (client secrets, tokens, private keys, passwords): never paste them
+  into the chat. At the step that needs one, Claude gives the exact command or
+  settings page, and the owner types or uploads the value directly on the server,
+  in GitHub or in Cloudflare.
+- **Secrets the server generates itself** need nothing from the owner except a
+  recovery copy kept in a password manager: the database password, session secret,
+  webhook secret, repository-secrets keyring and Grafana password (`setup.sh`
+  creates them, docs/25 Step 5).
+
+| # | What | Why | How the owner gives it | Needed at |
+| --- | --- | --- | --- | --- |
+| 1 | An OVHcloud account with two-factor authentication, its identity check completed | To rent the server | Create it; nothing to send | D2 |
+| 2 | **Decision:** a separate staging VPS for first-deployment and restore drills, as docs/25 Step 0 recommends | Rehearse without risking production | Yes or no, in the chat | D2 |
+| 3 | An SSH key on the owner's workstation (docs/25 Step 0) and a way for Claude to reach the server | To run the setup steps | Either make `ssh <name>` work from this WSL terminal (key plus a `~/.ssh/config` entry) and approve each command as Claude runs it, or run the commands Claude gives and paste back the non-secret output. Tell Claude which one, and the SSH name and user. | D2 |
+| 4 | The VPS's model, location and public IPv4 address | Inventory, DNS records, firewall | In the chat | D2 |
+| 5 | The owner's administration IP address or range | SSH firewall rule | In the chat | D2 |
+| 6 | Two domains on Cloudflare DNS: a dashboard domain (example: `previa.example.com`) and a **separate registrable domain** for previews (example: `preview.example.net`, with a wildcard record), as docs/25 Step 2 requires | Users reach the dashboard and every preview | Buy or choose them, move their nameservers to Cloudflare, then tell Claude both names in the chat | D2 |
+| 7 | A Cloudflare API token with Zone DNS Edit and Zone Read, scoped to the preview zone | Automatic HTTPS certificates (DNS-01) | **Secret.** Create it in Cloudflare, keep it in a password manager, and paste it yourself into `/etc/previa/dns-credential` on the server with the command Claude gives (docs/25 Step 4) | D3 |
+| 8 | A private Cloudflare R2 bucket and an API token scoped to it (access key and secret) | Encrypted off-server backups | The bucket name and R2 endpoint in the chat. **The keys are secret:** type them yourself into root's `rclone config` on the server (docs/25 B2–B3) | D5 |
+| 9 | A backup recovery key made with `age-keygen` on the owner's recovery workstation (docs/25 B1) | Only this key can open backups | Send only the public `age1…` recipient in the chat. The private key stays offline, in two copies, never on the server | D5 |
+| 10 | A production GitHub **OAuth App** (sign-in), with the field values Claude gives | Users sign in on the real domain | Register it on GitHub. Send the client ID in the chat; type the **client secret** yourself into `/etc/previa/previa.env` | D3 |
+| 11 | A production **GitHub App**, with the URLs and permissions Claude gives (docs/25 Step 4: Contents read, Pull requests write, Checks write, the Pull request event) | Repository access, webhooks, PR comments | Register it on GitHub. Send the App ID, slug and client ID in the chat. Type the **client secret** into `previa.env`; upload the **private key** with `scp` and install it with Claude's command; copy the **webhook secret** from the server's `previa.env` into GitHub yourself | D3 |
+| 12 | A monitored email address | The certificate account (`ACME_EMAIL`) and the host's abuse notices | In the chat | D3 |
+| 13 | GitHub repository settings: Actions enabled, `master` the default and protected branch, a `release` environment with reviewers (docs/25 "CI and releases") | Releases can be built and published | Set them on GitHub; tell Claude when done | D1 |
+| 14 | **Decision:** whether the GHCR images are public or private | Private images need a read credential on the host | In the chat. If private, configure the package-read credential on the host yourself | D1 |
+| 15 | Release approval | Only `master` commits that passed CI are tagged | Merge the `main` → `master` pull request after CI passes, create the release tag (or explicitly ask Claude to), and publish the draft release | D1 |
+| 16 | Where alerts go: an email address or a webhook receiver | Someone hears when builds, certificates or backups fail | An email address in the chat. A webhook URL that contains a token is a **secret**: put it yourself into the file Claude names | D8 |
+| 17 | An account with an external uptime service | Checks the dashboard and certificates from outside the server | Create it; Claude gives the check settings (docs/25) | D8 |
+| 18 | A disposable GitHub repository with the production App installed and an open pull request | The live GitHub proofs (`make test-source`, `make test-reporting`) | Create it; tell Claude its installation ID, repository ID and PR number in the chat | D7 |
+| 19 | **Decision:** gVisor (`PREVIEW_OCI_RUNTIME=runsc`) | Extra isolation, if the threat model needs it | Yes or no, in the chat | D4 |
+| 20 | **Decision:** the account-safety settings from docs/25: `BUILD_EGRESS=registries`, the preview lifetime (`ENV_TTL_HOURS`) | Fewer abuse risks | In the chat | D4 |
+
+### 3.2 Deployment checklist
+
+**D1 · Code and release**
+- [ ] **Claude** (when asked): push `mvp-complete` to `main`.
+- [ ] **Owner:** open the pull request `main` → `master`. When CI passes, merge it.
+- [ ] **Owner:** prepare the repository for releases (items 13–14).
+- [ ] **Claude:** rehearse the release candidate locally: `make release-images` and
+  `make prod-smoke` (docs/25 "Local staging smoke test").
+- [ ] **Owner:** tag a `master` commit whose CI passed (`v*.*.*`). The Release
+  workflow publishes images to GHCR as a draft release; review and publish it
+  (item 15).
+
+**D2 · Host** (docs/25 Steps 0–3)
+- [ ] Step 0: the non-secret inventory is recorded in the owner's operations notes.
+- [ ] Step 1: the VPS is ordered, the firewall and SSH configured.
+- [ ] Step 2: DNS records created as DNS-only. `dig` resolves the dashboard name
+  and a test label under the preview domain to the VPS.
+- [ ] Step 3: the checkout is installed and `setup.sh` has prepared the host.
+
+**D3 · GitHub integrations and credentials** (docs/25 Step 4)
+- [ ] The OAuth App and GitHub App are registered (items 10–11).
+- [ ] The App private key and DNS token are installed with the owners and modes
+  docs/25 specifies.
+
+**D4 · Production settings** (docs/25 Step 5)
+- [ ] `/etc/previa/previa.env` is complete per the docs/25 table, plus any setting
+  F2–F5 added (listed in docs/02 by then) and the decisions in items 19–20.
+- [ ] Both configuration checks pass: `server check-config` and
+  `worker check-config` (docs/25 Step 7).
+
+**D5 · Backups before production** (docs/25 Step 6, B1–B3)
+- [ ] The recovery key exists offline (item 9), the R2 bucket and rclone remote are
+  configured (item 8), and `BACKUP_AGE_RECIPIENT` and `BACKUP_REMOTE` are set.
+
+**D6 · First start** (docs/25 Steps 7–9, then B4)
+- [ ] Release images are pulled and the stack starts.
+- [ ] Certificates are issued with Let's Encrypt **staging**, then switched to
+  production.
+- [ ] The first real backup succeeds and the backup schedule is enabled (B4).
+
+**D7 · Verify and live proofs** (docs/25 Step 10, then docs/22)
+- [ ] Step 10: every process is ready, and migrations are at the release's version.
+- [ ] Hosted GitHub webhooks are delivered and discovery works against a real
+  installation.
+- [ ] Real source of a real pull request: `make test-source` (item 18).
+- [ ] PR feedback on a real pull request: `make test-reporting` (item 18).
+- [ ] The production wildcard certificate is valid over real DNS-01.
+- [ ] The whole pipeline on the host with a real repository: build, publish, the
+  comment, Retry and Rebuild, expiry, teardown on close and on revocation.
+- [ ] The release's own features on the host:
+  - workspaces;
+  - the Setup tab;
+  - the review page;
+  - test data with Reset and test access;
+  - 5B baselines and kept data;
+  - usage limits;
+  - support, status and deletion.
+- [ ] Capacity and disk pressure on the host's real resources, at
+  `MAX_CONCURRENT_BUILDS` concurrent builds.
+- [ ] The spec §12.2 GitHub integration journey.
+
+**D8 · Monitoring and alerts** (docs/25 "Monitor live traffic, jobs and containers")
+- [ ] Host CPU, memory and disk checks are understood. Grafana and metrics run, if
+  the observability profile is used.
+- [ ] The external uptime check for the dashboard and its certificate is configured
+  (item 17).
+- [ ] Alerts reach a person: Alertmanager and a receiver (item 16), plus
+  `BACKUP_FAILURE_WEBHOOK`. A test alert is received.
+
+**D9 · Rehearsals** (on the staging VPS, if item 2 is yes)
+- [ ] A restore (B5 and B6), including F4's deletion journal.
+- [ ] An upgrade and a rollback (U1–U5).
+
+**D10 · Account safety** (docs/25 "Account safety: abuse reports")
+- [ ] The abuse-notice email is monitored (item 12).
+- [ ] The decisions in item 20 are applied. The kill switch `BUILDS_PAUSED` is known.
+- [ ] F6's early-access decision is in effect.
+
+**D11 · Launch**
+- [ ] The first users are invited.
+- [ ] The spec §12.3 measurements are read as agreed in Part 2.
+
+**D12 · Record the evidence**
+- [ ] [docs/26](docs/26-release-report.md) is updated with the live results.
+- [ ] The test-docs report, HANDOFF.md and spec §1.2 (deployment done) are updated.
+
+---
+
+## Part 4 · Cleanup when testing is finished
+
+- [ ] **Claude** (only when the owner says testing is finished): remove the local
+  test database container `previa-member-ux-test-postgres`.
+- [ ] **Decision (owner):** the two leftover `ordering_test_*` schemas in the
+  development database. Claude has not touched them.
+
+## Not in this release
+
+These are deferred on purpose; nobody builds them as part of this list:
+- Feature 4: review requests, assignments, decisions, review queue, activity
+  timeline view (spec §7).
+- Step E: projecting review status and counts to GitHub (§10.1).
+- Paid subscriptions (§9.4, step J).
+- The third reference journey (§8.3 item 2).
+- Notification integrations (§10.4).
+- Several workers sharing baseline storage (§8B.4).
+- The ideas in [NEXT-FEATURES.md](NEXT-FEATURES.md).

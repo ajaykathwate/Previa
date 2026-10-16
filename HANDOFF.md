@@ -5,11 +5,12 @@ Last updated: 2026-10-16
 - Branch `mvp-complete`; commits are local (not pushed). Commit only when the user
   asks; push to `main`, never `master`.
 - Release plan (README-MVP-PRODUCT-EXPANSION.md §1.2, decided 16 Oct): preview-first
-  MVP. Done: Feature 1 (workspaces), 2 (onboarding), 3 (review and feedback, commit
-  `2ddaaef`), 5 (ready-to-test sample data, **not committed yet**). Next: Feature 5B
-  (persistent test data, §8B), then Feature 6 free plan, then deploy early access.
-  Deferred: Feature 4, GitHub review-status projection (step E), paid mode (step J),
-  the third reference journey.
+  MVP. Done: Feature 1 (workspaces), 2 (onboarding), 3 (review and feedback,
+  `2ddaaef`), 5 (ready-to-test sample data, `ea87e60`). Nothing pushed: GitHub `main`
+  is at `6b07c5b`. **MVP-TODO.md is the roadmap**: remaining features (5B, Feature 6
+  free plan, missed-uninstall detection, early-access decision), release acceptance,
+  and the deployment checklist with what the owner provides. Deferred: Feature 4,
+  GitHub review-status projection (step E), paid mode (step J), third journey.
 - README/DESIGN remain source of truth (DESIGN §21 workspaces, §22 onboarding, §23
   reviews, §24 test data). Feature docs: docs/28–31.
 
@@ -81,7 +82,6 @@ Last updated: 2026-10-16
 - Do not edit technical-docs/inside-previa.md unless asked. No deployment/push.
 
 ## Next steps
-- User reviews and tests Feature 5 (user guide checklist F2 R12–R18), then asks for a
-  commit.
-- Feature 5B per README-MVP §8B: `seed` key, repository baseline, kept PR data,
-  fallback, Reset choices (Reset modal gains a source choice).
+- Follow MVP-TODO.md top to bottom; tick boxes only with evidence. Next: F0 (owner
+  tests Feature 5, rows R12–R18), F1 (remove Feature 4 references from spec §8B, fix
+  the PR page *Runs with* after a failed update), then F2 Feature 5B.
