@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -64,6 +65,8 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 		r.Post(base+"/findings/{finding}/resolve", h.resolve)
 		r.Post(base+"/findings/{finding}/reopen", h.reopen)
 		r.Post(base+"/findings/{finding}/remove", h.removeFinding)
+		r.Post(base+"/test-access", h.saveTestAccess)
+		r.Post(base+"/test-access/reveal", h.revealTestAccess)
 	})
 }
 
@@ -450,7 +453,8 @@ func outcome(q url.Values) (string, pages.Notice) {
 	toast := map[string]string{
 		"instructions": "Testing instructions saved", "finding": "Finding added", "reply": "Reply added",
 		"edited": "Message updated", "removed": "Message removed", "removed-finding": "Finding removed",
-		"resolved": "Finding resolved", "reopened": "Finding reopened",
+		"resolved": "Finding resolved", "reopened": "Finding reopened", "test-access": "Test access saved",
+		"reset": "Reset requested: a fresh deployment with newly seeded data replaces this one when it is live",
 	}[q.Get("saved")]
 	var notice pages.Notice
 	switch q.Get("notice") {
@@ -460,6 +464,20 @@ func outcome(q url.Values) (string, pages.Notice) {
 		notice = pages.Notice{Tone: "info", Text: "That finding or message was removed meanwhile. Nothing was changed."}
 	case "stale":
 		notice = pages.Notice{Tone: "info", Text: "Someone changed that finding meanwhile. This is its latest state; nothing was changed."}
+	case "no-test-access":
+		notice = pages.Notice{Tone: "info", Text: "There is no stored password to reveal."}
+	case "build-closed":
+		notice = pages.Notice{Tone: "info", Text: "The pull request was closed, so nothing was rebuilt."}
+	case "build-blocked":
+		notice = pages.Notice{Tone: "warn", Text: "Building is blocked right now (the pull request page says why). Nothing was reset."}
+	case "build-unavailable":
+		notice = pages.Notice{Tone: "warn", Text: "Builds cannot start right now. Nothing was reset; try again in a few minutes."}
+	case "build-changed":
+		notice = pages.Notice{Tone: "info", Text: "The pull request or its build changed meanwhile. Nothing was reset; this is its latest state."}
+	case "build-github":
+		notice = pages.Notice{Tone: "warn", Text: "GitHub could not confirm the pull request right now. Nothing was reset; try again shortly."}
+	case "build-access":
+		notice = pages.Notice{Tone: "warn", Text: "GitHub access to this pull request is no longer available. Nothing was reset."}
 	case "limit":
 		text := "You made many review changes in the last hour. Try again later."
 		if until, err := time.Parse(time.RFC3339, q.Get("until")); err == nil {
@@ -475,6 +493,12 @@ func outcome(q url.Values) (string, pages.Notice) {
 func editTarget(p pages.Page, target string) string {
 	if target == "instructions" {
 		if p.CanOperate && !p.Closed() {
+			return target
+		}
+		return ""
+	}
+	if target == "test-access" {
+		if p.TestAccess.CanEdit {
 			return target
 		}
 		return ""
@@ -533,4 +557,75 @@ func keyOrNew(key string) string {
 		return key
 	}
 	return NewRequestKey()
+}
+
+func (h *Handler) saveTestAccess(w http.ResponseWriter, r *http.Request) {
+	a, ok := h.actor(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	revision, _ := strconv.ParseInt(r.PostFormValue("revision"), 10, 64)
+	in := TestAccessInput{Account: r.PostFormValue("account"), Secret: r.PostFormValue("secret"), RemoveSecret: r.PostFormValue("remove_secret") == "true", Revision: revision}
+	if err := h.service.SaveTestAccess(r.Context(), a, in); err != nil {
+		// The secret is write-only: it is never written back into a page.
+		h.draftFailure(w, r, a, &pages.Draft{Form: "test-access", Body: in.Account}, err)
+		return
+	}
+	h.back(w, r, a, "test-access", "test-access", true)
+}
+
+// revealTestAccess answers one reveal: JSON for the page's script, or the
+// page itself with the value shown, never cached and never redirected to.
+func (h *Handler) revealTestAccess(w http.ResponseWriter, r *http.Request) {
+	a, ok := h.actor(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	value, err := h.service.RevealTestAccess(r.Context(), a)
+	wantsJSON := strings.Contains(r.Header.Get("Accept"), "application/json")
+	var limit *LimitError
+	switch {
+	case err == nil:
+	case wantsJSON && errors.Is(err, ErrNoTestAccess):
+		jsonError(w, http.StatusNotFound, "There is no stored password to reveal.")
+		return
+	case wantsJSON && errors.As(err, &limit):
+		jsonError(w, http.StatusTooManyRequests, "You made many review changes in the last hour. Try again after "+limit.ResetsAt.UTC().Format("15:04")+" UTC.")
+		return
+	case errors.Is(err, ErrNoTestAccess):
+		h.notice(w, r, a, "no-test-access", nil)
+		return
+	default:
+		h.refused(w, r, a, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	if wantsJSON {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"value": value})
+		return
+	}
+	values, _ := url.ParseQuery(r.PostFormValue("return_query"))
+	query, ok := parseQuery(r, values)
+	if !ok {
+		query = Query{}
+	}
+	p, err := h.service.Page(r.Context(), a.UserID, a.RepoID, a.Number, query)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	p.TestAccess.Revealed = value
+	h.render(w, r, http.StatusOK, p)
+}
+
+// jsonError answers the page's script with a message it can show.
+func jsonError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }

@@ -77,6 +77,7 @@ templ Detail(p Page) {
 			</div>
 			<aside class="review-aside" aria-label="Deployment and context">
 				@previewCard(p)
+				@testAccessCard(p)
 				@descriptionCard(p)
 				<p class="review-later">
 					@components.InfoIcon()
@@ -264,7 +265,7 @@ templ instructionsForm(p Page, editing bool) {
 		@field("instructions-summary", "Summary", "What changed, in one line", fieldError(d, drafting, "summary")) {
 			<input id="instructions-summary" name="summary" value={ v.Summary } maxlength="500" placeholder="Checkout now validates the delivery address" autocomplete="off" data-draft-key="summary" aria-invalid={ invalid(fieldError(d, drafting, "summary") != "") }/>
 		}
-		@field("instructions-steps", "Steps", "One step per line; they are numbered for reviewers", fieldError(d, drafting, "steps")) {
+		@field("instructions-steps", "Steps", "One step per line, numbered for reviewers. Name the sample data they will find; passwords go under Test access", fieldError(d, drafting, "steps")) {
 			<textarea id="instructions-steps" name="steps" rows="5" placeholder={ "Open the checkout\nLeave the address empty\nChoose Pay" } data-draft-key="steps" aria-invalid={ invalid(fieldError(d, drafting, "steps") != "") }>{ v.Steps }</textarea>
 		}
 		@field("instructions-expected", "Expected result", "", fieldError(d, drafting, "expected")) {
@@ -344,6 +345,26 @@ templ previewCard(p Page) {
 			if note := p.Preview.Note(); note != "" {
 				<p class={ "lifecycle-note", templ.KV("tone-warn", p.Preview.Building == "" && (p.Preview.Outdated() || p.Preview.Failed || p.Preview.State == "previous")) }>{ note }</p>
 			}
+			if p.Preview.Deployed != "" {
+				<ul class="review-facts">
+					<li>
+						<span class="review-label">Setup</span>
+						if !p.Preview.SetupDeclared {
+							<span>No setup declared</span>
+						} else if p.Preview.SetupTook != "" {
+							<span>{ "Completed in " + p.Preview.SetupTook }</span>
+						} else {
+							<span>Completed</span>
+						}
+					</li>
+					if p.Preview.Data {
+						<li>
+							<span class="review-label">Test data</span>
+							<span>Fresh from setup for each deployment. A refresh or sleep keeps it; a new commit, Rebuild or Reset replaces it.</span>
+						</li>
+					}
+				</ul>
+			}
 			if p.Preview.Running() {
 				<div class="review-actions review-open">
 					@button.Button(button.Props{Href: p.PreviewHref(""), Target: "_blank", Attributes: templ.Attributes{"rel": "noopener noreferrer"}}) {
@@ -356,11 +377,187 @@ templ previewCard(p Page) {
 							@components.ArrowUpRight()
 						}
 					}
+					if p.Reset != nil && (p.Preview.Data || p.Preview.SetupDeclared) {
+						<button type="button" class="secondary-action review-reset-button" commandfor="review-reset" command="show-modal" data-open-dialog="review-reset" aria-haspopup="dialog">
+							@components.RestartIcon()
+							Reset test data
+						</button>
+					}
 				</div>
 				<p class="review-address" title="The preview's address">{ p.Preview.Address }</p>
 			}
 		</div>
+		if p.Reset != nil && (p.Preview.Data || p.Preview.SetupDeclared) {
+			@resetDialog(p)
+		}
 	</section>
+}
+
+// resetDialog confirms Reset test data: a Rebuild of the serving commit
+// through the pull request's own Build action, which comes back here.
+templ resetDialog(p Page) {
+	@components.ConfirmationDialog("review-reset", "Reset test data?", resetText(p)) {
+		<form method="post" action={ components.PublicURL(ctx, prpages.PRURL(p.RepoID, p.Number)+"/build") } class="dialog-actions" data-busy-form>
+			<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+			<input type="hidden" name="workspace_query" value={ components.PublicQuery(ctx, p.RepoID, "pr="+strconv.Itoa(int(p.Number))) }/>
+			<input type="hidden" name="expected_revision" value={ strconv.FormatInt(p.Reset.ExpectedRevision, 10) }/>
+			<input type="hidden" name="request_key" value={ p.Reset.RequestKey }/>
+			<input type="hidden" name="action" value="rebuild"/>
+			<input type="hidden" name="reset" value="true"/>
+			<input type="hidden" name="return" value="review"/>
+			<button type="button" class="secondary-action" autofocus commandfor="review-reset" command="close" data-close-dialog>Cancel</button>
+			<button type="submit" class="primary-action busy-button">
+				<span class="busy-text">Reset test data</span>
+				<span class="busy-label">Requesting…</span>
+			</button>
+		</form>
+	}
+}
+
+func resetText(p Page) string {
+	fresh := "that runs its setup command again"
+	switch {
+	case p.Preview.Data && p.Preview.SetupDeclared:
+		fresh = "whose databases start empty and are seeded again by its setup command"
+	case p.Preview.Data:
+		fresh = "whose databases start empty"
+	}
+	text := "Previa rebuilds commit " + shortSHA(p.Reset.Commit) + " into a new deployment " + fresh + ". Everything testers created in this preview is replaced once it is live; until then this preview keeps serving."
+	if p.Preview.Current != nil {
+		text += " Findings stay with " + p.Preview.Current.Label() + "."
+	}
+	return text
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}
+
+// testAccessCard says how reviewers sign in to this repository's previews.
+templ testAccessCard(p Page) {
+	{{ t := p.TestAccess }}
+	{{ editing := t.CanEdit && p.Editing("test-access") }}
+	if t.Set() || t.CanEdit {
+		<section class="workspace-panel field-card review-access" id="test-access" aria-labelledby="test-access-title">
+			<header class="field-card-head">
+				<h2 id="test-access-title">
+					@components.KeyIcon()
+					Test access
+				</h2>
+				if t.CanEdit && t.Set() {
+					<a class="field-card-action" href={ components.PublicURL(ctx, p.EditURL("test-access", "test-access")) } data-edit-open="test-access" hidden?={ editing }>
+						@components.PencilIcon()
+						Edit
+					</a>
+				}
+			</header>
+			<div class="review-card-body" data-edit-view="test-access" hidden?={ editing }>
+				if !t.Set() {
+					<div class="review-empty-inline">
+						<p>Tell reviewers how to sign in: a preview-only account that this repository's setup creates on every deployment.</p>
+						<a class="field-card-action" href={ components.PublicURL(ctx, p.EditURL("test-access", "test-access")) } data-edit-open="test-access">
+							@components.PlusIcon()
+							Add test access
+						</a>
+					</div>
+				} else {
+					if t.Account != "" {
+						<p class="review-account">
+							<span class="review-label">Sign in as</span>
+							<code>{ t.Account }</code>
+							@components.CopyButton(t.Account, "Copy the account")
+						</p>
+					}
+					if t.HasSecret {
+						if t.Revealed != "" {
+							<div class="review-secret" role="status">
+								<span class="review-label">Password</span>
+								<code data-reveal-value>{ t.Revealed }</code>
+								@components.CopyButton(t.Revealed, "Copy the password")
+							</div>
+						} else {
+							<form method="post" action={ components.PublicURL(ctx, p.ActionURL("/test-access/reveal")) } class="review-reveal" data-reveal-form={ strconv.FormatInt(t.Revision, 10) }>
+								<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+								<input type="hidden" name="return_query" value={ p.ReturnQuery() }/>
+								<span class="review-label">Password</span>
+								<span class="review-masked" aria-hidden="true">••••••••</span>
+								<button type="submit" class="secondary-action review-reveal-button">
+									@components.EyeIcon()
+									Reveal
+								</button>
+							</form>
+							<div class="review-secret" data-reveal-output hidden>
+								<span class="review-label">Password</span>
+								<code data-reveal-value></code>
+								<button type="button" class="copy-button" data-copy="" data-reveal-copy aria-label="Copy the password" title="Copy the password">
+									@components.CopyIcon()
+									<span data-copy-status>Copy</span>
+								</button>
+							</div>
+						}
+					}
+					<p class="review-muted">Preview-only. Members with access to this repository can reveal it, and each reveal is recorded.</p>
+					if t.LastRevealedAt != "" {
+						<p class="review-muted">
+							{ "Last revealed by " + t.LastRevealedBy.Display() + " · " }
+							@components.Time(t.LastRevealedAt, prpages.TimeLabel(t.LastRevealedAt))
+						</p>
+					}
+				}
+			</div>
+			if t.CanEdit {
+				@testAccessForm(p, editing)
+			}
+		</section>
+	}
+}
+
+templ testAccessForm(p Page, editing bool) {
+	{{ t := p.TestAccess }}
+	{{ d := p.Draft }}
+	{{ drafting := d != nil && d.Form == "test-access" }}
+	{{ account := t.Account }}
+	if drafting {
+		{{ account = d.Body }}
+	}
+	<form method="post" action={ components.PublicURL(ctx, p.ActionURL("/test-access")) } class="review-form review-access-form" data-edit-form="test-access" data-draft-form="test-access" data-busy-form hidden?={ !editing }>
+		<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+		<input type="hidden" name="return_query" value={ p.ReturnQuery() }/>
+		<input type="hidden" name="revision" value={ strconv.FormatInt(t.Revision, 10) }/>
+		if drafting && d.Error != "" {
+			<p class="review-form-error" role="alert">{ d.Error }</p>
+		}
+		@field("test-access-account", "Account", "An email or username; shown to everyone with access", fieldError(d, drafting, "account")) {
+			<input id="test-access-account" name="account" value={ account } maxlength="300" placeholder="reviewer@preview.test" autocomplete="off" spellcheck="false" data-draft-key="account" aria-invalid={ invalid(fieldError(d, drafting, "account") != "") }/>
+		}
+		@field("test-access-secret", "Password or token", secretHint(t), fieldError(d, drafting, "secret")) {
+			<input id="test-access-secret" name="secret" type="password" maxlength="512" autocomplete="new-password" disabled?={ !t.Sealing } aria-invalid={ invalid(fieldError(d, drafting, "secret") != "") }/>
+		}
+		if t.HasSecret {
+			<label class="review-check"><input type="checkbox" name="remove_secret" value="true"/> Remove the stored password</label>
+		}
+		<p class="review-field-hint">Use a preview-only account your setup creates on every deployment, never a real or production login. To remove test access, clear both.</p>
+		<div class="review-actions">
+			<a class="secondary-action" href={ components.PublicURL(ctx, p.CurrentURL()+"#test-access") } data-edit-cancel="test-access">Cancel</a>
+			<button type="submit" class="primary-action busy-button">
+				<span class="busy-text">Save test access</span>
+				<span class="busy-label">Saving…</span>
+			</button>
+		</div>
+	</form>
+}
+
+func secretHint(t TestAccess) string {
+	switch {
+	case !t.Sealing:
+		return "This server cannot store passwords: secret encryption is not set up"
+	case t.HasSecret:
+		return "Stored and hidden; leave empty to keep it"
+	}
+	return "Stored encrypted; members reveal it on request"
 }
 
 templ descriptionCard(p Page) {

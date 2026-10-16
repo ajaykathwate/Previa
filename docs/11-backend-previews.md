@@ -134,7 +134,8 @@ to the Docker host can read them with `docker inspect`, as with secrets.)
 6. **Processes** start and must still be running after two seconds.
 7. The **app** starts and passes its readiness check ([10](10-preview-runtime.md)).
 8. Processes must still run and services still answer; then what the candidate
-   runs is recorded (`preview_components`) and it is handed to publication.
+   runs is recorded (`preview_components`, with how long setup ran) and it is
+   handed to publication.
 9. Right before the route is accepted, `Runtime.Endpoint` checks the app and again
    that processes run and services answer (credential-free protocol checks).
 
@@ -226,6 +227,10 @@ removed with it.
 - **PR comment:** the docs link and "Runs with PostgreSQL 17 and Redis 7 · setup ran ·
   process worker" for a ready preview. Failures say which part failed:
   `service_unavailable`, `service_failed`, `setup_failed`, `process_failed`.
+- **Review page:** *Setup: Completed in 12.4 s* (or *No setup declared*) for the
+  deployment that serves, a Test data note, **Reset test data**, and the
+  repository's test login for reviewers. Seeding synthetic data in `setup`, the
+  reset and test access are described in [31](31-test-data.md).
 
 ## Configuration
 

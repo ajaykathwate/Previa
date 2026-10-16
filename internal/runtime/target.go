@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/runtime/dbgen"
@@ -136,6 +137,9 @@ type Components struct {
 	// ConfigHash is the effective configuration's hash, which the candidate's
 	// publication records (docs/30-reviews.md).
 	ConfigHash string
+	// SetupTook is how long the setup command ran; recorded only when the
+	// candidate declares setup.
+	SetupTook time.Duration
 }
 
 // ServiceComponent is one managed service of a candidate.
@@ -160,6 +164,7 @@ func (s *TargetStore) RecordComponents(ctx context.Context, c Components) error 
 		Processes: processes, DocsPath: pgtype.Text{String: c.DocsPath, Valid: c.DocsPath != ""},
 		Outbound: int32(c.Outbound), OutboundWithheld: c.OutboundWithheld,
 		ConfigHash: pgtype.Text{String: c.ConfigHash, Valid: c.ConfigHash != ""},
+		SetupMs:    pgtype.Int4{Int32: int32(max(0, min(c.SetupTook.Milliseconds(), 1<<31-1))), Valid: c.Setup},
 	}); err != nil {
 		return fmt.Errorf("record preview components: %w", err)
 	}

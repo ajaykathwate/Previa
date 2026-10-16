@@ -574,16 +574,21 @@ func logE2ERouter(t *testing.T, docker *client.Client, id string) {
 	t.Logf("test router logs:\n%s", output.String())
 }
 
-// get fetches / from host through the router over HTTPS.
-func (r *e2eRouter) get(host string) (string, error) {
-	c := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+// client reaches host through the router over HTTPS and does not follow
+// redirects.
+func (r *e2eRouter) client(host string) *http.Client {
+	return &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{ServerName: host, InsecureSkipVerify: true}, //nolint:gosec // Traefik's default certificate in a test
 			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 				return (&net.Dialer{}).DialContext(ctx, network, r.https)
 			},
 		}}
-	response, err := c.Get("https://" + host + "/")
+}
+
+// get fetches / from host through the router over HTTPS.
+func (r *e2eRouter) get(host string) (string, error) {
+	response, err := r.client(host).Get("https://" + host + "/")
 	if err != nil {
 		return "", err
 	}

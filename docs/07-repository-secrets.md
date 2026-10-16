@@ -86,8 +86,10 @@ Rotation, with no downtime:
 2. Set `SECRETS_ACTIVE_KEY_VERSION` to the new version; restart server and worker.
    New and replaced values now use the new key; old values still decrypt.
 3. Run `make secrets-reencrypt`. It moves every value onto the active key in batches,
-   is safe while the server takes edits (a concurrent edit wins) and is safe to
-   repeat. It prints counts only.
+   then does the same for the review page's sealed test-access passwords
+   ([31](31-test-data.md#test-access)), is safe while the server takes edits (a
+   concurrent edit wins) and is safe to repeat. It prints counts only, one set of
+   lines for `Secrets:` and one for `Test access:`.
 4. When it reports that every value uses the active key, remove the old version and
    restart. If an old key is removed too early, decryption reports an unknown key
    version and re-encryption stops without changing data.

@@ -22,6 +22,8 @@ var catalog = []Stack{
 			{Key: "prisma", Label: "Prisma: migrate deploy", Command: cmd("node_modules/.bin/prisma", "migrate", "deploy")},
 			{Key: "drizzle", Label: "Drizzle: migrate", Command: cmd("node_modules/.bin/drizzle-kit", "migrate")},
 			{Key: "npm", Label: "npm run migrate", Command: cmd("npm", "run", "migrate")},
+			{Key: "prisma-seed", Label: "Prisma: migrate deploy, then db seed", Command: cmd("sh", "-c", "node_modules/.bin/prisma migrate deploy && node_modules/.bin/prisma db seed")},
+			{Key: "npm-seed", Label: "npm run migrate, then npm run seed", Command: cmd("sh", "-c", "npm run migrate && npm run seed")},
 		},
 		Workers:    []Preset{{Key: "npm", Label: "npm run worker", Name: "worker", Command: cmd("npm", "run", "worker")}},
 		dockerfile: nextDockerfile,
@@ -48,6 +50,9 @@ var catalog = []Stack{
 			{Key: "prisma", Label: "Prisma: migrate deploy", Command: cmd("node_modules/.bin/prisma", "migrate", "deploy")},
 			{Key: "knex", Label: "Knex: migrate:latest", Command: cmd("node_modules/.bin/knex", "migrate:latest")},
 			{Key: "npm", Label: "npm run migrate", Command: cmd("npm", "run", "migrate")},
+			{Key: "prisma-seed", Label: "Prisma: migrate deploy, then db seed", Command: cmd("sh", "-c", "node_modules/.bin/prisma migrate deploy && node_modules/.bin/prisma db seed")},
+			{Key: "knex-seed", Label: "Knex: migrate:latest, then seed:run", Command: cmd("sh", "-c", "node_modules/.bin/knex migrate:latest && node_modules/.bin/knex seed:run")},
+			{Key: "npm-seed", Label: "npm run migrate, then npm run seed", Command: cmd("sh", "-c", "npm run migrate && npm run seed")},
 		},
 		Workers:    []Preset{{Key: "npm", Label: "npm run worker", Name: "worker", Command: cmd("npm", "run", "worker")}},
 		dockerfile: nodeAPIDockerfile,
@@ -60,7 +65,10 @@ var catalog = []Stack{
 		Port: 8000, Docs: "/api/docs/",
 		Detail: &Detail{Label: "Project package", Hint: "The folder that holds settings.py and wsgi.py, such as mysite.", Default: "mysite",
 			Pattern: regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)},
-		Setup: []Preset{{Key: "migrate", Label: "manage.py migrate", Command: cmd("python", "manage.py", "migrate", "--noinput")}},
+		Setup: []Preset{
+			{Key: "migrate", Label: "manage.py migrate", Command: cmd("python", "manage.py", "migrate", "--noinput")},
+			{Key: "migrate-seed", Label: "manage.py migrate, then loaddata preview", Command: cmd("sh", "-c", "python manage.py migrate --noinput && python manage.py loaddata preview")},
+		},
 		Workers: []Preset{{Key: "celery", Label: "Celery worker", Name: "celery", Command: func(c Choices) []string {
 			return []string{"celery", "-A", c.Detail, "worker", "--loglevel=info"}
 		}}},
@@ -78,7 +86,10 @@ var catalog = []Stack{
 		Port: 8000, Docs: "/docs", DocsOn: true,
 		Detail: &Detail{Label: "App module", Hint: "Where your FastAPI app lives, as module:variable, such as app.main:app.", Default: "app.main:app",
 			Pattern: regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]{0,99}:[A-Za-z_][A-Za-z0-9_]{0,63}$`)},
-		Setup: []Preset{{Key: "alembic", Label: "Alembic: upgrade head", Command: cmd("alembic", "upgrade", "head")}},
+		Setup: []Preset{
+			{Key: "alembic", Label: "Alembic: upgrade head", Command: cmd("alembic", "upgrade", "head")},
+			{Key: "alembic-seed", Label: "Alembic: upgrade head, then python -m app.seed", Command: cmd("sh", "-c", "alembic upgrade head && python -m app.seed")},
+		},
 		Workers: []Preset{
 			{Key: "celery", Label: "Celery worker (app.worker)", Name: "celery", Command: cmd("celery", "-A", "app.worker", "worker", "--loglevel=info")},
 			{Key: "arq", Label: "arq worker (app.worker.WorkerSettings)", Name: "arq", Command: cmd("arq", "app.worker.WorkerSettings")},
@@ -94,7 +105,7 @@ var catalog = []Stack{
 	{
 		ID: "rails", Name: "Ruby on Rails", Kind: "Full-stack", Language: "Ruby",
 		Port: 3000, Health: "/up",
-		Setup: []Preset{{Key: "prepare", Label: "rails db:prepare", Command: cmd("bin/rails", "db:prepare")}},
+		Setup: []Preset{{Key: "prepare", Label: "rails db:prepare (migrates, and seeds the new database)", Command: cmd("bin/rails", "db:prepare")}},
 		Workers: []Preset{
 			{Key: "sidekiq", Label: "Sidekiq", Name: "sidekiq", Command: cmd("bundle", "exec", "sidekiq")},
 			{Key: "solid", Label: "Solid Queue (bin/jobs)", Name: "jobs", Command: cmd("bin/jobs")},
@@ -116,7 +127,10 @@ var catalog = []Stack{
 		Port: 8080, Docs: "/swagger/", NoShell: true,
 		Detail: &Detail{Label: "Main package", Hint: "The package with func main, as a path from the repository root, such as ./cmd/server.", Default: ".",
 			Pattern: regexp.MustCompile(`^\.(/[A-Za-z0-9_-][A-Za-z0-9_.-]*){0,8}$`)},
-		Setup:      []Preset{{Key: "migrate", Label: "Your app: server migrate", Command: cmd("/app/server", "migrate")}},
+		Setup: []Preset{
+			{Key: "migrate", Label: "Your app: server migrate", Command: cmd("/app/server", "migrate")},
+			{Key: "setup", Label: "Your app: server setup (migrate, then seed)", Command: cmd("/app/server", "setup")},
+		},
 		Workers:    []Preset{{Key: "worker", Label: "Your app: server worker", Name: "worker", Command: cmd("/app/server", "worker")}},
 		dockerfile: goDockerfile,
 		notes: func(c Choices) []string {
@@ -136,7 +150,7 @@ var catalog = []Stack{
 		Workers:    []Preset{{Key: "profile", Label: "This app with a worker profile", Name: "worker", Command: cmd("preview-env", "java", "-jar", "/app/app.jar", "--spring.profiles.active=worker")}},
 		dockerfile: springDockerfile,
 		notes: func(c Choices) []string {
-			n := []string{"Flyway and Liquibase run when the app starts, so most Spring apps need no setup step."}
+			n := []string{"Flyway and Liquibase run when the app starts, so most Spring apps need no setup step. For reviewer data, add a preview-only Flyway location (or a CommandLineRunner in a preview profile) that inserts synthetic records."}
 			if c.Postgres != "" {
 				n = append(n, "preview-env turns Previa's PostgreSQL into SPRING_DATASOURCE_URL, username and password. Add the org.postgresql:postgresql driver.")
 			}
@@ -149,8 +163,11 @@ var catalog = []Stack{
 	{
 		ID: "laravel", Name: "Laravel", Kind: "Full-stack", Language: "PHP",
 		Port: 8000, Health: "/up",
-		Wrapper:    []string{"preview-env"},
-		Setup:      []Preset{{Key: "migrate", Label: "artisan migrate", Command: cmd("preview-env", "php", "artisan", "migrate", "--force")}},
+		Wrapper: []string{"preview-env"},
+		Setup: []Preset{
+			{Key: "migrate", Label: "artisan migrate", Command: cmd("preview-env", "php", "artisan", "migrate", "--force")},
+			{Key: "migrate-seed", Label: "artisan migrate --seed", Command: cmd("preview-env", "php", "artisan", "migrate", "--force", "--seed")},
+		},
 		Workers:    []Preset{{Key: "queue", Label: "artisan queue:work", Name: "queue", Command: cmd("preview-env", "php", "artisan", "queue:work", "--tries=3")}},
 		dockerfile: laravelDockerfile,
 		notes: func(Choices) []string {

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ func TestReviewBrowser(t *testing.T) {
 		t.Skip("run make test-review-browser with TEST_DATABASE_URL")
 	}
 	f := newFixture(t)
+	f.service = f.sealing(t, keyring(t, testKey("1"), "1"))
 	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Minute)
 	defer cancel()
 	if _, err := f.pool.Exec(ctx, "UPDATE pull_requests SET title='Validate the checkout address',description=$2 WHERE id=$1", f.pr,
@@ -34,6 +36,21 @@ func TestReviewBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.publish(t, f.pr, shaA)
+	// Deployment 1 ran a setup command with a database and built successfully,
+	// so the page shows its setup and offers Reset test data.
+	for _, query := range []string{
+		`INSERT INTO preview_components(pull_request_id, generation, revision, services, setup, setup_ms) VALUES ($1, 1, 1, '[{"name":"postgres"}]', true, 12400)`,
+		`INSERT INTO build_intents(pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, started_at, completed_at)
+			SELECT id, 1, 0, generation, head_sha, 'manual', 'build', $2, 'key-browser-00000001', 'succeeded', now(), now(), now() FROM pull_requests WHERE id=$1`,
+	} {
+		args := []any{f.pr}
+		if strings.Contains(query, "$2") {
+			args = append(args, f.owner)
+		}
+		if _, err := f.pool.Exec(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	hub := realtime.NewHub()
 	defer hub.Close()
@@ -60,6 +77,14 @@ func TestReviewBrowser(t *testing.T) {
 			return
 		}
 		if _, err := f.deploy(r.Context(), f.pr, shaB); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	// Something else changes on the repository: open review pages refresh.
+	root.Post("/__fixture/notify", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := f.pool.Exec(r.Context(), "SELECT previa_notify_repository($1, 'fixture')", f.repo); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

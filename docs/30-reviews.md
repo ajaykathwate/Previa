@@ -48,7 +48,10 @@ pull request link (which redirects them here). One compact page, no tabs:
 - **Preview** (side): the newest deployment (*Deployment N* and its commit), its
   state (Live, Asleep, Previous deployment, Expired, Removed, Not deployed), when it
   was published and expires, whether a newer commit is being built or failed,
-  **Open preview** and **Open docs**.
+  how its setup went, **Open preview**, **Open docs** and **Reset test data**
+  ([31](31-test-data.md)).
+- **Test access** (side): how reviewers sign in to the repository's previews, with
+  the password revealed on request ([31](31-test-data.md#test-access)).
 - **From GitHub** (side): the pull request description, escaped and labelled as
   imported; it never overwrites the instructions.
 
@@ -181,6 +184,7 @@ and churn.
 | `pr_review_counters` | Findings and messages ever written; numbering and limits |
 | `review_write_budgets` | Per member: the current hour and changes used |
 | `activity_events`, `activity_pruned` | Timeline events and the newest pruned time per pull request |
+| `review_test_access` | Per repository: test-login account, sealed password, revision, who changed and last revealed it ([31](31-test-data.md)) |
 
 `internal/activity` records events in the caller's transaction (dedup key per
 change) and an hourly River job (`activity_prune`, any worker) keeps 90 days and the

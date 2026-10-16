@@ -354,8 +354,9 @@ without reloading. See [29](29-guided-onboarding.md).
 
 `web/pages/reviews` (styles in `web/styles/reviews.css`): the pull request's header,
 then **How to test** and **Findings** beside a **Preview** card (the newest
-deployment, its state, Open preview and Open docs) and the description **From
-GitHub**; below 1080px the side cards come first. People who can build see the
+deployment, its state, its setup facts, Open preview, Open docs and Reset test
+data), a **Test access** card and the description **From GitHub**; below 1080px the
+side cards come first. People who can build see the
 **Preview | Review** switch (`components.PullRequestTabs`, also on the pull request
 page, with the open-findings count); Reviewers see only the review. Patterns:
 
@@ -377,8 +378,17 @@ page, with the open-findings count); Reviewers see only the review. Patterns:
 - **Forms** are plain CSRF-protected posts (`data-busy-form`) that redirect back to
   the same list and anchor with a toast; problems re-render the page (422, 409, 429)
   with the draft and field messages.
+- **Reset test data** is a `ConfirmationDialog` over the page whose form posts the
+  pull request's Build action with `return=review`; the server comes back to the
+  review with a toast or a notice.
+- **Reveal.** The test-access form (`data-reveal-form`, valued with the revision)
+  posts with `Accept: application/json`; `initReviews` shows the value in place for
+  two minutes, restores it after a live swap of `#review-detail` unless the revision
+  changed, and never stores it. The password field has no `data-draft-key`, so it
+  is never kept as a draft. Without JavaScript the response is the page itself,
+  `no-store`. Copy buttons in the card are icon-only, as in field rows.
 
-See [30](30-reviews.md).
+See [30](30-reviews.md) and [31](31-test-data.md).
 
 ## Secrets tab
 
@@ -575,7 +585,8 @@ through real `LISTEN`/`NOTIFY`, the picker, the Developer and Reviewer views and
 no-JavaScript path, in light, dark and phone layouts. Another (`make
 test-review-browser`) drives the review page: instructions in place, a finding's
 whole conversation, a live reply and a new deployment while a draft is unsent,
-moderation and the no-JavaScript path.
+moderation, setup facts, the Reset test data modal, test access saved, revealed and
+kept across a live refresh, and the no-JavaScript path.
 
 ## Decisions and trade-offs
 

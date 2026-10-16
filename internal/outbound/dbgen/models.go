@@ -271,6 +271,7 @@ type PreviewComponent struct {
 	OutboundWithheld bool
 	RecordedAt       pgtype.Timestamptz
 	ConfigHash       pgtype.Text
+	SetupMs          pgtype.Int4
 }
 
 type PreviewCrash struct {
@@ -445,6 +446,19 @@ type RepositorySetupCheck struct {
 	CheckedAt     pgtype.Timestamptz
 	ExpiresAt     pgtype.Timestamptz
 	Platform      string
+}
+
+type ReviewTestAccess struct {
+	RepoID           int64
+	ID               int64
+	Account          string
+	SecretCiphertext []byte
+	KeyVersion       pgtype.Int4
+	Revision         int64
+	UpdatedBy        int64
+	UpdatedAt        pgtype.Timestamptz
+	LastRevealedBy   pgtype.Int8
+	LastRevealedAt   pgtype.Timestamptz
 }
 
 type ReviewWriteBudget struct {

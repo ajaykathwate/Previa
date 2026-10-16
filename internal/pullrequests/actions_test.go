@@ -506,6 +506,37 @@ func TestPreviewsListOnlyWhatServes(t *testing.T) {
 	}
 }
 
+// The review page's Reset test data posts a Rebuild with reset=true and
+// return=review: it comes back to the review page with what happened.
+func TestResetFromTheReviewPageReturnsThere(t *testing.T) {
+	h := newActionsHarness(t)
+	values, _ := h.form(t)
+	if w := h.request(t, "POST", detailPath+"/build", values.Encode()); w.Code != http.StatusSeeOther {
+		t.Fatalf("first build: %d", w.Code)
+	}
+	h.exec(t, "UPDATE build_intents SET state='succeeded', started_at=now(), completed_at=now() WHERE pull_request_id=$1", h.prID)
+	reset := url.Values{"csrf_token": {values.Get("csrf_token")}, "action": {"rebuild"}, "reset": {"true"}, "return": {"review"},
+		"workspace_query": {"pr=7"}, "expected_revision": {"1"}, "request_key": {"review-reset-key-0000001"}}
+	w := h.request(t, "POST", detailPath+"/build", reset.Encode())
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/pull-requests/7/review?saved=reset" {
+		t.Fatalf("reset: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	if revision, _, _, _ := h.intent(t); revision != 2 {
+		t.Fatalf("the Rebuild was not requested: revision %d", revision)
+	}
+	// A reset from a page that is out of date explains itself there.
+	reset.Set("request_key", "review-reset-key-0000002")
+	w = h.request(t, "POST", detailPath+"/build", reset.Encode())
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/pull-requests/7/review?notice=build-changed" {
+		t.Fatalf("a stale reset: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	h.exec(t, "UPDATE pull_requests SET state='closed' WHERE id=$1", h.prID)
+	w = h.request(t, "POST", detailPath+"/build", reset.Encode())
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/pull-requests/7/review?notice=build-closed" {
+		t.Fatalf("a reset of a closed pull request: %d %s", w.Code, w.Header().Get("Location"))
+	}
+}
+
 // The Setup tab posts to the same Build and Sync actions with return=setup:
 // each comes back to the checklist, on the pull request it showed, with what
 // happened, never to a plain-text error page.

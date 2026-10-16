@@ -448,7 +448,7 @@ templ more() {
 		</details>
 		<details>
 			<summary>Seed data for reviewers</summary>
-			<p>Every preview starts with empty services. Under migrations, choose <strong>My own command…</strong> and chain your seed step, such as <code>npm run migrate &amp;&amp; npm run seed</code>.</p>
+			<p>Every deployment starts with empty services. Under migrations, choose a command that also seeds (or <strong>My own command…</strong>, such as <code>npm run migrate &amp;&amp; npm run seed</code>) and keep the seed repeatable and synthetic. For a test login, the seed creates a preview-only account from a repository secret, and the same password goes under <strong>Test access</strong> on the review page. <strong>Reset test data</strong> there rebuilds the preview from the seed.</p>
 		</details>
 	</section>
 }

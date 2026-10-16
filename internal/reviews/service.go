@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,12 +41,24 @@ const (
 	KindReplyAdded          = "feedback.reply_added"
 	KindMessageEdited       = "feedback.message_edited"
 	KindMessageRemoved      = "feedback.message_removed"
+	KindTestAccessUpdated   = "review.test_access_updated"
+	KindTestAccessRevealed  = "review.test_access_revealed"
 )
+
+// Sealer encrypts a repository's test-access secret with the platform's
+// secret keys, bound to the repository; *secrets.Keyring implements it.
+type Sealer interface {
+	Seal(repoID int64, name string, value []byte) ([]byte, int32, error)
+	Open(repoID int64, name string, version int32, sealed []byte) ([]byte, error)
+}
 
 // Options configure the service.
 type Options struct {
 	PreviewDomain  string // previews' base domain; empty: no preview addresses
 	WriteAllowance int    // review changes per member per hour; 0: DefaultWriteAllowance
+	// Sealer stores test-access secrets; nil: only the account text can be
+	// stored, and the page says why.
+	Sealer Sealer
 }
 
 // Service reads and changes pull request reviews. Every query derives access
@@ -96,7 +109,19 @@ func (s *Service) Page(ctx context.Context, userID, repoID int64, number int32, 
 		CanOperate: t.CanOperate, ViewerID: userID, OpenFindings: t.OpenFindings,
 		Preview: s.preview(t),
 	}
+	p.Reset = resetForm(t, p.Preview)
 	ids := map[int64]bool{}
+	access, err := q.GetTestAccess(ctx, repoID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return pages.Page{}, fmt.Errorf("load the test access: %w", err)
+	default:
+		ids[access.UpdatedBy] = true
+		if access.LastRevealedBy > 0 {
+			ids[access.LastRevealedBy] = true
+		}
+	}
 	instructions, err := q.GetInstructions(ctx, t.ID)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -127,6 +152,14 @@ func (s *Service) Page(ctx context.Context, userID, repoID int64, number int32, 
 			Summary: instructions.Summary, Steps: instructions.Steps, Expected: instructions.Expected,
 			StartPath: instructions.StartPath, DocsPath: instructions.DocsPath, Revision: instructions.Revision,
 			UpdatedBy: people.get(instructions.UpdatedBy), UpdatedAt: stamp(instructions.UpdatedAt),
+		}
+	}
+	p.TestAccess = pages.TestAccess{CanEdit: t.CanManage, Sealing: s.opts.Sealer != nil}
+	if access.Revision > 0 {
+		p.TestAccess.Account, p.TestAccess.HasSecret, p.TestAccess.Revision = access.Account, access.HasSecret, access.Revision
+		p.TestAccess.UpdatedBy, p.TestAccess.UpdatedAt = people.get(access.UpdatedBy), stamp(access.UpdatedAt)
+		if access.LastRevealedBy > 0 {
+			p.TestAccess.LastRevealedBy, p.TestAccess.LastRevealedAt = people.get(access.LastRevealedBy), stamp(access.LastRevealedAt)
 		}
 	}
 	p.Findings = list.findings
@@ -295,6 +328,12 @@ func (s *Service) preview(t dbgen.ReviewTargetRow) pages.Preview {
 	case t.PublicationID > 0:
 		p.State = "removed"
 	}
+	if deployed {
+		p.SetupDeclared, p.Data = t.SetupDeclared, t.HasServices
+		if t.SetupDeclared && t.SetupMs.Valid {
+			p.SetupTook = duration(time.Duration(t.SetupMs.Int32) * time.Millisecond)
+		}
+	}
 	if t.PublicationID > 0 {
 		d := &pages.Deployment{Sequence: t.PublicationSequence, SHA: t.PublicationSha, Backfilled: t.PublicationBackfilled}
 		if !d.Backfilled {
@@ -308,9 +347,33 @@ func (s *Service) preview(t dbgen.ReviewTargetRow) pages.Preview {
 			p.Building = t.IntentSha
 		case "failed":
 			p.Failed = t.IntentSha == t.HeadSha
+			p.SetupFailed = p.Failed && t.FailureCode == "setup_failed"
 		}
 	}
 	return p
+}
+
+// resetForm offers Reset test data when Rebuild would apply now: the open
+// pull request's latest commit built successfully and serves, nothing is
+// building or being torn down, and the viewer can build it. The Build
+// action checks all of it again.
+func resetForm(t dbgen.ReviewTargetRow, p pages.Preview) *pages.ResetForm {
+	if !t.CanOperate || t.State != "open" || !t.Available || t.BuildStatus != "open" || t.NeedsRefresh || t.TeardownRequested ||
+		!t.RequestCurrent || t.IntentState != "succeeded" || !p.Running() || p.Deployed != t.HeadSha {
+		return nil
+	}
+	return &pages.ResetForm{ExpectedRevision: t.RequestRevision, RequestKey: NewRequestKey(), Commit: t.HeadSha}
+}
+
+// duration says how long something took, briefly.
+func duration(d time.Duration) string {
+	switch {
+	case d < time.Second:
+		return "under a second"
+	case d < time.Minute:
+		return strconv.FormatFloat(d.Seconds(), 'f', 1, 64) + " s"
+	}
+	return strconv.Itoa(int(d.Minutes())) + " min " + strconv.Itoa(int(d.Seconds())%60) + " s"
 }
 
 // directory names the people in a review.

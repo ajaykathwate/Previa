@@ -131,6 +131,11 @@ even if the person who installed it changes their password or leaves the team.
    records findings against the deployment they tested, replies, edits, removes and
    resolves them in Previa; GitHub's comment links to it. See
    [native review and feedback](docs/30-reviews.md).
+7. Previews are ready to test: the repository's `setup` seeds synthetic data into
+   each deployment's own database, the review page shows how setup went, people who
+   can build **Reset test data** (a confirmed Rebuild that seeds again), and Owners
+   and Admins store a preview-only **test access** login, sealed, that members
+   reveal on request. See [ready-to-test sample data](docs/31-test-data.md).
 
 Backend and API repositories can also declare platform-managed PostgreSQL, Redis
 and MySQL (`services`), a setup command for migrations and seed data (`setup`), up to

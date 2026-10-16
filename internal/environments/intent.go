@@ -95,6 +95,9 @@ type IntentCommand struct {
 	ExpectedRevision int64
 	IdempotencyKey   string
 	Action           IntentAction
+	// Reset marks a Rebuild asked for to replace the preview's test data
+	// (docs/31-test-data.md); it builds exactly like any Rebuild.
+	Reset bool
 }
 
 var intentKey = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
@@ -103,7 +106,7 @@ func (c IntentCommand) validate() error {
 	if c.UserID <= 0 || c.PullRequestID <= 0 || c.ExpectedRevision < 0 || !intentKey.MatchString(c.IdempotencyKey) {
 		return errors.New("build command requires an owner, PR, nonnegative expected revision and a 16–128 character URL-safe idempotency key")
 	}
-	if c.Action != BuildLatest && c.Action != RetryBuild && c.Action != Rebuild {
+	if c.Action != BuildLatest && c.Action != RetryBuild && c.Action != Rebuild || c.Reset && c.Action != Rebuild {
 		return ErrIntentAction
 	}
 	return nil

@@ -88,6 +88,7 @@ type launch struct {
 	created   map[string]string // component -> container ID ("" is the app)
 	processes map[string]string // process name -> container ID
 	failed    string            // the component whose output explains a failure
+	setupTook time.Duration     // how long the setup command ran, once it finished
 }
 
 // admitCandidate checks capacity and prepares what the candidate's
@@ -223,9 +224,11 @@ func (l *launch) setUp(ctx context.Context) error {
 	if len(l.plan.setup) == 0 {
 		return nil
 	}
+	started := l.r.now()
 	if err := l.r.runSetup(ctx, l.created["setup"], l.plan.setup, l.logs); err != nil {
 		return err
 	}
+	l.setupTook = l.r.now().Sub(started)
 	delete(l.created, "setup")
 	return nil
 }
@@ -280,7 +283,9 @@ func (l *launch) recordComponents(ctx context.Context) error {
 	if l.r.components == nil {
 		return nil
 	}
-	if err := l.r.components.RecordComponents(ctx, l.plan.components(l.id, l.settings, l.outbound, l.withheld)); err != nil {
+	c := l.plan.components(l.id, l.settings, l.outbound, l.withheld)
+	c.SetupTook = l.setupTook
+	if err := l.r.components.RecordComponents(ctx, c); err != nil {
 		return failure(CodeUnavailable, "The preview's components could not be recorded.", true, err)
 	}
 	return nil

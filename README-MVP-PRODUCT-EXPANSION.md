@@ -1,11 +1,11 @@
 # Previa: complete team SaaS MVP specification
 
-**Status:** Feature 1's shared workspace core, Feature 2's guided onboarding and Feature 3's native review and feedback (with step B's publication references and activity records) are implemented. Feature 1's review-assignment and account-lifecycle dependencies remain pending in Features 4 and 6; Features 4–6 and 5B remain implementation specifications.
-**Prepared:** 14 October 2026. **Updated:** 16 October 2026 (Feature 3 implemented; Feature 5B, persistent test data, added after Feature 5 on 15 October).  
+**Status:** Features 1 (shared workspaces), 2 (guided onboarding), 3 (native review and feedback, with step B's publication references and activity records) and 5 (ready-to-test sample data) are implemented. The MVP release continues with Feature 5B and the free-plan part of 6 ([§1.2](#12-mvp-release-scope-and-order)); Feature 4, paid subscriptions and GitHub review-status projection are deferred until early-access feedback asks for them.
+**Prepared:** 14 October 2026. **Updated:** 16 October 2026 (Features 3 and 5 implemented; release scope narrowed to a preview-first MVP; Feature 5B added after Feature 5 on 15 October).  
 **Audience:** small development teams using hosted Previa.  
-**Scope:** the first six product improvements agreed with the owner, plus Feature 5B, which extends Feature 5; onboarding is deliberately minimal. Separate notification integrations are deferred.
+**Scope:** the product improvements agreed with the owner for the MVP release: Features 1, 2, 3, 5, 5B and the free-plan part of 6. Previa is a preview platform first; review workflow depth (Feature 4), paid subscriptions and separate notification integrations are deferred.
 
-This document explains the complete product behavior to implement, the changes to the existing application, and how completion will be demonstrated. Feature 1's workspace creation, membership, access, invitations, handover and shared quota identity now have application code and verification described in [Shared team workspaces](docs/28-shared-workspaces.md). Native feedback is implemented as described in [Native review and feedback](docs/30-reviews.md); review assignments and decisions, visible account usage and billing controls, and durable workspace deletion/disconnection referenced in its permission matrix depend on Features 4 and 6 and are not implemented. The remaining features are planned; this document does not claim they already exist.
+This document explains the complete product behavior to implement, the changes to the existing application, and how completion will be demonstrated. Feature 1's workspace creation, membership, access, invitations, handover and shared quota identity now have application code and verification described in [Shared team workspaces](docs/28-shared-workspaces.md). Native feedback is implemented as described in [Native review and feedback](docs/30-reviews.md); visible account usage and durable workspace deletion/disconnection referenced in its permission matrix depend on Feature 6 and are not implemented yet, and review assignments and decisions are deferred with Feature 4. Ready-to-test sample data is implemented as described in [Ready-to-test sample data](docs/31-test-data.md). The remaining features are planned; this document does not claim they already exist.
 
 All of these capabilities belong to the existing Previa application. Previa owns team access, review instructions, feedback, review decisions, activity, usage, and account settings. GitHub continues to provide identity, source, PR lifecycle, and a living status comment/check; it receives summaries and links back to Previa. Reviewers must not have to finish the Previa review workflow in GitHub, Slack, or another application.
 
@@ -17,7 +17,7 @@ All of these capabilities belong to the existing Previa application. Previa owns
 4. [Feature 1: shared team workspace](#4-feature-1-shared-team-workspace)
 5. [Feature 2: minimal guided onboarding](#5-feature-2-minimal-guided-onboarding)
 6. [Feature 3: native preview review and feedback](#6-feature-3-native-preview-review-and-feedback)
-7. [Feature 4: review status and activity timeline](#7-feature-4-review-status-and-activity-timeline)
+7. [Deferred: review status and activity timeline (formerly Feature 4)](#7-deferred-review-status-and-activity-timeline-formerly-feature-4)
 8. [Feature 5: ready-to-test sample data](#8-feature-5-ready-to-test-sample-data)
    - 8B. [Feature 5B: persistent test data](#8b-feature-5b-persistent-test-data)
 9. [Feature 6: usage and account management](#9-feature-6-usage-and-account-management)
@@ -34,10 +34,10 @@ All of these capabilities belong to the existing Previa application. Previa owns
 | 1. Shared team workspace | Complete membership, permissions, repository scope, handover, and ownership migration | The team can operate Previa without depending on the installer. |
 | 2. Guided onboarding | Only the steps required to connect a repository and obtain a usable preview | The next action is clear and blockers have actionable explanations. |
 | 3. Shared review and feedback | Complete native review page, instructions, contextual threads, replies, editing, removal, resolution, and access control | A reviewer can understand, test, and discuss a change inside Previa. |
-| 4. Review status and activity | Complete review requests, assignments, decisions, freshness rules, review queue, and bounded event history | Everyone can see what needs review, what changed, and which version was checked. |
+| 4. Review status and activity | **Deferred after the MVP release** ([§7](#7-deferred-review-status-and-activity-timeline-formerly-feature-4)). Publication references and bounded activity records already exist (step B). | Revisit when early-access teams ask for review workflow. |
 | 5. Sample data | Complete documented setup/seed workflow, example journeys, test-access guidance, and failure/rebuild behavior | A deployed application is usable for testing. |
 | 5B. Persistent test data | Repository baseline built from the baseline branch, PR data kept across builds, a separate `seed` step, layered starting data with automatic fallback, and Reset choices | Every preview opens with useful data, and testers' work survives new commits without PRs sharing a database. |
-| 6. Usage and accounts | Complete usage/limit enforcement, account lifecycle, support/status information, and a defined paid subscription lifecycle when paid plans are enabled | Customers understand access, limits, charges, retention, and how to leave. |
+| 6. Usage and accounts | Free plan for the MVP release: complete usage/limit visibility and enforcement, account lifecycle, support/status and policy pages. The paid subscription lifecycle is deferred. | Customers understand access, limits, retention, and how to leave. |
 
 The target journey is:
 
@@ -70,6 +70,22 @@ The owner has authorized this document as the plan for a broader hosted team pro
 | Managed-service data never survives a rebuild (README §2.5, [backend previews](docs/11-backend-previews.md)); every build is a PR build | Feature 5B copies a repository baseline or the PR's own serving data into each new candidate, adds a `seed` key, and adds a baseline build of one branch that is not attached to a PR. | Every candidate keeps its own service containers, credentials, network and tmpfs. No shared live database, no production data, no data moving between PRs or from a PR into the baseline; Redis stays fresh. |
 
 These are explicit product-scope changes, not incidental UI polish. Nothing here requires React, Kubernetes, another database, a separate service, or a replacement orchestration pipeline.
+
+### 1.2 MVP release scope and order
+
+Decided by the owner on 16 October 2026: Previa is marketed and built as a **preview platform**, not a review platform. The release therefore completes what makes a preview usable and safe to run for real teams, ships it as a free early access, and lets measured use decide what comes next.
+
+| Order | Work | Status |
+| --- | --- | --- |
+| 1 | Feature 1: shared team workspaces | Done ([28](docs/28-shared-workspaces.md)) |
+| 2 | Feature 2: guided onboarding | Done ([29](docs/29-guided-onboarding.md)) |
+| 3 | Feature 3: native review and feedback, with step B (publications, activity) | Done ([30](docs/30-reviews.md)) |
+| 4 | Feature 5: ready-to-test sample data, with two reference journeys | Done ([31](docs/31-test-data.md)) |
+| 5 | Feature 5B: persistent test data (repository baseline, kept PR data) | Next |
+| 6 | Feature 6, free plan: usage and limits, disconnect and deletion, support and status, policy pages | After Feature 5B |
+| 7 | Deploy early access ([production deployment](docs/25-production-deployment.md)) and measure ([§12.3](#123-product-measurements)) | After Feature 6 |
+
+**Deferred until feedback asks for them:** Feature 4 (review requests, assignments, decisions, review queue, activity timeline view), GitHub projection of review status and counts (step E; the comment links the review only), paid subscriptions (step J), the third reference journey (an app with a background process), and separate notification integrations. Preview-centric growth (branch previews, multiple code bases or services per preview, a main-versus-PR compare view; see [NEXT-FEATURES.md](NEXT-FEATURES.md)) ranks ahead of review workflow depth.
 
 ## 2. Verified current baseline
 
@@ -398,100 +414,17 @@ Proposed mutations under the review route cover instructions, thread creation, r
 - Current and historical deployment context, removed content, closed PRs, unavailable previews, and revoked access render accurately.
 - All feedback actions work with no JavaScript; GitHub summaries eventually reflect committed counts/status without copying private content.
 
-## 7. Feature 4: review status and activity timeline
+## 7. Deferred: review status and activity timeline (formerly Feature 4)
 
-### 7.1 Problem and user benefit
+Not part of the MVP release ([§1.2](#12-mvp-release-scope-and-order)). Previa's goal is a usable preview; review workflow depth is revisited only if early-access teams ask for it.
 
-Current dashboard activity describes deployment work. A green preview does not record that someone tested the change, and request counts cannot establish human review. The team needs to know who has been asked, what remains unresolved, and whether a review covers the version currently served.
+What the deferred feature covered: explicit review requests to selected members, required and optional assignments, **Reviewed** / **Changes requested** decisions bound to one publication, a derived review state (awaiting review, changes requested, reviewed, re-review needed, preview unavailable), a "My reviews" queue, and a PR and workspace activity timeline.
 
-Add explicit review rounds and a timeline of real actions. Build health, PR mergeability, human review, and feedback resolution remain separate concepts, with separate labels.
-
-### 7.2 Current and proposed user flow
-
-**Current:** published preview → deployment status shown → reviewer activity is not recorded as a product workflow.
-
-**Proposed:** published preview → developer requests review from selected members → those members see it in “My reviews” → reviewers record Reviewed or Changes requested → developer resolves findings and deploys changes → a new round requires review of the new publication → GitHub shows the updated review summary.
-
-Example: Maya asks Ravi and Lina to review publication A. Ravi requests changes; Lina marks it reviewed. Publication B fixes the issue. Both decisions remain visible on A, and the current round for B starts awaiting review. Maya cannot copy Lina's old decision onto B or mark Ravi's decision reviewed on his behalf.
-
-### 7.3 Request, assignment, and decision behavior
-
-1. A Developer/Admin selects one or more active repository members who can review. “Request review” is explicit and targets a routed, ready deployment. It creates a review round and selected required assignments atomically.
-2. The request includes optional instructions and an in-app due date. No email/Slack notification is emitted; the review queue, PR page, and GitHub summary surface the request.
-3. Each assignee can start reviewing and submit **Reviewed** or **Changes requested**, with an optional decision note. They can change their own decision while that round is current, preserving a decision event.
-4. Other permitted members can comment or record an optional review. Optional reviews are labeled and do not replace required assignees.
-5. Developers can add/remove assignees or reopen a current review, with a reason and assignment/round revision. Removed/changed assignments remain traceable; changing the required set cannot silently manufacture a completed review.
-6. A decision is submitted against the exact publication/round revision displayed. A stale submission preserves the note and prompts refresh; it never approves the next publication.
-7. PR close/merge ends open rounds as closed, not reviewed. Preview expiry marks them unavailable and leaves existing decisions visible. A subsequent authorized rebuild starts a new current round if review had been requested.
-
-Reviews are advisory product records. No new branch-protection requirement, automatic merge action, or silent replacement of GitHub's native code review is introduced. Self-reviews are labeled as such in the decision list; the UI does not imply independent verification.
-
-### 7.4 State model
-
-| Display state | Meaning | Available next action |
-| --- | --- | --- |
-| Not requested | No required reviewer set has been requested | Authorized developer requests review. |
-| Awaiting review | Current publication has pending required assignments | Reviewer opens/starts/submits review. |
-| In review | At least one required reviewer started; remaining decisions pending | Continue reviewing; discuss findings. |
-| Changes requested | A current required decision requests changes, or an unresolved finding remains | Fix/discuss; reviewer reassesses. |
-| Reviewed | All required reviewers marked current publication reviewed and no unresolved findings remain | Team can proceed with its normal GitHub merge process. |
-| Needs updated preview | Latest observed PR commit differs from reviewed/deployed SHA | Build latest commit explicitly or wait for authorized Automatic work. |
-| Re-review needed | A new publication replaced a version that had active/completed review | Review the new publication; prior decisions are historical. |
-| Preview unavailable | Requested target expired, crashed, or was removed while PR is open | Authorized developer rebuilds; retain context. |
-| Closed/Merged | PR lifecycle ended the review | Read retained history only. |
-
-Store assignments and decisions; derive the display state with a documented precedence: closed lifecycle → unavailable target → latest/deployed mismatch → current changes requested/open findings → complete required decisions → active/pending work → not requested. “Re-review needed” is the new round's pending label when it follows an earlier requested round. The page always shows enough detail to explain the aggregate.
-
-Never mark Reviewed merely because there are zero assignments. A resolved finding does not change a reviewer's Changes requested decision; that reviewer must resubmit or be explicitly replaced. Unavailable/removed required members block completion until an authorized assignment change, with an explanatory message.
-
-### 7.5 Publication identity and freshness
-
-Add immutable `preview_publications` records when route activation confirms a newly serving candidate. Record workspace, repository, PR, SHA, generation, revision, candidate/publication identity, effective configuration hash, and activation time. Deduplicate retried activation of the same candidate.
-
-Do not create a publication when the build finishes but routing has not accepted it. Do not advance the current review round during candidate preparation. A failed update keeps the old publication and its decisions; latest/deployed mismatch still warns that the new PR commit has not been reviewed.
-
-Even a same-SHA Rebuild receives a new publication because secrets, images, or fresh database contents may differ. Old decisions are retained and the current required set is carried into a pending new round. Silent approval reuse is excluded.
-
-Publication records are references, not historical runnable environments. They do not retain old containers, images, services, or build logs. Current build storage remains unchanged.
-
-### 7.6 Timeline and review queue
-
-Show a chronological PR timeline, a workspace recent-activity view, and “My reviews” filtered to current assignments and the user's permitted repositories. Each event has actor or System, time, event category, deployment/SHA where relevant, and a valid target link.
-
-Record connected/revoked repository access, requested/started/failed/published/removed previews, review requests and assignment changes, feedback create/edit/remove/resolve/reopen, submitted review decisions, and relevant setup outcomes. Workspace-level member/plan changes belong to an administrator activity view, not a Reviewer feed.
-
-Collapse repetitive waiting/health observations into a state transition; do not append a row every heartbeat, SSE reconnect, router request, or quiet-period tick. Do not fabricate “reviewer viewed” events from router metrics. If Previa records an authenticated Open preview action, label it precisely; it cannot prove that the reviewer completed testing.
-
-Events reference objects and safe metadata, not duplicated message bodies, secrets, tokens, source archives, billing payloads, or app output. Links to removed/pruned objects render a retained explanation rather than a broken page. Pagination and filters are server-side; role-sensitive event categories are filtered before counts and delivery.
-
-### 7.7 Technical changes
-
-`internal/reviews` additionally owns `preview_review_rounds`, `preview_review_assignments`, and `preview_review_decisions`. Use unique round/publication identity and member-assignment constraints; decisions are unique per assignment with optimistic revision and idempotent submission.
-
-`internal/activity` owns bounded `activity_events`: event ID, workspace/repository/PR scope, publication/round references, actor ID or system category, safe structured metadata, visibility category, occurred time, deduplication key. Domain changes and events commit in one transaction. Consumers receive a small transactional recording interface wired in `internal/app`; activity storage is not the authority for reconstructing orchestration state.
-
-Connect event creation to accepted lifecycle transitions in existing environment transactions. Use actual route publication confirmation as the review-refresh trigger. Membership removal, PR closure, publication, and decision writes check compatible revisions so a racing decision cannot win after revocation/closure.
-
-Default activity retention is 90 days with a per-PR cap of 5,000 entries, 50-entry pages, and an explicit older-history-pruned marker. Active review state and unresolved feedback are not inferred from retained timeline rows and survive timeline pruning. Publication records referenced by active rounds/feedback are retained while those references are retained. Closed PR pruning deletes dependent review/activity data under the same published lifecycle; workspace deletion removes it through the account erasure job.
-
-Review bodies and unresolved open-PR threads remain available while the PR is retained, subject to documented per-PR content limits and administrator deletion. Enforce limits with an honest message rather than dropping writes. Specify and test exact size/count limits in implementation configuration; no unlimited storage is implied.
-
-### 7.8 Benefits and costs
-
-**Benefits:** creates meaningful team activity; exposes outstanding review work; avoids false confidence from stale approvals; preserves context when several people review different versions.
-
-**Costs:** adds publication/round state and consistency rules across build, route, review, and membership changes. Requiring re-review after a same-SHA rebuild is conservative and can add work; it prevents fresh-data/config changes from inheriting an earlier review silently.
-
-### 7.9 Completion criteria
-
-- Two assigned reviewers can reach Reviewed only through their own current decisions and resolved findings; zero assignments cannot complete a round.
-- New commits, new publication, same-SHA rebuild, failed rebuild, expiry, close/merge, reviewer removal, and reassignment produce the defined state and timeline.
-- Duplicate webhook/worker execution produces one domain event/publication; no duplicate round appears on retry.
-- A decision racing publication, removal, or close cannot approve an unintended version.
-- The review queue and activity filters/counts expose only permitted records, including during SSE and no-JavaScript use.
-- Pruning past events does not alter current review decisions, orphan active references, or restore a removed member's access.
+What already exists and stays: immutable publication references recorded at route activation, with same-commit rebuilds as new publications; findings recorded against them; and bounded activity events (90 days, 5,000 per pull request, pruned hourly) for publications, instructions and every finding change ([30](docs/30-reviews.md)). A future review-status feature builds on those records. Until then the review page labels requesting reviewers and recording decisions as not available, and nothing implies an approval.
 
 ## 8. Feature 5: ready-to-test sample data
+
+Implementation and current scope: [Ready-to-test sample data](docs/31-test-data.md). The review page shows the serving deployment's setup (*Completed in 12.4 s* or *No setup declared*) and says when a newer commit failed in its setup command; **Reset test data** is a confirmed Rebuild through the pull request's Build action, recorded as its own activity event; **Test access** is a repository-level account with a sealed password that Owners and Admins set and members with preview access reveal, each reveal recorded. Two reference journeys (the API with SQL data, the web app with a test login) pass on real Docker (`make test-reference`). Flagged deviations: while a build runs the page says the commit is being built instead of a separate *Setup declared* state; test access is one value per repository carried across rebuilds (binding to one publication is deferred, as above); the third journey is deferred (§1.2).
 
 ### 8.1 Problem and user benefit
 
@@ -510,14 +443,14 @@ Example: an API repository creates two synthetic orders and a preview-only test 
 ### 8.3 Complete included behavior
 
 1. Starter kits show an optional migrations-and-seed setup command using the existing argv model. They explain how to combine steps explicitly with `sh -c` where needed and how to keep seed scripts repeatable.
-2. Provide runnable reference journeys for one web app with a test login, one HTTP API with SQL data, and one app using a background process. Adapt existing kits/fixtures rather than add another framework catalog. Publish tested versions and dates only after executing each journey.
+2. Provide runnable reference journeys for one web app with a test login and one HTTP API with SQL data (the MVP release; a journey for an app with a background process is deferred). Adapt existing kits/fixtures rather than add another framework catalog. Publish tested versions and dates only after executing each journey.
 3. Each reference includes actual seed implementation, config, required preview-only secrets, expected records, reproduction steps, rebuild/reset behavior, and cleanup verification. A passing config parser alone does not label the app tested.
 4. Review instructions contain test-access guidance and synthetic scenario descriptions. Optional public demo credentials must be explicitly labeled preview-only; confidential login/API credentials are referenced by name and obtained through an application-approved mechanism. They are not copied into ordinary comments, events, GitHub, or logs.
 5. The UI reports **Setup declared / Setup completed / Setup failed / No setup declared** from executed state. Unless the application provides explicit evidence, it cannot claim “Data seeded” from a generic successful setup command.
-6. A Reset test data action is an explicit rebuild of the current authorized commit through the existing pipeline, confirmed in a modal. Explain that the preview app/data are replaced and that a new review round will be required. No direct arbitrary SQL console or in-place seed command is added.
+6. A Reset test data action is an explicit rebuild of the current authorized commit through the existing pipeline, confirmed in a modal. Explain that the preview app/data are replaced, that the current preview keeps serving until the replacement is live, and that existing findings stay attached to the earlier deployment. No direct arbitrary SQL console or in-place seed command is added.
 7. All app, worker, and setup processes use candidate-specific credentials/services. The reviewed running candidate remains untouched while a replacement seeds; failure keeps the previous preview serving.
 
-For confidential preview-only test access, provide an explicit Owner/Admin-managed Test access field on the Previa review page, separate from ordinary instructions and repository runtime secrets. Store its value encrypted with the existing keyring primitives and associated workspace/repository scope, keep edits write-only, and allow current granted Reviewers to reveal it through a CSRF-protected, no-cache POST with recorded access metadata. Render only the requested value to that authorized response; never include it in page prefetched fragments, SSE events, exports, GitHub, logs, or activity bodies. Revocation removes reveal access immediately. The administrator must supply credentials that the committed seed script actually creates; Previa cannot infer them. A repository-level value is explicitly carried across rebuilds only when the seed script recreates that same preview account; otherwise bind it to a publication and require replacement before the new round is called usable.
+For confidential preview-only test access, provide an explicit Owner/Admin-managed Test access field on the Previa review page, separate from ordinary instructions and repository runtime secrets. Store its value encrypted with the existing keyring primitives and associated workspace/repository scope, keep edits write-only, and allow current granted Reviewers to reveal it through a CSRF-protected, no-cache POST with recorded access metadata. Render only the requested value to that authorized response; never include it in page prefetched fragments, SSE events, exports, GitHub, logs, or activity bodies. Revocation removes reveal access immediately. The administrator must supply credentials that the committed seed script actually creates; Previa cannot infer them. In the MVP release the value is repository-level and carried across rebuilds, so the seed script must recreate the same preview-only account on every candidate (the documented practice); binding a value to one publication for seeds that generate new credentials is deferred.
 
 ### 8.4 Technical changes
 
@@ -561,7 +494,7 @@ Render supports preview initialization with sample data, and Heroku recommends c
 ### 8.8 Completion criteria
 
 - Each reference journey publishes real data that a Reviewer can exercise, with accurate login/API guidance and no undeclared preparation.
-- A rebuild/reset creates fresh expected data and a new review round; prior reviewer mutations disappear as documented.
+- A rebuild/reset creates fresh expected data in a new publication; prior reviewer mutations disappear as documented, and earlier findings stay attached to the earlier publication.
 - A failed seed keeps the serving preview/data unchanged and cleans all replacement resources.
 - Same-repository and fork cases prove credential separation and redaction.
 - Startup/setup output is not visible to Reviewers; no confidential test credentials reach GitHub summaries or activity events.
@@ -626,7 +559,7 @@ seed:  ["bin/rails", "db:seed"]      # empty database only: admin@preview.test, 
 4. PR #43 *Checkout redesign* builds at the same time. It restores its own copy of the baseline: the seeded admin and products, but not `SAVE10`.
 5. PR #44 branched from an older `main`, and its migration tool rejects the baseline's newer migration history. Setup fails on the baseline copy, the attempt is discarded, and the candidate retries on an empty database with `setup` and `seed`. The page says *Started from: empty database and seed. The repository baseline did not work with this branch (setup failed).*
 6. #42 is merged into `main`. Previa refreshes the baseline from the new `main` head; later PRs start with the `discount_codes` table.
-7. Ravi clicks **Reset test data** on #42 and confirms *Repository baseline* in the modal. A new candidate starts from the current baseline; his earlier records are gone, and Feature 4 opens a new review round.
+7. Ravi clicks **Reset test data** on #42 and confirms *Repository baseline* in the modal. A new candidate starts from the current baseline; his earlier records are gone, and the new publication starts with no findings of its own.
 
 ### 8B.3 Complete included behavior
 
@@ -726,7 +659,7 @@ flowchart TD
 4. A copy problem also moves to the next source, recorded as `copy_failed`, `restore_failed`, `too_large` or `version_incompatible`.
 5. Only setup and copy failures trigger fallback. If the app later fails its readiness check, the build fails normally, because Previa cannot tell an application bug from a data problem; the failure page suggests Reset test data.
 6. Each attempt has its own setup deadline, and usage accounting counts the execution time of every attempt.
-7. The candidate's record stores the source used (kept: the source candidate's commit and publication; baseline: branch, commit and build time; empty), every fallback reason, and the Setup and Seed outcomes. Feature 4's publication record references it, so a review round knows whether data was kept or reset.
+7. The candidate's record stores the source used (kept: the source candidate's commit and publication; baseline: branch, commit and build time; empty), every fallback reason, and the Setup and Seed outcomes. The publication record references it, so the review page says whether data was kept or reset for the deployment under review.
 
 Repositories that do not declare `seed` still run `setup` on copied data. If their `setup` seeds in a way that cannot repeat, the copied-data attempt fails and the fallback reaches the empty database: the same result as Feature 5, only slower. The PR page then suggests moving seeding into `seed`.
 
@@ -739,7 +672,7 @@ Feature 5's Reset action gains a source choice in its confirmation modal:
 | Repository baseline (default) | The current baseline, then `setup` | Test data on and a ready baseline |
 | Empty database and seed | Empty services, then `setup` and `seed` | Always |
 
-Reset still executes the existing Rebuild path of the current authorized commit with the same source verification, permissions, quotas, Manual-policy rules, fences and cleanup. It records a distinct activity event with the chosen source and produces a new publication and review round (Feature 4). The modal explains that everything testers created in this preview will be replaced, and that the serving preview keeps its data until the replacement publishes. A Reset never alters other PRs or the baseline.
+Reset still executes the existing Rebuild path of the current authorized commit with the same source verification, permissions, quotas, Manual-policy rules, fences and cleanup. It records a distinct activity event with the chosen source and produces a new publication. The modal explains that everything testers created in this preview will be replaced, and that the serving preview keeps its data until the replacement publishes. A Reset never alters other PRs or the baseline.
 
 ### 8B.8 Configuration contract
 
@@ -826,7 +759,9 @@ Presentation follows the signal theme: status in semantic tones, commits and bra
 
 Current resource fairness/quota controls are operator-facing and installer-keyed. Hosted customers need to understand what their team can use, why an action is blocked, who pays, and what happens when they disconnect or leave.
 
-Add visible workspace entitlements and usage, complete subscription state when charging is enabled, and durable account/disconnection/deletion workflows. Users should be able to make these decisions inside Previa without interpreting worker settings.
+Add visible workspace entitlements and usage, and durable account/disconnection/deletion workflows. Users should be able to make these decisions inside Previa without interpreting worker settings.
+
+**MVP release scope:** the free early-access plan only. Usage, finite free limits, account/repository/workspace lifecycle, support/status and policy pages are included; the paid subscription lifecycle (§9.4) and everything provider-related in §9.5–§9.10 are deferred, and no purchase control appears.
 
 ### 9.2 Current and proposed user flow
 
@@ -858,24 +793,7 @@ Allowance exhaustion blocks compute mutations, not reads, feedback, account acce
 
 ### 9.4 Subscription and payment flow
 
-Paid mode must implement this full lifecycle; a fake upgrade screen or manually toggled “paid” flag is insufficient:
-
-1. Owner opens Billing, sees the real plan price/currency/period and included limits, and chooses an available paid plan.
-2. Server creates a workspace-bound payment/subscription operation with an idempotency key. Owner enters payment details through provider-controlled embedded payment components within Previa; payment data never enters Previa's database/logs.
-
-3. Previa shows pending/verification state. Only a server-verified provider subscription/payment state grants paid entitlement. Browser return URL parameters and client success callbacks do not establish payment.
-4. Billing shows current subscription state, next renewal/end date, payment-method summary, invoice list/download links, and any required payment action. Raw card details are never displayed or stored.
-5. Owner updates the payment method using provider-controlled components. Cancellation is initiated in Previa with an accessible confirmation modal and applies at period end; the UI states the exact date, remaining entitlement, and next plan.
-6. Before the period ends, Owner can undo scheduled cancellation. At expiry, downgrade to the free plan and explain reduced limits. Existing excess previews keep their existing expiry; no new slots are admitted until usage fits the new plan.
-7. A paid-to-paid plan change is scheduled for the next renewal in the initial model, avoiding hidden immediate prorations. Free-to-paid activation follows the verified checkout. Show a pending plan change and support cancellation of that scheduled change.
-8. Payment failure shows the provider-backed state and an actionable retry/update path. Apply a documented seven-day grace for previously paid workspaces, then restrict new compute while preserving review/account/cleanup access. Initial incomplete/unpaid checkout never grants paid entitlement.
-9. A late payment/recovery restores entitlement only after re-reading current provider state. Cancellation, disputes, refunds, or provider-side updates reconcile into the same local model; financial adjustments never silently erase an account.
-
-Provider-required billing contact/details are supplied explicitly through that payment flow. Current GitHub sign-in stores public ID/login/avatar and discards its OAuth token; it does not establish a billing email. Do not broaden OAuth scopes merely to guess billing contact information.
-
-Stripe is a reference implementation choice for the specification, subject to the operator having an eligible account. Its Checkout documentation lists embedded subscription UI variants. Use the current supported provider API/SDK version at implementation time and flag any new dependency/CSP allowance in the design review; do not pin a guessed SDK version here. [Stripe subscription checkout](https://docs.stripe.com/payments/checkout/build-subscriptions)
-
-Previa's plan controls remain native; there is no required separate customer billing application. Bank/3DS/payment authentication may involve provider or bank-controlled steps. If an embedded provider flow cannot support a required operation, document that concrete constraint and revise the payment UX explicitly before implementing a redirect.
+Deferred after the MVP release ([§1.2](#12-mvp-release-scope-and-order)). When paid plans are wanted, specify and implement the full provider-verified lifecycle then: real prices, embedded provider checkout, verified entitlement only, payment-method updates, period-end cancellation and reversal, scheduled plan changes, payment failure with grace, reconciliation of out-of-order provider events, and no entitlement from client-side success. A fake upgrade screen or a manually toggled "paid" flag never counts as this feature.
 
 ### 9.5 Account, repository, and workspace lifecycle
 
@@ -956,12 +874,11 @@ Restore-safe erasure requires a deletion/revocation journal newer than the resto
 
 - UI totals reconcile with authoritative attempt records; duplicate/replayed jobs cannot increase consumption twice.
 - Concurrent requests by several members cannot exceed workspace reservations, preview slots, or global ceilings.
-- Free allowance exhaustion, reset, upgrade, scheduled downgrade, payment failure/grace expiry, recovery, cancellation, and cancellation reversal all reach the specified state.
-- Test-mode payments prove genuine provider state, signature validation, duplicate/out-of-order events, pending verification, invoices, and no entitlement from a forged success URL.
+- Free allowance exhaustion and reset reach the specified state; paid-plan states are deferred with §9.4.
 - Leave/removal revokes access immediately; personal deletion preserves others' work; repository/workspace deletion survives crashes until every required step finishes.
 - Disconnection cannot be undone by a webhook, and a deleting workspace cannot create new work or accept a delayed invitation.
 - Help, support requests, incident/status information, retention pages, and cancellation/delete controls are real and accessible inside Previa.
-- Paid mode is unavailable with a clear reason unless provider configuration, prices, entitlements, terms, and test/live acceptance are complete. A free beta is labeled free and finite; it never implies that paid billing has already shipped.
+- The free early access is labeled free and finite; no purchase control appears and nothing implies that paid billing exists.
 
 ## 10. GitHub reporting across all features
 
@@ -983,7 +900,7 @@ Expires: <actual published expiry>
 
 This is an example format, not sample activity to render in the product. The exact comment must be built from committed records and preserve current waiting/failure/previous-preview/fork notices.
 
-Do not copy private test credentials, message bodies, testing instructions that contain sensitive information, reviewer identity lists, workspace members, billing data, usage totals, or support content into GitHub. Aggregate review status/counts must have an explicit administrator-enabled repository sharing policy, shown during connection with an explanation that GitHub repository readers can see them. Default for migrated repositories is link-only review projection until that policy is chosen.
+Do not copy private test credentials, message bodies, testing instructions that contain sensitive information, reviewer identity lists, workspace members, billing data, usage totals, or support content into GitHub. The MVP release projects the review as a link only (*Review in Previa*). Aggregate review status/counts are deferred with Feature 4; if ever added they need an explicit administrator-enabled repository sharing policy, shown during connection with an explanation that GitHub repository readers can see them.
 
 ### 10.2 Durable reporting changes
 
@@ -1029,19 +946,19 @@ This is an ordered implementation plan, not permission to resume a previous road
 | Step | Deliverable | Must be operational before proceeding |
 | --- | --- | --- |
 | A | Workspace ownership and complete access migration | Existing owner behavior plus new roles/grants; revocation; quota identity; no tenant leaks. |
-| B | Immutable publication references and bounded activity hooks | Deduplicated actual-publication events; accurate current state and pruning. |
-| C | Native review page, instructions, feedback lifecycle | Protected reviewer access, complete CRUD/state actions, no-JS and concurrency handling. |
-| D | Assignments, decisions, review queue and freshness | New/failed/same-SHA builds behave correctly; decisions cannot cross publications. |
-| E | GitHub projection of native review state | Existing comment/check reliability remains; privacy policy and replay tests pass. |
-| F | Minimal onboarding and complete seed/reference journeys | First usable preview flow; true tested examples; reset/failure behavior. |
+| B | Immutable publication references and bounded activity hooks | Done with Feature 3. |
+| C | Native review page, instructions, feedback lifecycle | Done (Feature 3). |
+| D | Assignments, decisions, review queue and freshness | **Deferred** after the MVP release (§7). |
+| E | GitHub projection of native review state | **Deferred**; the comment links the review only. |
+| F | Minimal onboarding and complete seed/reference journeys | Done (Features 2 and 5). |
 | G | Feature 5B persistent test data: `seed` key, repository baseline, kept PR data, fallback, Reset choices | Baseline refresh/fence/storage, starting-data selection and fallback, fork and Redis isolation, crash cleanup, and reference journeys with Test data on and off. |
 | H | Usage reservations and finite plans | Shared limits and exact cutover accounting, including baseline builds; recovery/boundary tests. |
 | I | Accounts, disconnect/delete, support/status | Resumable cleanup/erasure, including baselines; ownership constraints; working customer controls. |
-| J | Paid subscription mode | Real provider test-mode lifecycle, embedded payment UX, reconciliation, cancellation, policies. |
+| J | Paid subscription mode | **Deferred** after the MVP release (§9.4). |
 
 Step G follows F because Feature 5B extends Feature 5's seed workflow, setup outcomes, Reset action and test-access guidance, and needs Features 3/4 publications and review rounds to show reviewers whether data was kept or reset. It precedes H and I so usage accounting and deletion cover baseline builds and stored baselines from their first release instead of being retrofitted.
 
-Feature 2's onboarding part of step F was delivered after step A at the owner's request ([Guided onboarding](docs/29-guided-onboarding.md)). Steps B and C followed ([Native review and feedback](docs/30-reviews.md)); review requests remain labelled until step D.
+Feature 2's onboarding part of step F was delivered after step A at the owner's request ([Guided onboarding](docs/29-guided-onboarding.md)). Steps B and C followed ([Native review and feedback](docs/30-reviews.md)). The rest of F (Feature 5) followed ([Ready-to-test sample data](docs/31-test-data.md)). For the MVP release the order continues with G (5B), H and I for the free plan, then deployment ([§1.2](#12-mvp-release-scope-and-order)); D, E and J are deferred.
 
 Features can reuse small interfaces from an earlier step, but visible functionality must not end with mock persistence or an unimplemented action. Keep beta/purchase controls unavailable until their corresponding backend and verification exist. A free beta release can omit paid mode only if explicitly labeled and agreed; it does not satisfy a later claim that paid subscription support is complete.
 
@@ -1074,14 +991,12 @@ Direct equivalents where generated sources/assets already exist include `go buil
 | Journey | Required evidence |
 | --- | --- |
 | New small team | Owner creates workspace, connects repository, invites Developer/Reviewer, completes minimal setup, publishes preview, and requests review. |
-| Complete review | Reviewer opens private preview, follows instructions, creates/replies/edits/removes feedback, requests changes, verifies replacement, resolves finding, and submits current decision. |
-| Several reviewers | Required/optional/self-review labels, assignment changes, unavailable members, unresolved findings, and aggregate status match stored decisions. |
+| Complete review | Reviewer opens private preview, follows instructions, uses the test access, creates/replies/edits/removes feedback, verifies a replacement deployment and resolves the finding. |
 | Deployment freshness | New commit, delayed Manual build, same-SHA rebuild, failed update, sleep/wake, expiry, and close/merge preserve correct publication/review relationships. |
 | Offboarding/handover | Removal revokes routes/streams/actions; Owner transfers; installer leaves; team retains resources and subscription without privilege leakage. |
 | Useful seed/reset | Example data exists; test login/API journey works; reset recreates it; failure preserves prior data and cleans replacement resources. |
 | Persistent test data | Baseline builds from the default branch; first PR build starts seeded; reviewer records survive a new commit; a parallel PR and a fork never see them; incompatible history falls back with its reason; Reset to baseline and to empty both work; crashes leave nothing behind. |
 | Shared quota | Several members contend for finite allowance/slots; duplicate/retried/crashed work counts correctly and cannot overrun reservations. |
-| Paid account | Test-mode checkout, renewal, pending plan change, cancellation/reversal, payment failure/grace, and recovery change entitlement only after verification. |
 | Exit | Disconnect, workspace deletion, and personal deletion finish after injected crashes/provider outages without renewed work or accidental deletion of another team's resources. |
 | GitHub integration | One living comment reflects current allowed summary, survives deletion/duplicates/outage, preserves exact-SHA build checks, and leaks no private review bodies or credentials. |
 | Support/status | Customer submits a persisted support request; only authorized operator handles it; current incidents and checked dependency state are real. |
@@ -1095,7 +1010,7 @@ Record only actual events needed to assess the product:
 
 - Connection-to-first-published-preview time, separated from time waiting for the customer's configuration change.
 - Workspaces where a second member opens a review and submits feedback/decision.
-- Requested rounds that complete for their current publication, with time awaiting review and unresolved findings.
+- Pull requests whose previews receive findings, and findings resolved on a later deployment.
 - Repeat review use across subsequent PRs, rather than time spent in the dashboard.
 - Setup/build failure categories, quota blocks, stale decisions rejected, and failed cleanup/reporting reconciliation.
 - Candidates by starting-data source (kept, baseline, empty) and fallback reason, and baseline refresh outcomes.
@@ -1104,7 +1019,7 @@ An authenticated Open preview action is not proof of a completed review. Router 
 
 ### 12.4 Definition of release-complete
 
-The features in this document are complete when their acceptance criteria and the above journeys pass, the operational/user documents reflect shipped behavior, and there are no placeholder actions or undisclosed manual steps in an included flow. Paid mode additionally requires real provider acceptance; test-mode success alone is not a live-payment claim.
+The MVP release is complete when the included features' acceptance criteria and the above journeys pass, the operational/user documents reflect shipped behavior, and there are no placeholder actions or undisclosed manual steps in an included flow. Deferred items (§1.2) are labelled as not available, never shown as working controls.
 
 Existing deployment/security release acceptance remains a separate required release discipline. This specification does not claim that product features can replace production-host, backup, routing, or source-isolation verification.
 
@@ -1114,8 +1029,7 @@ Most behavior above is specified. The following inputs must be supplied or agree
 
 | Input | Defined behavior around it | Needed for |
 | --- | --- | --- |
-| Free/paid plan prices, currency, allowance amounts | Flat workspace fee; finite included limits; no automatic overages; Reviewers are not per-seat charges. | Displaying a real plan and enabling payment. |
-| Payment-provider account and availability | Stripe is the reference; embedded customer UX and full reconciled lifecycle are required. | Provider implementation and live paid acceptance. |
+| Free early-access allowance amounts | Finite included limits; no charges; Reviewers are not per-seat. Paid prices and a payment provider are deferred with §9.4. | Displaying the free plan. |
 | Migration entitlement policy | No migration creates charges; legacy usage is labeled; stable resources/access preserved. | Backfilling existing hosted users. |
 | Support operator IDs and staffing/contact | Native request/status workflow; restricted operator access; no invented SLA. | Operating customer support. |
 | Operator-approved privacy/terms and retained financial-record policy | Explicit live-data/backup/provider/GitHub boundaries; real deletion behavior. | Public account and paid release. |

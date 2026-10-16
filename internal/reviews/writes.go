@@ -59,6 +59,7 @@ type scope struct {
 	pr      int64
 	open    bool
 	operate bool
+	manage  bool
 	threads int32
 	msgs    int32
 	wrote   bool
@@ -92,7 +93,8 @@ func (s *Service) write(ctx context.Context, a Actor, fn func(*scope) error) err
 		if err != nil {
 			return fmt.Errorf("lock review counters: %w", err)
 		}
-		sc := &scope{tx: tx, q: q, actor: a, pr: pr.ID, open: pr.State == "open", operate: who.CanOperate, threads: counters.Threads, msgs: counters.Messages}
+		sc := &scope{tx: tx, q: q, actor: a, pr: pr.ID, open: pr.State == "open", operate: who.CanOperate, manage: who.CanManage,
+			threads: counters.Threads, msgs: counters.Messages}
 		if err := fn(sc); err != nil {
 			return err
 		}

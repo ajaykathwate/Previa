@@ -2,14 +2,25 @@
 -- A pull request's review context, for someone who may review it: its
 -- source facts, what the preview serves now, the newest deployment and the
 -- current build request (to say when a newer commit is on its way or failed).
+-- The serving deployment's components (setup, services, docs) come from the
+-- newest publication: after a failed update the environment's applied
+-- revision is the failed attempt's, while the earlier deployment serves.
 SELECT p.id, p.repo_id, p.number, p.title, p.author, p.head_branch, p.state, p.head_sha, p.description, p.html_url, p.is_fork,
        coalesce(p.teardown_reason, '')::text AS teardown_reason, r.full_name,
        workspace_repository_access(r.id, sqlc.arg(user_id)::bigint, 'operate')::boolean AS can_operate,
+       workspace_repository_access(r.id, sqlc.arg(user_id)::bigint, 'manage')::boolean AS can_manage,
        coalesce(e.status, '')::text AS environment_status, coalesce(e.head_sha, '')::text AS deployed_sha,
        coalesce(e.subdomain, '')::text AS hostname, e.expires_at, e.asleep_at,
        coalesce(e.applied_generation, -1)::bigint AS applied_generation, coalesce(e.applied_revision, -1)::bigint AS applied_revision,
        coalesce(b.state, '')::text AS intent_state, coalesce(b.head_sha, '')::text AS intent_sha,
        coalesce(pc.docs_path, '')::text AS docs_path,
+       coalesce(pc.setup, false)::boolean AS setup_declared, pc.setup_ms,
+       coalesce(jsonb_array_length(pc.services) > 0, false)::boolean AS has_services,
+       coalesce(e.last_error_code, '')::text AS failure_code,
+       coalesce(b.revision, 0)::bigint AS request_revision,
+       coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
+       p.build_status, p.needs_refresh, (p.teardown_requested_generation = p.generation)::boolean AS teardown_requested,
+       (r.accessible AND i.status = 'active')::boolean AS available,
        coalesce(pub.id, 0)::bigint AS publication_id, coalesce(pub.sequence, 0)::integer AS publication_sequence,
        coalesce(pub.head_sha, '')::text AS publication_sha, pub.activated_at AS publication_at,
        coalesce(pub.backfilled, false)::boolean AS publication_backfilled,
@@ -17,14 +28,15 @@ SELECT p.id, p.repo_id, p.number, p.title, p.author, p.head_branch, p.state, p.h
        (SELECT count(*) FROM preview_feedback_threads t WHERE t.pull_request_id = p.id AND t.state = 'open')::bigint AS open_findings
 FROM pull_requests p
 JOIN repos r ON r.id = p.repo_id
+JOIN installations i ON i.id = r.installation_id
 LEFT JOIN environments e ON e.pull_request_id = p.id
 LEFT JOIN build_intents b ON b.pull_request_id = p.id
-LEFT JOIN preview_components pc ON pc.pull_request_id = p.id AND pc.generation = e.applied_generation AND pc.revision = e.applied_revision
 LEFT JOIN LATERAL (
     SELECT x.id, x.sequence, x.head_sha, x.activated_at, x.backfilled, x.generation, x.revision
     FROM preview_publications x WHERE x.pull_request_id = p.id
     ORDER BY x.sequence DESC LIMIT 1
 ) pub ON true
+LEFT JOIN preview_components pc ON pc.pull_request_id = p.id AND pc.generation = pub.generation AND pc.revision = pub.revision
 WHERE p.repo_id = sqlc.arg(repo_id)::bigint AND p.number = sqlc.arg(number)::integer
   AND workspace_repository_access(r.id, sqlc.arg(user_id)::bigint, 'preview');
 
@@ -136,7 +148,8 @@ FOR KEY SHARE;
 -- The writer's active membership, locked for share: removing the member waits
 -- for this write, and every later write sees the removal.
 SELECT workspace_repository_access(r.id, sqlc.arg(user_id)::bigint, 'preview')::boolean AS can_review,
-       workspace_repository_access(r.id, sqlc.arg(user_id)::bigint, 'operate')::boolean AS can_operate
+       workspace_repository_access(r.id, sqlc.arg(user_id)::bigint, 'operate')::boolean AS can_operate,
+       workspace_repository_access(r.id, sqlc.arg(user_id)::bigint, 'manage')::boolean AS can_manage
 FROM repos r
 JOIN installations i ON i.id = r.installation_id
 JOIN workspace_memberships m ON m.workspace_id = i.workspace_id AND m.user_id = sqlc.arg(user_id)::bigint AND m.state = 'active'
@@ -261,3 +274,43 @@ RETURNING used;
 
 -- name: WriteBudgetReset :one
 SELECT (window_started_at + interval '1 hour')::timestamptz AS resets_at FROM review_write_budgets WHERE user_id = $1;
+
+-- name: GetTestAccess :one
+-- A repository's test access as pages show it: never the secret itself.
+SELECT account, (secret_ciphertext IS NOT NULL)::boolean AS has_secret, revision, updated_by, updated_at,
+       coalesce(last_revealed_by, 0)::bigint AS last_revealed_by, last_revealed_at
+FROM review_test_access WHERE repo_id = $1;
+
+-- name: LockTestAccess :one
+SELECT account, secret_ciphertext, key_version, revision FROM review_test_access WHERE repo_id = $1 FOR UPDATE;
+
+-- name: SaveTestAccess :one
+INSERT INTO review_test_access (repo_id, account, secret_ciphertext, key_version, updated_by)
+VALUES (sqlc.arg(repo_id)::bigint, sqlc.arg(account)::text, sqlc.narg(secret_ciphertext)::bytea, sqlc.narg(key_version)::integer,
+        sqlc.arg(updated_by)::bigint)
+ON CONFLICT (repo_id) DO UPDATE
+SET account = EXCLUDED.account, secret_ciphertext = EXCLUDED.secret_ciphertext, key_version = EXCLUDED.key_version,
+    updated_by = EXCLUDED.updated_by, updated_at = clock_timestamp(), revision = review_test_access.revision + 1
+RETURNING revision;
+
+-- name: DeleteTestAccess :exec
+DELETE FROM review_test_access WHERE repo_id = $1;
+
+-- name: MarkTestAccessRevealed :exec
+UPDATE review_test_access SET last_revealed_by = sqlc.arg(user_id)::bigint, last_revealed_at = clock_timestamp()
+WHERE repo_id = sqlc.arg(repo_id)::bigint;
+
+-- name: TestAccessNeedingRotation :many
+-- Sealed test access not on the active key, for key rotation.
+SELECT id, repo_id, secret_ciphertext, key_version FROM review_test_access
+WHERE secret_ciphertext IS NOT NULL AND key_version <> sqlc.arg(active_version)::integer AND id > sqlc.arg(after_id)::bigint
+ORDER BY id LIMIT sqlc.arg(batch_size)::integer;
+
+-- name: RotateTestAccess :execrows
+-- Replaces a sealed value only if it is unchanged since it was read.
+UPDATE review_test_access SET secret_ciphertext = sqlc.arg(sealed)::bytea, key_version = sqlc.arg(key_version)::integer
+WHERE id = sqlc.arg(id)::bigint AND secret_ciphertext = sqlc.arg(previous)::bytea;
+
+-- name: CountTestAccessByVersion :many
+SELECT key_version::integer AS key_version, count(*)::bigint AS values FROM review_test_access
+WHERE secret_ciphertext IS NOT NULL GROUP BY key_version;

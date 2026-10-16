@@ -88,7 +88,7 @@ func TestRealBackendEndToEnd(t *testing.T) {
 	gateway := newE2EGateway(t, docker, execution.EgressImage)
 	router := startE2ERouter(t, docker)
 	github := newFakeGitHub(t)
-	binary := buildBackendFixture(t, ctx, docker)
+	binary := buildFixture(t, ctx, docker, "backend")
 	backendFiles := func(marker string, env ...string) map[string]string {
 		yaml := "port: 8080\nresource_tier: small\nhealth_check_path: /health\nservices:\n  postgres: 17\n  redis: 7\nsetup: [backend, migrate]\n" +
 			"processes:\n  - name: worker\n    command: [backend, worker]\ndocs_path: /docs\nenv:\n  - MARKER=" + marker + "\n"
@@ -417,8 +417,8 @@ func TestRealBackendEndToEnd(t *testing.T) {
 	t.Log("teardown: no container, image, network or volume of either preview remains")
 }
 
-// buildBackendFixture compiles the fixture for the Docker host's platform.
-func buildBackendFixture(t *testing.T, ctx context.Context, docker *client.Client) string {
+// buildFixture compiles testdata/<name> for the Docker host's platform.
+func buildFixture(t *testing.T, ctx context.Context, docker *client.Client, name string) string {
 	t.Helper()
 	info, err := docker.Info(ctx, client.InfoOptions{})
 	if err != nil {
@@ -428,11 +428,11 @@ func buildBackendFixture(t *testing.T, ctx context.Context, docker *client.Clien
 	if arch == "" {
 		t.Fatalf("unsupported Docker architecture %s", info.Info.Architecture)
 	}
-	out := filepath.Join(t.TempDir(), "backend")
-	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", out, "./testdata/backend")
+	out := filepath.Join(t.TempDir(), name)
+	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", out, "./testdata/"+name)
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+arch)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build the backend fixture: %v\n%s", err, output)
+		t.Fatalf("build the %s fixture: %v\n%s", name, err, output)
 	}
 	data, err := os.ReadFile(out)
 	if err != nil {

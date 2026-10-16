@@ -119,6 +119,25 @@ a.review-chip:hover { border-color: var(--line-strong); color: var(--ink); }
 .review-later svg { width: 14px; height: 14px; flex-shrink: 0; margin-top: 2px; }
 .review-description .pr-description-content { max-height: 18rem; }
 
+/* What the deployment ran, and its test data. */
+.review-facts { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 12.8px; line-height: 1.5; }
+.review-facts li { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; color: var(--ink-soft); }
+.review-facts .review-label { padding-top: 2px; }
+
+/* Test access: the account in the open, the secret on request. */
+.review-account, .review-secret, .review-reveal { display: grid; grid-template-columns: 74px minmax(0, max-content) auto; justify-content: start; align-items: center; gap: 8px; margin: 0; min-width: 0; }
+.review-secret[hidden], .review-reveal[hidden] { display: none; }
+.review-access .copy-button { position: relative; width: 26px; height: 24px; padding: 0; justify-content: center; }
+.review-access .copy-button span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.review-access .copy-button svg { width: 13px; height: 13px; }
+.review-account code, .review-secret code { padding: 2px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-muted); color: var(--ink); font-family: var(--font-code); font-size: 12.5px; overflow-wrap: anywhere; }
+.review-masked { color: var(--text-muted); font-family: var(--font-code); letter-spacing: .12em; }
+.review-reveal { margin: 0; }
+.review-workspace .review-reveal-button { min-height: 28px; padding: 3px 10px; font-size: 12.5px; }
+.review-check { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 12.8px; cursor: pointer; }
+.review-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--signal-strong); }
+.review-access-form { padding: 14px 18px 16px; }
+
 /* Findings */
 .review-findings { display: grid; gap: 12px; min-width: 0; scroll-margin-top: 80px; }
 .review-findings-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }

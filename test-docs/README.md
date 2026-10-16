@@ -5,7 +5,9 @@ Feature 1 implementation verification is recorded separately in the
 Feature 2 (guided onboarding, the repository Setup tab) in the
 [2026-10-16 guided onboarding report](2026-10-16-guided-onboarding-report.md), and
 Feature 3 (native review and feedback, with deployment records and activity) in the
-[2026-10-16 review and feedback report](2026-10-16-review-feedback-report.md).
+[2026-10-16 review and feedback report](2026-10-16-review-feedback-report.md), and
+Feature 5 (ready-to-test sample data, with the reference journeys) in the
+[2026-10-16 test data report](2026-10-16-test-data-report.md).
 It includes team access/offboarding, migration, browser and worker-pipeline checks;
 the full product regression cycle below remains the earlier baseline.
 

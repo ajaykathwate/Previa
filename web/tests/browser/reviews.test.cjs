@@ -91,6 +91,73 @@ test('a developer writes the testing instructions in place', async () => {
   } finally { await context.close(); }
 });
 
+test('an owner sees the setup, confirms a reset in place and adds test access a reviewer reveals', async () => {
+  const password = 'preview-only-Pa55';
+  const owner = await session('owner');
+  try {
+    const {page, errors} = owner;
+    await page.goto(`${origin}${reviewPath}`);
+    const facts = page.locator('.review-facts');
+    assert.match(await facts.textContent(), /Setup\s*Completed in 12\.4 s/);
+    assert.match(await facts.textContent(), /Test data\s*Fresh from setup for each deployment/);
+    // Reset test data confirms in a modal over the page.
+    const before = page.url();
+    await page.locator('.review-reset-button').click();
+    const dialog = page.locator('#review-reset');
+    await dialog.waitFor();
+    assert.equal(page.url(), before, 'the confirmation opens over the page');
+    assert.match(await dialog.textContent(), /rebuilds commit 1111111/);
+    for (const [name, value] of [['action', 'rebuild'], ['reset', 'true'], ['return', 'review']]) {
+      assert.equal(await dialog.locator(`input[name="${name}"]`).inputValue(), value);
+    }
+    await screenshot(page, 'reset-dialog');
+    await page.keyboard.press('Escape');
+    assert.equal(await dialog.evaluate(d => d.open), false, 'Escape closes it without resetting');
+
+    // Test access is added in place and confirmed with a toast.
+    await page.locator('#test-access [data-edit-open]', {hasText: 'Add test access'}).click();
+    assert.equal(page.url(), before, 'editing opens in place');
+    await page.locator('#test-access-account').fill('reviewer@preview.test');
+    await page.locator('#test-access-secret').fill(password);
+    await screenshot(page, 'test-access-editing');
+    await page.locator('[data-edit-form="test-access"] button[type=submit]').click();
+    await toast(page, 'Test access saved');
+    assert.match(await page.locator('#test-access .review-account').textContent(), /reviewer@preview\.test/);
+    assert.equal((await page.content()).includes(password), false, 'the password is never part of the page');
+    await themes(page, 'test-access');
+    await phone(page, 'test-access');
+    // Where a confirmed reset comes back to.
+    await page.goto(`${origin}${reviewPath}?saved=reset`);
+    await toast(page, 'Reset requested');
+    assert.deepEqual(errors, []);
+  } finally { await owner.context.close(); }
+
+  const reviewer = await session('reviewer');
+  try {
+    const {page, errors} = reviewer;
+    await page.goto(`${origin}${reviewPath}`);
+    assert.equal(await page.locator('.review-reset-button').count(), 0, 'Reviewers cannot rebuild');
+    assert.equal(await page.locator('[data-edit-form="test-access"]').count(), 0, 'or change test access');
+    await live(page);
+    await page.locator('[data-reveal-form] button[type=submit]').click();
+    const value = page.locator('[data-reveal-output] [data-reveal-value]');
+    await value.waitFor();
+    assert.equal(await value.textContent(), password);
+    assert.equal(await page.locator('[data-reveal-copy]').getAttribute('data-copy'), password);
+    // Other activity refreshes the page; the revealed value stays.
+    await page.evaluate(() => { document.querySelector('#test-access').dataset.before = 'refresh'; });
+    await fixture(page, 'notify');
+    await page.waitForFunction(() => !document.querySelector('#test-access')?.dataset.before);
+    await value.waitFor();
+    assert.equal(await value.textContent(), password, 'a live refresh keeps the revealed value');
+    await screenshot(page, 'test-access-revealed');
+    await page.reload();
+    assert.match(await page.locator('#test-access').textContent(), /Last revealed by Ravi Reviewer/);
+    assert.equal((await page.content()).includes(password), false, 'a refresh drops the value');
+    assert.deepEqual(errors, []);
+  } finally { await reviewer.context.close(); }
+});
+
 test('a reviewer records, discusses and resolves a finding inside Previa', async () => {
   const {context, page, errors} = await session('reviewer');
   try {
@@ -240,6 +307,9 @@ test('without JavaScript every review action still works', async () => {
     assert.match(await page.locator('#finding-3-2').textContent(), /Message removed by its author/);
     await page.locator('#finding-3 .review-state-button').click();
     assert.equal(await page.locator('#finding-3').count(), 0, 'resolved findings leave the open list');
+    // Reveal answers with the page itself, showing the value.
+    await page.locator('[data-reveal-form] button[type=submit]').click();
+    assert.equal(await page.locator('#test-access [data-reveal-value]').first().textContent(), 'preview-only-Pa55');
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });

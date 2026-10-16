@@ -2,6 +2,7 @@ package reviews
 
 import (
 	"context"
+	"encoding/json"
 	"html"
 	"net/http"
 	"net/http/httptest"
@@ -243,5 +244,75 @@ func TestInstructionsSaveInPlaceAndKeepConflicts(t *testing.T) {
 	save.Set("revision", "1")
 	if res := b.do(http.MethodPost, review+"/instructions", save); res.Code != http.StatusUnprocessableEntity || !strings.Contains(res.Body.String(), "Use a path inside the preview") {
 		t.Fatalf("an outside address: %d", res.Code)
+	}
+}
+
+func TestTestAccessSavesAndRevealsWithAndWithoutJavaScript(t *testing.T) {
+	f := newFixture(t)
+	f.service = f.sealing(t, keyring(t, testKey("1"), "1"))
+	f.publish(t, f.pr, shaA)
+	router := f.router(t, "http://localhost", nil)
+	owner := newBrowser(router)
+	owner.login(t, "owner")
+	csrf := owner.csrf(t)
+	review := f.reviewPath(t)
+	const secret = "s3cret-Preview-only"
+	if page := owner.do(http.MethodGet, review, nil).Body.String(); !strings.Contains(page, "Add test access") || !strings.Contains(page, `autocomplete="new-password"`) {
+		t.Fatal("an Owner is invited to add test access")
+	}
+	res := owner.do(http.MethodPost, review+"/test-access", url.Values{"csrf_token": {csrf}, "account": {"qa@preview.test"}, "secret": {secret}, "revision": {"0"}})
+	if location := res.Header().Get("Location"); res.Code != http.StatusSeeOther || !strings.Contains(location, "saved=test-access") || !strings.HasSuffix(location, "#test-access") {
+		t.Fatalf("save: %d %q %s", res.Code, location, res.Body.String())
+	}
+	page := owner.do(http.MethodGet, review+"?saved=test-access", nil).Body.String()
+	if !strings.Contains(page, "Test access saved") || !strings.Contains(page, "<code>qa@preview.test</code>") || !strings.Contains(page, "data-reveal-form") || strings.Contains(page, secret) {
+		t.Fatal("the saved account shows; the password stays hidden")
+	}
+	// A form problem shows the draft account again, never the password.
+	res = owner.do(http.MethodPost, review+"/test-access", url.Values{"csrf_token": {csrf}, "account": {"draft@preview.test"}, "secret": {"zz-leak-check\x01"}, "revision": {"1"}})
+	if body := res.Body.String(); res.Code != http.StatusUnprocessableEntity || !strings.Contains(body, `value="draft@preview.test"`) || !strings.Contains(body, "Remove line breaks and control characters.") || strings.Contains(body, "zz-leak-check") {
+		t.Fatalf("a refused password: %d", res.Code)
+	}
+
+	reviewer := newBrowser(router)
+	reviewer.login(t, "reviewer")
+	reviewerCSRF := reviewer.csrf(t)
+	if page := reviewer.do(http.MethodGet, review, nil).Body.String(); !strings.Contains(page, "qa@preview.test") || strings.Contains(page, `data-edit-form="test-access"`) || strings.Contains(page, secret) {
+		t.Fatal("a Reviewer sees the account and Reveal, not the form")
+	}
+	if res := reviewer.do(http.MethodPost, review+"/test-access", url.Values{"csrf_token": {reviewerCSRF}, "account": {"mine@preview.test"}, "revision": {"1"}}); res.Code != http.StatusNotFound {
+		t.Fatalf("a Reviewer saving test access: %d", res.Code)
+	}
+	if res := reviewer.do(http.MethodPost, review+"/test-access/reveal", nil); res.Code != http.StatusForbidden {
+		t.Fatalf("a reveal without a CSRF token: %d", res.Code)
+	}
+	// Without JavaScript the page comes back with the value, never cached.
+	res = reviewer.do(http.MethodPost, review+"/test-access/reveal", url.Values{"csrf_token": {reviewerCSRF}})
+	if res.Code != http.StatusOK || res.Header().Get("Cache-Control") != "no-store" || res.Header().Get("Referrer-Policy") != "no-referrer" || !strings.Contains(res.Body.String(), "<code data-reveal-value>"+secret+"</code>") {
+		t.Fatalf("no-JavaScript reveal: %d %v", res.Code, res.Header())
+	}
+	// The page script gets JSON.
+	asJSON := http.Header{"Accept": {"application/json"}}
+	res = reviewer.doWith(http.MethodPost, review+"/test-access/reveal", url.Values{"csrf_token": {reviewerCSRF}}, asJSON)
+	var revealed struct{ Value, Error string }
+	if err := json.Unmarshal(res.Body.Bytes(), &revealed); err != nil || res.Code != http.StatusOK || revealed.Value != secret || res.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("JSON reveal: %d %v %+v", res.Code, err, revealed)
+	}
+	if page := owner.do(http.MethodGet, review, nil).Body.String(); !strings.Contains(page, "Last revealed by Ravi Reviewer") || strings.Contains(page, secret) {
+		t.Fatal("the last reveal is shown to everyone; the value to no one")
+	}
+
+	// With the password removed there is nothing to reveal.
+	if res := owner.do(http.MethodPost, review+"/test-access", url.Values{"csrf_token": {csrf}, "account": {"qa@preview.test"}, "remove_secret": {"true"}, "revision": {"1"}}); res.Code != http.StatusSeeOther {
+		t.Fatalf("remove the password: %d %s", res.Code, res.Body.String())
+	}
+	res = reviewer.doWith(http.MethodPost, review+"/test-access/reveal", url.Values{"csrf_token": {reviewerCSRF}}, asJSON)
+	revealed = struct{ Value, Error string }{}
+	if err := json.Unmarshal(res.Body.Bytes(), &revealed); err != nil || res.Code != http.StatusNotFound || revealed.Error != "There is no stored password to reveal." {
+		t.Fatalf("JSON reveal of nothing: %d %+v", res.Code, revealed)
+	}
+	res = reviewer.do(http.MethodPost, review+"/test-access/reveal", url.Values{"csrf_token": {reviewerCSRF}})
+	if res.Code != http.StatusSeeOther || !strings.Contains(res.Header().Get("Location"), "notice=no-test-access") {
+		t.Fatalf("no-JavaScript reveal of nothing: %d %q", res.Code, res.Header().Get("Location"))
 	}
 }

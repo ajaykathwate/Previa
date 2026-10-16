@@ -4,66 +4,73 @@ Last updated: 2026-10-16
 ## Current state
 - Branch `mvp-complete`; commits are local (not pushed). Commit only when the user
   asks; push to `main`, never `master`.
-- README-MVP-PRODUCT-EXPANSION.md: Feature 1 (shared workspaces), Feature 2 (guided
-  onboarding) and Feature 3 (native review and feedback, with step B: publication
-  records and activity) are implemented. Feature 3 is not committed yet. Next in the
-  documented order: Feature 4 (review rounds, decisions, review queue, timeline).
+- Release plan (README-MVP-PRODUCT-EXPANSION.md §1.2, decided 16 Oct): preview-first
+  MVP. Done: Feature 1 (workspaces), 2 (onboarding), 3 (review and feedback, commit
+  `2ddaaef`), 5 (ready-to-test sample data, **not committed yet**). Next: Feature 5B
+  (persistent test data, §8B), then Feature 6 free plan, then deploy early access.
+  Deferred: Feature 4, GitHub review-status projection (step E), paid mode (step J),
+  the third reference journey.
 - README/DESIGN remain source of truth (DESIGN §21 workspaces, §22 onboarding, §23
-  reviews). Feature docs: docs/28, docs/29, docs/30.
+  reviews, §24 test data). Feature docs: docs/28–31.
+
+## Feature 5: ready-to-test sample data (docs/31-test-data.md)
+- Migration 0040 (`SchemaVersion` = 40): `preview_components.setup_ms` (runtime
+  times setup per candidate) and `review_test_access` (one per repository: account,
+  sealed secret, revision, updated/last revealed). Trigger notifies on revision
+  change only (reveals and key rotation do not refresh pages).
+- Review page (`internal/reviews`): Preview card shows the serving deployment's setup
+  (components joined on the **newest publication**, not `e.applied_*`, which a failed
+  update moves) and **Reset test data** (`resetForm` conditions in service.go). Test
+  access card: Owners/Admins edit (`testaccess.go`, `Sealer` interface = secrets
+  keyring, name `previa:test-access`); members with preview access reveal via
+  `POST …/review/test-access/reveal` (JSON or page, `no-store`), recorded, spends
+  allowance. ui.js keeps a revealed value across live swaps for 2 min unless the
+  revision changed.
+- Reset = pull request Build action with `action=rebuild&reset=true&return=review`
+  (`pullrequests.returnLocation`); `environments.IntentCommand.Reset` (Rebuild only)
+  and `Broker.WithResets` → `internal/app/reviews.go` `resetActivity`
+  (`preview.reset_requested`).
+- `make secrets-reencrypt` also rotates test access (`testAccessRotation`).
+- Starter kits: migrate-and-seed presets per stack; seed guidance kept short (a
+  guidance card must fit a 640 px viewport, checked by the UI suite).
+- Reference journeys: `internal/app/testdata/reference` (shop API, notes web app with
+  login), `TestRealReferenceJourneys` (`make test-reference`, also in `make test-e2e`).
+  Fake GitHub supports same-repository branch PRs (`pushBranch`).
+- Flagged deviations: no separate *Setup declared* state while building; test access
+  is repository-level (per-deployment binding deferred); two journeys, not three.
+- Known, unchanged: the PR page's *Runs with*/docs still join `e.applied_*`, so they
+  hide after a failed update (review page fixed only).
 
 ## Feature 3: review and feedback (docs/30-reviews.md)
-- Review page `GET /repositories/{id}/pull-requests/{n}/review` (`internal/reviews`,
-  `web/pages/reviews`, `web/styles/reviews.css`). Operators reach it via
-  `components.PullRequestTabs` (Preview | Review, open-findings count) on the PR
-  page; Reviewers via **Review** on Previews or a PR link (guard redirects).
-- Forms (all plain POST + redirect, no-JS safe): `…/review/instructions`,
-  `/findings`, `/findings/{n}/replies`, `/findings/{n}/messages/{p}/edit|remove`,
-  `/findings/{n}/resolve|reopen|remove`. Errors re-render with the draft
-  (422/409/429). Writes lock PR (key share) → membership (share) → counters.
-- Migration 0039 (`SchemaVersion` = 39): `preview_publications` (written in
-  `environments.activateTx`, numbered per PR, backfilled *Present at migration*),
-  `preview_components.config_hash` (threaded from `runtime.buildImage`),
-  `activity_events`/`activity_pruned` (`internal/activity`, hourly `activity_prune`
-  on every worker), review tables, counters, `review_write_budgets` (300/member/h).
-- Workspace guard: Reviewers may use review paths, `/repositories/{id}/events` and
-  `…/open`; review POSTs need only "preview" ability (no GitHub source check).
-- Open preview (`internal/onboarding`) now takes a validated `?path=` (instructions'
-  start/docs pages). GitHub comment adds a link-only *Review in Previa* line.
-- ui.js `initReviews`: in-place edit toggles, one removal modal
-  (`data-remove-*`), drafts kept across live swaps (`data-draft-form/key`), refresh
-  deferred while typing, Ctrl/⌘+Enter, auto-submit filters. Finding headers are
-  stretched links to `?finding=N` (user request). htmx `attributesToSettle` no
-  longer copies `style` (CSP).
-- Flagged deviations: one page instead of Review/Feedback/Activity tabs; link-only
-  GitHub projection (step E needs a sharing policy); activity has no view yet
-  (Feature 4); 200 messages per finding and the hourly allowance are extra bounds.
-- Labelled as not available: requesting specific reviewers, review decisions.
+- Review page `GET /repositories/{id}/pull-requests/{n}/review`; Operators via
+  `components.PullRequestTabs`, Reviewers via **Review** on Previews or links.
+- No-JS POST forms with redirect; errors re-render with drafts (422/409/429). Writes
+  lock PR (key share) → membership (share) → counters. Publications written in
+  `environments.activateTx`; activity in `internal/activity` (hourly prune).
+- Workspace guard: Reviewers reach review paths, `/events` and `…/open` only.
 
 ## Feature 2: guided onboarding (docs/29-guided-onboarding.md)
-- Repository **Setup** tab for Owner/Admin/Developer, five derived steps, checks via
-  River `repository_setup_check` (queue `setup_checks`), migration 0038. After an
-  opened preview, "What's next" leads to the review page (Write testing instructions).
+- Repository **Setup** tab, River `repository_setup_check`, migration 0038; "What's
+  next" leads to the review page.
 
 ## UI direction (user requirements; also saved in memory)
 - Compact, Jira-like pages: side-by-side cards, in-place edits with a toast, inline
   errors, no tabs for related details, each fact shown once, one primary per area.
-- Page headings: `components.PageTitle`; repository pages use `RepositoryHero` +
-  `RepositoryTabs`; PR pages `prHero` + `PullRequestTabs`. Modals open in place;
-  navigation only after submit; menus and dialogs close before navigation.
-  Screenshot new pages at 1440 and 390, both themes.
+- `components.PageTitle` headings; PR pages `prHero` + `PullRequestTabs`. Modals open
+  in place; navigate only after submit. Screenshot new UI at 1440 and 390, both themes.
 
 ## Environments and verification
-- Dev DB `previa-postgres-1` needs Goose 39 (`make migrate-up`, then restart server
-  and worker); the user was already testing review pages on it. Two leftover
-  `ordering_test_*` schemas remain there (not touched).
+- Dev DB `previa-postgres-1` is at Goose 39; it needs Goose 40 (`make migrate-up`,
+  then restart server and worker) to run this code. Not touched by the agent. Two
+  leftover `ordering_test_*` schemas remain there.
 - Test DB container `previa-member-ux-test-postgres` (127.0.0.1:55439,
   previa_ux_test, previa/previa-test) is TEST_DATABASE_URL; tests use isolated
   schemas. Remove only this container when the user is done.
 - Browser: `UI_BROWSER_EXECUTABLE=/snap/bin/chromium`; suites `make test-browser`,
-  `make test-workspace-browser`, `make test-setup-browser`, `make test-review-browser`.
-- Feature 3 verification: build, lint (0 issues), `go test ./...` 47/47 packages,
-  review 5/5, setup 5/5, workspace 14/14, UI 55/55; migration up/down/up checked.
-  See test-docs/2026-10-16-review-feedback-report.md.
+  `test-workspace-browser`, `test-setup-browser`, `test-review-browser`.
+- Feature 5 verification: build, lint 0 issues, `go test ./...` 47/47, `make test-e2e`
+  3/3 on Docker 29.8.1, review 6/6, workspace 14/14, setup 5/5, UI 55/55; migration
+  up/down/up checked. See test-docs/2026-10-16-test-data-report.md.
 
 ## Access invariants (unchanged)
 - Active workspace membership is authoritative; Owner/Admin span all repositories;
@@ -74,6 +81,7 @@ Last updated: 2026-10-16
 - Do not edit technical-docs/inside-previa.md unless asked. No deployment/push.
 
 ## Next steps
-- User reviews and tests Feature 3, then asks for a commit.
-- Feature 4: review rounds/assignments/decisions on publications, review queue,
-  activity timeline view (events already recorded), freshness states.
+- User reviews and tests Feature 5 (user guide checklist F2 R12–R18), then asks for a
+  commit.
+- Feature 5B per README-MVP §8B: `seed` key, repository baseline, kept PR data,
+  fallback, Reset choices (Reset modal gains a source choice).

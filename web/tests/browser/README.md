@@ -132,12 +132,15 @@ UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-review-browser
 `internal/reviews/browser_test.go` migrates a temporary schema and serves the real
 session, CSRF, public-ID, workspace, pull request and review handlers with live
 updates through `LISTEN`/`NOTIFY`. Test-only routes stand in for a worker
-publishing the next deployment (after a pushed commit) and a teammate replying.
-Five scenarios in `reviews.test.cjs` cover:
+publishing the next deployment (after a pushed commit), a teammate replying and
+another change waking the page. Deployment 1 ran a setup command with a database,
+and the review service seals test access with a test keyring.
+Six scenarios in `reviews.test.cjs` cover:
 - a Developer writing instructions in place (Escape cancels);
+- an Owner seeing the setup facts, opening the Reset test data confirmation in place (Escape closes it) and adding test access in place; a Reviewer revealing the password, which a live refresh keeps and a reload drops, with *Last revealed by* shown;
 - a Reviewer's whole conversation: a finding with its page and details, the finding header opening its own page, a Ctrl/⌘+Enter reply, an in-place edit, removal in the shared modal, resolving and reopening;
 - a live reply and a new deployment arriving while a draft is unsent (the draft stays; the version is chosen on purpose);
 - a Developer moderating with a required reason from the pull request page's Review tab;
-- the whole flow without JavaScript (run with reduced motion, since the site's smooth scrolling never lets the test robot's own scrolling settle without scripts).
+- the whole flow without JavaScript, a test-access reveal included (run with reduced motion, since the site's smooth scrolling never lets the test robot's own scrolling settle without scripts).
 
 Every scenario fails on any CSP violation. `UI_BROWSER_SCREENSHOTS=1` writes `review-*.png` captures (light, dark and phone, grown to the full content height).

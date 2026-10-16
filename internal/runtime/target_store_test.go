@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,7 +189,7 @@ func TestRecordComponentsKeepsOnlyServedRows(t *testing.T) {
 	}
 	record := func(generation, revision int64) {
 		t.Helper()
-		if err := store.RecordComponents(ctx, Components{PullRequestID: pr, Generation: generation, Revision: revision, Services: []ServiceComponent{{Kind: "postgres", Version: "17"}}, Setup: true, Processes: []string{"worker"}, DocsPath: "/docs", Outbound: 1}); err != nil {
+		if err := store.RecordComponents(ctx, Components{PullRequestID: pr, Generation: generation, Revision: revision, Services: []ServiceComponent{{Kind: "postgres", Version: "17"}}, Setup: true, SetupTook: 12400 * time.Millisecond, Processes: []string{"worker"}, DocsPath: "/docs", Outbound: 1}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -207,6 +208,31 @@ func TestRecordComponentsKeepsOnlyServedRows(t *testing.T) {
 	}
 	if strings.Join(rows, ",") != "1.1,3.1" {
 		t.Fatalf("rows kept: %v", rows)
+	}
+	// How long setup ran stays with its candidate: nothing without a setup
+	// command, and an absurd duration is clamped.
+	setupMs := func(revision int64) *int32 {
+		t.Helper()
+		var ms *int32
+		if err := pool.QueryRow(ctx, "SELECT setup_ms FROM preview_components WHERE pull_request_id=$1 AND generation=3 AND revision=$2", pr, revision).Scan(&ms); err != nil {
+			t.Fatal(err)
+		}
+		return ms
+	}
+	if ms := setupMs(1); ms == nil || *ms != 12400 {
+		t.Fatalf("setup duration %v", ms)
+	}
+	if err := store.RecordComponents(ctx, Components{PullRequestID: pr, Generation: 3, Revision: 2, SetupTook: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if ms := setupMs(2); ms != nil {
+		t.Fatalf("a candidate without setup recorded %d ms", *ms)
+	}
+	if err := store.RecordComponents(ctx, Components{PullRequestID: pr, Generation: 3, Revision: 3, Setup: true, SetupTook: 1000 * time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	if ms := setupMs(3); ms == nil || *ms != math.MaxInt32 {
+		t.Fatalf("clamped duration %v", ms)
 	}
 }
 

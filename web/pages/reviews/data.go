@@ -62,6 +62,10 @@ type Page struct {
 	Instructions Instructions
 	Findings     Findings
 	OpenFindings int64
+	// Reset is the Reset test data form, when the viewer may rebuild the
+	// serving commit now; nil otherwise.
+	Reset      *ResetForm
+	TestAccess TestAccess
 
 	Toast  string
 	Notice Notice
@@ -135,7 +139,7 @@ func (p Page) RemoveURL(target string) string {
 // Editing reports whether target's edit form starts open.
 func (p Page) Editing(target string) bool {
 	return p.Edit == target || p.Draft != nil && p.Draft.Form == "edit" && p.Draft.Target() == target ||
-		target == "instructions" && p.Draft != nil && p.Draft.Form == "instructions"
+		(target == "instructions" || target == "test-access") && p.Draft != nil && p.Draft.Form == target
 }
 
 // Preview is what the pull request's preview serves now.
@@ -153,7 +157,40 @@ type Preview struct {
 	Building string
 	Failed   bool
 	Current  *Deployment // the newest deployment; nil before the first
+	// The serving deployment's setup: declared, and how long it took.
+	SetupDeclared bool
+	SetupTook     string
+	// SetupFailed: the newest commit's build failed in its setup command.
+	SetupFailed bool
+	// Data: the deployment runs managed databases, so it has test data.
+	Data bool
 }
+
+// ResetForm rebuilds the serving commit to start again from the seed.
+type ResetForm struct {
+	ExpectedRevision int64
+	RequestKey       string
+	Commit           string
+}
+
+// TestAccess is how reviewers sign in to the repository's previews.
+type TestAccess struct {
+	Account        string // shown to everyone with access
+	HasSecret      bool   // a password or token is stored (never shown)
+	Revision       int64
+	UpdatedBy      Person
+	UpdatedAt      string
+	LastRevealedBy Person
+	LastRevealedAt string
+	CanEdit        bool // Owners and Admins
+	// Sealing says whether this server can store a secret at all.
+	Sealing bool
+	// Revealed is the secret, only in the response to a reveal.
+	Revealed string
+}
+
+// Set reports test access worth showing.
+func (t TestAccess) Set() bool { return t.Account != "" || t.HasSecret }
 
 // Running reports whether the preview can be opened now.
 func (p Preview) Running() bool {
@@ -590,11 +627,17 @@ func (p Preview) Note() string {
 		}
 		return sha
 	}
+	failed := "failed to build"
+	if p.SetupFailed {
+		failed = "failed in its setup command"
+	}
 	switch {
 	case p.Building != "":
 		return "Commit " + short(p.Building) + " is being built; this page updates when it is live."
-	case p.State == "previous" || p.Failed:
-		return "The newest commit " + short(p.Latest) + " failed to build, so this is the previous deployment."
+	case (p.State == "previous" || p.Failed) && p.Deployed != "":
+		return "The newest commit " + short(p.Latest) + " " + failed + ", so this is the previous deployment."
+	case p.Failed:
+		return "The newest commit " + short(p.Latest) + " " + failed + "; nothing is deployed."
 	case p.Outdated():
 		return "The newest commit " + short(p.Latest) + " is not deployed yet."
 	case p.State == "expired":

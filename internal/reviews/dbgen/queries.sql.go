@@ -48,6 +48,36 @@ func (q *Queries) AddMessage(ctx context.Context, arg AddMessageParams) (int64, 
 	return id, err
 }
 
+const countTestAccessByVersion = `-- name: CountTestAccessByVersion :many
+SELECT key_version::integer AS key_version, count(*)::bigint AS values FROM review_test_access
+WHERE secret_ciphertext IS NOT NULL GROUP BY key_version
+`
+
+type CountTestAccessByVersionRow struct {
+	KeyVersion int32
+	Values     int64
+}
+
+func (q *Queries) CountTestAccessByVersion(ctx context.Context) ([]CountTestAccessByVersionRow, error) {
+	rows, err := q.db.Query(ctx, countTestAccessByVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountTestAccessByVersionRow
+	for rows.Next() {
+		var i CountTestAccessByVersionRow
+		if err := rows.Scan(&i.KeyVersion, &i.Values); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countThreads = `-- name: CountThreads :one
 SELECT count(*) FILTER (WHERE t.state = 'open')::bigint AS open,
        count(*) FILTER (WHERE t.state = 'resolved')::bigint AS resolved,
@@ -167,6 +197,15 @@ func (q *Queries) CurrentPublication(ctx context.Context, pullRequestID int64) (
 	return i, err
 }
 
+const deleteTestAccess = `-- name: DeleteTestAccess :exec
+DELETE FROM review_test_access WHERE repo_id = $1
+`
+
+func (q *Queries) DeleteTestAccess(ctx context.Context, repoID int64) error {
+	_, err := q.db.Exec(ctx, deleteTestAccess, repoID)
+	return err
+}
+
 const editMessage = `-- name: EditMessage :exec
 UPDATE preview_feedback_messages
 SET body = $1::text, page_path = $2::text, details = $3::text,
@@ -245,6 +284,38 @@ func (q *Queries) GetInstructions(ctx context.Context, pullRequestID int64) (Get
 		&i.Revision,
 		&i.UpdatedBy,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTestAccess = `-- name: GetTestAccess :one
+SELECT account, (secret_ciphertext IS NOT NULL)::boolean AS has_secret, revision, updated_by, updated_at,
+       coalesce(last_revealed_by, 0)::bigint AS last_revealed_by, last_revealed_at
+FROM review_test_access WHERE repo_id = $1
+`
+
+type GetTestAccessRow struct {
+	Account        string
+	HasSecret      bool
+	Revision       int64
+	UpdatedBy      int64
+	UpdatedAt      pgtype.Timestamptz
+	LastRevealedBy int64
+	LastRevealedAt pgtype.Timestamptz
+}
+
+// A repository's test access as pages show it: never the secret itself.
+func (q *Queries) GetTestAccess(ctx context.Context, repoID int64) (GetTestAccessRow, error) {
+	row := q.db.QueryRow(ctx, getTestAccess, repoID)
+	var i GetTestAccessRow
+	err := row.Scan(
+		&i.Account,
+		&i.HasSecret,
+		&i.Revision,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+		&i.LastRevealedBy,
+		&i.LastRevealedAt,
 	)
 	return i, err
 }
@@ -644,7 +715,8 @@ func (q *Queries) LockReviewPullRequest(ctx context.Context, arg LockReviewPullR
 
 const lockReviewer = `-- name: LockReviewer :one
 SELECT workspace_repository_access(r.id, $1::bigint, 'preview')::boolean AS can_review,
-       workspace_repository_access(r.id, $1::bigint, 'operate')::boolean AS can_operate
+       workspace_repository_access(r.id, $1::bigint, 'operate')::boolean AS can_operate,
+       workspace_repository_access(r.id, $1::bigint, 'manage')::boolean AS can_manage
 FROM repos r
 JOIN installations i ON i.id = r.installation_id
 JOIN workspace_memberships m ON m.workspace_id = i.workspace_id AND m.user_id = $1::bigint AND m.state = 'active'
@@ -660,6 +732,7 @@ type LockReviewerParams struct {
 type LockReviewerRow struct {
 	CanReview  bool
 	CanOperate bool
+	CanManage  bool
 }
 
 // The writer's active membership, locked for share: removing the member waits
@@ -667,7 +740,30 @@ type LockReviewerRow struct {
 func (q *Queries) LockReviewer(ctx context.Context, arg LockReviewerParams) (LockReviewerRow, error) {
 	row := q.db.QueryRow(ctx, lockReviewer, arg.UserID, arg.RepoID)
 	var i LockReviewerRow
-	err := row.Scan(&i.CanReview, &i.CanOperate)
+	err := row.Scan(&i.CanReview, &i.CanOperate, &i.CanManage)
+	return i, err
+}
+
+const lockTestAccess = `-- name: LockTestAccess :one
+SELECT account, secret_ciphertext, key_version, revision FROM review_test_access WHERE repo_id = $1 FOR UPDATE
+`
+
+type LockTestAccessRow struct {
+	Account          string
+	SecretCiphertext []byte
+	KeyVersion       pgtype.Int4
+	Revision         int64
+}
+
+func (q *Queries) LockTestAccess(ctx context.Context, repoID int64) (LockTestAccessRow, error) {
+	row := q.db.QueryRow(ctx, lockTestAccess, repoID)
+	var i LockTestAccessRow
+	err := row.Scan(
+		&i.Account,
+		&i.SecretCiphertext,
+		&i.KeyVersion,
+		&i.Revision,
+	)
 	return i, err
 }
 
@@ -708,6 +804,21 @@ func (q *Queries) LockThread(ctx context.Context, arg LockThreadParams) (LockThr
 		&i.VisibleReplies,
 	)
 	return i, err
+}
+
+const markTestAccessRevealed = `-- name: MarkTestAccessRevealed :exec
+UPDATE review_test_access SET last_revealed_by = $1::bigint, last_revealed_at = clock_timestamp()
+WHERE repo_id = $2::bigint
+`
+
+type MarkTestAccessRevealedParams struct {
+	UserID int64
+	RepoID int64
+}
+
+func (q *Queries) MarkTestAccessRevealed(ctx context.Context, arg MarkTestAccessRevealedParams) error {
+	_, err := q.db.Exec(ctx, markTestAccessRevealed, arg.UserID, arg.RepoID)
+	return err
 }
 
 const publicationBySequence = `-- name: PublicationBySequence :one
@@ -847,11 +958,19 @@ const reviewTarget = `-- name: ReviewTarget :one
 SELECT p.id, p.repo_id, p.number, p.title, p.author, p.head_branch, p.state, p.head_sha, p.description, p.html_url, p.is_fork,
        coalesce(p.teardown_reason, '')::text AS teardown_reason, r.full_name,
        workspace_repository_access(r.id, $1::bigint, 'operate')::boolean AS can_operate,
+       workspace_repository_access(r.id, $1::bigint, 'manage')::boolean AS can_manage,
        coalesce(e.status, '')::text AS environment_status, coalesce(e.head_sha, '')::text AS deployed_sha,
        coalesce(e.subdomain, '')::text AS hostname, e.expires_at, e.asleep_at,
        coalesce(e.applied_generation, -1)::bigint AS applied_generation, coalesce(e.applied_revision, -1)::bigint AS applied_revision,
        coalesce(b.state, '')::text AS intent_state, coalesce(b.head_sha, '')::text AS intent_sha,
        coalesce(pc.docs_path, '')::text AS docs_path,
+       coalesce(pc.setup, false)::boolean AS setup_declared, pc.setup_ms,
+       coalesce(jsonb_array_length(pc.services) > 0, false)::boolean AS has_services,
+       coalesce(e.last_error_code, '')::text AS failure_code,
+       coalesce(b.revision, 0)::bigint AS request_revision,
+       coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
+       p.build_status, p.needs_refresh, (p.teardown_requested_generation = p.generation)::boolean AS teardown_requested,
+       (r.accessible AND i.status = 'active')::boolean AS available,
        coalesce(pub.id, 0)::bigint AS publication_id, coalesce(pub.sequence, 0)::integer AS publication_sequence,
        coalesce(pub.head_sha, '')::text AS publication_sha, pub.activated_at AS publication_at,
        coalesce(pub.backfilled, false)::boolean AS publication_backfilled,
@@ -859,14 +978,15 @@ SELECT p.id, p.repo_id, p.number, p.title, p.author, p.head_branch, p.state, p.h
        (SELECT count(*) FROM preview_feedback_threads t WHERE t.pull_request_id = p.id AND t.state = 'open')::bigint AS open_findings
 FROM pull_requests p
 JOIN repos r ON r.id = p.repo_id
+JOIN installations i ON i.id = r.installation_id
 LEFT JOIN environments e ON e.pull_request_id = p.id
 LEFT JOIN build_intents b ON b.pull_request_id = p.id
-LEFT JOIN preview_components pc ON pc.pull_request_id = p.id AND pc.generation = e.applied_generation AND pc.revision = e.applied_revision
 LEFT JOIN LATERAL (
     SELECT x.id, x.sequence, x.head_sha, x.activated_at, x.backfilled, x.generation, x.revision
     FROM preview_publications x WHERE x.pull_request_id = p.id
     ORDER BY x.sequence DESC LIMIT 1
 ) pub ON true
+LEFT JOIN preview_components pc ON pc.pull_request_id = p.id AND pc.generation = pub.generation AND pc.revision = pub.revision
 WHERE p.repo_id = $2::bigint AND p.number = $3::integer
   AND workspace_repository_access(r.id, $1::bigint, 'preview')
 `
@@ -892,6 +1012,7 @@ type ReviewTargetRow struct {
 	TeardownReason        string
 	FullName              string
 	CanOperate            bool
+	CanManage             bool
 	EnvironmentStatus     string
 	DeployedSha           string
 	Hostname              string
@@ -902,6 +1023,16 @@ type ReviewTargetRow struct {
 	IntentState           string
 	IntentSha             string
 	DocsPath              string
+	SetupDeclared         bool
+	SetupMs               pgtype.Int4
+	HasServices           bool
+	FailureCode           string
+	RequestRevision       int64
+	RequestCurrent        bool
+	BuildStatus           string
+	NeedsRefresh          bool
+	TeardownRequested     bool
+	Available             bool
 	PublicationID         int64
 	PublicationSequence   int32
 	PublicationSha        string
@@ -915,6 +1046,9 @@ type ReviewTargetRow struct {
 // A pull request's review context, for someone who may review it: its
 // source facts, what the preview serves now, the newest deployment and the
 // current build request (to say when a newer commit is on its way or failed).
+// The serving deployment's components (setup, services, docs) come from the
+// newest publication: after a failed update the environment's applied
+// revision is the failed attempt's, while the earlier deployment serves.
 func (q *Queries) ReviewTarget(ctx context.Context, arg ReviewTargetParams) (ReviewTargetRow, error) {
 	row := q.db.QueryRow(ctx, reviewTarget, arg.UserID, arg.RepoID, arg.Number)
 	var i ReviewTargetRow
@@ -933,6 +1067,7 @@ func (q *Queries) ReviewTarget(ctx context.Context, arg ReviewTargetParams) (Rev
 		&i.TeardownReason,
 		&i.FullName,
 		&i.CanOperate,
+		&i.CanManage,
 		&i.EnvironmentStatus,
 		&i.DeployedSha,
 		&i.Hostname,
@@ -943,6 +1078,16 @@ func (q *Queries) ReviewTarget(ctx context.Context, arg ReviewTargetParams) (Rev
 		&i.IntentState,
 		&i.IntentSha,
 		&i.DocsPath,
+		&i.SetupDeclared,
+		&i.SetupMs,
+		&i.HasServices,
+		&i.FailureCode,
+		&i.RequestRevision,
+		&i.RequestCurrent,
+		&i.BuildStatus,
+		&i.NeedsRefresh,
+		&i.TeardownRequested,
+		&i.Available,
 		&i.PublicationID,
 		&i.PublicationSequence,
 		&i.PublicationSha,
@@ -953,6 +1098,32 @@ func (q *Queries) ReviewTarget(ctx context.Context, arg ReviewTargetParams) (Rev
 		&i.OpenFindings,
 	)
 	return i, err
+}
+
+const rotateTestAccess = `-- name: RotateTestAccess :execrows
+UPDATE review_test_access SET secret_ciphertext = $1::bytea, key_version = $2::integer
+WHERE id = $3::bigint AND secret_ciphertext = $4::bytea
+`
+
+type RotateTestAccessParams struct {
+	Sealed     []byte
+	KeyVersion int32
+	ID         int64
+	Previous   []byte
+}
+
+// Replaces a sealed value only if it is unchanged since it was read.
+func (q *Queries) RotateTestAccess(ctx context.Context, arg RotateTestAccessParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rotateTestAccess,
+		arg.Sealed,
+		arg.KeyVersion,
+		arg.ID,
+		arg.Previous,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const saveInstructions = `-- name: SaveInstructions :one
@@ -984,6 +1155,37 @@ func (q *Queries) SaveInstructions(ctx context.Context, arg SaveInstructionsPara
 		arg.Expected,
 		arg.StartPath,
 		arg.DocsPath,
+		arg.UpdatedBy,
+	)
+	var revision int64
+	err := row.Scan(&revision)
+	return revision, err
+}
+
+const saveTestAccess = `-- name: SaveTestAccess :one
+INSERT INTO review_test_access (repo_id, account, secret_ciphertext, key_version, updated_by)
+VALUES ($1::bigint, $2::text, $3::bytea, $4::integer,
+        $5::bigint)
+ON CONFLICT (repo_id) DO UPDATE
+SET account = EXCLUDED.account, secret_ciphertext = EXCLUDED.secret_ciphertext, key_version = EXCLUDED.key_version,
+    updated_by = EXCLUDED.updated_by, updated_at = clock_timestamp(), revision = review_test_access.revision + 1
+RETURNING revision
+`
+
+type SaveTestAccessParams struct {
+	RepoID           int64
+	Account          string
+	SecretCiphertext []byte
+	KeyVersion       pgtype.Int4
+	UpdatedBy        int64
+}
+
+func (q *Queries) SaveTestAccess(ctx context.Context, arg SaveTestAccessParams) (int64, error) {
+	row := q.db.QueryRow(ctx, saveTestAccess,
+		arg.RepoID,
+		arg.Account,
+		arg.SecretCiphertext,
+		arg.KeyVersion,
 		arg.UpdatedBy,
 	)
 	var revision int64
@@ -1043,6 +1245,51 @@ func (q *Queries) SpendWriteBudget(ctx context.Context, arg SpendWriteBudgetPara
 	var used int32
 	err := row.Scan(&used)
 	return used, err
+}
+
+const testAccessNeedingRotation = `-- name: TestAccessNeedingRotation :many
+SELECT id, repo_id, secret_ciphertext, key_version FROM review_test_access
+WHERE secret_ciphertext IS NOT NULL AND key_version <> $1::integer AND id > $2::bigint
+ORDER BY id LIMIT $3::integer
+`
+
+type TestAccessNeedingRotationParams struct {
+	ActiveVersion int32
+	AfterID       int64
+	BatchSize     int32
+}
+
+type TestAccessNeedingRotationRow struct {
+	ID               int64
+	RepoID           int64
+	SecretCiphertext []byte
+	KeyVersion       pgtype.Int4
+}
+
+// Sealed test access not on the active key, for key rotation.
+func (q *Queries) TestAccessNeedingRotation(ctx context.Context, arg TestAccessNeedingRotationParams) ([]TestAccessNeedingRotationRow, error) {
+	rows, err := q.db.Query(ctx, testAccessNeedingRotation, arg.ActiveVersion, arg.AfterID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TestAccessNeedingRotationRow
+	for rows.Next() {
+		var i TestAccessNeedingRotationRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoID,
+			&i.SecretCiphertext,
+			&i.KeyVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const threadByKey = `-- name: ThreadByKey :one

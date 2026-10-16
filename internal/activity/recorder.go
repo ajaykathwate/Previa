@@ -17,7 +17,8 @@ import (
 // "review.*"). PreviewPublished is written for the environments feature.
 const (
 	PreviewPublished     = "preview.published"
-	VisibilityRepository = "repository" // everyone who can read the repository
+	ResetRequested       = "preview.reset_requested" // Reset test data: a Rebuild of the serving commit
+	VisibilityRepository = "repository"              // everyone who can read the repository
 )
 
 // MaxMetadata bounds an event's metadata, encoded as JSON.

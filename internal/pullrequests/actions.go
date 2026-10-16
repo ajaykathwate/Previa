@@ -517,6 +517,7 @@ func (h *Handler) build(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := h.actions.Builds.RequestBuild(r.Context(), environments.IntentCommand{
 		UserID: user, PullRequestID: row.ID, ExpectedRevision: expected, IdempotencyKey: key, Action: action,
+		Reset: action == environments.Rebuild && r.PostForm.Get("reset") == "true",
 	}); err != nil {
 		h.refuse(w, r, id, err)
 		return

@@ -127,6 +127,11 @@ func (b *Broker) RequestBuild(ctx context.Context, command IntentCommand) (outco
 		if outcome.Coalesced {
 			return nil
 		}
+		if command.Reset && b.resets != nil {
+			if err := b.resets.ResetRequestedTx(ctx, tx, ResetRequest{PullRequestID: i.PullRequestID, ActorID: command.UserID, Revision: i.Revision, HeadSHA: i.HeadSHA}); err != nil {
+				return err
+			}
+		}
 		return b.reportTx(ctx, tx, i.PullRequestID)
 	})
 	if err != nil {

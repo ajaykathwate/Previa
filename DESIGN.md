@@ -36,6 +36,7 @@ Each feature has five parts:
 21. Shared team workspaces (approved SaaS Feature 1)
 22. Guided onboarding (approved SaaS Feature 2)
 23. Native preview review and feedback (approved SaaS Feature 3)
+24. Ready-to-test sample data (approved SaaS Feature 5)
 
 ---
 
@@ -871,6 +872,7 @@ preview/
 │   │   ├── handler.go              # page and no-JS forms; drafts shown again on errors/conflicts
 │   │   ├── service.go  writes.go   # page state; locked, revisioned, deduplicated writes
 │   │   ├── limits.go  errors.go    # content limits and validation; refusals the handler shows
+│   │   ├── testaccess.go           # sealed test access: save, reveal, key rotation store
 │   │   └── queries.sql  dbgen/
 │   │
 │   ├── activity/                   # FEATURE: bounded timeline events (recorder + retention job)
@@ -881,7 +883,8 @@ preview/
 │   │   ├── worker.go               # starts River, the capability heartbeat, draining
 │   │   ├── pipeline.go             # composes the worker pipeline from validated dependencies
 │   │   ├── observe.go              # scrape-time state gauges from the features' counts
-│   │   └── migrate.go              # embedded Goose and River migrations (cmd/migrate)
+│   │   ├── migrate.go              # embedded Goose and River migrations (cmd/migrate)
+│   │   └── testdata/               # E2E fixtures: backend/ and reference/ (docs/31 journeys)
 │   │
 │   ├── auth/                       # FEATURE: GitHub OAuth login + sessions
 │   │   ├── handler.go              # login, callback, logout (the "controller")
@@ -1500,3 +1503,77 @@ read-only except removal. Limits: 8 KB per message and per reproduction details,
 32 KB of instructions, 500 findings and 5,000 messages per pull request, 200 per
 finding, 300 review changes per member per hour; removals never give allowance
 back. Details: [30-reviews.md](docs/30-reviews.md).
+
+## 24. Ready-to-test sample data
+
+### Requirement
+
+Implement approved Feature 5 of `README-MVP-PRODUCT-EXPANSION.md`: make the
+existing `setup` command a complete customer workflow. Repositories seed their own
+synthetic data in `setup`; the review page says how setup went for the deployment
+under review; Reset test data starts again from the seed; reviewers get a
+preview-only test login through Previa; and two reference journeys (a web app with
+a test login, an HTTP API with SQL data) are proven on real Docker.
+
+### Complexity
+
+Medium. No new lifecycle hook: the hard parts are reporting the serving
+deployment's setup (not a failed newer attempt's), making Reset a normal Rebuild
+with its own recorded intent, and keeping shared test-login material sealed,
+write-only and revealed only on request.
+
+### Tech stack (feature-specific)
+
+Existing Go, PostgreSQL/pgx/sqlc, Goose, templ/HTMX and the secrets keyring
+(AES-256-GCM with repository- and purpose-bound associated data). No new library.
+
+### Technical implementation
+
+- **Setup outcome.** Migration 0040 adds `preview_components.setup_ms`: the runtime
+  times each candidate's setup command and records it with the candidate's
+  components once it is ready. The review page reads the components of the newest
+  publication (the deployment serving now), because after a failed update the
+  environment's applied revision names the failed attempt. It shows *Completed in
+  12.4 s* or *No setup declared*, a Test data note when the deployment runs managed
+  databases, and *failed in its setup command* when the newest commit's setup
+  failed while the earlier deployment keeps serving.
+- **Reset test data** is a confirmed modal on the review page that posts the pull
+  request's existing Build action with `action=rebuild`, `reset=true` and
+  `return=review`. It is offered only when Rebuild applies now (open, buildable,
+  available, latest commit built successfully and serving, nothing building or
+  being torn down, the viewer can build). `environments.IntentCommand.Reset` is
+  accepted only with Rebuild; the broker calls a `ResetRecorder` inside the request
+  transaction, adapted in `internal/app` to an activity event
+  (`preview.reset_requested`, deduplicated per revision). Source verification,
+  policy, capacity and publication fences are the Rebuild's own.
+- **Test access.** `internal/reviews` owns `review_test_access` (one row per
+  repository): account text shown to members with preview access, and an optional
+  secret sealed through a small `Sealer` interface implemented by the secrets
+  keyring, under the name `previa:test-access` and the repository's ID, so it can
+  neither be opened as a repository secret nor moved to another repository. Owners
+  and Admins save it (revisioned, write-only secret); members with preview access
+  reveal it with a CSRF-protected POST answered `Cache-Control: no-store`, as JSON
+  for the page script or as the page itself without JavaScript. Each reveal is
+  recorded on the row and as an activity event and spends the review write
+  allowance. Saves wake live pages; reveals and key rotations do not, and the page
+  script keeps a revealed value across other live refreshes for two minutes.
+  `make secrets-reencrypt` rotates test access beside repository secrets.
+- **Starter kits** offer migrate-and-seed setup presets per stack and say that a
+  seed should be repeatable and synthetic.
+- **Reference journeys.** `internal/app/testdata/reference` is a small app with two
+  modes (a shop API and a notes web app with a login) built from its own
+  Dockerfile; `TestRealReferenceJourneys` (`make test-reference`) runs both through
+  the worker's pipeline with a fake GitHub, BuildKit, Traefik and managed
+  PostgreSQL.
+
+### Design decisions and edge cases
+
+Reset is a Rebuild, not a seed command or SQL console: a fresh candidate with fresh
+services is the only state Previa can promise, and the preview keeps serving until
+the replacement is live. Findings stay with the deployment they were recorded on.
+Test access is repository-level and carried across rebuilds, so the seed must
+recreate the same preview-only account on every deployment; binding a value to one
+deployment, a third journey with a background process and a *Setup declared* state
+while a build runs are deferred. Forks get no repository secrets, so a seed that
+needs one must say the test login is unavailable. Details:
+[31-test-data.md](docs/31-test-data.md).

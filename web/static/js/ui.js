@@ -2012,6 +2012,43 @@
     document.addEventListener('change', event => {
       if (event.target.matches?.('select[data-auto-submit]')) event.target.form?.requestSubmit();
     });
+    // A test-access reveal shows the value in place for two minutes, also
+    // across live refreshes unless the test access changed meanwhile. It is
+    // never stored; reloading the page drops it.
+    let revealed = null;
+    let hideRevealed = 0;
+    const showRevealed = () => {
+      const form = document.querySelector('[data-reveal-form]');
+      if (revealed && form?.dataset.revealForm !== revealed.revision) revealed = null;
+      const output = form?.parentElement.querySelector('[data-reveal-output]');
+      if (!form || !output) return;
+      const value = revealed ? revealed.value : '';
+      output.querySelector('[data-reveal-value]').textContent = value;
+      const copy = output.querySelector('[data-reveal-copy]');
+      if (copy) copy.dataset.copy = value;
+      form.hidden = Boolean(revealed);
+      output.hidden = !revealed;
+    };
+    document.addEventListener('submit', async event => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement) || !form.matches('[data-reveal-form]')) return;
+      event.preventDefault();
+      let result;
+      try {
+        result = await postForm(form, new FormData(form));
+      } catch (e) {
+        toast(e.message, 'danger');
+        return;
+      }
+      if (typeof result.value !== 'string') return;
+      revealed = {value: result.value, revision: form.dataset.revealForm};
+      showRevealed();
+      clearTimeout(hideRevealed);
+      hideRevealed = setTimeout(() => { revealed = null; showRevealed(); }, 120000);
+    });
+    document.addEventListener('htmx:afterSwap', event => {
+      if (event.detail.target?.id === 'review-detail' && revealed) showRevealed();
+    });
     // While someone types, a waiting refresh says so instead of moving the page.
     let note = null;
     document.addEventListener('live-deferred', () => {

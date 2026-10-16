@@ -128,13 +128,14 @@ func (h *Handler) finishMutation(w http.ResponseWriter, r *http.Request, userID,
 		http.Error(w, "Invalid workspace filters.", http.StatusBadRequest)
 		return
 	}
-	if r.FormValue("return") == "setup" {
-		location := setupLocation(repoID, params)
+	if location, ok := returnLocation(r, repoID); ok {
 		separator := "?"
 		if strings.Contains(location, "?") {
 			separator = "&"
 		}
 		switch {
+		case r.FormValue("return") == "review" && r.PostForm.Get("reset") == "true":
+			location += separator + "saved=reset"
 		case strings.HasSuffix(r.URL.Path, "/build"):
 			location += separator + "saved=build"
 		case strings.HasSuffix(r.URL.Path, "/refresh"):
@@ -171,17 +172,33 @@ func setupLocation(repoID int64, params url.Values) string {
 	return location
 }
 
-// refusedFromSetup sends a refused request from the Setup tab back to its
-// checklist with a fixed notice code, instead of a plain-text error page.
-func refusedFromSetup(w http.ResponseWriter, r *http.Request, repoID int64, code string) bool {
-	if r.FormValue("return") != "setup" {
-		return false
-	}
+// returnLocation is where an action started on another page goes back to:
+// the Setup tab (return=setup) or the pull request's review page
+// (return=review, Reset test data). workspace_query names the pull request.
+func returnLocation(r *http.Request, repoID int64) (string, bool) {
 	params, err := url.ParseQuery(r.FormValue("workspace_query"))
 	if err != nil {
 		params = url.Values{}
 	}
-	location := setupLocation(repoID, params)
+	switch r.FormValue("return") {
+	case "setup":
+		return setupLocation(repoID, params), true
+	case "review":
+		if pr := params.Get("pr"); pr != "" {
+			return "/repositories/" + strconv.FormatInt(repoID, 10) + "/pull-requests/" + url.PathEscape(pr) + "/review", true
+		}
+	}
+	return "", false
+}
+
+// refusedFromSetup sends a refused request from the Setup tab or the review
+// page back there with a fixed notice code, instead of a plain-text error
+// page.
+func refusedFromSetup(w http.ResponseWriter, r *http.Request, repoID int64, code string) bool {
+	location, ok := returnLocation(r, repoID)
+	if !ok {
+		return false
+	}
 	separator := "?"
 	if strings.Contains(location, "?") {
 		separator = "&"

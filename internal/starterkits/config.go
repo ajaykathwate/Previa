@@ -102,7 +102,7 @@ func quote(s string) string {
 func notesFor(s Stack, c Choices) []string {
 	var notes []string
 	if c.Postgres != "" {
-		notes = append(notes, "Your app, setup and processes get DATABASE_URL (and PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE). Each preview starts with an empty database: seed it in the setup command if reviewers need data.")
+		notes = append(notes, "Your app, setup and processes get DATABASE_URL (and PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE). Each preview starts with an empty database: to give reviewers data, pick a setup command that also seeds, with a repeatable, synthetic seed.")
 	}
 	if c.Redis != "" {
 		notes = append(notes, "They also get REDIS_URL for Redis.")

@@ -29,6 +29,9 @@ and a checklist to test it all by hand, including the edge cases. Labels in
 - **Starter kits**: pick your stack and what it uses, and Previa writes the
   `Dockerfile` and `.previewrc.yaml` your repository needs, checked and editable,
   ready to copy or download.
+- **Ready to test**: your setup seeds sample data in every preview's own database,
+  the review page says how setup went, **Reset test data** starts again from the
+  seed, and **Test access** hands reviewers a preview-only login.
 
 ## The journey at a glance
 
@@ -413,7 +416,21 @@ link, which takes them there.
   finding's header opens it on its own page; **Copy link** in its menu shares it.
 - **Open / Resolved / All**, search, author and deployment filters narrow the list.
   The **Preview** card shows the deployment under review, whether a newer commit is
-  building or failed, **Open preview** and **Open docs**.
+  building or failed, how its setup went (*Setup: Completed in 12.4 s*), **Open
+  preview** and **Open docs**.
+- **Reset test data** (Owners, Admins, Developers; on the Preview card when the
+  preview runs a database or a setup command): a confirmation explains that Previa
+  rebuilds the same commit into a new deployment whose setup seeds a fresh
+  database, that the current preview keeps serving until then, and that findings
+  stay with the current deployment. **Reset test data** confirms; the page says
+  *Reset requested* and shows the new deployment when it is live.
+- **Test access** (beside the Preview card): how to sign in to the repository's
+  previews. Owners and Admins choose **Add test access** (or **Edit**): an account
+  such as `reviewer@preview.test` and its password, stored encrypted and never shown
+  in the form again. Everyone with access sees the account (with a copy button) and
+  can **Reveal** the password for two minutes; each reveal is recorded (*Last
+  revealed by …*). Use only a preview-only account your setup creates on every
+  deployment ([docs/31](../docs/31-test-data.md)).
 - After the pull request closes or merges, the review stays readable; only removal
   is still possible. Asking specific people to review and recording review
   decisions are not available yet.
@@ -533,7 +550,9 @@ docs_path: /docs
 
 1. Every build gets **its own fresh** PostgreSQL and Redis; the app, the setup
    command and the processes receive `DATABASE_URL`, `PG*` and `REDIS_URL`.
-   **Data does not survive a rebuild.**
+   **Data does not survive a rebuild.** Seed synthetic test data in `setup` (Starter
+   kits offer migrate-and-seed commands); a repeatable seed and a preview-only test
+   account make every preview ready to test ([docs/31](../docs/31-test-data.md)).
 2. The build log shows each service becoming ready, the setup command's output and
    the processes starting. If one fails, the build fails with that reason and the
    previous preview keeps serving.
@@ -790,6 +809,13 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | R9 | As a Reviewer, open the PR's build logs or Secrets address | Sent to **Previews**; forged posts to build or settings addresses are refused |
 | R10 | Merge the PR, open its review | Readable; no new findings, replies, edits or resolving; **Remove** still works |
 | R11 | Turn JavaScript off and repeat R3–R5 | Every action works; removal confirms on the page |
+| R12 | On a preview whose setup seeds data, open **Review** | The Preview card says *Setup: Completed in …* and *Test data: Fresh from setup for each deployment…* |
+| R13 | As a Developer, change some data in the preview, then **Reset test data** and confirm | A modal over the page names the commit; after confirming, *Reset requested…*; when the new deployment is live the preview has only the seeded data again, and earlier findings still say the earlier deployment |
+| R14 | As a Reviewer, look for **Reset test data** | Not shown |
+| R15 | As an Owner, **Add test access** with an account and a password, save; reopen **Edit** | Toast **Test access saved**; the account shows with a copy button, the password as dots; the form's password field is empty (*leave empty to keep it*) |
+| R16 | As a Reviewer, **Reveal** the password, use it to sign in to the preview | The password shows with a copy button; after a page reload it is hidden again and *Last revealed by …* names you |
+| R17 | Push a commit whose seed fails | The update fails in its setup command; the review says so and the earlier deployment keeps serving its data |
+| R18 | Turn JavaScript off and **Reveal** | The page comes back with the password shown |
 
 ### G. GitHub feedback
 

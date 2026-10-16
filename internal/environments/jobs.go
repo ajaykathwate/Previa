@@ -78,9 +78,29 @@ type Broker struct {
 	enabled         bool        // dispatches and admits: real execution adapters
 	requests        bool        // records owner build requests (the server)
 	reports         *Repository // reporting enabled: records report work
+	resets          ResetRecorder
 	now             func() time.Time
 	recoveryMu      sync.Mutex
 	recoveryAfterID int64
+}
+
+// ResetRecorder hears about each accepted test-data reset inside the
+// request's transaction, so what it writes (a timeline event) commits with
+// it; internal/app connects the activity feature.
+type ResetRecorder interface {
+	ResetRequestedTx(ctx context.Context, tx pgx.Tx, r ResetRequest) error
+}
+
+// ResetRequest is one accepted Reset test data: the Rebuild it became.
+type ResetRequest struct {
+	PullRequestID, ActorID, Revision int64
+	HeadSHA                          string
+}
+
+// WithResets passes every accepted Reset test data to rec.
+func (b *Broker) WithResets(rec ResetRecorder) *Broker {
+	b.resets = rec
+	return b
 }
 
 // WithReports makes the broker's observations, requests and dispatches record

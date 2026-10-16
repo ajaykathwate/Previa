@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/activity"
 	"github.com/ajaykathwatee/previa/internal/appoutput"
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
@@ -147,7 +148,7 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 		return nil, err
 	}
 	f.environments = environments.NewRepository(pool, operations)
-	coordinator := environments.NewRequestBroker(pool, producer)
+	coordinator := environments.NewRequestBroker(pool, producer).WithResets(resetActivity{recorder: activity.NewRecorder()})
 	var appClient *githubapp.Client
 	var upstream pullrequests.Source
 	if cfg.GitHubAppID != 0 {

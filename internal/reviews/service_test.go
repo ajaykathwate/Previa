@@ -514,3 +514,72 @@ func TestReviewChangesWakeTheRepositoryPage(t *testing.T) {
 		}
 	}
 }
+
+func TestTheReviewShowsSetupAndOffersReset(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := f.pool.Exec(ctx, query, args...); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+	}
+	f.publish(t, f.pr, shaA)
+	exec(`INSERT INTO preview_components(pull_request_id, generation, revision, services, setup, setup_ms, docs_path)
+		VALUES ($1, 1, 1, '[{"name":"postgres"}]', true, 12400, '/docs')`, f.pr)
+	exec(`INSERT INTO build_intents(pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, started_at, completed_at)
+		VALUES ($1, 1, 0, 1, $2, 'manual', 'build', $3, 'key-reset-00000001', 'succeeded', now(), now(), now())`, f.pr, shaA, f.owner)
+	page := func(user int64) pages.Page {
+		t.Helper()
+		p, err := f.service.Page(ctx, user, f.repo, 42, Query{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	p := page(f.owner)
+	if !p.Preview.SetupDeclared || p.Preview.SetupTook != "12.4 s" || !p.Preview.Data || p.Preview.DocsPath != "/docs" {
+		t.Fatalf("setup facts %+v", p.Preview)
+	}
+	if r := p.Reset; r == nil || r.ExpectedRevision != 1 || r.Commit != shaA || !validRequestKey(r.RequestKey) {
+		t.Fatalf("Reset test data for an Owner: %+v", r)
+	}
+	if page(f.dev).Reset == nil || page(f.reviewer).Reset != nil {
+		t.Fatal("Reset test data is for people who can build")
+	}
+	// Not offered while Rebuild would not apply.
+	for name, change := range map[string][2]string{
+		"building":             {"UPDATE build_intents SET state='running', completed_at=NULL WHERE pull_request_id=$1", "UPDATE build_intents SET state='succeeded', completed_at=now() WHERE pull_request_id=$1"},
+		"no repository access": {"UPDATE repos SET accessible=false WHERE id=(SELECT repo_id FROM pull_requests WHERE id=$1)", "UPDATE repos SET accessible=true WHERE id=(SELECT repo_id FROM pull_requests WHERE id=$1)"},
+		"conflicts":            {"UPDATE pull_requests SET build_status='conflicts' WHERE id=$1", "UPDATE pull_requests SET build_status='open' WHERE id=$1"},
+		"source to refresh":    {"UPDATE pull_requests SET needs_refresh=true WHERE id=$1", "UPDATE pull_requests SET needs_refresh=false WHERE id=$1"},
+		"teardown requested":   {"UPDATE pull_requests SET teardown_requested_generation=generation WHERE id=$1", "UPDATE pull_requests SET teardown_requested_generation=-1 WHERE id=$1"},
+		"closed":               {"UPDATE pull_requests SET state='closed' WHERE id=$1", "UPDATE pull_requests SET state='open' WHERE id=$1"},
+	} {
+		exec(change[0], f.pr)
+		if r := page(f.owner).Reset; r != nil {
+			t.Errorf("%s: Reset test data offered", name)
+		}
+		exec(change[1], f.pr)
+	}
+	if page(f.owner).Reset == nil {
+		t.Fatal("restored state offers Reset test data again")
+	}
+	// A newer commit failed in setup: the earlier deployment still serves
+	// with its own setup facts, and there is nothing to reset.
+	exec("UPDATE pull_requests SET head_sha=$2 WHERE id=$1", f.pr, shaB)
+	exec("UPDATE build_intents SET revision=2, base_revision=1, head_sha=$2, state='failed' WHERE pull_request_id=$1", f.pr, shaB)
+	exec("UPDATE environments SET status='failed', applied_revision=2, last_error_code='setup_failed' WHERE pull_request_id=$1", f.pr)
+	p = page(f.reviewer)
+	if !p.Preview.SetupFailed || p.Preview.Deployed != shaA || p.Preview.SetupTook != "12.4 s" || p.Preview.DocsPath != "/docs" || p.Reset != nil {
+		t.Fatalf("after a failed setup: %+v reset %+v", p.Preview, p.Reset)
+	}
+	if note := p.Preview.Note(); !strings.Contains(note, "failed in its setup command") || !strings.Contains(note, "previous deployment") {
+		t.Fatalf("note %q", note)
+	}
+	// A deployment without a setup command says nothing about one.
+	exec("UPDATE preview_components SET setup=false, setup_ms=NULL WHERE pull_request_id=$1", f.pr)
+	if p = page(f.reviewer); p.Preview.SetupDeclared || p.Preview.SetupTook != "" {
+		t.Fatalf("no setup declared: %+v", p.Preview)
+	}
+}

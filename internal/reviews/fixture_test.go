@@ -270,8 +270,16 @@ func newBrowser(router http.Handler) *browser {
 }
 
 func (b *browser) do(method, path string, form url.Values) *httptest.ResponseRecorder {
+	return b.doWith(method, path, form, nil)
+}
+
+// doWith sends extra headers, such as the page script's Accept.
+func (b *browser) doWith(method, path string, form url.Values, header http.Header) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, "http://localhost"+path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for name, values := range header {
+		req.Header[name] = values
+	}
 	for _, c := range b.cookies {
 		req.AddCookie(c)
 	}

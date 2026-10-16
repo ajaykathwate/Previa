@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser test-workspace-browser test-setup-browser test-review-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status river-ui
+.PHONY: generate templates watch-templates assets build test test-browser test-workspace-browser test-setup-browser test-review-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e test-reference router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status river-ui
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -130,12 +130,19 @@ test-routing: egress-image
 
 # Opt-in real end-to-end proof of the worker's own pipeline on the local
 # Docker Engine: a fake GitHub (TLS), real BuildKit builds, hardened previews,
-# Traefik routing, PR reports, logs and teardown, and a backend preview with
+# Traefik routing, PR reports, logs and teardown, a backend preview with
 # managed PostgreSQL and Redis, setup, a worker process and approved outbound
-# connections, on a throwaway schema.
+# connections, and the ready-to-test reference journeys (docs/31), on a
+# throwaway schema.
 test-e2e: egress-image
 	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
-	TEST_E2E=1 $(GO) test -count=1 -v -timeout 60m -run '^TestReal(EndToEnd|BackendEndToEnd)$$' ./internal/app
+	TEST_E2E=1 $(GO) test -count=1 -v -timeout 90m -run '^TestReal(EndToEnd|BackendEndToEnd|ReferenceJourneys)$$' ./internal/app
+
+# Only the reference journeys of docs/31-test-data.md: seeded data, Reset test
+# data, a failing seed, a test login from a repository secret and a fork.
+test-reference: egress-image
+	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
+	TEST_E2E=1 $(GO) test -count=1 -v -timeout 40m -run '^TestRealReferenceJourneys$$' ./internal/app
 
 # Opt-in real housekeeping on the local Docker Engine: grace periods, dry run,
 # orphans of known and unknown PRs, other instances left alone, and an

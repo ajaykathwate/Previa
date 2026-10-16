@@ -34,6 +34,7 @@ rest explain how and why it works.
 | 28 | [Shared team workspaces](28-shared-workspaces.md) | Roles, repository grants, invitation consent, ownership handover, revocation, shared quotas and migration cutover. |
 | 29 | [Guided onboarding](29-guided-onboarding.md) | The repository Setup tab: five steps from a connected repository to an opened preview, bounded setup checks, and where new members start. |
 | 30 | [Native review and feedback](30-reviews.md) | The review page: testing instructions, findings recorded against deployments, moderation, version conflicts, access, limits and activity records. |
+| 31 | [Ready-to-test sample data](31-test-data.md) | Seeding with `setup`, setup facts on the review page, Reset test data, sealed test access for reviewers, and the two reference journeys with their customer copies. |
 
 Related files outside this folder:
 
