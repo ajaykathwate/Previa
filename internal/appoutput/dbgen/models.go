@@ -15,6 +15,25 @@ type AccountBuildUsage struct {
 	Builds       int32
 }
 
+type ActivityEvent struct {
+	ID            int64
+	WorkspaceID   int64
+	RepoID        pgtype.Int8
+	PullRequestID pgtype.Int8
+	PublicationID pgtype.Int8
+	ActorUserID   pgtype.Int8
+	Kind          string
+	Visibility    string
+	Metadata      []byte
+	DedupKey      pgtype.Text
+	OccurredAt    pgtype.Timestamptz
+}
+
+type ActivityPruned struct {
+	PullRequestID int64
+	PrunedThrough pgtype.Timestamptz
+}
+
 type AppOutputLine struct {
 	EnvironmentID int64
 	Epoch         int64
@@ -209,6 +228,25 @@ type PrReconciliation struct {
 	Outcome       string
 }
 
+type PrReviewCounter struct {
+	PullRequestID int64
+	Threads       int32
+	Messages      int32
+}
+
+type PrReviewInstruction struct {
+	PullRequestID int64
+	Summary       string
+	Steps         string
+	Expected      string
+	StartPath     pgtype.Text
+	DocsPath      pgtype.Text
+	Revision      int64
+	UpdatedBy     int64
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
 type PrSync struct {
 	RepoID        int64
 	Revision      int64
@@ -232,6 +270,7 @@ type PreviewComponent struct {
 	Outbound         int32
 	OutboundWithheld bool
 	RecordedAt       pgtype.Timestamptz
+	ConfigHash       pgtype.Text
 }
 
 type PreviewCrash struct {
@@ -242,11 +281,62 @@ type PreviewCrash struct {
 	CrashedAt     pgtype.Timestamptz
 }
 
+type PreviewFeedbackMessage struct {
+	ID             int64
+	ThreadID       int64
+	PullRequestID  int64
+	Position       int32
+	AuthorUserID   int64
+	PublicationID  pgtype.Int8
+	Body           string
+	PagePath       pgtype.Text
+	Details        pgtype.Text
+	Revision       int64
+	IdempotencyKey pgtype.Text
+	CreatedAt      pgtype.Timestamptz
+	EditedAt       pgtype.Timestamptz
+	RemovedAt      pgtype.Timestamptz
+	RemovedBy      pgtype.Int8
+	RemovalReason  pgtype.Text
+}
+
+type PreviewFeedbackThread struct {
+	ID                    int64
+	PullRequestID         int64
+	Number                int32
+	PublicationID         pgtype.Int8
+	AuthorUserID          int64
+	State                 string
+	Revision              int64
+	StateChangedBy        pgtype.Int8
+	StateChangedAt        pgtype.Timestamptz
+	ResolvedPublicationID pgtype.Int8
+	RemovalReason         pgtype.Text
+	IdempotencyKey        string
+	CreatedAt             pgtype.Timestamptz
+}
+
 type PreviewOpen struct {
 	PullRequestID int64
 	UserID        int64
 	DeployedSha   string
 	OpenedAt      pgtype.Timestamptz
+}
+
+type PreviewPublication struct {
+	ID            int64
+	PullRequestID int64
+	RepoID        int64
+	WorkspaceID   int64
+	Sequence      int32
+	HeadSha       string
+	Generation    int64
+	Revision      int64
+	ContainerID   pgtype.Text
+	ImageTag      pgtype.Text
+	ConfigHash    pgtype.Text
+	Backfilled    bool
+	ActivatedAt   pgtype.Timestamptz
 }
 
 type PreviewVisitCounter struct {
@@ -355,6 +445,12 @@ type RepositorySetupCheck struct {
 	CheckedAt     pgtype.Timestamptz
 	ExpiresAt     pgtype.Timestamptz
 	Platform      string
+}
+
+type ReviewWriteBudget struct {
+	UserID          int64
+	WindowStartedAt pgtype.Timestamptz
+	Used            int32
 }
 
 type RouteTable struct {

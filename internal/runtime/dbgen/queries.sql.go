@@ -138,12 +138,12 @@ func (q *Queries) ListOutboundPreviews(ctx context.Context) ([]ListOutboundPrevi
 
 const recordComponents = `-- name: RecordComponents :exec
 WITH recorded AS (
-    INSERT INTO preview_components (pull_request_id, generation, revision, services, setup, processes, docs_path, outbound, outbound_withheld)
+    INSERT INTO preview_components (pull_request_id, generation, revision, services, setup, processes, docs_path, outbound, outbound_withheld, config_hash)
     VALUES ($1, $2, $3, $4, $5,
-            $6, $7, $8, $9)
+            $6, $7, $8, $9, $10)
     ON CONFLICT (pull_request_id, generation, revision) DO UPDATE
     SET services = EXCLUDED.services, setup = EXCLUDED.setup, processes = EXCLUDED.processes, docs_path = EXCLUDED.docs_path,
-        outbound = EXCLUDED.outbound, outbound_withheld = EXCLUDED.outbound_withheld, recorded_at = now()
+        outbound = EXCLUDED.outbound, outbound_withheld = EXCLUDED.outbound_withheld, config_hash = EXCLUDED.config_hash, recorded_at = now()
     RETURNING pull_request_id
 )
 DELETE FROM preview_components c
@@ -164,6 +164,7 @@ type RecordComponentsParams struct {
 	DocsPath         pgtype.Text
 	Outbound         int32
 	OutboundWithheld bool
+	ConfigHash       pgtype.Text
 }
 
 // What a ready candidate runs next to its app. Rows of earlier requests that
@@ -179,6 +180,7 @@ func (q *Queries) RecordComponents(ctx context.Context, arg RecordComponentsPara
 		arg.DocsPath,
 		arg.Outbound,
 		arg.OutboundWithheld,
+		arg.ConfigHash,
 	)
 	return err
 }

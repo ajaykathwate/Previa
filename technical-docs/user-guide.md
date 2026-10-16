@@ -385,6 +385,39 @@ again**.
 - With **Private previews** on, reviewers sign in with GitHub first; anyone who
   cannot see the repository gets **You can't open this preview**.
 
+### Review it in Previa
+
+Every pull request has a review page: choose **Review** beside **Preview** under
+the pull request's title (the number counts open findings). Reviewers reach it
+from **Review** on **Previews**, from a shared review link, or from a pull request
+link, which takes them there.
+
+- **How to test** (Owners, Admins, Developers): **Write instructions** or **Edit**
+  opens the form in place: a one-line summary, steps (one per line, numbered for
+  reviewers), the expected result, and optional **Start page** and **Docs page**
+  paths such as `/checkout`, which open inside the preview. **Save instructions**
+  confirms with a toast. If a teammate saved meanwhile, both versions are shown and
+  **Save mine instead** replaces theirs. Reviewers read them; the GitHub
+  description stays separate under **From GitHub**.
+- **Record a finding:** say what happened and what you expected, optionally the
+  page and **Reproduction details** (steps, or a request and the response you
+  expected), then **Add finding**. It is recorded against the deployment named under
+  the form (*Deployment 2 · abc1234*). If a newer deployment went live while you
+  wrote, Previa asks: **Record against Deployment 3** or **Keep Deployment 2**.
+- **Reply** under any finding (Ctrl/⌘+Enter sends). The **⋯** menu on your own
+  message offers **Edit** (in place, marked *Edited*) and **Remove** (confirmed;
+  the text is erased and a note says you removed it). Owners, Admins and Developers
+  can also **Remove as moderator** or **Remove finding**, choosing a reason.
+- **Resolve** marks a finding resolved (its author, or anyone who can build); the
+  line says who and on which deployment. **Reopen** brings it back. Clicking a
+  finding's header opens it on its own page; **Copy link** in its menu shares it.
+- **Open / Resolved / All**, search, author and deployment filters narrow the list.
+  The **Preview** card shows the deployment under review, whether a newer commit is
+  building or failed, **Open preview** and **Open docs**.
+- After the pull request closes or merges, the review stays readable; only removal
+  is still possible. Asking specific people to review and recording review
+  decisions are not available yet.
+
 ## 11. Feedback on the pull request (GitHub)
 
 One comment, always edited in place, titled **Previa preview: …**:
@@ -401,7 +434,10 @@ One comment, always edited in place, titled **Previa preview: …**:
 | Removing / Preview removed / Preview expired | Teardown in progress / done / by expiry |
 
 A **Previa preview** check run is added for each build request on its exact commit
-(a retry or rebuild of the same commit gets its own run).
+(a retry or rebuild of the same commit gets its own run). The comment ends with
+**Review in Previa** (and **Build log** while a preview exists): links that need
+Previa sign-in. Findings, instructions and review status are never copied to
+GitHub.
 
 ## 12. Read build logs
 
@@ -669,7 +705,7 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | BS3 | Add the file on the PR's branch and push | The step says the new commit is not checked yet; **Check setup** passes; **What the app needs** lists port, health check, services and secret names |
 | BS4 | Use a service version the server does not offer, check | The problem names `services.<kind>`, its line and the versions offered |
 | BS5 | **Build preview** | Toast **Build requested**; the publish step follows the build; **Open preview** appears when live |
-| BS6 | **Open preview** | A new tab opens the preview; the Setup tab shows **Opened by you** and **Ready for review**; **Request review** is disabled and says why |
+| BS6 | **Open preview** | A new tab opens the preview; the Setup tab shows **Opened by you** and **Ready for review**; **Write testing instructions** leads to the review page and the note says asking specific people to review is not available yet |
 | BS7 | As a Developer, open Setup | Secret names are hidden; the panel names the Owners and Admins to ask; there is no Secrets tab |
 | BS8 | As a Reviewer, open a repository's Setup address | You are sent to **Previews** |
 | BS9 | Stop the worker, **Check setup**, wait two minutes | The step says the check did not finish and offers **Check again** |
@@ -739,6 +775,22 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | F8 | Open an address that never existed (`https://pr-999-x-y.<preview domain>`) | "Preview not found or expired" |
 | F9 | As another GitHub user, try the first user's PR page URL | Not found (owners only) |
 
+### F2. Reviews
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| R1 | As a Developer on a PR with a live preview, choose **Review**, **Write instructions**, fill in and save | The form opens in place; toast **Testing instructions saved**; numbered steps; **Start at** opens that page in the preview |
+| R2 | As a Reviewer, open **Previews**, then **Review** | The review page without the Preview tab or instruction editing; **Recorded against Deployment N** under the form |
+| R3 | Record a finding with a page and reproduction details | Toast **Finding added**; the finding shows the deployment, the page link and the details as code |
+| R4 | Reply with Ctrl/⌘+Enter, edit the reply from **⋯**, then remove it | **Reply added**, **Message updated** (marked *Edited*), a confirmation modal, then *Message removed by its author* |
+| R5 | **Resolve**, open **Resolved**, then **Reopen** | *Resolved by … on Deployment N*; the Open count changes; reopening returns it |
+| R6 | Start typing a finding, have a teammate reply elsewhere | A note says new activity appears when you leave the field; afterwards the reply shows and your text is still there |
+| R7 | With a draft unsent, publish a new commit, then **Add finding** | The page asks **Record against Deployment N+1** or **Keep Deployment N**; your text is kept |
+| R8 | As a Developer, **Remove as moderator** on a Reviewer's message without a reason, then with one | Remove waits for a reason; the tombstone shows who and why |
+| R9 | As a Reviewer, open the PR's build logs or Secrets address | Sent to **Previews**; forged posts to build or settings addresses are refused |
+| R10 | Merge the PR, open its review | Readable; no new findings, replies, edits or resolving; **Remove** still works |
+| R11 | Turn JavaScript off and repeat R3–R5 | Every action works; removal confirms on the page |
+
 ### G. GitHub feedback
 
 | # | Steps | Expected |
@@ -747,6 +799,7 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | G2 | Fail a build | The comment says Failed with the reason; the check run fails |
 | G3 | Delete the Previa comment on GitHub, then rebuild | A new comment is created (still only one) |
 | G4 | Tear down | The comment says Preview removed; an unfinished check run is closed as stopped |
+| G5 | Open the comment's **Review in Previa** link signed out, then as a workspace member | Sign-in first; then the review page. No finding text appears on GitHub |
 
 ### H. Secrets
 

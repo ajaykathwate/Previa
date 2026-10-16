@@ -29,6 +29,7 @@ templ Panel(p Page, csrf string) {
 	<div class="pr-workspace" data-selected-repo={ components.PublicValue(ctx, "repository", p.RepoID) }>
 		if p.SelectedPR!=nil {
 			@prHero(p, p.Selected())
+			@components.PullRequestTabs(p.RepoID, p.Selected().Number, "preview", p.Selected().OpenFindings)
 			@PRDetail(p, p.Selected(), csrf)
 		} else {
 			@repositoryHero(p, csrf)

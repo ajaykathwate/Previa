@@ -214,3 +214,32 @@ func TestReadyCommentNamesTheBackendAndDocs(t *testing.T) {
 		t.Fatalf("plain preview comment changed:\n%s", body)
 	}
 }
+
+// The living comment links the pull request's review in Previa and nothing
+// more: no review status, counts, people or feedback text reach GitHub.
+func TestCommentLinksTheReviewOnly(t *testing.T) {
+	s := open(intent("succeeded", 2), &Environment{Status: "running", Hostname: "pr-42-x-abc", DeployedSHA: headB, AppliedGeneration: 5, AppliedRevision: 2})
+	s.RepoPublicID, s.PRPublicID = "repo-uuid", "pr-uuid"
+	v := Derive(s, settings, false, now)
+	if v.ReviewURL != "https://previa.example.com/repositories/repo-uuid/pull-requests/pr-uuid/review" {
+		t.Fatalf("review link %q", v.ReviewURL)
+	}
+	body := CommentContent(v)
+	if !strings.Contains(body, "[Review in Previa]("+v.ReviewURL+") · [Build log]("+v.LogsURL+") (sign in to Previa)") {
+		t.Fatalf("links line:\n%s", body)
+	}
+	for _, private := range []string{"finding", "Findings", "Reviewed", "Changes requested"} {
+		if strings.Contains(body, private) {
+			t.Fatalf("the comment carries review state %q:\n%s", private, body)
+		}
+	}
+	// A closed pull request keeps its review link; its removed preview has no log link.
+	closed := s
+	closed.State, closed.Environment = "closed", nil
+	if body := CommentContent(Derive(closed, settings, true, now)); !strings.Contains(body, "[Review in Previa]") || strings.Contains(body, "Build log") {
+		t.Fatalf("closed:\n%s", body)
+	}
+	if v := Derive(s, Settings{CheckName: "x"}, false, now); v.ReviewURL != "" {
+		t.Fatal("no dashboard address, no link")
+	}
+}

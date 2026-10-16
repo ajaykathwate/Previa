@@ -361,9 +361,12 @@ func (v view) openedStep() pages.Step {
 	return s
 }
 
-// nextLinks are what to do once the first preview is open.
+// nextLinks are what to do once the first preview is open: write the
+// testing instructions on the pull request's review page and bring in
+// reviewers.
 func (v view) nextLinks() []pages.Link {
-	links := []pages.Link{{Label: "Pull request", Href: "/repositories/" + strconv.FormatInt(v.repo.ID, 10) + "/pull-requests/" + strconv.Itoa(int(v.pr.Number)), Icon: "pr"}}
+	pr := "/repositories/" + strconv.FormatInt(v.repo.ID, 10) + "/pull-requests/" + strconv.Itoa(int(v.pr.Number))
+	links := []pages.Link{{Label: "Write testing instructions", Href: pr + "/review", Icon: "review", Primary: true}, {Label: "Pull request", Href: pr, Icon: "pr"}}
 	if v.repo.CanManage {
 		links = append(links, pages.Link{Label: "Invite a reviewer", Href: "/workspaces/" + strconv.FormatInt(v.repo.WorkspaceID, 10) + "/members", Icon: "members"})
 	}

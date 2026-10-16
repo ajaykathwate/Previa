@@ -69,6 +69,8 @@ type PR struct {
 	// ("postgres 17, 16"); ExecutionWorker says whether one runs at all.
 	ServicesOffered []string
 	ExecutionWorker bool
+	// OpenFindings counts the review's open findings, for the Review tab.
+	OpenFindings int64
 }
 
 // ServicesLabel says what managed services previews may request here.

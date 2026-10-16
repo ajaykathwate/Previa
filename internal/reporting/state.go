@@ -80,6 +80,7 @@ type View struct {
 	DocsURL    string    // the live preview's docs path, when it declares one
 	Backend    string    // what the live preview runs next to its app, one line
 	LogsURL    string    // only when a log page exists and the dashboard URL is known
+	ReviewURL  string    // the pull request's review page in Previa, when the dashboard URL is known
 	Failure    string    // safe sentence for a failed request
 	Blocked    string    // why a requested build cannot start
 	Waiting    string    // an environments.Wait* reason while the request waits
@@ -121,11 +122,16 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 	if live {
 		v.describePreview(env, settings)
 	}
-	if env != nil && settings.AppBaseURL != "" {
+	if settings.AppBaseURL != "" {
+		pr := fmt.Sprintf("%s/repositories/%d/pull-requests/%d", settings.AppBaseURL, s.RepoID, s.Number)
 		if s.RepoPublicID != "" && s.PRPublicID != "" {
-			v.LogsURL = fmt.Sprintf("%s/repositories/%s/pull-requests/%s/logs", settings.AppBaseURL, s.RepoPublicID, s.PRPublicID)
-		} else {
-			v.LogsURL = fmt.Sprintf("%s/repositories/%d/pull-requests/%d/logs", settings.AppBaseURL, s.RepoID, s.Number)
+			pr = fmt.Sprintf("%s/repositories/%s/pull-requests/%s", settings.AppBaseURL, s.RepoPublicID, s.PRPublicID)
+		}
+		// Link only: review status, counts and feedback stay in Previa
+		// (docs/30-reviews.md).
+		v.ReviewURL = pr + "/review"
+		if env != nil {
+			v.LogsURL = pr + "/logs"
 		}
 	}
 	current := s.Intent

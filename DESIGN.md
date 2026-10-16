@@ -35,6 +35,7 @@ Each feature has five parts:
 19. End-to-end sequence diagram
 21. Shared team workspaces (approved SaaS Feature 1)
 22. Guided onboarding (approved SaaS Feature 2)
+23. Native preview review and feedback (approved SaaS Feature 3)
 
 ---
 
@@ -865,6 +866,16 @@ preview/
 │   │   ├── checks.go  github.go  result.go    # bounded preflight of one commit
 │   │   ├── jobs.go                 # setup check worker (claim, read GitHub, fenced result)
 │   │   └── queries.sql  dbgen/
+│   │
+│   ├── reviews/                    # FEATURE: a pull request's review page, instructions and findings
+│   │   ├── handler.go              # page and no-JS forms; drafts shown again on errors/conflicts
+│   │   ├── service.go  writes.go   # page state; locked, revisioned, deduplicated writes
+│   │   ├── limits.go  errors.go    # content limits and validation; refusals the handler shows
+│   │   └── queries.sql  dbgen/
+│   │
+│   ├── activity/                   # FEATURE: bounded timeline events (recorder + retention job)
+│   │   ├── recorder.go  prune.go
+│   │   └── queries.sql  dbgen/
 │   ├── app/                        # composition root: builds and wires everything
 │   │   ├── server.go               # creates features, mounts routes, starts HTTP
 │   │   ├── worker.go               # starts River, the capability heartbeat, draining
@@ -1034,6 +1045,7 @@ preview/
 │   │   ├── repositories/           # paginated, filtered repository page
 │   │   ├── pullrequests/           # repository/PR detail and shared current activity
 │   │   ├── onboarding/             # a repository's Setup tab
+│   │   ├── reviews/                # a pull request's review page (instructions, findings)
 │   │   ├── builds/                 # Builds page, current-attempt build log page
 │   │   ├── appoutput/              # live app output page
 │   │   ├── idle/                   # "Waking the preview…" page (public)
@@ -1313,7 +1325,9 @@ human source authority. Shared modal components provide accessible confirmation.
   boundaries. Source permissions are verified outside database transactions.
 - Cookies/tokens for private previews recheck current database grants on every
   request. SSE checks access before subsequent frames and heartbeats. Reviewer
-  navigation contains granted previews without operational logs/actions.
+  navigation contains granted previews without operational logs/actions; on
+  repository paths Reviewers reach only a pull request's review page and its forms,
+  the repository's change stream and Open preview (§23).
 - Quotas and fairness use workspace IDs and a workspace usage ledger. Container
   labels identify workspace; legacy labels resolve through PR identity. Captured
   attempt consumption survives ownership transfer and running cancellation.
@@ -1385,7 +1399,8 @@ realtime hub. `repoconfig.ParseFor` (the build's parser) and
   check of the head commit; the PR page is unchanged.
 - Open preview actions for people who can build go through the recording route,
   which redirects with `Referrer-Policy: no-referrer` and records only navigations
-  started on Previa; Reviewers keep direct links.
+  started on Previa. The review page uses it for everyone, with an optional
+  validated `path` inside the preview; Reviewers keep direct links on Previews.
 - The Overview's checklist is role-aware and links to the Setup tab where setup
   continues; accepted invitations land Reviewers on Previews and others on the
   Overview, in the joined workspace.
@@ -1398,6 +1413,90 @@ the last completed result for reference but never counts as current success. A p
 while checking, a closed pull request or revoked access discards the result. A check
 nobody picks up turns stale after two minutes. Developers who cannot manage secrets
 see whom to ask instead of an editor. Hosted pages never show operator settings.
-Request review is labelled as not available until Feature 3. The checks are per
+After the first preview is open, the next step is the pull request's review page;
+asking specific people to review is labelled as not available (Feature 4). The checks are per
 pull request rather than per repository, and building acknowledges the app's
 prerequisites (no stored boolean). Details: [29-guided-onboarding.md](docs/29-guided-onboarding.md).
+
+## 23. Native preview review and feedback
+
+### Requirement
+
+Implement approved Feature 3 of `README-MVP-PRODUCT-EXPANSION.md`, with the
+publication references and activity hooks of delivery step B: one review page per
+pull request where people who can build write testing instructions and every member
+with preview access records findings, discusses them and resolves them, entirely in
+Previa. Findings keep the deployment they were recorded against; Reviewers never
+need source access, logs or build controls.
+
+### Complexity
+
+High. Authorization spans three roles and moderation; every write must survive
+double submission, concurrent edits, a deployment published mid-draft, member
+removal and pull request closure; drafts must survive validation errors and live
+refreshes; all of it works without JavaScript.
+
+### Tech stack (feature-specific)
+
+Existing Go, PostgreSQL/pgx/sqlc, Goose, River, templ/HTMX and the realtime hub. No
+new library.
+
+### Technical implementation
+
+- **Publications (step B).** Migration 0039 adds `preview_publications`: written in
+  `environments.activateTx`, the transaction that makes a candidate the serving
+  preview, never at build completion. One row per (pull request, generation,
+  revision), numbered per pull request ("Deployment 3"), with SHA, candidate, the
+  effective configuration hash (threaded from the build into
+  `preview_components.config_hash`) and activation time. A retried activation
+  records nothing; a same-commit Rebuild is a new revision, so a new publication.
+  Live previews at migration are backfilled with their deployed fence and labelled
+  *Present at migration*. Rows are references; nothing runnable is retained.
+- **Activity (step B).** `internal/activity` owns `activity_events` (workspace,
+  repository, pull request, publication, actor or system, kind, visibility, small
+  safe metadata, dedup key) and `activity_pruned`. Features record through their
+  own small interfaces, adapted in `internal/app`, inside their own transactions:
+  publications (`preview.published`), instructions and every finding change. An
+  hourly River job keeps 90 days and the newest 5,000 events per pull request and
+  moves a pruned-history marker. The timeline view is Feature 4.
+- **Reviews.** `internal/reviews` owns `pr_review_instructions` (revisioned, one per
+  pull request), `preview_feedback_threads` (per-PR number, recorded publication,
+  state open/resolved/removed with revision, resolver's live publication, moderation
+  reason, idempotency key), `preview_feedback_messages` (position, author,
+  publication, text, page path and reproduction details on the opening message,
+  revision, edit and removal metadata), `pr_review_counters` and
+  `review_write_budgets`. Composite foreign keys keep messages and publications
+  inside their pull request; everything cascades with the pull request.
+- Writes lock in one order — the pull request (key share, as references do), the
+  writer's active membership (share, so a removal waits and is seen by later
+  writes), then the per-PR counters — check access in SQL
+  (`workspace_repository_access`: preview for feedback, operate for instructions,
+  moderation and resolving others' findings), compare revisions, enforce limits, and
+  record the event in the same transaction. No GitHub call is involved.
+- A new finding names the deployment the page showed. If a newer one was published
+  meanwhile the form returns a conflict with the draft; the person records it
+  against the newest or keeps the tested one on purpose. Replies record what was
+  shown; resolving records the deployment only while the preview serves it.
+- Routes live under `/repositories/{id}/pull-requests/{n}/review`: the page and
+  POST forms for instructions, findings, replies, edits, removals (own, or
+  moderation with a reason), finding removal, resolve and reopen. Success redirects
+  back with a toast; problems render the page again (422/409/429) with the draft.
+  The workspace guard lets Reviewers reach only these paths, the repository's
+  change stream and Open preview, and treats review writes as preview access.
+- Presentation is `web/pages/reviews` plus `components.PullRequestTabs` (Preview |
+  Review) for people who can build. Triggers on the review tables notify the
+  repository topic; `ui.js` keeps unsent drafts (with their deployment and revision)
+  across live refreshes and waits while someone types.
+- GitHub's living comment gains a link-only *Review in Previa* line; no review text,
+  status, counts or people are projected (the sharing policy is delivery step E).
+
+### Design decisions and edge cases
+
+One page instead of Review/Feedback/Activity tabs keeps instructions, the deployment
+and findings side by side. Removal erases text (tombstones keep who and why);
+removing an unanswered opening message removes the finding. A removed member's
+words stay attributed as a former member. Closed or merged pull requests are
+read-only except removal. Limits: 8 KB per message and per reproduction details,
+32 KB of instructions, 500 findings and 5,000 messages per pull request, 200 per
+finding, 300 review changes per member per hour; removals never give allowance
+back. Details: [30-reviews.md](docs/30-reviews.md).

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/ajaykathwatee/previa/internal/activity"
 	"strings"
 
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
@@ -86,7 +87,8 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 	}
 	x.repo = environments.NewRepository(pool, operations).WithHostnames(routing.NewLabel).WithReports().
 		WithLifetime(cfg.PreviewLifetime()).WithBuildSlots(cfg.MaxConcurrentBuilds).
-		WithAccountLimits(environments.AccountLimits{BuildsPerAccount: cfg.BuildsPerAccount, MinutesPerDay: cfg.BuildMinutesPerAccountDay})
+		WithAccountLimits(environments.AccountLimits{BuildsPerAccount: cfg.BuildsPerAccount, MinutesPerDay: cfg.BuildMinutesPerAccountDay}).
+		WithPublications(publicationActivity{recorder: activity.NewRecorder()})
 	repo := x.repo
 	if x.controller, err = newRouteController(in, repo, x.runtime); err != nil {
 		return nil, err

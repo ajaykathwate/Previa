@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/platform/publicid"
@@ -224,10 +225,33 @@ func (h *Handler) open(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "The preview could not be opened. Please try again.", http.StatusServiceUnavailable)
 		return
 	}
+	// A page inside the preview (a review's start or docs page) keeps the
+	// preview's own host; anything else opens its front page.
+	if path, ok := previewPath(r.URL.Query().Get("path")); ok {
+		address += path
+	}
 	// The preview never learns which Previa page sent the visitor.
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, address, http.StatusSeeOther)
+}
+
+// previewPath accepts a path inside a preview, such as "/checkout?step=2":
+// rooted, without a host, credentials, backslashes or control characters.
+func previewPath(raw string) (string, bool) {
+	if raw == "" || len(raw) > 300 || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.ContainsAny(raw, "\\ \t\r\n") {
+		return "", false
+	}
+	for _, r := range raw {
+		if r < 0x20 || r == 0x7f {
+			return "", false
+		}
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil {
+		return "", false
+	}
+	return u.String(), true
 }
 
 // fromPrevia reports whether a navigation started on Previa's own pages (or

@@ -126,8 +126,9 @@ test('the checklist takes an owner from a check to an opened preview, live', asy
     await waitForStep(page, 'opened', 'done');
     assert.match(await page.locator('#setup-title').textContent(), /Ready for review/);
     assert.match(await page.locator('#setup-opened').textContent(), /Opened by you/);
-    const review = page.locator('.setup-next button', {hasText: 'Request review'});
-    assert.equal(await review.isDisabled(), true, 'review requests are labelled as not available yet');
+    const review = page.locator('.setup-next a', {hasText: 'Write testing instructions'});
+    assert.match(await review.getAttribute('href'), /\/pull-requests\/[^/]+\/review$/, 'what comes next is the review page');
+    assert.match(await page.locator('.setup-next').textContent(), /Asking specific people to review is not available yet/);
     for (const theme of ['light', 'dark']) {
       await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
       await screenshot(page, `done-${theme}`);

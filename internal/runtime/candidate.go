@@ -349,7 +349,7 @@ func (b backend) componentTitle(component string) string {
 // components describes the ready candidate for the dashboard and reports.
 func (b backend) components(id requestIdentity, settings repoconfig.Config, outbound int, withheld bool) Components {
 	c := Components{PullRequestID: id.PullRequestID, Generation: id.Generation, Revision: id.Revision, Setup: len(b.setup) > 0,
-		DocsPath: settings.DocsPath, Outbound: outbound, OutboundWithheld: withheld}
+		DocsPath: settings.DocsPath, Outbound: outbound, OutboundWithheld: withheld, ConfigHash: b.configHash}
 	for _, s := range b.services {
 		c.Services = append(c.Services, ServiceComponent{Kind: s.Kind, Version: s.Version})
 	}

@@ -300,8 +300,9 @@ func TestOpeningThePreviewFinishesSetup(t *testing.T) {
 	})
 	v.opened = &dbgen.LatestOpenRow{UserID: 1, DisplayName: "Owner", OpenedAt: at(-time.Minute)}
 	p := derived(v)
-	if !p.Complete() || !strings.Contains(step(t, p, stepOpened).Summary, "by you") || len(p.Next) != 2 || p.Next[1].Href != "/workspaces/9/members" {
-		t.Fatalf("opened by the viewer: %s %+v", states(p), p.Next)
+	if !p.Complete() || !strings.Contains(step(t, p, stepOpened).Summary, "by you") || len(p.Next) != 3 ||
+		p.Next[0].Href != "/repositories/5/pull-requests/42/review" || !p.Next[0].Primary || p.Next[2].Href != "/workspaces/9/members" {
+		t.Fatalf("opened by the viewer: what comes next is the review page: %s %+v", states(p), p.Next)
 	}
 	if step(t, p, stepConfiguration).State != pages.StateDone {
 		t.Fatal("a commit that built needs no separate check")
@@ -309,7 +310,7 @@ func TestOpeningThePreviewFinishesSetup(t *testing.T) {
 	v.opened.UserID, v.opened.DisplayName = 2, "Ada"
 	v.repo.CanManage = false
 	p = derived(v)
-	if !strings.Contains(step(t, p, stepOpened).Summary, "by Ada") || len(p.Next) != 1 {
+	if !strings.Contains(step(t, p, stepOpened).Summary, "by Ada") || len(p.Next) != 2 {
 		t.Fatalf("opened by a teammate; Developers are not offered invitations: %+v", p.Next)
 	}
 	v.pr.HeadSha, v.pr.RequestCurrent = strings.Repeat("c", 40), false

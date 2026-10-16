@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/activity"
 	"github.com/ajaykathwatee/previa/internal/appoutput"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/builds"
@@ -91,11 +92,12 @@ type pipeline struct {
 func buildPipeline(ctx context.Context, in pipelineInput) (*pipeline, error) {
 	p := &pipeline{}
 	cfg, log := in.cfg, in.logger
-	// Log retention needs only the database.
+	// Log and activity retention need only the database.
 	p.register = append(p.register, func(rc *river.Config) {
 		river.AddWorker(rc.Workers, &buildlogs.PruneWorker{Store: buildlogs.NewStore(in.pool).WithRetention(cfg.BuildLogRetention()), Logger: log})
 		rc.Queues[buildlogs.PruneQueue] = river.QueueConfig{MaxWorkers: 1}
 		rc.PeriodicJobs = append(rc.PeriodicJobs, buildlogs.PeriodicPrune())
+		activity.Register(rc, in.pool, log)
 	})
 	if in.github == nil {
 		p.unavailable = append(p.unavailable, "GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH are not set: no discovery, builds or PR reports")

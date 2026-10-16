@@ -126,6 +126,11 @@ even if the person who installed it changes their password or leaves the team.
 5. Optionally, the repository's **Setup** tab checks one open pull request's
    commit (configuration, Dockerfile and context, without building) and walks to
    its first preview; see [guided onboarding](docs/29-guided-onboarding.md).
+6. Each pull request has a **review page**: Owners, Admins and Developers write
+   its testing instructions, and everyone with preview access (Reviewers included)
+   records findings against the deployment they tested, replies, edits, removes and
+   resolves them in Previa; GitHub's comment links to it. See
+   [native review and feedback](docs/30-reviews.md).
 
 Backend and API repositories can also declare platform-managed PostgreSQL, Redis
 and MySQL (`services`), a setup command for migrations and seed data (`setup`), up to
@@ -229,11 +234,14 @@ must match the worker's architecture; Windows and GPU workloads are unsupported.
 
 The dashboard supports login, installation linking and the accepted manual build
 workflow. Owners need repository mode controls and a way to select a PR and request
-its latest commit. GitHub comments/checks remain the review-facing feedback channel.
+its latest commit. Review feedback lives in Previa: each pull request's review page
+holds its testing instructions and findings, and the GitHub comment links to it
+while comments and checks keep reporting builds.
 
 Current pages are Overview, Repositories, Builds, Previews, Workspaces (members,
-invitations and settings), and Developer Tools. Reviewer navigation exposes only
-permitted previews and team settings.
+invitations and settings), and Developer Tools, plus a review page per pull
+request. Reviewer navigation exposes only permitted previews, their review pages
+and team settings.
 The workspace uses a "signal" theme (graphite neutrals, a lime accent, light and
 dark modes that follow the OS with a manual toggle, system sans plus monospace for
 commits and branches). A grouped sidebar collapses to an icon rail on medium screens

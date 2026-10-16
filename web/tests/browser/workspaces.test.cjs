@@ -117,7 +117,9 @@ test('workspace invitation consent and reviewer scope work without JavaScript',a
   await reviewer.page.getByRole('link',{name:'Previews',exact:true}).click();
   assert.ok((await reviewer.page.locator('main').textContent()).includes('acme/api'));
   assert.ok(!(await reviewer.page.locator('main').textContent()).includes('acme/private'));
-  assert.equal(await reviewer.page.locator('main a[href^="/repositories/"]').count(),0);
+  // Reviewers reach a pull request only through its review page.
+  assert.ok(await reviewer.page.locator('main a[href^="/repositories/"][href$="/review"]').count()>0);
+  assert.equal(await reviewer.page.locator('main a[href^="/repositories/"]:not([href$="/review"])').count(),0);
   await screenshot(reviewer.page,'reviewer-previews');
   assert.equal(await reviewer.page.locator('.sidebar-nav a[href="/builds"]').count(),0);
   assert.equal(await reviewer.page.locator('.sidebar-nav a[href="/repositories"]').count(),0);

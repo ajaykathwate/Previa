@@ -31,6 +31,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/previewaccess"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/ajaykathwatee/previa/internal/reviews"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/starterkits"
@@ -123,6 +124,7 @@ type serverFeatures struct {
 	workspaceScope *workspaces.Middleware
 	publicIDs      *publicid.Catalog
 	setup          *onboarding.Handler
+	reviews        *reviews.Handler
 }
 
 func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
@@ -197,6 +199,9 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 		return nil, err
 	}
 	f.setup = setupHandler
+	if f.reviews, err = newReviews(cfg, pool, hub, f.auth, logger); err != nil {
+		return nil, err
+	}
 	f.summary = overviewSummary(service, prRepository, f.capabilities, f.prs, setup)
 	if f.outbound, err = newOutboundHandler(cfg, pool, producer, f.auth, logger); err != nil {
 		return nil, err
@@ -353,6 +358,9 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 		f.prs.Mount(r, auth.RequireUser)
 		if f.setup != nil {
 			f.setup.Mount(r, auth.RequireUser)
+		}
+		if f.reviews != nil {
+			f.reviews.Mount(r, auth.RequireUser)
 		}
 		f.secrets.Mount(r, auth.RequireUser)
 		f.outbound.Mount(r, auth.RequireUser)

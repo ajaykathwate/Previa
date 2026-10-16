@@ -766,7 +766,8 @@ SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.cr
  (p.teardown_requested_generation = p.generation)::boolean AS teardown_requested,
  pc.services AS backend_services, coalesce(pc.setup, false)::boolean AS backend_setup, pc.processes AS backend_processes,
  coalesce(pc.docs_path, '')::text AS backend_docs_path, coalesce(pc.outbound, 0)::integer AS backend_outbound,
- coalesce(pc.outbound_withheld, false)::boolean AS backend_outbound_withheld
+ coalesce(pc.outbound_withheld, false)::boolean AS backend_outbound_withheld,
+ (SELECT count(*) FROM preview_feedback_threads t WHERE t.pull_request_id=p.id AND t.state='open')::bigint AS open_findings
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN users u ON u.id=b.requested_by
@@ -847,6 +848,7 @@ type OwnedPRRow struct {
 	BackendDocsPath             string
 	BackendOutbound             int32
 	BackendOutboundWithheld     bool
+	OpenFindings                int64
 }
 
 // The PR's three lifecycle columns (observed, requested, deployed) and what
@@ -920,6 +922,7 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 		&i.BackendDocsPath,
 		&i.BackendOutbound,
 		&i.BackendOutboundWithheld,
+		&i.OpenFindings,
 	)
 	return i, err
 }

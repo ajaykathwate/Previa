@@ -126,6 +126,28 @@ func TestOpenPreviewRecordsOpensFromPreviaOnly(t *testing.T) {
 	if res = owner.do(http.MethodGet, "/repositories/"+strconv.FormatInt(f.repo, 10)+"/pull-requests/42/open", nil); res.Code != http.StatusNotFound {
 		t.Fatalf("numeric addresses are not accepted for an action: %d", res.Code)
 	}
+	// Reviewers open previews from the review page through the same action.
+	reviewer := newBrowser(router)
+	reviewer.login(t, "reviewer")
+	if res = reviewer.do(http.MethodGet, open, nil); res.Code != http.StatusSeeOther || res.Header().Get("Location") != "https://pr-42-fixture.preview.test" {
+		t.Fatalf("a Reviewer opens the preview: %d %s", res.Code, res.Header().Get("Location"))
+	}
+	// A page inside the preview, as a review's start or docs link asks for.
+	for path, want := range map[string]string{
+		"/checkout?step=2":     "https://pr-42-fixture.preview.test/checkout?step=2",
+		"//evil.example/phish": "https://pr-42-fixture.preview.test",
+		"https://evil.example": "https://pr-42-fixture.preview.test",
+		"/a\\b":                "https://pr-42-fixture.preview.test",
+	} {
+		if res = reviewer.do(http.MethodGet, open+"?"+url.Values{"path": {path}}.Encode(), nil); res.Header().Get("Location") != want {
+			t.Errorf("path %q opened %q", path, res.Header().Get("Location"))
+		}
+	}
+	outsider := newBrowser(router)
+	outsider.login(t, "outsider")
+	if res = outsider.do(http.MethodGet, open, nil); res.Code != http.StatusNotFound {
+		t.Fatalf("an outsider cannot: %d", res.Code)
+	}
 }
 
 func TestARefusedBuildReturnsToTheChecklistWithItsReason(t *testing.T) {

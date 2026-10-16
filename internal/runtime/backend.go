@@ -59,6 +59,8 @@ type backend struct {
 	// redactEnv names the variables whose values output must never show:
 	// the repository's secrets and the credentials in env (LabelRedactEnv).
 	redactEnv []string
+	// configHash is the effective configuration the candidate was built with.
+	configHash string
 }
 
 // credentialNames are the variables of env that carry a generated password.

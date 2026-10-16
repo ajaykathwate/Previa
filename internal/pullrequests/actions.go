@@ -130,7 +130,8 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 		Deadline: timestamp(row.AvailableAt), Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh,
 		PublishedAt: timestamp(row.PublishedAt), RequestCurrent: row.RequestCurrent,
 		RequestSource: row.RequestSource, RequestedBy: row.RequestedByLogin,
-		RequestedAt: timestamp(row.RequestedAt), StartedAt: timestamp(row.StartedAt), CompletedAt: timestamp(row.CompletedAt)}
+		RequestedAt: timestamp(row.RequestedAt), StartedAt: timestamp(row.StartedAt), CompletedAt: timestamp(row.CompletedAt),
+		OpenFindings: row.OpenFindings}
 	switch {
 	case previewDeployed(row.DeployedSha, row.EnvironmentStatus):
 		h.describePreview(&pr, row)

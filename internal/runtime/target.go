@@ -133,6 +133,9 @@ type Components struct {
 	DocsPath                            string
 	Outbound                            int  // approved destinations given to it
 	OutboundWithheld                    bool // approvals exist but its source is untrusted
+	// ConfigHash is the effective configuration's hash, which the candidate's
+	// publication records (docs/30-reviews.md).
+	ConfigHash string
 }
 
 // ServiceComponent is one managed service of a candidate.
@@ -156,6 +159,7 @@ func (s *TargetStore) RecordComponents(ctx context.Context, c Components) error 
 		PullRequestID: c.PullRequestID, Generation: c.Generation, Revision: c.Revision, Services: services, Setup: c.Setup,
 		Processes: processes, DocsPath: pgtype.Text{String: c.DocsPath, Valid: c.DocsPath != ""},
 		Outbound: int32(c.Outbound), OutboundWithheld: c.OutboundWithheld,
+		ConfigHash: pgtype.Text{String: c.ConfigHash, Valid: c.ConfigHash != ""},
 	}); err != nil {
 		return fmt.Errorf("record preview components: %w", err)
 	}

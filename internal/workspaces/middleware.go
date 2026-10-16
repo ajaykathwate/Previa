@@ -121,9 +121,14 @@ func needsWorkspace(path string) bool {
 	return path == "/dashboard" || strings.HasPrefix(path, "/repositories") || path == "/builds" || path == "/previews" || path == "/installations/start"
 }
 func (m *Middleware) guard(w http.ResponseWriter, r *http.Request, user int64, selected Workspace) bool {
-	if selected.Role == "reviewer" && (needsWorkspace(r.URL.Path) || r.URL.Path == "/starter-kits" || r.URL.Path == "/developer-tools") {
+	if selected.Role == "reviewer" && (needsWorkspace(r.URL.Path) || r.URL.Path == "/starter-kits" || r.URL.Path == "/developer-tools") && !reviewerPath(r) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.NotFound(w, r)
+			return false
+		}
+		// A shared pull request link leads a Reviewer to its review page.
+		if p := strings.Split(r.URL.Path, "/"); len(p) == 5 && p[1] == "repositories" && p[3] == "pull-requests" {
+			publicid.Redirect(w, r, r.URL.Path+"/review", http.StatusSeeOther)
 			return false
 		}
 		if r.URL.Path != "/previews" {
@@ -159,9 +164,35 @@ func (m *Middleware) fail(w http.ResponseWriter, r *http.Request, err error) {
 	http.Error(w, "Workspace or GitHub access could not be verified. Please try again.", http.StatusServiceUnavailable)
 }
 
+// reviewerPath reports the repository paths a Reviewer uses: a pull
+// request's review page and its forms, the repository's change stream that
+// keeps that page live, and the Open preview action.
+func reviewerPath(r *http.Request) bool {
+	p := strings.Split(r.URL.Path, "/")
+	if len(p) < 4 || p[0] != "" || p[1] != "repositories" {
+		return false
+	}
+	read := r.Method == http.MethodGet || r.Method == http.MethodHead
+	switch {
+	case len(p) >= 6 && p[3] == "pull-requests" && p[5] == "review":
+		return true
+	case len(p) == 6 && p[3] == "pull-requests" && p[5] == "open":
+		return read
+	case len(p) == 4 && p[3] == "events":
+		return read
+	}
+	return false
+}
+
 func repositoryAbility(r *http.Request) (string, bool) {
 	path := r.URL.Path
 	mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
+	// Review changes need preview access only: Reviewers write feedback
+	// without source access, and the reviews feature checks build access for
+	// instructions and moderation itself. No GitHub call stands in the way.
+	if p := strings.Split(path, "/"); mutation && len(p) >= 6 && p[1] == "repositories" && p[3] == "pull-requests" && p[5] == "review" {
+		return "preview", false
+	}
 	settings := strings.Contains(path, "/secrets") || strings.HasSuffix(path, "/policy") || strings.HasSuffix(path, "/preview-access") || strings.Contains(path, "/outbound")
 	if settings {
 		source := mutation

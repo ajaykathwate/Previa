@@ -331,6 +331,8 @@ templ linkIcon(name string) {
 			@components.KeyIcon()
 		case "pr":
 			@components.PullRequestIcon()
+		case "review":
+			@components.MessageIcon()
 	}
 }
 
@@ -349,20 +351,17 @@ templ nextSteps(p Page) {
 			for _, link := range p.Next {
 				@stepLink(link)
 			}
-			@button.Button(button.Props{Disabled: true, Variant: button.VariantOutline, Attributes: templ.Attributes{"aria-describedby": "setup-review-later"}}) {
-				@components.MessageIcon()
-				Request review
-			}
 		</div>
-		<p class="setup-blocked" id="setup-review-later">
+		<p class="setup-blocked">
 			@components.InfoIcon()
 			<span>
-				Review requests in Previa are not available yet. Share the preview link with your reviewers;
+				Reviewers test from the review page: your instructions, the deployed version and their findings in one place. Copy its link to share it;
 				if p.Manager {
-					people you invite as Reviewers can also open private previews.
+					people you invite as Reviewers can open it and private previews.
 				} else {
-					an Owner or Admin can invite them as Reviewers to open private previews.
+					an Owner or Admin can invite them as Reviewers to open it and private previews.
 				}
+				Asking specific people to review is not available yet.
 			</span>
 		</p>
 		if p.Mode != "automatic" {

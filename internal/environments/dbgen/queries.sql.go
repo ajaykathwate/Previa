@@ -792,6 +792,55 @@ func (q *Queries) RearmCleanupOperation(ctx context.Context, id int64) (int64, e
 	return result.RowsAffected(), nil
 }
 
+const recordPublication = `-- name: RecordPublication :one
+INSERT INTO preview_publications (pull_request_id, repo_id, workspace_id, sequence, head_sha, generation, revision,
+                                  container_id, image_tag, config_hash)
+SELECT p.id, p.repo_id, i.workspace_id,
+       coalesce((SELECT max(x.sequence) FROM preview_publications x WHERE x.pull_request_id = p.id), 0) + 1,
+       $1::text, $2::bigint, $3::bigint,
+       $4::text, $5::text,
+       (SELECT c.config_hash FROM preview_components c
+        WHERE c.pull_request_id = p.id AND c.generation = $2::bigint AND c.revision = $3::bigint)
+FROM pull_requests p
+JOIN repos r ON r.id = p.repo_id
+JOIN installations i ON i.id = r.installation_id
+WHERE p.id = $6::bigint AND i.workspace_id IS NOT NULL
+ON CONFLICT (pull_request_id, generation, revision) DO NOTHING
+RETURNING id, sequence
+`
+
+type RecordPublicationParams struct {
+	HeadSha       string
+	Generation    int64
+	Revision      int64
+	ContainerID   pgtype.Text
+	ImageTag      pgtype.Text
+	PullRequestID int64
+}
+
+type RecordPublicationRow struct {
+	ID       int64
+	Sequence int32
+}
+
+// The immutable reference to a candidate that just started serving
+// (docs/30-reviews.md), written in its activating transaction under the PR
+// lock, which also serializes the per-PR sequence. A retried activation of
+// the same candidate records nothing new.
+func (q *Queries) RecordPublication(ctx context.Context, arg RecordPublicationParams) (RecordPublicationRow, error) {
+	row := q.db.QueryRow(ctx, recordPublication,
+		arg.HeadSha,
+		arg.Generation,
+		arg.Revision,
+		arg.ContainerID,
+		arg.ImageTag,
+		arg.PullRequestID,
+	)
+	var i RecordPublicationRow
+	err := row.Scan(&i.ID, &i.Sequence)
+	return i, err
+}
+
 const releaseExpiredOperationLease = `-- name: ReleaseExpiredOperationLease :execrows
 UPDATE environment_operations
 SET state = 'retryable', lease_owner = NULL, lease_expires_at = NULL,

@@ -53,6 +53,9 @@ type Repository struct {
 	lifetime   time.Duration
 	buildSlots int
 	accounts   AccountLimits
+	// publications hears about each new publication; nil records only the
+	// publication itself.
+	publications PublicationRecorder
 }
 
 // WithLifetime makes each publication set the preview's expiry to now plus

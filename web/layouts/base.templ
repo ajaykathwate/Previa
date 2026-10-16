@@ -15,7 +15,7 @@ templ Document(title string) {
 			<link rel="icon" href="/static/brand/favicon.svg" type="image/svg+xml"/>
 			<link rel="icon" href="/static/brand/favicon-32.png" sizes="32x32" type="image/png"/>
 			<link rel="apple-touch-icon" href="/static/brand/apple-touch-icon.png"/>
-			<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'/>
+			<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"attributesToSettle":["class","width","height"]}'/>
 			<script nonce={ templ.GetNonce(ctx) } data-theme-boot>
 				(function(){
 					try{var t=localStorage.getItem("previa-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}

@@ -190,11 +190,12 @@ func (r *Runtime) Build(ctx context.Context, request environments.Request, attem
 	}
 	buildLogs := r.openLogs(ctx, attempt, buildRedactor)
 	announceBuildSecrets(buildLogs, buildSecrets)
-	image, settings, err := r.buildImage(ctx, request, target, buildLogs, buildSecrets)
+	image, prepared, err := r.buildImage(ctx, request, target, buildLogs, buildSecrets)
 	r.closeLogs(ctx, buildLogs)
 	if err != nil {
 		return environments.Artifact{}, err
 	}
+	settings := prepared.Config
 	// Access and the PR's source can change while a build runs. Decide on
 	// secrets with what is true now; an unbuilt candidate is never started.
 	if target, err = r.targets.Current(ctx, request); err != nil {
@@ -213,6 +214,7 @@ func (r *Runtime) Build(ctx context.Context, request environments.Request, attem
 	if err != nil {
 		return environments.Artifact{}, failure(CodeUnavailable, "The preview's services could not be prepared.", true, err)
 	}
+	plan.configHash = prepared.Hash
 	redactor, err := env.Redactor(plan.secrets...)
 	if err != nil {
 		return environments.Artifact{}, failure(CodeSecrets, "Repository secrets could not be prepared for log redaction.", false, err)
@@ -258,7 +260,7 @@ func announceBuildSecrets(logs LogSink, b *secrets.BuildSecrets) {
 }
 
 // buildImage prepares the commit and builds it, always releasing the source.
-func (r *Runtime) buildImage(ctx context.Context, request environments.Request, t Target, logs LogSink, buildSecrets *secrets.BuildSecrets) (builds.Image, repoconfig.Config, error) {
+func (r *Runtime) buildImage(ctx context.Context, request environments.Request, t Target, logs LogSink, buildSecrets *secrets.BuildSecrets) (builds.Image, repoconfig.Result, error) {
 	logs.System("Preparing commit " + request.HeadSHA[:min(12, len(request.HeadSHA))] + " from GitHub.")
 	prepared, err := r.sources.Prepare(ctx, source.Request{
 		InstallationID: t.InstallationID, BaseRepoID: t.BaseRepoID, CommitSHA: request.HeadSHA,
@@ -266,7 +268,7 @@ func (r *Runtime) buildImage(ctx context.Context, request environments.Request, 
 	})
 	if err != nil {
 		if source.CodeOf(err) == source.CodeCancelled {
-			return builds.Image{}, repoconfig.Config{}, r.interrupted(ctx, failure(CodeCancelled, "The build was cancelled.", false, err))
+			return builds.Image{}, repoconfig.Result{}, r.interrupted(ctx, failure(CodeCancelled, "The build was cancelled.", false, err))
 		}
 		var sourceErr *source.Error
 		message, retryable := "The commit could not be prepared.", false
@@ -274,7 +276,7 @@ func (r *Runtime) buildImage(ctx context.Context, request environments.Request, 
 			message, retryable = sourceErr.Message, sourceErr.Retryable
 		}
 		logs.System("Source preparation failed: " + message)
-		return builds.Image{}, repoconfig.Config{}, failure(CodeSource, message, retryable, err)
+		return builds.Image{}, repoconfig.Result{}, failure(CodeSource, message, retryable, err)
 	}
 	defer func() {
 		if err := r.sources.Release(prepared); err != nil {
@@ -290,7 +292,7 @@ func (r *Runtime) buildImage(ctx context.Context, request environments.Request, 
 	// before allowing its Dockerfile to read any decrypted build credential.
 	t, err = r.targets.Current(ctx, request)
 	if err != nil {
-		return builds.Image{}, repoconfig.Config{}, err
+		return builds.Image{}, repoconfig.Result{}, err
 	}
 	// A fork flag contradicting matching IDs must not select the cache of
 	// trusted branches. Treat that source as unverified throughout the build.
@@ -319,7 +321,7 @@ func (r *Runtime) buildImage(ctx context.Context, request environments.Request, 
 		// original only while classifying it; callers may log the safe copy.
 		redactor, redactErr := buildSecrets.Redactor()
 		if redactErr != nil {
-			return builds.Image{}, repoconfig.Config{}, failure(CodeSecrets, "Build error redaction could not be prepared.", false, redactErr)
+			return builds.Image{}, repoconfig.Result{}, failure(CodeSecrets, "Build error redaction could not be prepared.", false, redactErr)
 		}
 		safeErr := errors.New(string(redactor.Redact([]byte(err.Error()))))
 		var buildErr *builds.Error
@@ -330,19 +332,19 @@ func (r *Runtime) buildImage(ctx context.Context, request environments.Request, 
 		message = string(redactor.Redact([]byte(message)))
 		switch builds.CodeOf(err) {
 		case builds.CodeCancelled:
-			return builds.Image{}, repoconfig.Config{}, failure(CodeCancelled, message, false, safeErr)
+			return builds.Image{}, repoconfig.Result{}, failure(CodeCancelled, message, false, safeErr)
 		case builds.CodeTimeout:
-			return builds.Image{}, repoconfig.Config{}, failure(CodeTimeout, message, false, safeErr)
+			return builds.Image{}, repoconfig.Result{}, failure(CodeTimeout, message, false, safeErr)
 		case builds.CodeSuperseded:
-			return builds.Image{}, repoconfig.Config{}, failure(CodeNotCurrent, message, false, safeErr)
+			return builds.Image{}, repoconfig.Result{}, failure(CodeNotCurrent, message, false, safeErr)
 		case builds.CodeDiskLow:
-			return builds.Image{}, repoconfig.Config{}, failure(CodeDiskLow, message, true, safeErr)
+			return builds.Image{}, repoconfig.Result{}, failure(CodeDiskLow, message, true, safeErr)
 		case builds.CodeImageTooLarge:
-			return builds.Image{}, repoconfig.Config{}, failure(CodeImageTooLarge, message, false, safeErr)
+			return builds.Image{}, repoconfig.Result{}, failure(CodeImageTooLarge, message, false, safeErr)
 		}
-		return builds.Image{}, repoconfig.Config{}, failure(CodeBuild, message, retryable, safeErr)
+		return builds.Image{}, repoconfig.Result{}, failure(CodeBuild, message, retryable, safeErr)
 	}
-	return image, settings, nil
+	return image, prepared.Config, nil
 }
 
 // interrupted reports cancellation or timeout instead of fallback when ctx ended.

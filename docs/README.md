@@ -32,6 +32,8 @@ rest explain how and why it works.
 | 26 | [Release report](26-release-report.md) | Evidence for each release acceptance item: what passed, how, and what is still pending. |
 | 27 | [Roadmap](27-roadmap.md) | Prompts 1–13 (13: backend previews), the planned Prompt 14 (missed uninstall detection), and the release checklist. |
 | 28 | [Shared team workspaces](28-shared-workspaces.md) | Roles, repository grants, invitation consent, ownership handover, revocation, shared quotas and migration cutover. |
+| 29 | [Guided onboarding](29-guided-onboarding.md) | The repository Setup tab: five steps from a connected repository to an opened preview, bounded setup checks, and where new members start. |
+| 30 | [Native review and feedback](30-reviews.md) | The review page: testing instructions, findings recorded against deployments, moderation, version conflicts, access, limits and activity records. |
 
 Related files outside this folder:
 

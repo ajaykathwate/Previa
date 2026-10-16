@@ -681,10 +681,12 @@
     livePending = false;
     if (document.querySelector('[data-live-refresh]')) window.htmx?.trigger(document.body, 'live-update');
   };
-  // Live refreshes wait while a confirmation dialog is open (policy, teardown)
-  // or the PR search has focus, so nothing moves under the owner's hand.
+  // Live refreshes wait while a confirmation dialog or menu is open, or while
+  // someone types in a filter or a review form, so nothing moves under their
+  // hand. Review drafts that are not being typed in survive a refresh.
+  const livePause = '#pull-request-filters, [data-live-pause], [data-draft-form]';
   const liveBlocked = () => Boolean(document.querySelector('dialog[data-confirmation-dialog][open], details[data-menu][open]') ||
-    document.activeElement?.closest('#pull-request-filters'));
+    document.activeElement?.closest(livePause));
 
   // A state that changes with time alone (a sync turning stale) carries
   // data-refresh-at: refresh the panel once that moment passes, since no
@@ -713,7 +715,11 @@
     let failures = 0;
     let retry = 0;
     const setState = (state) => { document.documentElement.dataset.liveState = state; };
-    const request = () => { if (liveBlocked()) livePending = true; else liveRefresh(); };
+    const request = () => {
+      if (!liveBlocked()) { liveRefresh(); return; }
+      livePending = true;
+      document.dispatchEvent(new CustomEvent('live-deferred'));
+    };
     const connect = () => {
       clearTimeout(retry);
       const url = new URL(base);
@@ -759,7 +765,7 @@
       if (event.target.matches?.('details[data-menu]') && !event.target.open && livePending) setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
     }, true);
     document.addEventListener('focusout', (event) => {
-      const form = event.target.closest?.('#pull-request-filters');
+      const form = event.target.closest?.(livePause);
       if (!form || form.contains(event.relatedTarget) || !livePending) return;
       setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
     });
@@ -1925,6 +1931,133 @@
     document.addEventListener('htmx:afterSwap', setup);
   }
 
+  // Review pages (docs/30-reviews.md): edit forms open in place, removals
+  // confirm in one shared modal, filters apply on change and Ctrl/⌘+Enter
+  // sends. A live refresh keeps every unsent draft, with the deployment and
+  // revision it was written against, so a newer deployment is never assumed.
+  function initReviews() {
+    const region = () => document.getElementById('review-detail');
+    if (!region()) return;
+    const byKey = (attribute, key) => document.querySelectorAll(`[${attribute}="${CSS.escape(key)}"]`);
+    const fields = form => [...form.querySelectorAll('[data-draft-key]')];
+    const dirty = form => fields(form).some(field => field.type !== 'hidden' && field.value !== field.defaultValue);
+    const showEdit = (key, focus = true) => {
+      const form = byKey('data-edit-form', key)[0];
+      if (!form) return false;
+      byKey('data-edit-view', key).forEach(view => { view.hidden = true; });
+      byKey('data-edit-open', key).forEach(link => { if (link.closest('.field-card-head')) link.hidden = true; });
+      form.hidden = false;
+      if (focus) {
+        const field = form.querySelector('textarea, input:not([type=hidden])');
+        field?.focus();
+        if (field instanceof HTMLTextAreaElement) field.setSelectionRange(field.value.length, field.value.length);
+      }
+      return true;
+    };
+    const hideEdit = key => {
+      const form = byKey('data-edit-form', key)[0];
+      if (!form) return;
+      form.reset();
+      form.hidden = true;
+      byKey('data-edit-view', key).forEach(view => { view.hidden = false; });
+      byKey('data-edit-open', key).forEach(link => { link.hidden = false; });
+      const anchor = form.closest('[id]');
+      (anchor?.querySelector('.review-menu summary') || byKey('data-edit-open', key)[0])?.focus({preventScroll: true});
+    };
+    const dialog = document.getElementById('review-remove');
+    const confirmRemoval = trigger => {
+      const form = dialog.querySelector('[data-remove-form]');
+      form.action = trigger.dataset.removeAction;
+      form.removeAttribute('aria-busy');
+      form.querySelectorAll('button[type=submit]').forEach(button => { button.disabled = false; });
+      dialog.querySelector('[data-remove-title]').textContent = trigger.dataset.removeTitle;
+      dialog.querySelector('[data-remove-text]').textContent = trigger.dataset.removeText;
+      const moderate = trigger.dataset.removeModerate === 'true';
+      const reasons = dialog.querySelector('[data-remove-reasons]');
+      reasons.hidden = !moderate;
+      reasons.querySelectorAll('input').forEach(input => { input.required = moderate; input.checked = false; });
+      openDialog(dialog, trigger);
+    };
+    document.addEventListener('click', event => {
+      const open = event.target.closest('[data-edit-open]');
+      if (open && showEdit(open.dataset.editOpen)) {
+        event.preventDefault();
+        open.closest('details[data-menu]')?.removeAttribute('open');
+        return;
+      }
+      const cancel = event.target.closest('[data-edit-cancel]');
+      if (cancel) {
+        event.preventDefault();
+        hideEdit(cancel.dataset.editCancel);
+        return;
+      }
+      const remove = event.target.closest('[data-remove-open]');
+      if (remove && dialog) {
+        event.preventDefault();
+        confirmRemoval(remove);
+      }
+    });
+    if (dialog?.hasAttribute('data-open-on-load')) openDialog(dialog, null);
+    document.addEventListener('keydown', event => {
+      const form = event.target.closest?.('[data-draft-form]');
+      if (!form) return;
+      if (event.key === 'Escape' && form.matches('[data-edit-form]') && !document.querySelector('dialog[open]')) {
+        event.preventDefault();
+        hideEdit(form.dataset.editForm);
+      } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && event.target instanceof HTMLTextAreaElement) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
+    document.addEventListener('change', event => {
+      if (event.target.matches?.('select[data-auto-submit]')) event.target.form?.requestSubmit();
+    });
+    // While someone types, a waiting refresh says so instead of moving the page.
+    let note = null;
+    document.addEventListener('live-deferred', () => {
+      if (note || !document.activeElement?.closest('#review-detail [data-draft-form]')) return;
+      note = document.createElement('p');
+      note.className = 'review-live-note';
+      note.setAttribute('role', 'status');
+      note.textContent = 'New activity on this review. It appears when you leave the text field; your draft stays.';
+      document.querySelector('.review-workspace')?.append(note);
+    });
+    let stash = null;
+    document.addEventListener('htmx:beforeSwap', event => {
+      if (event.detail.target?.id !== 'review-detail' || event.detail.shouldSwap === false) return;
+      stash = {drafts: [], deployment: region().querySelector('[data-review-deployment]')?.dataset.reviewDeployment};
+      region().querySelectorAll('[data-draft-form]').forEach(form => {
+        const editing = form.matches('[data-edit-form]') && !form.hidden;
+        if (!dirty(form) && !editing) return;
+        stash.drafts.push({
+          key: form.dataset.draftForm, edit: editing ? form.dataset.editForm : '',
+          values: Object.fromEntries(fields(form).map(field => [field.dataset.draftKey, field.value])),
+          open: [...form.querySelectorAll('details')].map(details => details.open),
+        });
+      });
+    });
+    document.addEventListener('htmx:afterSwap', event => {
+      if (event.detail.target?.id !== 'review-detail' || !stash) return;
+      const kept = stash;
+      stash = null;
+      note?.remove();
+      note = null;
+      let lost = false;
+      for (const draft of kept.drafts) {
+        const form = byKey('data-draft-form', draft.key)[0];
+        if (!form) { lost = lost || Object.entries(draft.values).some(([key, value]) => key === 'body' && value.trim()); continue; }
+        fields(form).forEach(field => {
+          if (draft.values[field.dataset.draftKey] !== undefined) field.value = draft.values[field.dataset.draftKey];
+        });
+        form.querySelectorAll('details').forEach((details, i) => { if (draft.open[i]) details.open = true; });
+        if (draft.edit) showEdit(draft.edit, false);
+      }
+      if (lost) toast('A message you were writing could not be kept: its finding was removed meanwhile.', 'danger');
+      const now = region().querySelector('[data-review-deployment]')?.dataset.reviewDeployment;
+      if (kept.deployment && now && now !== '0' && now !== kept.deployment) toast(`Deployment ${now} is now the newest. Unsent drafts stay with the one you were testing.`);
+    });
+  }
+
   initMotion();
   initTheme();
   initNavigation();
@@ -1956,4 +2089,5 @@
   initFAQ();
   initOverview();
   initStarterKit();
+  initReviews();
 })();

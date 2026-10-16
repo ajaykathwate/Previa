@@ -43,7 +43,9 @@ elected leader.
 | `housekeeping_records` | 1 h | Deletes history whose retention ended ([below](#retention-of-records)). |
 
 Expired build logs keep their own hourly retention job (`build_log_prune`,
-[08](08-build-logs.md)). Idle previews sleep through `preview_sleep` (every 5
+[08](08-build-logs.md)), and activity events theirs (`activity_prune` on every
+worker: 90 days and the newest 5,000 per pull request, with a marker that older
+history was removed; [30](30-reviews.md)). Idle previews sleep through `preview_sleep` (every 5
 minutes on the `idle` queue, [10](10-preview-runtime.md#idle-previews-sleep)).
 
 ## Retention of records
@@ -56,7 +58,7 @@ minutes on the `idle` queue, [10](10-preview-runtime.md#idle-previews-sleep)).
 | Finished operations (`environment_operations`) | 30 days after they finished | Enough for diagnosis. A route operation of a pull request's current generation stays while its preview can be live (it protects what the router serves), and a failed cleanup stays as the sign of something left behind. |
 | Daily build minutes (`account_build_usage`) | after 90 days | Only today's count matters. |
 | App output nobody watches | an hour after its last viewer | The follower deletes its lines itself when the viewer leaves. |
-| Closed and merged pull requests | 90 days after GitHub last updated them | With their environment row, build logs, route record, operations, report, reconciliation, preview records and dismissals. Only once their teardown finished and nothing about them is pending (no operation, active route, build or unwritten report); checked again under the PR's lock. A PR reopened later is recorded afresh. |
+| Closed and merged pull requests | 90 days after GitHub last updated them | With their environment row, build logs, route record, operations, report, reconciliation, preview records, dismissals, deployment records, review instructions, findings and activity. Only once their teardown finished and nothing about them is pending (no operation, active route, build or unwritten report); checked again under the PR's lock. A PR reopened later is recorded afresh. |
 
 Deletions are batched (5,000 rows per statement; 50 pull requests per pass). A dry
 run counts one batch of each and changes nothing (`make housekeeping-dry-run`

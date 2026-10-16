@@ -22,7 +22,9 @@ user's point of view is in the
 - **Strict Content-Security-Policy.** Every page is served with a per-request nonce
   policy: the theme boot script carries the nonce (and passes it to the style it
   creates), `ui.js` gives it to the speculation rules it injects, and HTMX is
-  configured (`htmx-config` meta) not to inject styles or evaluate code. No inline
+  configured (`htmx-config` meta) not to inject styles or evaluate code, and not to
+  copy `style` attributes while settling a swap (a style an extension or tool left on
+  a field would otherwise be re-applied inline and refused). No inline
   event handlers, inline styles or `eval`. The browser suite runs under the same
   policy and fails on any violation ([23](23-observability-and-hardening.md)).
 - **Presentation never reaches into the backend.** Templates receive display data;
@@ -44,8 +46,9 @@ Use import aliases (`authpages`, `dashboardpages`, `prpages`) where names collid
 Ownership of routes: `internal/dashboard` (home, overview, session, tools, FAQ, Open Source Tests),
 `internal/installations` (`/repositories`), `internal/pullrequests` (repository and
 PR pages, Builds, Previews, the event stream), `internal/onboarding` (a
-repository's Setup tab and the Open preview action), `internal/secrets` (a
-repository's Secrets tab).
+repository's Setup tab and the Open preview action), `internal/reviews` (a pull
+request's review page and its forms), `internal/secrets` (a repository's Secrets
+tab).
 
 ## Visual system: the "signal" theme
 
@@ -119,8 +122,9 @@ Making full-page navigation feel instant, without giving up MPA semantics:
   Failed requests keep current content and show retry feedback.
 - Live refreshes come from the event stream ([20](20-realtime-updates.md)). A hidden
   `[data-live-refresh]` element refetches `#repository-detail` (or the Setup tab's
-  `#setup-detail`) with the current URL's filters. While PR search is focused, a
-  confirmation is open or a `details[data-menu]` menu is open, a refresh is deferred
+  `#setup-detail`, or a review's `#review-detail`) with the current URL's filters.
+  While PR search, a `[data-live-pause]` filter or a review form (`[data-draft-form]`)
+  has focus, a confirmation is open or a `details[data-menu]` menu is open, a refresh is deferred
   (one that returns while a menu inside its target is open is not swapped in), then
   run when the user leaves the field, closes the modal or closes the menu. Menus are
   looked up when an event happens, so menus a refresh replaced still close on an
@@ -149,7 +153,8 @@ busy button's spinner and label until the next page), `initElapsed` (counts
 exact UTC time as the title), `initCopyButtons` (`data-copy` text or a log list's
 lines to the clipboard, confirmed for two seconds), `initSecretEditor` and
 `initBulkDelete` (the Secrets tab, below), `initStory` and `initFAQ` (the
-conversations, below), `initOverview` (the Overview, above). A `js-enabled` class on `<html>` scopes
+conversations, below), `initOverview` (the Overview, above), `initReviews` (the
+review page, below). A `js-enabled` class on `<html>` scopes
 CSS that only makes sense with scripting. No third-party JavaScript besides HTMX.
 
 ## Confirmations
@@ -345,6 +350,36 @@ notice. **Open preview** links open a new tab through the recording `/open` rout
 Live updates replace `#setup-detail`, so a check, push, build or open shows up
 without reloading. See [29](29-guided-onboarding.md).
 
+## Review page
+
+`web/pages/reviews` (styles in `web/styles/reviews.css`): the pull request's header,
+then **How to test** and **Findings** beside a **Preview** card (the newest
+deployment, its state, Open preview and Open docs) and the description **From
+GitHub**; below 1080px the side cards come first. People who can build see the
+**Preview | Review** switch (`components.PullRequestTabs`, also on the pull request
+page, with the open-findings count); Reviewers see only the review. Patterns:
+
+- **In-place edits.** Instructions and own messages render their edit form hidden
+  beside the text; `[data-edit-open]` shows it without navigating (Escape or Cancel
+  restores it). Without JavaScript the same links are `?edit=…` addresses that render
+  the form open.
+- **One removal modal.** Menu items carry `data-remove-action`, title, text and
+  whether moderation needs a reason; `initReviews` fills the single
+  `#review-remove` dialog. Without JavaScript `?remove=…` renders the same form as a
+  confirmation inside the page (`<noscript>`); a server-side refusal reopens it.
+- **Card links.** A finding's number link stretches over its header, so the header
+  opens the finding's own page; its page link and menu sit above and keep their jobs.
+- **Drafts and live updates.** Forms marked `data-draft-form` defer refreshes while
+  focused; before a refresh swaps `#review-detail`, unsent fields (`data-draft-key`,
+  including the hidden deployment, revision and request key) and open edit forms are
+  kept and restored, and a toast names a newly published deployment. Ctrl/⌘+Enter
+  sends; selects marked `data-auto-submit` apply filters on change.
+- **Forms** are plain CSRF-protected posts (`data-busy-form`) that redirect back to
+  the same list and anchor with a toast; problems re-render the page (422, 409, 429)
+  with the draft and field messages.
+
+See [30](30-reviews.md).
+
 ## Secrets tab
 
 Write-only by design. The list and editor sit beside a **How secrets reach your
@@ -537,7 +572,10 @@ lifetime, both lists without JavaScript), reduced motion and no-JavaScript flows
 A separate PostgreSQL-backed suite (`make test-setup-browser`) drives the Setup tab:
 a check, a push and a recheck, building, publishing and opening with live updates
 through real `LISTEN`/`NOTIFY`, the picker, the Developer and Reviewer views and the
-no-JavaScript path, in light, dark and phone layouts.
+no-JavaScript path, in light, dark and phone layouts. Another (`make
+test-review-browser`) drives the review page: instructions in place, a finding's
+whole conversation, a live reply and a new deployment while a draft is unsent,
+moderation and the no-JavaScript path.
 
 ## Decisions and trade-offs
 

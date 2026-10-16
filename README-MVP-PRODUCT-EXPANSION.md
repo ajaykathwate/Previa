@@ -1,11 +1,11 @@
 # Previa: complete team SaaS MVP specification
 
-**Status:** Feature 1's shared workspace core and Feature 2's guided onboarding are implemented. Feature 1's review and account-lifecycle dependencies remain pending in Features 3 and 6; Features 3–6 and 5B remain implementation specifications.
-**Prepared:** 14 October 2026. **Updated:** 15 October 2026 (Feature 5B, persistent test data, added after Feature 5).  
+**Status:** Feature 1's shared workspace core, Feature 2's guided onboarding and Feature 3's native review and feedback (with step B's publication references and activity records) are implemented. Feature 1's review-assignment and account-lifecycle dependencies remain pending in Features 4 and 6; Features 4–6 and 5B remain implementation specifications.
+**Prepared:** 14 October 2026. **Updated:** 16 October 2026 (Feature 3 implemented; Feature 5B, persistent test data, added after Feature 5 on 15 October).  
 **Audience:** small development teams using hosted Previa.  
 **Scope:** the first six product improvements agreed with the owner, plus Feature 5B, which extends Feature 5; onboarding is deliberately minimal. Separate notification integrations are deferred.
 
-This document explains the complete product behavior to implement, the changes to the existing application, and how completion will be demonstrated. Feature 1's workspace creation, membership, access, invitations, handover and shared quota identity now have application code and verification described in [Shared team workspaces](docs/28-shared-workspaces.md). Review/assignment interactions, visible account usage and billing controls, and durable workspace deletion/disconnection referenced in its permission matrix depend on Features 3 and 6 and are not implemented. The remaining features are planned; this document does not claim they already exist.
+This document explains the complete product behavior to implement, the changes to the existing application, and how completion will be demonstrated. Feature 1's workspace creation, membership, access, invitations, handover and shared quota identity now have application code and verification described in [Shared team workspaces](docs/28-shared-workspaces.md). Native feedback is implemented as described in [Native review and feedback](docs/30-reviews.md); review assignments and decisions, visible account usage and billing controls, and durable workspace deletion/disconnection referenced in its permission matrix depend on Features 4 and 6 and are not implemented. The remaining features are planned; this document does not claim they already exist.
 
 All of these capabilities belong to the existing Previa application. Previa owns team access, review instructions, feedback, review decisions, activity, usage, and account settings. GitHub continues to provide identity, source, PR lifecycle, and a living status comment/check; it receives summaries and links back to Previa. Reviewers must not have to finish the Previa review workflow in GitHub, Slack, or another application.
 
@@ -241,7 +241,7 @@ Migrate quota/account IDs in scheduling, runtime labels, target loading, fair sh
 
 ## 5. Feature 2: minimal guided onboarding
 
-Implementation and current scope: [Guided onboarding](docs/29-guided-onboarding.md). It was delivered right after Feature 1, ahead of step F in §11.2, at the owner's request. Until Features 3 and 4 exist, **Request review** is shown disabled and labelled as not yet available, and Reviewers land on Previews instead of a review queue. Flagged deviations: checks are recorded per pull request (their repository derived), and building acknowledges the application prerequisites (no separate acknowledgement is stored).
+Implementation and current scope: [Guided onboarding](docs/29-guided-onboarding.md). It was delivered right after Feature 1, ahead of step F in §11.2, at the owner's request. Since Feature 3, the step after an opened preview is the pull request's review page (write testing instructions, share its link); asking specific people to review is labelled as not yet available until Feature 4, and Reviewers land on Previews (each preview with a **Review** action) instead of a review queue. Flagged deviations: checks are recorded per pull request (their repository derived), and building acknowledges the application prerequisites (no separate acknowledgement is stored).
 
 ### 5.1 Problem and user benefit
 
@@ -308,6 +308,8 @@ Routes can be `GET /repositories/{id}/setup` and CSRF-protected `POST /repositor
 - New members receive onboarding appropriate to their role; no duplicate setup wizard is required for an already-working repository.
 
 ## 6. Feature 3: native preview review and feedback
+
+Implementation and current scope: [Native review and feedback](docs/30-reviews.md), together with step B of §11.2 (publication records at route activation and bounded activity events). Flagged deviations: one review page with the instructions, the deployment and the findings side by side, reached from the pull request page through a **Preview | Review** switch, instead of separate Review, Feedback and Activity tabs; the GitHub comment carries a link to the review only, since review status and counts need the sharing policy of step E; activity is recorded and pruned but has no view until Feature 4; a cap of 200 messages per finding and an hourly allowance of 300 review changes per member bound rendering and churn. Requested reviewers and review status appear as not yet available.
 
 ### 6.1 Problem and user benefit
 
@@ -1039,7 +1041,7 @@ This is an ordered implementation plan, not permission to resume a previous road
 
 Step G follows F because Feature 5B extends Feature 5's seed workflow, setup outcomes, Reset action and test-access guidance, and needs Features 3/4 publications and review rounds to show reviewers whether data was kept or reset. It precedes H and I so usage accounting and deletion cover baseline builds and stored baselines from their first release instead of being retrofitted.
 
-Feature 2's onboarding part of step F was delivered after step A at the owner's request ([Guided onboarding](docs/29-guided-onboarding.md)); its review-dependent pieces are labelled until steps C and D.
+Feature 2's onboarding part of step F was delivered after step A at the owner's request ([Guided onboarding](docs/29-guided-onboarding.md)). Steps B and C followed ([Native review and feedback](docs/30-reviews.md)); review requests remain labelled until step D.
 
 Features can reuse small interfaces from an earlier step, but visible functionality must not end with mock persistence or an unimplemented action. Keep beta/purchase controls unavailable until their corresponding backend and verification exist. A free beta release can omit paid mode only if explicitly labeled and agreed; it does not satisfy a later claim that paid subscription support is complete.
 

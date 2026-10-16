@@ -39,13 +39,13 @@ func TestPipelineRegistersOnlyWhatItsDependenciesAllow(t *testing.T) {
 	}
 	defer pool.Close()
 
-	// Without the GitHub App: log retention only, and the reason is stated.
+	// Without the GitHub App: log and activity retention only, and the reason is stated.
 	p, err := buildPipeline(t.Context(), pipelineInput{cfg: base, pool: pool, logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
 	rc := registered(t, p)
-	if p.capabilities.Execution || p.capabilities.Discovery || len(rc.Queues) != 1 || !strings.Contains(strings.Join(p.unavailable, " "), "GITHUB_APP_ID") {
+	if _, activity := rc.Queues["activity_prune"]; p.capabilities.Execution || p.capabilities.Discovery || len(rc.Queues) != 2 || !activity || !strings.Contains(strings.Join(p.unavailable, " "), "GITHUB_APP_ID") {
 		t.Fatalf("no App: %+v %v %v", p.capabilities, rc.Queues, p.unavailable)
 	}
 

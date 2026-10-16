@@ -82,8 +82,15 @@ func CommentContent(v View) string {
 	for _, notice := range v.Notices {
 		b.WriteString("\n> " + notice + "\n")
 	}
+	var links []string
+	if v.ReviewURL != "" {
+		links = append(links, "[Review in Previa]("+v.ReviewURL+")")
+	}
 	if v.LogsURL != "" && v.Phase != PhaseRemoved && v.Phase != PhaseExpired {
-		b.WriteString("\n[Build log](" + v.LogsURL + ") (repository owner sign-in)\n")
+		links = append(links, "[Build log]("+v.LogsURL+")")
+	}
+	if len(links) > 0 {
+		b.WriteString("\n" + strings.Join(links, " · ") + " (sign in to Previa)\n")
 	}
 	return b.String()
 }

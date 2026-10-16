@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 38**, **River 007**. After pulling changes, run
+Current schema: **Goose 39**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker. When the egress proxy or the
 router changed (this version changed both), also run `make egress-image` (builds
 are metered and may be limited to package registries) and `make router-up` (the
@@ -15,9 +15,10 @@ public UUIDs (0033). It needs no new environment variables or Docker image rebui
 PR descriptions and execution health are added by 0034, and uploaded profile
 photos (with GitHub-name prefill for never-edited blank names) by 0035, deactivated
 members, in-app invitations, activity and workspace deletion by 0036, cached
-head-commit messages for the PR page by 0037, and the repository Setup tab's
+head-commit messages for the PR page by 0037, the repository Setup tab's
 checks, preview opens and hourly check allowance by 0038
-([29](29-guided-onboarding.md)). Internal
+([29](29-guided-onboarding.md)), and pull request review pages, deployment
+records and activity by 0039 ([30](30-reviews.md)). Internal
 database keys and stored jobs remain unchanged. Apply migrations before
 starting the new binaries; old numeric HTML bookmarks redirect after access checks.
 Use UUIDs for forms, streams and downloads.
@@ -28,10 +29,13 @@ make run-server          # automatically loads .env; exported values win
 make run-worker          # restart separately after migration
 ```
 
-**Expected:** Goose reaches **38**, River stays **007**, and the new server accepts
-the schema (a server built for 38 refuses to start on an older schema with "run
+**Expected:** Goose reaches **39**, River stays **007**, and the new server accepts
+the schema (a server built for 39 refuses to start on an older schema with "run
 migrations first"). Restart the worker too: setup checks run on any worker with
-the GitHub App, including one without a preview domain. Sign in again (or use Your profile → GitHub account → Refresh)
+the GitHub App, including one without a preview domain; deployment records are
+written by the worker that activates routes, and every worker prunes activity.
+0039 records live previews as *Present at migration* deployments; it adds no
+configuration. Sign in again (or use Your profile → GitHub account → Refresh)
 to populate GitHub metadata. Login requests the read-only `user:email` OAuth scope
 for the verified primary email; tokens are still discarded. No repository OAuth
 scope is added. The account's first/last name is editable independently; refreshed
@@ -248,6 +252,7 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0036 | Member lifecycle: `workspace_memberships.removed_by`/`removed_repository_ids` (Deactivated list and re-invitation with previous access), an index for invitations addressed to a GitHub account (in-app Invitations), an index for per-member build activity, and `workspaces.deleted_at` (soft delete). |
 | 0037 | `pull_requests.head_commit_*`: the PR page caches the head commit's message, author and time, fetched once per head SHA (GitHub's PR payloads omit them). Needs the GitHub App; without it the section is simply absent. |
 | 0038 | Guided onboarding ([29](29-guided-onboarding.md)): `repository_setup_checks` (the latest setup check per pull request, its last completed result and why an attempt failed), `preview_opens` (who opened which deployment from Previa) and `setup_check_budgets` (60 checks per workspace and hour). Changes to the first two wake live pages. No configuration; existing data is untouched. |
+| 0039 | Native review and feedback ([30](30-reviews.md)): `preview_publications` (one per route activation, numbered per pull request; live previews backfilled as *Present at migration*), `preview_components.config_hash`, `activity_events` and `activity_pruned` (90 days, 5,000 per pull request), `pr_review_instructions`, `preview_feedback_threads`, `preview_feedback_messages`, `pr_review_counters` and `review_write_budgets` (300 review changes per member and hour). Review changes wake live pages. No configuration. Rolling back drops reviews written since; back up first. |
 
 
 ### Shared workspace cutover
@@ -799,6 +804,35 @@ views and the no-JavaScript path, with no CSP errors. Test-only routes stand in 
 the worker's GitHub reads, a push, a build and a deployment. `UI_BROWSER_SCREENSHOTS=1`
 writes `setup-*.png` captures (desktop light and dark, mobile).
 
+To verify review pages, deployment records and activity against real PostgreSQL:
+
+```sh
+set -a; . ./.env; set +a
+export TEST_DATABASE_URL="$DATABASE_URL"
+go test -count=1 ./internal/reviews ./internal/activity ./internal/environments ./internal/onboarding
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-review-browser
+```
+
+**Expected:** the Go tests create and drop isolated schemas. They cover:
+- who may read and change a review;
+- a whole conversation with edits, removal and moderation;
+- version conflicts, instruction conflicts and closed pull requests;
+- removed members, limits and the hourly allowance;
+- filters, search and pages;
+- cascade deletion with the pull request, and the realtime signal;
+- every form without JavaScript, CSRF and forged IDs;
+- publications recorded once per activation (a same-commit Rebuild included, a failed update excluded);
+- activity deduplication and pruning.
+
+The browser suite (`RUN_REVIEW_BROWSER_TESTS=1` for direct Go runs) covers:
+- a Developer writing instructions in place;
+- a Reviewer recording, replying, editing, removing and resolving a finding;
+- a live reply and a new deployment arriving while a draft is unsent (the draft stays; the version is chosen on purpose);
+- moderation with a reason from the pull request page;
+- the whole flow without JavaScript, with no CSP errors.
+
+`UI_BROWSER_SCREENSHOTS=1` writes `review-*.png` captures (light, dark, mobile).
+
 To verify the build-log viewer specifically:
 
 ```sh
@@ -850,7 +884,8 @@ checks; with builds configured ([22](22-mvp-operations.md#capability-and-configu
 it also builds, publishes, reports and keeps house, follows live app output while
 someone watches it, watches for crashed previews, reads preview visit counts from
 the router every minute, and (with `PREVIEW_IDLE_SLEEP`) puts idle previews to
-sleep. It always runs `build_log_prune` at start and hourly; with the App it also runs
+sleep. It always runs `build_log_prune` and `activity_prune` (activity older than 90
+days or beyond 5,000 per pull request) at start and hourly; with the App it also runs
 repository setup checks (`setup_checks` queue, two at a time), so the Setup tab's
 **Check setup** needs only a worker with GitHub credentials. `Ctrl+C` removes the worker's capability row,
 lets running jobs finish for 30 seconds, then cancels them; an interrupted build
@@ -1035,8 +1070,8 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
 ### Fresh local setup after deleting Docker data
 
 A new database can run all migrations from scratch, including workspace migrations
-0030–0038. Deleting the PostgreSQL volume erases users/sessions, workspace memberships,
-invitations, repository links, stored secrets, preview history and usage. Remove
+0030–0039. Deleting the PostgreSQL volume erases users/sessions, workspace memberships,
+invitations, repository links, stored secrets, preview history, reviews and usage. Remove
 data only if you intend to discard it, or take a database backup first. Restrict
 cleanup to Previa resources; global Docker cleanup can erase other projects.
 

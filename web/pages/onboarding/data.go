@@ -110,7 +110,7 @@ type Item struct {
 type Link struct {
 	Label    string
 	Href     string
-	Icon     string // kit, logs, open, repo, members, secrets, pr, settings
+	Icon     string // kit, logs, open, repo, members, secrets, pr, review, settings
 	Primary  bool
 	External bool // opens in a new tab
 }

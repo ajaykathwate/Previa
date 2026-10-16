@@ -304,8 +304,10 @@ See [browser setup](02-development-setup.md#browser-regression-checks-optional).
 The shared workspace core is implemented and verified. The original Feature 1
 section also references native feedback/review decisions, review-assignment
 offboarding, visible usage/account controls and durable deletion/disconnection.
-Those dependencies are **not implemented**: the review UI belongs to Feature 3
-and account lifecycle/usage to Feature 6. The settings UI focuses on implemented workspace controls; unbuilt review and
+Native feedback is implemented ([30](30-reviews.md)): granted Reviewers use a pull
+request's review page, its forms, the repository's change stream and Open preview,
+and nothing else on repository paths. Review decisions and assignments (Feature 4)
+and account lifecycle/usage (Feature 6) are **not implemented**. The settings UI focuses on implemented workspace controls; unbuilt review and
 account-management panels are omitted. This is not a claim that every
 interaction in the original cross-feature permission matrix is finished.
 Notification integrations remain deferred as agreed. Hosted, live multi-user

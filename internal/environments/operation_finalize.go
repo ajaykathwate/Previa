@@ -169,10 +169,10 @@ func lockFinalization(ctx context.Context, q *dbgen.Queries, op Operation, owner
 	return authorized, lockOperationLease(ctx, q, op.ID, owner, "finalization")
 }
 
-// activateTx makes the pending candidate the environment's active preview and
-// hands what it replaced (the previous active preview, and an older candidate
-// it superseded) to cleanup. It returns when the published request became
-// eligible, for the request-to-preview metric.
+// activateTx makes the pending candidate the environment's active preview,
+// records its publication and hands what it replaced (the previous active
+// preview, and an older candidate it superseded) to cleanup. It returns when
+// the published request became eligible, for the request-to-preview metric.
 func (r *Repository) activateTx(ctx context.Context, tx pgx.Tx, q *dbgen.Queries, op Operation) (time.Time, error) {
 	active, err := q.ActivatePendingEnvironment(ctx, dbgen.ActivatePendingEnvironmentParams{PrID: op.PullRequestID, ExpectedGeneration: op.Generation, ExpectedRevision: op.Revision, TtlSeconds: int64(r.lifetime / time.Second)})
 	if err != nil {
@@ -191,6 +191,10 @@ func (r *Repository) activateTx(ctx context.Context, tx pgx.Tx, q *dbgen.Queries
 		}
 	}
 	if err := r.enqueueTakenTx(ctx, tx, op, replaced); err != nil {
+		return time.Time{}, err
+	}
+	served := Artifact{ContainerID: active.ActiveContainerID.String, ImageTag: active.ActiveImageTag.String}
+	if err := r.recordPublicationTx(ctx, tx, q, op, active.ActiveHeadSha.String, served); err != nil {
 		return time.Time{}, err
 	}
 	if err := r.reportTx(ctx, tx, op.PullRequestID); err != nil {

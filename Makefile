@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser test-workspace-browser test-setup-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status river-ui
+.PHONY: generate templates watch-templates assets build test test-browser test-workspace-browser test-setup-browser test-review-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status river-ui
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -67,6 +67,9 @@ test-workspace-browser: assets generate
 
 test-setup-browser: assets generate
 	RUN_SETUP_BROWSER_TESTS=1 $(GO) test -count=1 -v ./internal/onboarding -run TestSetupBrowser
+
+test-review-browser: assets generate
+	RUN_REVIEW_BROWSER_TESTS=1 $(GO) test -count=1 -v ./internal/reviews -run TestReviewBrowser
 
 # Opt-in real GitHub proof; reads credentials from .env, never CLI flags.
 test-github-app:

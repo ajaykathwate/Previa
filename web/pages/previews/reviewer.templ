@@ -57,12 +57,18 @@ templ ReviewerIndex(username, csrf string, p pages.Activity) {
 							if v.Available && v.PreviewURL!="" {
 								{{ label, tone := v.PreviewStatus() }}
 								<span class={ "badge",tone }><span class="badge-dot" aria-hidden="true"></span>{ label }</span>
-								<a class="primary-action" href={ components.PublicURL(ctx, v.PreviewURL) } target="_blank" rel="noopener noreferrer">
+							} else {
+								<span class="badge tone-neutral">Preview unavailable</span>
+							}
+							<a class="primary-action" href={ components.PublicURL(ctx, pages.PRURL(v.RepoID, v.Number)+"/review") }>
+								@components.MessageIcon()
+								Review
+							</a>
+							if v.Available && v.PreviewURL!="" {
+								<a class="secondary-action" href={ components.PublicURL(ctx, v.PreviewURL) } target="_blank" rel="noopener noreferrer">
 									{ "Open preview " }
 									@components.LinkIcon()
 								</a>
-							} else {
-								<span class="badge tone-neutral">Preview unavailable</span>
 							}
 						</div>
 					</article>

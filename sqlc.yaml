@@ -137,3 +137,19 @@ sql:
         package: dbgen
         out: internal/onboarding/dbgen
         sql_package: pgx/v5
+  - engine: postgresql
+    schema: db/migrations
+    queries: internal/activity/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: internal/activity/dbgen
+        sql_package: pgx/v5
+  - engine: postgresql
+    schema: db/migrations
+    queries: internal/reviews/queries.sql
+    gen:
+      go:
+        package: dbgen
+        out: internal/reviews/dbgen
+        sql_package: pgx/v5
