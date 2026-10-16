@@ -1,7 +1,9 @@
 # Previa regression test documents
 
 Feature 1 implementation verification is recorded separately in the
-[2026-10-14 shared workspace report](2026-10-14-shared-workspaces-report.md).
+[2026-10-14 shared workspace report](2026-10-14-shared-workspaces-report.md), and
+Feature 2 (guided onboarding, the repository Setup tab) in the
+[2026-10-16 guided onboarding report](2026-10-16-guided-onboarding-report.md).
 It includes team access/offboarding, migration, browser and worker-pipeline checks;
 the full product regression cycle below remains the earlier baseline.
 

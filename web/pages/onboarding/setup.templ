@@ -1,0 +1,473 @@
+package onboarding
+
+import (
+	"strconv"
+
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/button"
+	"github.com/ajaykathwatee/previa/web/layouts"
+	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
+)
+
+// Index is a repository's Setup tab: the checklist to a first usable preview
+// for one open pull request, beside what that commit declares it needs.
+templ Index(username string, p Page) {
+	@layouts.AppTrail(p.Name+" · Setup", components.Crumb{Label: p.Repository(), Href: "/repositories/" + strconv.FormatInt(p.RepoID, 10)}, "Setup", username, p.CSRF, components.NavRepositories) {
+		<div class="repository-workspace setup-page">
+			@components.RepositoryHero(p.Owner(), p.Repository(), "Five checks from a connected repository to a preview you have opened.")
+			@components.RepositoryTabs(p.RepoID, "setup")
+			@components.Toasts(p.Toast)
+			<section id="setup-detail" class="setup-detail" aria-label="Setup checklist" hx-sync="this:replace" hx-request='{"timeout":10000}'>
+				@Detail(p)
+			</section>
+			if p.LiveURL != "" {
+				// Change signals refetch the checklist through this GET handler.
+				<div hidden data-live-events={ components.PublicURL(ctx, p.LiveURL) } data-live-refresh hx-get={ components.PublicURL(ctx, URL(p.RepoID, selectedNumber(p))) } hx-trigger="live-update from:body" hx-target="#setup-detail" hx-sync="#setup-detail:drop"></div>
+			}
+		</div>
+	}
+}
+
+// Detail is the part live updates replace.
+templ Detail(p Page) {
+	if p.RefreshAt != "" {
+		<span hidden data-refresh-at={ p.RefreshAt }></span>
+	}
+	if p.Notice.Text != "" {
+		<p class={ "connection-notice", "tone-" + p.Notice.Tone } role="status">
+			if p.Notice.Tone == "warn" {
+				@components.AlertIcon()
+			} else {
+				@components.InfoIcon()
+			}
+			<span>{ p.Notice.Text }</span>
+		</p>
+	}
+	<div class="section-grid setup-grid">
+		<div class="section-main">
+			<section class="workspace-panel setup-card" aria-labelledby="setup-title">
+				<header class="setup-card-head">
+					<div class="setup-card-title">
+						<h2 id="setup-title">
+							if p.Complete() {
+								Ready for review
+							} else {
+								First preview checklist
+							}
+						</h2>
+						<p class="setup-progress">
+							<span><strong>{ strconv.Itoa(p.Done()) } of { strconv.Itoa(len(p.Steps)) }</strong> done</span>
+							<span class="setup-meter" aria-hidden="true"><span class={ "setup-meter-fill", "fill-" + strconv.Itoa(p.Done()) }></span></span>
+						</p>
+					</div>
+					if len(p.Options) > 0 {
+						@picker(p)
+					}
+				</header>
+				if p.Selected == nil {
+					@noPullRequest(p)
+				}
+				<ol class="setup-checklist">
+					for i, step := range p.Steps {
+						@stepRow(p, step, i+1)
+					}
+				</ol>
+				if p.Complete() {
+					@nextSteps(p)
+				}
+			</section>
+		</div>
+		<aside class="section-aside">
+			@facts(p)
+		</aside>
+	</div>
+}
+
+// picker switches the checklist to another open pull request. Each choice is
+// an ordinary link, so it works without JavaScript.
+templ picker(p Page) {
+	<details class="setup-picker" data-menu>
+		<summary aria-label="Choose a pull request">
+			@components.PullRequestIcon()
+			if p.Selected != nil {
+				<span class="setup-picker-current">
+					<strong>{ "#" + strconv.Itoa(int(p.Selected.Number)) }</strong>
+					<span class="setup-picker-title">{ p.Selected.Title }</span>
+				</span>
+				<code class="setup-picker-sha" title={ p.Selected.SHA }>{ Short(p.Selected.SHA) }</code>
+			} else {
+				<span>Choose a pull request</span>
+			}
+			@components.ChevronDownIcon()
+		</summary>
+		<div class="setup-picker-menu" role="menu" aria-label="Open pull requests">
+			for _, o := range p.Options {
+				<a
+					role="menuitem"
+					href={ components.PublicURL(ctx, URL(p.RepoID, o.Number)) }
+					if p.Selected != nil && p.Selected.Number == o.Number {
+						aria-current="true"
+					}
+				>
+					<strong>{ "#" + strconv.Itoa(int(o.Number)) }</strong>
+					<span class="setup-picker-option">
+						<span>{ o.Title }</span>
+						<code>{ o.Branch }</code>
+					</span>
+				</a>
+			}
+			if p.OpenCount > int64(len(p.Options)) {
+				<p class="setup-picker-more">
+					{ strconv.Itoa(len(p.Options)) } of { strconv.FormatInt(p.OpenCount, 10) } open pull requests, most recently updated first.
+					Others: open them from the
+					<a href={ components.PublicURL(ctx, "/repositories/"+strconv.FormatInt(p.RepoID, 10)) }>Pull requests</a> tab.
+				</p>
+			}
+		</div>
+	</details>
+}
+
+// noPullRequest explains that setup needs an open pull request.
+templ noPullRequest(p Page) {
+	<div class="setup-empty">
+		<span class="empty-source-icon" aria-hidden="true">
+			@components.PullRequestIcon()
+		</span>
+		<div>
+			<h3>Open a pull request to continue</h3>
+			<p>Previa previews pull requests, so setup checks the newest commit of one. Open a pull request on GitHub; it appears here within moments, or sync now.</p>
+			if p.Sync.Running {
+				<p class="setup-note">
+					@components.SpinnerIcon()
+					Syncing pull requests from GitHub…
+				</p>
+			} else if p.Sync.Last != "" {
+				<p class="setup-note">{ "Last synced " }@components.Time(p.Sync.Last, prpages.TimeLabel(p.Sync.Last))</p>
+			}
+		</div>
+		if p.Discover && !p.Sync.Running {
+			<form method="post" action={ components.PublicURL(ctx, p.SyncURL()) } data-busy-form>
+				<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+				<input type="hidden" name="return" value="setup"/>
+				@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline, Class: "busy-button"}) {
+					@busyIcon(components.SyncIcon())
+					<span class="busy-text">Sync pull requests</span>
+					<span class="busy-label">Syncing…</span>
+				}
+			</form>
+		}
+	</div>
+}
+
+templ stepRow(p Page, s Step, n int) {
+	<li class="setup-step-row" data-state={ s.State } id={ "setup-" + s.ID }>
+		@stepMark(s.State, n)
+		<div class="setup-step-body">
+			<div class="setup-step-head">
+				<h3>{ s.Title }</h3>
+				if s.When != "" && s.State != StateWaiting {
+					<span class="setup-step-when">{ s.Label + " " }@components.Time(s.When, prpages.TimeLabel(s.When))</span>
+				}
+			</div>
+			<p class="setup-step-summary">{ s.Headline() }</p>
+			if len(s.Items) > 0 && s.State != StateWaiting {
+				<ul class="setup-findings">
+					for _, item := range s.Items {
+						<li class={ "setup-finding", "tone-" + item.Tone }>
+							<span class="setup-finding-dot" aria-hidden="true"></span>
+							<div>
+								<p>
+									if item.Field != "" {
+										<code>{ item.Field }</code>
+									}
+									<span>{ item.Title }</span>
+									if item.Line > 0 {
+										<span class="setup-finding-line">{ "line " + strconv.Itoa(item.Line) }</span>
+									}
+								</p>
+								if item.Detail != "" {
+									<p class="setup-finding-detail">{ item.Detail }</p>
+								}
+							</div>
+						</li>
+					}
+				</ul>
+			}
+			if s.State != StateWaiting && (len(s.Links) > 0 || s.Form != "") {
+				<div class="setup-actions">
+					for _, link := range s.Links {
+						if link.Primary {
+							@stepLink(link)
+						}
+					}
+					@stepForm(p, s)
+					for _, link := range s.Links {
+						if !link.Primary {
+							@stepLink(link)
+						}
+					}
+				</div>
+				if s.Blocked != "" && s.Form != "" {
+					<p class="setup-blocked" id={ "setup-" + s.ID + "-blocked" }>
+						@components.InfoIcon()
+						<span>{ s.Blocked }</span>
+					</p>
+				}
+			}
+		</div>
+	</li>
+}
+
+templ stepMark(state string, n int) {
+	<span class="setup-mark" aria-hidden="true">
+		switch state {
+			case StateDone:
+				@components.CheckIcon()
+			case StateWorking:
+				@components.SpinnerIcon()
+			case StateProblem:
+				@components.AlertIcon()
+			default:
+				{ strconv.Itoa(n) }
+		}
+	</span>
+	<span class="sr-only">
+		switch state {
+			case StateDone:
+				Done:
+			case StateWorking:
+				In progress:
+			case StateProblem:
+				Needs attention:
+			case StateCurrent:
+				Next:
+			default:
+				Later:
+		}
+	</span>
+}
+
+// stepForm is the check or build form a step offers, or its disabled button
+// with the reason beside it.
+templ stepForm(p Page, s Step) {
+	switch s.Form {
+		case "check":
+			if p.Check != nil && p.Selected != nil {
+				if s.Blocked != "" || !p.Discover {
+					@button.Button(button.Props{Disabled: true, Variant: variant(p.Check.Primary), Attributes: templ.Attributes{"aria-describedby": "setup-" + s.ID + "-blocked"}}) {
+						@components.ChecklistIcon()
+						{ p.Check.Label }
+					}
+				} else {
+					<form method="post" action={ components.PublicURL(ctx, p.CheckURL()) } data-busy-form>
+						<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+						<input type="hidden" name="expected_sha" value={ p.Selected.SHA }/>
+						@button.Button(button.Props{Type: button.TypeSubmit, Variant: variant(p.Check.Primary), Class: "busy-button"}) {
+							@busyIcon(components.ChecklistIcon())
+							<span class="busy-text">{ p.Check.Label }</span>
+							<span class="busy-label">Starting…</span>
+						}
+					</form>
+				}
+			}
+		case "build":
+			if p.Build != nil && p.Selected != nil {
+				if s.Blocked != "" {
+					@button.Button(button.Props{Disabled: true, Attributes: templ.Attributes{"aria-describedby": "setup-" + s.ID + "-blocked"}}) {
+						@components.BuildIcon()
+						{ p.Build.Label }
+					}
+				} else {
+					<form method="post" action={ components.PublicURL(ctx, p.BuildURL()) } data-busy-form>
+						<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+						<input type="hidden" name="return" value="setup"/>
+						<input type="hidden" name="workspace_query" value={ components.PublicQuery(ctx, p.RepoID, p.ReturnQuery()) }/>
+						<input type="hidden" name="action" value={ p.Build.Action }/>
+						<input type="hidden" name="expected_revision" value={ strconv.FormatInt(p.Build.ExpectedRevision, 10) }/>
+						<input type="hidden" name="request_key" value={ p.Build.RequestKey }/>
+						@button.Button(button.Props{Type: button.TypeSubmit, Class: "busy-button"}) {
+							if p.Build.Action == "retry" {
+								@busyIcon(components.RestartIcon())
+							} else {
+								@busyIcon(components.BuildIcon())
+							}
+							<span class="busy-text">{ p.Build.Label }</span>
+							<span class="busy-label">Starting…</span>
+						}
+					</form>
+				}
+			}
+	}
+}
+
+templ stepLink(link Link) {
+	if link.External {
+		@button.Button(button.Props{Href: link.Href, Target: "_blank", Variant: variant(link.Primary), Attributes: templ.Attributes{"rel": "noopener"}}) {
+			@linkIcon(link.Icon)
+			{ link.Label }
+			@components.ArrowUpRight()
+		}
+	} else {
+		@button.Button(button.Props{Href: link.Href, Variant: variant(link.Primary)}) {
+			@linkIcon(link.Icon)
+			{ link.Label }
+		}
+	}
+}
+
+templ linkIcon(name string) {
+	switch name {
+		case "kit":
+			@components.KitIcon()
+		case "logs":
+			@components.LogsIcon()
+		case "open":
+			@components.BrowserIcon()
+		case "repo":
+			@components.RepositoryIcon()
+		case "members":
+			@components.TeamIcon()
+		case "secrets":
+			@components.KeyIcon()
+		case "pr":
+			@components.PullRequestIcon()
+	}
+}
+
+templ busyIcon(icon templ.Component) {
+	<span class="busy-icon" aria-hidden="true">
+		@icon
+		@components.SpinnerIcon()
+	</span>
+}
+
+// nextSteps follow a first preview that has been opened.
+templ nextSteps(p Page) {
+	<div class="setup-next">
+		<h3>What's next</h3>
+		<div class="setup-actions">
+			for _, link := range p.Next {
+				@stepLink(link)
+			}
+			@button.Button(button.Props{Disabled: true, Variant: button.VariantOutline, Attributes: templ.Attributes{"aria-describedby": "setup-review-later"}}) {
+				@components.MessageIcon()
+				Request review
+			}
+		</div>
+		<p class="setup-blocked" id="setup-review-later">
+			@components.InfoIcon()
+			<span>
+				Review requests in Previa are not available yet. Share the preview link with your reviewers;
+				if p.Manager {
+					people you invite as Reviewers can also open private previews.
+				} else {
+					an Owner or Admin can invite them as Reviewers to open private previews.
+				}
+			</span>
+		</p>
+		if p.Mode != "automatic" {
+			<p class="setup-note">
+				if p.Manager {
+					New commits build when someone asks; turn on Automatic builds on the Pull requests tab to build them by themselves.
+				} else {
+					New commits build when someone asks; an Owner or Admin can turn on Automatic builds.
+				}
+			</p>
+		}
+	</div>
+}
+
+// facts lists what the checked commit declares its app needs.
+templ facts(p Page) {
+	<section class="workspace-panel guidance-card setup-facts" aria-labelledby="setup-facts-title">
+		<h2 id="setup-facts-title">
+			@components.ServerIcon()
+			What the app needs
+		</h2>
+		if p.Facts.SHA != "" {
+			<p class="setup-facts-source">From .previewrc.yaml at <code title={ p.Facts.SHA }>{ Short(p.Facts.SHA) }</code></p>
+			<dl class="setup-facts-list">
+				for _, f := range p.Facts.Rows {
+					<div>
+						<dt>{ f.Label }</dt>
+						<dd>
+							if f.Code {
+								<code>{ f.Value }</code>
+							} else {
+								<span>{ f.Value }</span>
+							}
+							if f.Note != "" {
+								<small>{ f.Note }</small>
+							}
+						</dd>
+					</div>
+				}
+			</dl>
+		} else {
+			<p class="setup-facts-empty">The port, health check, services and commands the commit declares appear here after the configuration check.</p>
+		}
+		<div class="setup-secrets">
+			<h3>
+				@components.KeyIcon()
+				Secrets
+			</h3>
+			if p.Facts.Fork {
+				<p>Fork pull requests get no secrets, so their previews start without them.</p>
+			} else if p.Facts.Secrets.Manager && !p.Facts.Secrets.Configured {
+				<p>This server cannot store secrets yet: an operator must configure their encryption key.</p>
+			} else if p.Facts.Secrets.Manager && len(p.Facts.Secrets.Names) == 0 {
+				<p>None stored. Previews start without runtime secrets.</p>
+				<a class="text-link" href={ components.PublicURL(ctx, p.Facts.Secrets.Href) }>
+					Add secrets
+					@components.Arrow()
+				</a>
+			} else if p.Facts.Secrets.Manager {
+				<ul class="setup-secret-names" aria-label="Stored secret names">
+					for _, name := range p.Facts.Secrets.Names {
+						<li><code>{ name }</code></li>
+					}
+				</ul>
+				<a class="text-link" href={ components.PublicURL(ctx, p.Facts.Secrets.Href) }>
+					Manage secrets
+					@components.Arrow()
+				</a>
+			} else {
+				<p>Secrets are managed by Owners and Admins. If the app needs one, ask { managerNames(p.Facts.Secrets.Managers) }.</p>
+			}
+			<p class="setup-facts-hint">Previa only knows the names stored here; it cannot tell which ones your app reads.</p>
+		</div>
+	</section>
+}
+
+// variant draws the step's main action solid and the rest outlined.
+func variant(primary bool) button.Variant {
+	if primary {
+		return button.VariantDefault
+	}
+	return button.VariantOutline
+}
+
+func selectedNumber(p Page) int32 {
+	if p.Selected == nil {
+		return 0
+	}
+	return p.Selected.Number
+}
+
+func managerNames(people []Person) string {
+	if len(people) == 0 {
+		return "an Owner or Admin"
+	}
+	text := ""
+	for i, person := range people {
+		switch {
+		case i == 0:
+		case i == len(people)-1:
+			text += " or "
+		default:
+			text += ", "
+		}
+		text += person.Name + " (@" + person.Login + ")"
+	}
+	return text
+}

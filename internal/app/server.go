@@ -19,12 +19,14 @@ import (
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/idle"
 	"github.com/ajaykathwatee/previa/internal/installations"
+	"github.com/ajaykathwatee/previa/internal/onboarding"
 	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/githubapp"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
+	"github.com/ajaykathwatee/previa/internal/platform/scope"
 	"github.com/ajaykathwatee/previa/internal/platform/version"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/previewaccess"
@@ -120,6 +122,7 @@ type serverFeatures struct {
 	workspaces     *workspaces.Handler
 	workspaceScope *workspaces.Middleware
 	publicIDs      *publicid.Catalog
+	setup          *onboarding.Handler
 }
 
 func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
@@ -184,10 +187,17 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 		})
 	}
 	f.installations.WithNavigator(f.prs)
-	f.summary = overviewSummary(service, prRepository, f.capabilities, f.prs)
-	if f.secrets, err = newSecretsHandler(cfg, pool, f.auth, logger); err != nil {
+	secretsService, err := newSecretsService(cfg, pool)
+	if err != nil {
 		return nil, err
 	}
+	f.secrets = secrets.NewHandler(secretsService, f.auth, logger)
+	setup, setupHandler, err := newOnboarding(cfg, pool, producer, f.capabilities, secretsService, hub, f.auth, logger)
+	if err != nil {
+		return nil, err
+	}
+	f.setup = setupHandler
+	f.summary = overviewSummary(service, prRepository, f.capabilities, f.prs, setup)
 	if f.outbound, err = newOutboundHandler(cfg, pool, producer, f.auth, logger); err != nil {
 		return nil, err
 	}
@@ -212,9 +222,9 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	return f, nil
 }
 
-// overviewSummary reads the Overview's counts, worker capabilities and
-// latest builds and previews.
-func overviewSummary(service *installations.Service, prs *pullrequests.Repository, capabilities *workers.Reader, highlights *pullrequests.Handler) dashboard.SummaryReader {
+// overviewSummary reads the Overview's counts, worker capabilities, latest
+// builds and previews, and where this person's first-preview setup stands.
+func overviewSummary(service *installations.Service, prs *pullrequests.Repository, capabilities *workers.Reader, highlights *pullrequests.Handler, setup *onboarding.Service) dashboard.SummaryReader {
 	return func(ctx context.Context, userID int64) (dashboardpages.Summary, error) {
 		summary, err := service.Summary(ctx, userID)
 		if err != nil {
@@ -232,19 +242,35 @@ func overviewSummary(service *installations.Service, prs *pullrequests.Repositor
 		if err != nil {
 			return dashboardpages.Summary{}, err
 		}
+		selection := scope.Current(ctx)
+		journey, err := setup.Journey(ctx, selection.WorkspaceID, userID)
+		if err != nil {
+			return dashboardpages.Summary{}, err
+		}
 		return dashboardpages.Summary{
 			Installations: summary.Installations, Repositories: summary.Repositories, Available: summary.Available,
 			OpenPRs: delivery.OpenPrs, Waiting: delivery.Waiting, Building: delivery.Building, Failed: delivery.Failed, FailedOlder: delivery.FailedOlder, Live: delivery.Live,
 			AttentionDays: int(pullrequests.FailureAttentionWindow / (24 * time.Hour)),
 			Workers:       dashboardpages.Workers{Discovery: caps.Discovery, Execution: caps.Execution, Reporting: caps.Reporting, Housekeeping: caps.Housekeeping, Paused: caps.Paused},
 			Builds:        builds, Previews: previews,
+			Journey: overviewJourney(selection.Role, journey),
 		}, nil
 	}
 }
 
-// newSecretsHandler serves repository secrets; without an encryption key
-// the page says secrets are unavailable.
-func newSecretsHandler(cfg config.ServerConfig, pool *pgxpool.Pool, users *auth.Handler, logger *slog.Logger) (*secrets.Handler, error) {
+// overviewJourney is the Overview's view of first-preview setup.
+func overviewJourney(role string, j onboarding.Journey) dashboardpages.Journey {
+	out := dashboardpages.Journey{Manager: role == "owner" || role == "admin", Repositories: j.Repositories, Available: j.Available,
+		Checked: j.Checked, Published: j.Published, Opened: j.Opened, FocusID: j.FocusID, FocusName: j.FocusName}
+	for _, m := range j.Managers {
+		out.Managers = append(out.Managers, dashboardpages.Person{Login: m.Login, Name: m.Name})
+	}
+	return out
+}
+
+// newSecretsService manages repository secrets; without an encryption key
+// the Secrets tab says secrets are unavailable.
+func newSecretsService(cfg config.ServerConfig, pool *pgxpool.Pool) (*secrets.Service, error) {
 	var keyring *secrets.Keyring
 	if cfg.SecretsConfigured() {
 		var err error
@@ -252,11 +278,7 @@ func newSecretsHandler(cfg config.ServerConfig, pool *pgxpool.Pool, users *auth.
 			return nil, fmt.Errorf("configure repository secrets: %w", err)
 		}
 	}
-	service, err := secrets.NewService(secrets.NewRepository(pool), keyring)
-	if err != nil {
-		return nil, err
-	}
-	return secrets.NewHandler(service, users, logger), nil
+	return secrets.NewService(secrets.NewRepository(pool), keyring)
 }
 
 // newOutboundHandler serves owner-approved outbound connections; a change
@@ -329,6 +351,9 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 		})
 		f.installations.Mount(r, auth.RequireUser)
 		f.prs.Mount(r, auth.RequireUser)
+		if f.setup != nil {
+			f.setup.Mount(r, auth.RequireUser)
+		}
 		f.secrets.Mount(r, auth.RequireUser)
 		f.outbound.Mount(r, auth.RequireUser)
 		f.logs.Mount(r, auth.RequireUser)

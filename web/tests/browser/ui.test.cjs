@@ -153,7 +153,8 @@ test('Overview places open PRs along the pipeline and its activity tabs and rows
   await login();
   // An empty workspace: the blocked notice, setup steps and honest zeros.
   assert(await page.locator('.ov-alert').isVisible());
-  assert.match(await page.locator('.ov-setup-progress').innerText(), /1 of 5\s+done/);
+  assert.match(await page.locator('.ov-setup-progress').innerText(), /0 of 4\s+done/);
+  assert.match(await page.locator('.ov-step.is-next').innerText(), /Connect a repository/);
   assert.deepEqual(await page.locator('.ov-flow-count').allInnerTexts(), ['0', '0', '0', '0']);
   assert.match(await page.locator('.ov-status').innerText(), /No worker running/);
   // A busy workspace.
@@ -186,7 +187,8 @@ test('Overview places open PRs along the pipeline and its activity tabs and rows
   await preview.locator('summary').click();
   assert.match(await preview.locator('.ov-facts').innerText(), /newer commit .* is not live yet/);
   assert.equal(await preview.locator('[data-lifetime-text]').innerText(), '75% of its lifetime left');
-  assert.equal(await preview.locator('.ov-open').getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
+  // Open goes through Previa, which records the open for the Setup checklist.
+  assert.equal(await preview.locator('.ov-open').getAttribute('href'), '/repositories/1/pull-requests/3/open');
   await page.reload();
   assert.equal(await page.locator('#ov-tab-previews').getAttribute('aria-selected'), 'true');
   // A failed request says why and how long it took.
@@ -506,7 +508,7 @@ test('owner builds once and tears a preview down only after confirming in a moda
   const preview = page.locator('[data-preview-url]');
   assert.equal(await preview.getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
   assert.equal(await preview.getAttribute('target'), '_blank');
-  assert.equal(await page.getByRole('link', {name: 'Open preview', exact: true}).getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
+  assert.equal(await page.getByRole('link', {name: 'Open preview', exact: true}).getAttribute('href'), '/repositories/1/pull-requests/3/open', 'Open preview records the open; the address stays direct');
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin});
   const copy = page.getByRole('button', {name: 'Copy the preview address', exact: true});
   await copy.click();
@@ -709,7 +711,7 @@ test('Previews show what is live with its link, Builds show attempts, and teardo
   assert.match(await page.locator('.page-header-text [role=tooltip]').textContent(), /What is live now/);
   assert.ok(await page.locator('.page-header-text [role=tooltip]').isHidden(), 'the description waits in its tooltip');
   const preview = page.getByRole('link', {name: 'Open the preview of fixture-owner/repository-1 #3 in a new tab'});
-  assert.equal(await preview.getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
+  assert.equal(await preview.getAttribute('href'), '/repositories/1/pull-requests/3/open');
   assert.equal(await preview.getAttribute('target'), '_blank');
   // Status is what reviewers care about: live, even while a newer build failed.
   assert.deepEqual(await page.locator('.activity-table .pr-cell-state .badge').allInnerTexts(), ['Live', 'Live · update failed']);

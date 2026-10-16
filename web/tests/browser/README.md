@@ -101,3 +101,22 @@ search, separate invitations, switcher alignment, profile edits, PNG upload and
 removal, stale forms, narrow layouts, and no-JavaScript saves against PostgreSQL.
 Its fixture timeout is five minutes. `UI_BROWSER_SCREENSHOTS=1` includes settings,
 logo, invitation and switcher screenshots in the ignored artifacts directory.
+
+The repository Setup tab has its own PostgreSQL-backed suite:
+
+```sh
+set -a; . ./.env; set +a
+export TEST_DATABASE_URL="$DATABASE_URL"
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-setup-browser
+```
+
+`internal/onboarding/browser_test.go` migrates a temporary schema and serves the
+real session, CSRF, public-ID, workspace, pull request and setup handlers, with live
+updates from PostgreSQL `LISTEN`/`NOTIFY` through the realtime hub. Test-only routes
+stand in for the worker's GitHub reads, a pushed commit, a build and a deployment.
+Five scenarios in `onboarding.test.cjs` cover the Overview's role-aware next steps,
+an owner's whole path (check, problem with its fix, push, recheck, build, publish,
+open in a new tab, live completion), the pull request picker as a menu of links
+(Escape, closing before navigation, a phone-width menu), the Developer and Reviewer
+views, and checking without JavaScript. `UI_BROWSER_SCREENSHOTS=1` writes
+`setup-*.png` captures in light, dark and phone layouts.

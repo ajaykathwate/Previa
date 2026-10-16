@@ -102,6 +102,10 @@ func buildPipeline(ctx context.Context, in pipelineInput) (*pipeline, error) {
 		return p, nil
 	}
 	upstream := pullrequests.NewGitHubSource(in.github)
+	// Setup checks read a few files from GitHub; any worker with the App runs them.
+	if err := p.addSetupChecks(in); err != nil {
+		return nil, err
+	}
 	if !cfg.RoutingConfigured() {
 		// Discovery and mergeability only; webhooks and requests still record
 		// durable intent and wake-ups, which wait for an execution worker.

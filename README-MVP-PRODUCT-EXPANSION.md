@@ -1,6 +1,6 @@
 # Previa: complete team SaaS MVP specification
 
-**Status:** Feature 1's shared workspace core is implemented. Its review and account-lifecycle dependencies remain pending in Features 3 and 6; Features 2–6 and 5B remain implementation specifications.
+**Status:** Feature 1's shared workspace core and Feature 2's guided onboarding are implemented. Feature 1's review and account-lifecycle dependencies remain pending in Features 3 and 6; Features 3–6 and 5B remain implementation specifications.
 **Prepared:** 14 October 2026. **Updated:** 15 October 2026 (Feature 5B, persistent test data, added after Feature 5).  
 **Audience:** small development teams using hosted Previa.  
 **Scope:** the first six product improvements agreed with the owner, plus Feature 5B, which extends Feature 5; onboarding is deliberately minimal. Separate notification integrations are deferred.
@@ -240,6 +240,8 @@ Migrate quota/account IDs in scheduling, runtime labels, target loading, fair sh
 - Cross-workspace forged IDs fail for lists, details, logs, downloads, actions, grants, previews, and billing.
 
 ## 5. Feature 2: minimal guided onboarding
+
+Implementation and current scope: [Guided onboarding](docs/29-guided-onboarding.md). It was delivered right after Feature 1, ahead of step F in §11.2, at the owner's request. Until Features 3 and 4 exist, **Request review** is shown disabled and labelled as not yet available, and Reviewers land on Previews instead of a review queue. Flagged deviations: checks are recorded per pull request (their repository derived), and building acknowledges the application prerequisites (no separate acknowledgement is stored).
 
 ### 5.1 Problem and user benefit
 
@@ -1036,6 +1038,8 @@ This is an ordered implementation plan, not permission to resume a previous road
 | J | Paid subscription mode | Real provider test-mode lifecycle, embedded payment UX, reconciliation, cancellation, policies. |
 
 Step G follows F because Feature 5B extends Feature 5's seed workflow, setup outcomes, Reset action and test-access guidance, and needs Features 3/4 publications and review rounds to show reviewers whether data was kept or reset. It precedes H and I so usage accounting and deletion cover baseline builds and stored baselines from their first release instead of being retrofitted.
+
+Feature 2's onboarding part of step F was delivered after step A at the owner's request ([Guided onboarding](docs/29-guided-onboarding.md)); its review-dependent pieces are labelled until steps C and D.
 
 Features can reuse small interfaces from an earlier step, but visible functionality must not end with mock persistence or an unimplemented action. Keep beta/purchase controls unavailable until their corresponding backend and verification exist. A free beta release can omit paid mode only if explicitly labeled and agreed; it does not satisfy a later claim that paid subscription support is complete.
 

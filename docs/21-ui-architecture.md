@@ -43,7 +43,8 @@ Dependencies point one way: feature handler → page package → layouts/compone
 Use import aliases (`authpages`, `dashboardpages`, `prpages`) where names collide.
 Ownership of routes: `internal/dashboard` (home, overview, session, tools, FAQ, Open Source Tests),
 `internal/installations` (`/repositories`), `internal/pullrequests` (repository and
-PR pages, Builds, Previews, the event stream), `internal/secrets` (a
+PR pages, Builds, Previews, the event stream), `internal/onboarding` (a
+repository's Setup tab and the Open preview action), `internal/secrets` (a
 repository's Secrets tab).
 
 ## Visual system: the "signal" theme
@@ -83,10 +84,12 @@ repository's Secrets tab).
   arrow. Pages under a repository open with a shared hero
   (`components.RepositoryHero`: owner, name, one line of context).
 - **Repository tabs.** `components.RepositoryTabs` switches a repository between
-  **Pull requests** (`/repositories/{id}`), **Secrets** (`/repositories/{id}/secrets`)
-  and **Outbound** (`/repositories/{id}/outbound`) as an underlined tab bar. Each is
-  a full page, so the switch works without JavaScript and view transitions keep it
-  smooth. PR detail pages do not show the tabs.
+  **Pull requests** (`/repositories/{id}`), **Setup** (`/repositories/{id}/setup`,
+  for people who can build), **Secrets** (`/repositories/{id}/secrets`) and
+  **Outbound** (`/repositories/{id}/outbound`) as an underlined tab bar; the last two
+  are for managers. Each is a full page, so the switch works without JavaScript and
+  view transitions keep it smooth. Below 760px the tabs keep one line and scroll
+  sideways; below 480px they drop their icons. PR detail pages do not show the tabs.
 - **Dedicated pages.** `/repositories`, `/repositories/{id}`,
   `/repositories/{id}/pull-requests/{number}` and its `/logs` page are separate,
   bookmarkable pages. PR detail and every Builds/Previews row link to the logs.
@@ -115,9 +118,13 @@ Making full-page navigation feel instant, without giving up MPA semantics:
 - Requests to one target share a replacement slot so older responses are discarded.
   Failed requests keep current content and show retry feedback.
 - Live refreshes come from the event stream ([20](20-realtime-updates.md)). A hidden
-  `[data-live-refresh]` element refetches `#repository-detail` with the current
-  URL's filters. While PR search is focused or the policy modal is open, a refresh
-  is deferred, then run when the user leaves the field or closes the modal.
+  `[data-live-refresh]` element refetches `#repository-detail` (or the Setup tab's
+  `#setup-detail`) with the current URL's filters. While PR search is focused, a
+  confirmation is open or a `details[data-menu]` menu is open, a refresh is deferred
+  (one that returns while a menu inside its target is open is not swapped in), then
+  run when the user leaves the field, closes the modal or closes the menu. Menus are
+  looked up when an event happens, so menus a refresh replaced still close on an
+  outside click or Escape.
 - After a user-triggered results swap, the view scrolls back under the sticky
   toolbar if the results' top had scrolled out of sight.
 
@@ -135,7 +142,9 @@ while the reader is at the bottom, pauses in hidden tabs, marks error-looking
 lines), `initBuildProgress` (on a PR page whose build is in flight, follows the
 attempt's log stream to name the current step and its latest line; closes on
 swaps and hidden tabs; a stream that cannot open leaves the server's rendering),
-`initElapsed` (counts `time[data-elapsed]` up every second), `initRelativeTimes` (rewrites
+`initBusyForms` (a plain form marked `data-busy-form` submits once and shows its
+busy button's spinner and label until the next page), `initElapsed` (counts
+`time[data-elapsed]` up every second), `initRelativeTimes` (rewrites
 `time[data-relative]` as "3 minutes ago" every 30 s and after swaps, keeping the
 exact UTC time as the title), `initCopyButtons` (`data-copy` text or a log list's
 lines to the clipboard, confirmed for two seconds), `initSecretEditor` and
@@ -208,7 +217,11 @@ comes from `dashboardpages.Summary`; nothing is simulated.
   refresh link.
 - **Blocked notice** first when no running worker can build, with the fix and a link
   to the FAQ answer; then **setup steps** with a progress bar until every step is done,
-  the next step highlighted with its action.
+  the next step highlighted with its action. The steps follow the role: Owners and
+  Admins *Connect a repository*, Developers *Get access to a repository* (naming whom
+  to ask), then *Check a pull request's setup*, *Publish a preview* and *Open it from
+  Previa*, from workspace-wide records; the next step's action opens the Setup tab
+  of the repository where setup continues ([29](29-guided-onboarding.md)).
 - **Delivery pipeline:** open pull requests, waiting or queued, building and live
   previews as connected stages, each with its count, its share of open pull requests
   and a link; stages with work in progress are marked **Now**; a lane below names
@@ -314,6 +327,23 @@ page. The building blocks are `components.PreviaAvatar`, `PersonAvatar`, `Previa
   redirected to `/#faq`.
 - **Keeping it true:** the answers are static, user-level copy describing what works
   today. Change an answer in the same change that alters the behaviour it describes.
+
+## Setup tab
+
+`web/pages/onboarding` (styles in `web/styles/onboarding.css`): a checklist card
+beside **What the app needs**, like the Secrets layout (below 1100px the panel
+follows). The card's header has the progress (*n of 5 done*) and a pull request
+picker: a `details[data-menu]` of ordinary links (number, title, branch), so
+choosing works without JavaScript and the menu closes before navigating. Each step
+row has a state mark (number, check, spinner, warning), a title with its time, one
+sentence, findings as tinted rows (key in code, line number, detail), and its
+actions: one solid primary, the rest outlined, a disabled action with its reason
+beside it. **Check setup** and **Build preview** are plain CSRF-protected forms
+(`data-busy-form`); Build posts to the PR's Build action with `return=setup`, so
+every outcome, refusals included, comes back to the checklist with a toast or a
+notice. **Open preview** links open a new tab through the recording `/open` route.
+Live updates replace `#setup-detail`, so a check, push, build or open shows up
+without reloading. See [29](29-guided-onboarding.md).
 
 ## Secrets tab
 
@@ -472,8 +502,8 @@ redirect to the last valid page. The PR list follows the same 10-row pattern.
 - **Tailwind CSS v4.1.18** standalone CLI, checksum-pinned. `make assets` compiles
   `web/styles/app.css` into `web/static/css/app.css` (ignored, embedded at build).
   `site.css` imports `base`, `home`, `conversation`, `workspace`, `overview`,
-  `command`, `repositories`, `logs`, `surfaces`, `confirmation` and `motion`
-  modules. `surfaces.css` holds the shared page pieces (header trail, heroes, tabs,
+  `command`, `repositories`, `logs`, `surfaces`, `confirmation`, `motion`, `teams`,
+  `onboarding` and `fields` modules. `surfaces.css` holds the shared page pieces (header trail, heroes, tabs,
   two-column sections, tracker, diagnosis, busy buttons, terminal panel, stat
   tiles, activity table).
 - **templUI v1.13.2** (MIT) supplies copied button, card, alert and input source;
@@ -504,6 +534,10 @@ palette, signed-out redirect), the Overview (empty and busy workspaces, pipeline
 shares, coverage, tabs with arrow keys and session memory, the activity table and
 its plain-language failures, expandable rows, preview
 lifetime, both lists without JavaScript), reduced motion and no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-optional).
+A separate PostgreSQL-backed suite (`make test-setup-browser`) drives the Setup tab:
+a check, a push and a recheck, building, publishing and opening with live updates
+through real `LISTEN`/`NOTIFY`, the picker, the Developer and Reviewer views and the
+no-JavaScript path, in light, dark and phone layouts.
 
 ## Decisions and trade-offs
 

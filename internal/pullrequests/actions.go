@@ -485,10 +485,16 @@ func (h *Handler) build(w http.ResponseWriter, r *http.Request) {
 	// What is wrong with the PR itself comes first; then whether a worker can
 	// build at all.
 	if row.State != "open" {
+		if refusedFromSetup(w, r, id, "build-closed") {
+			return
+		}
 		http.Error(w, "Closed and merged pull requests are not built.", http.StatusConflict)
 		return
 	}
 	if err := environments.BuildBlockReason(row.BuildStatus, row.NeedsRefresh); err != nil {
+		if refusedFromSetup(w, r, id, "build-blocked") {
+			return
+		}
 		http.Error(w, blockSentence(err), http.StatusConflict)
 		return
 	}
@@ -498,17 +504,20 @@ func (h *Handler) build(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !available {
+		if refusedFromSetup(w, r, id, "build-unavailable") {
+			return
+		}
 		http.Error(w, why.reason+" No build was requested.", http.StatusServiceUnavailable)
 		return
 	}
 	if _, err := h.actions.Verifier.VerifyUpstream(r.Context(), row.ID); err != nil {
-		h.refuse(w, r, err)
+		h.refuse(w, r, id, err)
 		return
 	}
 	if _, err := h.actions.Builds.RequestBuild(r.Context(), environments.IntentCommand{
 		UserID: user, PullRequestID: row.ID, ExpectedRevision: expected, IdempotencyKey: key, Action: action,
 	}); err != nil {
-		h.refuse(w, r, err)
+		h.refuse(w, r, id, err)
 		return
 	}
 	h.finishMutation(w, r, user, id)
@@ -547,9 +556,13 @@ func (h *Handler) teardown(w http.ResponseWriter, r *http.Request) {
 	h.finishMutation(w, r, user, id)
 }
 
-// refuse answers a refused build with a short, safe reason.
-func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {
+// refuse answers a refused build with a short, safe reason. From the Setup
+// tab it returns to the checklist with the matching notice.
+func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, repoID int64, err error) {
 	var limited *environments.UpstreamRetryAfter
+	if code := setupRefusal(err); code != "" && refusedFromSetup(w, r, repoID, code) {
+		return
+	}
 	switch {
 	case errors.As(err, &limited):
 		w.Header().Set("Retry-After", strconv.Itoa(int(max(limited.Delay, time.Second)/time.Second)))
@@ -569,4 +582,23 @@ func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		h.fail(w, r, err)
 	}
+}
+
+// setupRefusal names a refused build for the Setup tab's notice; "" for
+// errors that are not a refusal.
+func setupRefusal(err error) string {
+	var limited *environments.UpstreamRetryAfter
+	switch {
+	case errors.As(err, &limited), errors.Is(err, environments.ErrUpstreamUnavailable):
+		return "build-github"
+	case errors.Is(err, environments.ErrUpstreamInaccessible), errors.Is(err, environments.ErrIntentUnavailable):
+		return "build-access"
+	case errors.Is(err, environments.ErrUpstreamClosed), errors.Is(err, environments.ErrPRClosed):
+		return "build-closed"
+	case errors.Is(err, environments.ErrPRConflicts), errors.Is(err, environments.ErrPRChecking), errors.Is(err, environments.ErrPRRefresh):
+		return "build-blocked"
+	case errors.Is(err, environments.ErrUpstreamChanged), errors.Is(err, environments.ErrIntentConflict), errors.Is(err, environments.ErrIntentKeyConflict), errors.Is(err, environments.ErrIntentAction):
+		return "build-changed"
+	}
+	return ""
 }

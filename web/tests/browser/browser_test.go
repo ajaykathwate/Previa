@@ -152,7 +152,8 @@ func TestBrowserRegression(t *testing.T) {
 			DeveloperTools: true, Identity: handler.UserIDs,
 			Summary: func(ctx context.Context, _ int64) (dashboardpages.Summary, error) {
 				if sessions.GetString(ctx, "fixture-overview") != "busy" {
-					return dashboardpages.Summary{}, nil
+					// A new owner: nothing connected yet.
+					return dashboardpages.Summary{Journey: dashboardpages.Journey{Manager: true}}, nil
 				}
 				return fixtureOverview(time.Now()), nil
 			},
@@ -738,6 +739,7 @@ func fixtureOverview(now time.Time) dashboardpages.Summary {
 	return dashboardpages.Summary{
 		Installations: 2, Repositories: 6, Available: 5, OpenPRs: 12, Waiting: 2, Building: 1, Failed: 1, FailedOlder: 2, Live: 4, AttentionDays: 7,
 		Workers: dashboardpages.Workers{Discovery: true, Execution: true, Reporting: true, Housekeeping: true},
+		Journey: dashboardpages.Journey{Manager: true, Repositories: 6, Available: 5, Checked: true, Published: true, Opened: true, FocusID: 1, FocusName: "fixture-owner/repository-1"},
 		Builds: []prpages.ActivityRow{
 			{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Title: "Fixture pull request 3", Latest: "latest-commit", Requested: "latest-commit",
 				State: "running", RequestCurrent: true, RequestSource: "manual", Available: true, Deadline: at(-3 * time.Minute), StartedAt: at(-2 * time.Minute)},

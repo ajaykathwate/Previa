@@ -405,7 +405,7 @@ templ Results(p Page) {
 								}
 							</td>
 							<td class="pr-cell-build pr-cell-url" data-label="Preview">
-								@previewCell(pr)
+								@previewCell(p.RepoID, pr)
 							</td>
 							<td class="pr-cell-go" aria-hidden="true">
 								@components.Arrow()
@@ -492,7 +492,7 @@ templ PRDetail(p Page, pr PR, csrf string) {
 					}
 					<div class="pr-detail-actions">
 						if pr.Live() {
-							@button.Button(button.Props{Href: pr.PreviewURL, Target: "_blank", Attributes: templ.Attributes{"rel": "noopener noreferrer"}}) {
+							@button.Button(button.Props{Href: PreviewHref(ctx, p.RepoID, pr.Number, pr.PreviewURL), Target: "_blank", Attributes: templ.Attributes{"rel": "noopener noreferrer"}}) {
 								Open preview
 								@components.ArrowUpRight()
 							}
@@ -750,7 +750,7 @@ templ PRDetail(p Page, pr PR, csrf string) {
 
 // previewCell is a list row's delivery status: the live preview with its
 // address first, otherwise where the latest build request stands.
-templ previewCell(pr PR) {
+templ previewCell(repoID int64, pr PR) {
 	if pr.PreviewURL != "" {
 		<span class="delivery tone-ok">
 			<span class="delivery-icon" aria-hidden="true">
@@ -758,7 +758,7 @@ templ previewCell(pr PR) {
 			</span>
 			Live
 		</span>
-		<a class="delivery-open" href={ components.PublicURL(ctx, pr.PreviewURL) } target="_blank" rel="noopener noreferrer" title={ pr.PreviewURL } aria-label={ "Open the preview of #" + strconv.Itoa(int(pr.Number)) }>
+		<a class="delivery-open" href={ components.PublicURL(ctx, PreviewHref(ctx, repoID, pr.Number, pr.PreviewURL)) } target="_blank" rel="noopener noreferrer" title={ pr.PreviewURL } aria-label={ "Open the preview of #" + strconv.Itoa(int(pr.Number)) }>
 			Open
 			@components.ArrowUpRight()
 		</a>
@@ -1146,7 +1146,7 @@ templ ActivityIndex(username, csrf string, p Activity) {
 												</td>
 												<td class="pr-cell-url" data-label="Link">
 													if row.PreviewURL!="" {
-														<a class="preview-open" href={ components.PublicURL(ctx, row.PreviewURL) } target="_blank" rel="noopener noreferrer" title={ row.PreviewURL } aria-label={ "Open the preview of " + row.Name + " #" + strconv.Itoa(int(row.Number)) + " in a new tab" }>
+														<a class="preview-open" href={ components.PublicURL(ctx, PreviewHref(ctx, row.RepoID, row.Number, row.PreviewURL)) } target="_blank" rel="noopener noreferrer" title={ row.PreviewURL } aria-label={ "Open the preview of " + row.Name + " #" + strconv.Itoa(int(row.Number)) + " in a new tab" }>
 															Open preview
 															@components.ArrowUpRight()
 														</a>

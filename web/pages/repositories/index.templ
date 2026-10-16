@@ -41,7 +41,10 @@ templ Index(username string, csrfToken string, page Page) {
 			if page.Connected {
 				<p class="connection-notice tone-ok" role="status">
 					@components.CheckIcon()
-					GitHub connection verified. Your selected repositories are linked.
+					<span>
+						GitHub connection verified. Your selected repositories are linked.
+						Next, open one and choose its <strong>Setup</strong> tab: it checks a pull request's configuration and takes you to its first preview.
+					</span>
 				</p>
 			}
 			<div class="repository-directory-view">

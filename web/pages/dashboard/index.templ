@@ -17,6 +17,9 @@ import (
 templ Index(username string, csrfToken string, summary Summary) {
 	@layouts.App("Overview", username, csrfToken, components.NavOverview) {
 		{{ note, attention := summary.WorkerNote() }}
+		if summary.Joined {
+			@components.Toasts("Welcome to " + components.Workspace(ctx).Name)
+		}
 		<div class="ov" data-overview>
 			<header class="page-header dashboard-heading ov-hero">
 				<div class="page-header-text">
@@ -228,7 +231,7 @@ templ setup(summary Summary) {
 						}
 					</strong>
 					<span class="ov-step-detail">{ step.Detail }</span>
-					if !step.Done && step.Href != "" {
+					if i == next && step.Href != "" {
 						<a class="ov-step-action" href={ components.PublicURL(ctx, step.Href) }>
 							{ step.Action }
 							@components.Arrow()
@@ -627,7 +630,7 @@ templ previewRow(row prpages.ActivityRow) {
 		</details>
 		if row.PreviewURL != "" {
 			<div class="ov-row-quick">
-				<a class="ov-open" href={ components.PublicURL(ctx, row.PreviewURL) } target="_blank" rel="noopener noreferrer" title={ row.PreviewURL }>
+				<a class="ov-open" href={ components.PublicURL(ctx, prpages.PreviewHref(ctx, row.RepoID, row.Number, row.PreviewURL)) } target="_blank" rel="noopener noreferrer" title={ row.PreviewURL }>
 					Open
 					@components.ArrowUpRight()
 				</a>

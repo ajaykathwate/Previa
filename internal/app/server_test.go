@@ -116,7 +116,7 @@ func TestServerRoutesRegression(t *testing.T) {
 
 	t.Run("protected pages send anonymous visitors to sign in", func(t *testing.T) {
 		for _, path := range []string{"/dashboard", "/repositories", "/builds", "/previews", "/environments", "/repositories/1",
-			"/repositories/1/pull-requests/1", "/repositories/1/secrets", "/repositories/1/outbound", "/repositories/1/pull-requests/1/logs", "/auth/logout"} {
+			"/repositories/1/pull-requests/1", "/repositories/1/secrets", "/repositories/1/outbound", "/repositories/1/setup", "/repositories/1/pull-requests/1/logs", "/auth/logout"} {
 			login := "/auth/github/login?" + url.Values{"next": {path}}.Encode()
 			response := send(http.MethodGet, path, nil, nil)
 			if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != login {

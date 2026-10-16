@@ -128,6 +128,21 @@ func (h *Handler) finishMutation(w http.ResponseWriter, r *http.Request, userID,
 		http.Error(w, "Invalid workspace filters.", http.StatusBadRequest)
 		return
 	}
+	if r.FormValue("return") == "setup" {
+		location := setupLocation(repoID, params)
+		separator := "?"
+		if strings.Contains(location, "?") {
+			separator = "&"
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/build"):
+			location += separator + "saved=build"
+		case strings.HasSuffix(r.URL.Path, "/refresh"):
+			location += separator + "saved=sync"
+		}
+		publicid.Redirect(w, r, location, http.StatusSeeOther)
+		return
+	}
 	location := repositorypages.WorkspaceURL(repoID, params)
 	if r.Header.Get("HX-Request") != "true" {
 		publicid.Redirect(w, r, location, http.StatusSeeOther)
@@ -144,4 +159,33 @@ func (h *Handler) finishMutation(w http.ResponseWriter, r *http.Request, userID,
 	}
 	w.Header().Add("Vary", "HX-Request, HX-Target")
 	publicid.Handler(r, pages.Panel(page, h.users.CSRFToken(r.Context())), page).ServeHTTP(w, r)
+}
+
+// setupLocation is a repository's Setup tab, on the pull request the form
+// came from (a fixed path; only its pr selector comes from the form).
+func setupLocation(repoID int64, params url.Values) string {
+	location := "/repositories/" + strconv.FormatInt(repoID, 10) + "/setup"
+	if pr := params.Get("pr"); pr != "" {
+		location += "?pr=" + url.QueryEscape(pr)
+	}
+	return location
+}
+
+// refusedFromSetup sends a refused request from the Setup tab back to its
+// checklist with a fixed notice code, instead of a plain-text error page.
+func refusedFromSetup(w http.ResponseWriter, r *http.Request, repoID int64, code string) bool {
+	if r.FormValue("return") != "setup" {
+		return false
+	}
+	params, err := url.ParseQuery(r.FormValue("workspace_query"))
+	if err != nil {
+		params = url.Values{}
+	}
+	location := setupLocation(repoID, params)
+	separator := "?"
+	if strings.Contains(location, "?") {
+		separator = "&"
+	}
+	publicid.Redirect(w, r, location+separator+"notice="+code, http.StatusSeeOther)
+	return true
 }

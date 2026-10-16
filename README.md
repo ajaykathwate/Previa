@@ -123,6 +123,9 @@ even if the person who installed it changes their password or leaves the team.
 4. The repository defaults to **Manual**. Its owner may enable **Automatic** in
    the dashboard; this policy is stored by the platform, not in PR-controlled YAML.
    Connecting a repository or enabling Automatic does not bulk-build existing PRs.
+5. Optionally, the repository's **Setup** tab checks one open pull request's
+   commit (configuration, Dockerfile and context, without building) and walks to
+   its first preview; see [guided onboarding](docs/29-guided-onboarding.md).
 
 Backend and API repositories can also declare platform-managed PostgreSQL, Redis
 and MySQL (`services`), a setup command for migrations and seed data (`setup`), up to
@@ -379,6 +382,18 @@ GitHub repository owner describe the GitHub connection authority; they do not
 create a separate installer-only dashboard authorization path. Review feedback,
 billing and deletion remain the later features specified in
 [the team SaaS plan](README-MVP-PRODUCT-EXPANSION.md).
+
+### Guided onboarding requirement
+
+A repository's Setup tab takes people who can build (Owner, Admin, Developer) from
+a connected repository to a preview opened from Previa, for one open pull request:
+connection, a bounded check of that exact commit's configuration (run by a worker
+from a few GitHub reads, never the archive), what the app declares it needs, an
+explicit build through the existing action, and opening it. Every step is derived
+from current records; only checks and opens are stored. Checks never build, never
+enable Automatic builds and are limited per commit and per workspace hour. The
+Overview's next steps follow the person's role, and accepted invitations land
+Reviewers on Previews. Details: [guided onboarding](docs/29-guided-onboarding.md).
 
 ### 3.3 Key design decisions worth being able to explain
 

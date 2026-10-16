@@ -505,3 +505,34 @@ func TestPreviewsListOnlyWhatServes(t *testing.T) {
 		t.Fatalf("old links to Environments move to Previews: %d %q", w.Code, w.Header().Get("Location"))
 	}
 }
+
+// The Setup tab posts to the same Build and Sync actions with return=setup:
+// each comes back to the checklist, on the pull request it showed, with what
+// happened, never to a plain-text error page.
+func TestSetupTabActionsReturnToTheChecklist(t *testing.T) {
+	h := newActionsHarness(t)
+	values, _ := h.form(t)
+	values.Set("return", "setup")
+	values.Set("workspace_query", "pr=7")
+	w := h.request(t, "POST", detailPath+"/build", values.Encode())
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/setup?pr=7&saved=build" {
+		t.Fatalf("build from setup: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	if revision, _, _, _ := h.intent(t); revision != 1 {
+		t.Fatalf("the build was not requested: revision %d", revision)
+	}
+	h.exec(t, "UPDATE build_intents SET state='failed', started_at=now(), completed_at=now() WHERE pull_request_id=$1", h.prID)
+	values, _ = h.form(t)
+	values.Set("return", "setup")
+	values.Set("workspace_query", "pr=7")
+	values.Set("expected_revision", "0")
+	values.Set("request_key", "a-key-from-an-old-setup-tab")
+	w = h.request(t, "POST", detailPath+"/build", values.Encode())
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/setup?pr=7&notice=build-changed" {
+		t.Fatalf("a stale build from setup: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	w = h.request(t, "POST", "/repositories/1/refresh", url.Values{"csrf_token": {values.Get("csrf_token")}, "return": {"setup"}}.Encode())
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/setup?saved=sync" {
+		t.Fatalf("sync from setup: %d %s", w.Code, w.Header().Get("Location"))
+	}
+}

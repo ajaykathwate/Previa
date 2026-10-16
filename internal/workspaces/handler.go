@@ -296,7 +296,7 @@ func (h *Handler) respondInvitation(w http.ResponseWriter, r *http.Request) {
 		publicid.Redirect(w, r, "/workspaces?saved=declined", http.StatusSeeOther)
 		return
 	}
-	publicid.Redirect(w, r, "/workspaces/"+pages.ID(id)+"/members?saved=joined", http.StatusSeeOther)
+	h.joined(w, r, u, id)
 }
 
 var directorySaved = map[string]string{"deleted": "Workspace deleted", "declined": "Invitation declined"}
@@ -363,5 +363,23 @@ func (h *Handler) respondReceived(w http.ResponseWriter, r *http.Request) {
 		publicid.Redirect(w, r, "/workspaces?saved=declined", http.StatusSeeOther)
 		return
 	}
-	publicid.Redirect(w, r, "/workspaces/"+pages.ID(id)+"/members?saved=joined", http.StatusSeeOther)
+	h.joined(w, r, u, id)
+}
+
+// joined sends someone who just accepted an invitation to where their role
+// starts, in the workspace they joined: Reviewers to the previews shared with
+// them, everyone else to the Overview's next steps.
+func (h *Handler) joined(w http.ResponseWriter, r *http.Request, userID, workspaceID int64) {
+	h.users.RememberWorkspace(r.Context(), workspaceID)
+	target := "/dashboard?saved=joined"
+	items, err := h.service.List(r.Context(), userID)
+	if err != nil {
+		h.logger.WarnContext(r.Context(), "read the joined workspace's role", "error", err)
+	}
+	for _, v := range items {
+		if v.ID == workspaceID && v.Role == "reviewer" {
+			target = "/previews?saved=joined"
+		}
+	}
+	publicid.Redirect(w, r, target, http.StatusSeeOther)
 }

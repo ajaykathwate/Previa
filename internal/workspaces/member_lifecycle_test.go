@@ -118,8 +118,8 @@ func TestInvitedPeopleAnswerInsidePrevia(t *testing.T) {
 		t.Fatalf("accept without CSRF: %d", r.Code)
 	}
 	accepted := dev.request("POST", "/workspace-invitations/received/"+inv, url.Values{"csrf_token": {csrf}, "action": {"accept"}})
-	if accepted.Code != http.StatusSeeOther || !strings.Contains(accepted.Header().Get("Location"), "saved=joined") {
-		t.Fatalf("accept received invitation: %d %s", accepted.Code, accepted.Header().Get("Location"))
+	if accepted.Code != http.StatusSeeOther || accepted.Header().Get("Location") != "/dashboard?saved=joined" {
+		t.Fatalf("a Developer who joins starts on the Overview's next steps: %d %s", accepted.Code, accepted.Header().Get("Location"))
 	}
 	if _, err := f.service.Authorize(t.Context(), f.dev, f.repo, "operate", false); err != nil {
 		t.Fatalf("accepted invitation granted no access: %v", err)

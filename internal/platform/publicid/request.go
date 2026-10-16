@@ -40,7 +40,7 @@ func PRNumber(r *http.Request, repo int64) (int64, error) {
 	return Value(r, "pull-request", chi.URLParam(r, "number"), repo)
 }
 func htmlPath(path string) bool {
-	for _, suffix := range []string{"/events", "/recent", "/download", "/logo", "/build", "/teardown", "/remove"} {
+	for _, suffix := range []string{"/events", "/recent", "/download", "/logo", "/build", "/teardown", "/remove", "/open"} {
 		if strings.HasSuffix(path, suffix) {
 			return false
 		}

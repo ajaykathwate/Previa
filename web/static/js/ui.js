@@ -173,8 +173,8 @@
     document.addEventListener('click', event => { event.target.closest?.('.toast')?.remove(); });
     // A confirmation after a plain form redirect should not repeat on reload.
     const url = new URL(location.href);
-    if (url.searchParams.has('saved')) {
-      url.searchParams.delete('saved');
+    if (['saved', 'notice', 'until'].some(name => url.searchParams.has(name))) {
+      ['saved', 'notice', 'until'].forEach(name => url.searchParams.delete(name));
       history.replaceState(history.state, '', url.pathname + url.search + url.hash);
     }
     // A picture that fails to load leaves the initial underneath visible.
@@ -421,7 +421,7 @@
       source: 'document',
       where: {and: [
         {href_matches: '/*'},
-        {not: {href_matches: ['/', '/auth/*', '/installations/*', '/queue/*', '/webhooks/*', '/static/*']}},
+        {not: {href_matches: ['/', '/auth/*', '/installations/*', '/queue/*', '/webhooks/*', '/static/*', '/repositories/*/pull-requests/*/open']}},
         {not: {selector_matches: '[target], [download], [hx-get], [hx-post]'}},
       ]},
       eagerness: 'moderate',
@@ -494,19 +494,41 @@
   }
 
   function initAccountMenus() {
-    const menus = document.querySelectorAll('[data-menu]');
+    // Menus are looked up per event: a live refresh may have replaced them.
+    const menus = () => document.querySelectorAll('details[data-menu]');
     document.addEventListener('click', (event) => {
-      menus.forEach((menu) => {
+      menus().forEach((menu) => {
         if (!menu.contains(event.target)) menu.open = false;
       });
     });
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape' || document.querySelector('[data-confirmation-dialog][open]')) return;
-      menus.forEach((menu) => {
+      menus().forEach((menu) => {
         if (menu.open) {
           menu.open = false;
           menu.querySelector('summary').focus();
         }
+      });
+    });
+  }
+
+  // A plain form marked data-busy-form submits once: its busy button shows a
+  // spinner and its label (busy-label) until the next page loads. Returning to
+  // the page from the back-forward cache resets it.
+  function initBusyForms() {
+    document.addEventListener('submit', (event) => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement) || !form.matches('[data-busy-form]')) return;
+      if (form.getAttribute('aria-busy') === 'true') { event.preventDefault(); return; }
+      form.setAttribute('aria-busy', 'true');
+      // Disable after the browser has read the form, so the submission goes ahead.
+      setTimeout(() => form.querySelectorAll('button[type=submit]').forEach(button => { button.disabled = true; }));
+    });
+    window.addEventListener('pageshow', (event) => {
+      if (!event.persisted) return;
+      document.querySelectorAll('form[data-busy-form][aria-busy="true"]').forEach(form => {
+        form.removeAttribute('aria-busy');
+        form.querySelectorAll('button[type=submit]').forEach(button => { button.disabled = false; });
       });
     });
   }
@@ -661,7 +683,7 @@
   };
   // Live refreshes wait while a confirmation dialog is open (policy, teardown)
   // or the PR search has focus, so nothing moves under the owner's hand.
-  const liveBlocked = () => Boolean(document.querySelector('dialog[data-confirmation-dialog][open]') ||
+  const liveBlocked = () => Boolean(document.querySelector('dialog[data-confirmation-dialog][open], details[data-menu][open]') ||
     document.activeElement?.closest('#pull-request-filters'));
 
   // A state that changes with time alone (a sync turning stale) carries
@@ -723,6 +745,18 @@
     // Deferred refreshes run once the user finishes filtering or confirming.
     document.addEventListener('close', (event) => {
       if (event.target.matches?.('dialog[data-confirmation-dialog]') && livePending) setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
+    }, true);
+    // A refresh that returns while a menu inside its target is open waits
+    // until the menu closes, so the menu never vanishes under the pointer.
+    document.addEventListener('htmx:beforeSwap', (event) => {
+      const trigger = event.detail.requestConfig?.elt || event.detail.elt;
+      if (!trigger?.hasAttribute?.('data-live-refresh') || !event.detail.target?.querySelector?.('details[data-menu][open]')) return;
+      event.detail.shouldSwap = false;
+      livePending = true;
+    });
+    // A refresh deferred while a menu was open runs once it closes.
+    document.addEventListener('toggle', (event) => {
+      if (event.target.matches?.('details[data-menu]') && !event.target.open && livePending) setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
     }, true);
     document.addEventListener('focusout', (event) => {
       const form = event.target.closest?.('#pull-request-filters');
@@ -1903,6 +1937,7 @@
   initPrefetch();
   initConfirmationDialogs();
   initAccountMenus();
+  initBusyForms();
   initQueueForms();
   initCommandPalette();
   initRepositorySearch();

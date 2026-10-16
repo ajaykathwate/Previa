@@ -3,6 +3,7 @@ package workspaces
 import (
 	"context"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -165,8 +166,11 @@ func TestInvitationRouteShowsExactScopeAndJoinsWithoutJavaScript(t *testing.T) {
 	if r.Code != 200 || !strings.Contains(r.Body.String(), "acme/api") || strings.Contains(r.Body.String(), "acme/private") || r.Header().Get("Cache-Control") != "no-store" || r.Header().Get("Referrer-Policy") != "same-origin" {
 		t.Fatalf("consent scope: %d %s", r.Code, r.Body.String())
 	}
-	if r := b.request(http.MethodPost, path, url.Values{"csrf_token": {b.csrf(t)}, "action": {"accept"}}); r.Code != 303 {
-		t.Fatal("accept failed", r.Code, r.Body.String())
+	if r := b.request(http.MethodPost, path, url.Values{"csrf_token": {b.csrf(t)}, "action": {"accept"}}); r.Code != 303 || r.Header().Get("Location") != "/previews?saved=joined" {
+		t.Fatal("a Reviewer who joins starts on the previews to review", r.Code, r.Header().Get("Location"))
+	}
+	if r := b.request(http.MethodGet, "/previews?saved=joined", nil); r.Code != 200 || !strings.Contains(r.Body.String(), "Welcome to "+html.EscapeString(w.Name)) {
+		t.Fatalf("the joined workspace is current and says so: %d", r.Code)
 	}
 	r = b.request(http.MethodGet, fmt.Sprintf("/workspaces/%d/previews", f.wid), nil)
 	if r.Code != 303 || r.Header().Get("Location") != "/previews" {

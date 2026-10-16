@@ -52,6 +52,7 @@ func (h *handler) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	summary.DeveloperTools = h.devTools
+	summary.Joined = r.URL.Query().Get("saved") == "joined"
 	publicid.Handler(r, dashboardpages.Index(username, h.users.CSRFToken(r.Context()), summary), summary).ServeHTTP(w, r)
 }
 

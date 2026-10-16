@@ -310,6 +310,7 @@ func (h *Handler) activity(w http.ResponseWriter, r *http.Request) {
 	page := pages.Activity{Number: data.Page, Pages: data.Pages, Total: data.Total, RepoID: repoID, Previews: previews, Failures: failures,
 		AttentionDays: int(FailureAttentionWindow / (24 * time.Hour))}
 	page.DismissedRepo, page.DismissedNumber = publicid.Dismissed(r, r.URL.Query().Get("dismissed"), dismissedNotice)
+	page.Joined = previews && r.URL.Query().Get("saved") == "joined"
 	for _, row := range data.Rows {
 		page.Rows = append(page.Rows, h.activityRow(row, previews, since))
 	}

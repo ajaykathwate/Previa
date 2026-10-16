@@ -27,7 +27,11 @@ choose repositories. Previa resolves the immutable GitHub account ID and display
 an invitation link once. Copy and share it manually. Links expire in seven days;
 regeneration invalidates the old link. Only a digest is stored, and request logs
 redact invitation paths. The signed-in recipient sees the role and exact repository
-scope before accepting or declining. Repeated acceptance is idempotent, and cannot
+scope before accepting or declining. Accepting makes the joined workspace current and
+lands where the role starts: Reviewers on **Previews** (the previews shared with
+them), everyone else on the Overview's next steps
+([guided onboarding](29-guided-onboarding.md)), with a toast naming the workspace.
+Repeated acceptance is idempotent, and cannot
 restore removed membership or replace a newer role. Invites issued by someone who
 loses invitation authority are revoked.
 

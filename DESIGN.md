@@ -34,6 +34,7 @@ Each feature has five parts:
 18. Observability
 19. End-to-end sequence diagram
 21. Shared team workspaces (approved SaaS Feature 1)
+22. Guided onboarding (approved SaaS Feature 2)
 
 ---
 
@@ -858,6 +859,12 @@ preview/
 │   │   ├── profile.go  profile_handler.go  invitation_handler.go
 │   │   ├── lifecycle.go            # activity, member profiles, re-invite, received invitations, delete
 │   │   └── dbgen/
+│   │
+│   ├── onboarding/                 # FEATURE: the repository Setup tab (first-preview checklist)
+│   │   ├── handler.go  service.go  steps.go   # routes, page state, check requests, opens
+│   │   ├── checks.go  github.go  result.go    # bounded preflight of one commit
+│   │   ├── jobs.go                 # setup check worker (claim, read GitHub, fenced result)
+│   │   └── queries.sql  dbgen/
 │   ├── app/                        # composition root: builds and wires everything
 │   │   ├── server.go               # creates features, mounts routes, starts HTTP
 │   │   ├── worker.go               # starts River, the capability heartbeat, draining
@@ -1026,6 +1033,7 @@ preview/
 │   │   ├── dashboard/              # overview, session, developer tools
 │   │   ├── repositories/           # paginated, filtered repository page
 │   │   ├── pullrequests/           # repository/PR detail and shared current activity
+│   │   ├── onboarding/             # a repository's Setup tab
 │   │   ├── builds/                 # Builds page, current-attempt build log page
 │   │   ├── appoutput/              # live app output page
 │   │   ├── idle/                   # "Waking the preview…" page (public)
@@ -1325,3 +1333,71 @@ assumption. A solo rollback preserves usage; rollback after team data exists
 refuses data loss. Detailed flows, permissions and upgrade steps:
 [28-shared-workspaces.md](docs/28-shared-workspaces.md) and
 [02-development-setup.md](docs/02-development-setup.md#shared-workspace-cutover).
+
+## 22. Guided onboarding
+
+### Requirement
+
+Implement approved Feature 2 of `README-MVP-PRODUCT-EXPANSION.md`: a short,
+repository-specific path from a connected repository to a usable preview someone
+opened, for one open pull request, with setup checks for that exact commit. It must
+not generate code, detect frameworks, enable Automatic builds or build anything by
+itself, and an already-working repository must not need a wizard.
+
+### Complexity
+
+Medium. The checks must be honest about what static reads can prove, never let a
+stale or delayed result claim the current commit is ready, and stay cheap against
+GitHub's rate limit; every step must be derived from current records.
+
+### Tech stack (feature-specific)
+
+Existing Go, PostgreSQL/pgx/sqlc, Goose, River, go-github, templ/HTMX and the
+realtime hub. `repoconfig.ParseFor` (the build's parser) and
+`source.SubmodulesInContext` (the build's submodule rule) are reused; no new library.
+
+### Technical implementation
+
+- `internal/onboarding` owns the Setup tab (`GET /repositories/{id}/setup`), check
+  requests (`POST …/setup/check`) and the Open preview action
+  (`GET …/pull-requests/{pr}/open`). Presentation is `web/pages/onboarding`.
+- Five steps (connect, check the configuration, review what the app needs, publish,
+  open from Previa) are derived on every view by pure functions over current
+  records; a step after an unfinished one waits. A head commit that already built
+  counts as checked.
+- Migration 0038 stores only what cannot be derived: the latest check per pull
+  request (request revision, head SHA and generation, state, failure code, and the
+  last completed result with its time, expiry and platform fingerprint),
+  `preview_opens`, and a per-workspace hourly check allowance. Triggers on the first
+  two notify the repository's realtime topic.
+- A request records the check and a `repository_setup_check` River job in one
+  transaction, once per commit (20 s cooldown, 60 per workspace and hour). Any worker
+  with the GitHub App runs it: claim under lock, read GitHub outside transactions
+  (repository by immutable ID, `.previewrc.yaml`, the Dockerfile inside its context,
+  the root `.gitmodules`, all size-bounded), then record the result only if the
+  revision, head, generation, open state and access are unchanged.
+- Results are validated against the services and build deadline the running build
+  workers advertise (Previa's default catalog when none runs), as Starter kits do;
+  a fingerprint of that platform and the check rules invalidates older results.
+  They keep only names, paths, numbers and parser messages, never config values.
+- Building uses the existing PR Build action with `return=setup`; refusals return to
+  the checklist with a fixed notice code. The tab offers Build only after a passing
+  check of the head commit; the PR page is unchanged.
+- Open preview actions for people who can build go through the recording route,
+  which redirects with `Referrer-Policy: no-referrer` and records only navigations
+  started on Previa; Reviewers keep direct links.
+- The Overview's checklist is role-aware and links to the Setup tab where setup
+  continues; accepted invitations land Reviewers on Previews and others on the
+  Overview, in the joined workspace.
+
+### Design decisions and edge cases
+
+Static checks label runtime facts *Checked during the build*; a passing check never
+claims the image compiles. A failed attempt (rate limit, outage, lost access) keeps
+the last completed result for reference but never counts as current success. A push
+while checking, a closed pull request or revoked access discards the result. A check
+nobody picks up turns stale after two minutes. Developers who cannot manage secrets
+see whom to ask instead of an editor. Hosted pages never show operator settings.
+Request review is labelled as not available until Feature 3. The checks are per
+pull request rather than per repository, and building acknowledges the app's
+prerequisites (no stored boolean). Details: [29-guided-onboarding.md](docs/29-guided-onboarding.md).

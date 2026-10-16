@@ -9,6 +9,9 @@ import (
 
 templ ReviewerIndex(username, csrf string, p pages.Activity) {
 	@layouts.App("Previews", username, csrf, components.NavPreviews) {
+		if p.Joined {
+			@components.Toasts("Welcome to " + components.Workspace(ctx).Name)
+		}
 		<div class="team-page">
 			<header class="team-heading">
 				<div class="team-heading-copy">

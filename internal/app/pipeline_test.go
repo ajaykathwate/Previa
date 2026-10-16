@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ajaykathwatee/previa/internal/onboarding"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/google/go-github/v91/github"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 )
 
@@ -30,9 +32,15 @@ func registered(t *testing.T, p *pipeline) *river.Config {
 func TestPipelineRegistersOnlyWhatItsDependenciesAllow(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	base := config.WorkerConfig{MaxConcurrentBuilds: 2}
+	// The pool connects lazily; registering workers never reaches it.
+	pool, err := pgxpool.New(t.Context(), "postgres://previa@127.0.0.1:1/unused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
 
 	// Without the GitHub App: log retention only, and the reason is stated.
-	p, err := buildPipeline(t.Context(), pipelineInput{cfg: base, logger: logger})
+	p, err := buildPipeline(t.Context(), pipelineInput{cfg: base, pool: pool, logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,8 +49,8 @@ func TestPipelineRegistersOnlyWhatItsDependenciesAllow(t *testing.T) {
 		t.Fatalf("no App: %+v %v %v", p.capabilities, rc.Queues, p.unavailable)
 	}
 
-	// With the App but no preview domain: discovery only; nothing builds.
-	p, err = buildPipeline(t.Context(), pipelineInput{cfg: base, github: noApp{}, logger: logger})
+	// With the App but no preview domain: discovery and setup checks only; nothing builds.
+	p, err = buildPipeline(t.Context(), pipelineInput{cfg: base, pool: pool, github: noApp{}, logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,12 +63,15 @@ func TestPipelineRegistersOnlyWhatItsDependenciesAllow(t *testing.T) {
 			t.Fatalf("queue %s registered without execution", queue)
 		}
 	}
+	if _, ok := rc.Queues[onboarding.CheckQueue]; !ok {
+		t.Fatal("setup checks need only the App and GitHub, not a preview domain")
+	}
 
 	// A preview domain without Docker is a configuration error, not a quiet
 	// worker that never builds.
 	routed := base
 	routed.PreviewBaseDomain = "preview.example.com"
-	if _, err := buildPipeline(t.Context(), pipelineInput{cfg: routed, github: noApp{}, logger: logger}); err == nil || !strings.Contains(err.Error(), "Docker") {
+	if _, err := buildPipeline(t.Context(), pipelineInput{cfg: routed, pool: pool, github: noApp{}, logger: logger}); err == nil || !strings.Contains(err.Error(), "Docker") {
 		t.Fatalf("routing without Docker: %v", err)
 	}
 }

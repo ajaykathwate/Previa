@@ -1,8 +1,12 @@
 package dashboard
 
-import "github.com/ajaykathwatee/previa/web/components"
+import (
+	"strconv"
+	"strings"
 
-import prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
+	"github.com/ajaykathwatee/previa/web/components"
+	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
+)
 
 // HighlightRows is how many recent builds and live previews the Overview lists.
 const HighlightRows = 5
@@ -23,7 +27,25 @@ type Summary struct {
 	Builds, Previews []prpages.ActivityRow
 	// DeveloperTools: the queue diagnostics page is served (not in production).
 	DeveloperTools bool
+	// Journey is where the signed-in person's first preview stands.
+	Journey Journey
+	// Joined: the person arrived from accepting an invitation.
+	Joined bool
 }
+
+// Journey is the first-preview path for the signed-in person, across the
+// workspace's repositories they can build in.
+type Journey struct {
+	Manager                    bool  // Owner or Admin: can connect repositories
+	Repositories, Available    int64 // repositories this person can build in
+	Checked, Published, Opened bool
+	FocusID                    int64 // the repository whose Setup tab continues the path
+	FocusName                  string
+	Managers                   []Person // whom a Developer without repositories asks
+}
+
+// Person is a teammate named on the Overview.
+type Person struct{ Login, Name string }
 
 // Step is one item of the getting-started checklist.
 type Step struct {
@@ -31,15 +53,41 @@ type Step struct {
 	Title, Detail, Href, Action string
 }
 
-// Setup is the getting-started checklist, from real saved state.
+// Setup is the path to a first usable preview, from real saved state and the
+// person's role: Owners and Admins connect code; Developers are given access.
+// Each later step continues on a repository's Setup tab.
 func (s Summary) Setup() []Step {
-	return []Step{
-		{true, "Sign in with GitHub", "Your Previa session is active.", "", ""},
-		{s.Installations > 0, "Install the GitHub App", "Choose which repositories Previa may read.", "/repositories", "Open repositories"},
-		{s.Repositories > 0, "Link repositories", "Verified repositories appear in your directory.", "/repositories?access=all", "View directory"},
-		{s.OpenPRs > 0, "Track pull requests", "Open a repository and choose Sync Pull Requests; GitHub keeps the list current after that.", "/repositories?access=available", "Pick a repository"},
-		{s.Live > 0 || len(s.Builds) > 0, "Build a preview", "Open a pull request and choose Build latest commit, or turn on Automatic builds.", "/repositories?access=available", "Pick a repository"},
+	j := s.Journey
+	setup, where := "/repositories?access=available", "Choose a repository"
+	if j.FocusID > 0 {
+		setup, where = "/repositories/"+strconv.FormatInt(j.FocusID, 10)+"/setup", "Open setup"
 	}
+	first := Step{Done: j.Repositories > 0, Title: "Connect a repository", Detail: "Install the GitHub App on the repositories that should get previews.", Href: "/repositories", Action: "Open repositories"}
+	if !j.Manager {
+		first = Step{Done: j.Repositories > 0, Title: "Get access to a repository", Detail: "An Owner or Admin chooses which repositories you can build. " + ask(j.Managers)}
+	}
+	check := "Pick an open pull request; Previa checks its configuration and Dockerfile without building."
+	if j.FocusName != "" && !j.Checked {
+		check = "Continue in " + j.FocusName + ": pick an open pull request and check its configuration, without building."
+	}
+	return []Step{
+		first,
+		{Done: j.Checked, Title: "Check a pull request's setup", Detail: check, Href: setup, Action: where},
+		{Done: j.Published, Title: "Publish a preview", Detail: "Build it from the checklist once its setup check passes.", Href: setup, Action: where},
+		{Done: j.Opened, Title: "Open it from Previa", Detail: "Open the live preview from Previa; it is then ready to share for review.", Href: setup, Action: where},
+	}
+}
+
+// ask names the people a Developer asks for repository access.
+func ask(people []Person) string {
+	if len(people) == 0 {
+		return "Ask an Owner or Admin of this workspace."
+	}
+	names := make([]string, 0, len(people))
+	for _, p := range people {
+		names = append(names, p.Name+" (@"+p.Login+")")
+	}
+	return "Ask " + strings.Join(names, " or ") + "."
 }
 
 // SetupDone hides the checklist once every step is done.
@@ -87,7 +135,7 @@ func (s Summary) FailuresURL() string {
 }
 
 func (s Summary) PublicReferences() []components.ResourceRef {
-	var refs []components.ResourceRef
+	refs := components.ResourceRefs("repository", s.Journey.FocusID)
 	for _, rows := range [][]prpages.ActivityRow{s.Builds, s.Previews} {
 		for _, r := range rows {
 			refs = append(refs, components.PRRefs(r.RepoID, r.Number)...)

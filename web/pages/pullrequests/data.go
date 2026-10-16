@@ -1,6 +1,7 @@
 package pullrequests
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -269,6 +270,20 @@ func PRURL(id int64, number int32) string {
 // LogsURL is a PR's current-build log page.
 func LogsURL(id int64, number int32) string { return PRURL(id, number) + "/logs" }
 
+// OpenURL is a PR's Open preview action: Previa records that the preview was
+// opened from its own pages (the Setup checklist's last step), then goes there.
+func OpenURL(id int64, number int32) string { return PRURL(id, number) + "/open" }
+
+// PreviewHref is where an Open preview action leads: through Previa for people
+// who can build, directly for Reviewers, whose navigation never opens
+// repository pages.
+func PreviewHref(ctx context.Context, id int64, number int32, preview string) string {
+	if components.CanOperate(ctx) {
+		return OpenURL(id, number)
+	}
+	return preview
+}
+
 // OutputURL is a PR's live app output page.
 func OutputURL(id int64, number int32) string { return PRURL(id, number) + "/output" }
 func (p Page) PageURL(n int64) string {
@@ -445,6 +460,8 @@ type Activity struct {
 	DismissedNumber int32
 	// AttentionDays is how long a failure needs attention.
 	AttentionDays int
+	// Joined: a Reviewer arrived from accepting an invitation.
+	Joined bool
 }
 
 // FailureEmpty is what an empty failure view says.

@@ -114,6 +114,7 @@ templ repositoryFiles() {
 	<p>Two files at its root: a <code>Dockerfile</code> and a <code>.previewrc.yaml</code>. The config can be as short as <code>{ "{}" }</code>; by default I expect your app on port 3000.</p>
 	<p>When you need more, it sets the Dockerfile path, the port, a health check path, plain environment variables and a size: <code>small</code>, <code>standard</code> or <code>large</code>.</p>
 	<p>Don't have them yet? Open <strong>Starter kits</strong>, pick your stack and what it uses, and I'll write both files, already checked, for you to edit and copy.</p>
+	<p>Not sure they're right? On the repository's <strong>Setup</strong> tab, choose <strong>Check setup</strong>: I read both files on a pull request's latest commit and tell you what to fix, before anything builds.</p>
 }
 
 templ languages() {
@@ -127,7 +128,7 @@ templ signInAccess() {
 
 templ connectRepository() {
 	<p>Open <strong>Repositories</strong> and choose <strong>Install on GitHub</strong>. Pick the repositories there, then authorize as the same account you signed in with. I make sure the installation is really yours before linking anything.</p>
-	<p>New repositories start in Manual mode, so nothing builds until you ask.</p>
+	<p>New repositories start in Manual mode, so nothing builds until you ask. Then open the repository's <strong>Setup</strong> tab: it walks one pull request to its first preview.</p>
 }
 
 templ whenItBuilds() {

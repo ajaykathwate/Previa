@@ -279,6 +279,32 @@ preview):
 3. Your app runs as a non-root user (UID 65532) with a read-only file system and a
    writable `/tmp`; write only to `/tmp`.
 
+### Check it on the Setup tab
+
+A repository's **Setup** tab (for Owners, Admins and Developers) walks one open pull
+request to its first preview, five checks in order:
+
+1. **Connect the repository**: done when Previa can read it. If access was lost,
+   Owners and Admins get a link to restore it; Developers see whom to ask.
+2. **Check the configuration**: **Check setup** asks Previa to read
+   `.previewrc.yaml` and your Dockerfile at the pull request's latest commit. Nothing
+   is built or run, and the page updates by itself within seconds. Problems are listed
+   with the key and line and the fix (for a missing file, **Create it with a Starter
+   kit**). Fix them on the pull request's branch, push, and check the new commit. A
+   commit that already built counts as checked.
+3. **Review what the app needs**: the panel beside the list shows the port, health
+   check, services, setup command and the secrets stored (or, for Developers, who
+   manages them). **Build preview** starts the build; what only a real start can
+   prove (the app answers its health check, migrations run) is checked during it.
+4. **Publish a preview**: follows the build; a failure says what went wrong, with
+   **Retry build** and the pull request page's details.
+5. **Open it from Previa**: **Open preview** opens it in a new tab and finishes
+   setup. Previa records that it was opened, not whether it works.
+
+Pick another open pull request from the menu at the top of the list. A new commit
+starts the path again from its own check. Previa allows 60 checks per workspace an
+hour; checking the same commit twice in a row does nothing new.
+
 ## 6. Choose when previews build
 
 On the repository page (pull request list only):
@@ -633,6 +659,21 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | B6 | On GitHub, **Suspend** the App | All its repositories move to **Unavailable**; their previews are removed |
 | B7 | **Unsuspend** it | **Available** again; nothing rebuilds by itself |
 | B8 | **Uninstall** the App, then install it again with the same account | Previews removed and PR pages say access is unavailable; after reinstalling, repositories and build mode return and nothing rebuilds |
+
+### B2. Repository Setup tab
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| BS1 | Connect a repository, open it, choose **Setup** | Five steps; **Connect the repository** done; the newest open PR selected; **Check setup** offered |
+| BS2 | On a PR whose commit has no `.previewrc.yaml`, **Check setup** | Toast **Setup check started**, then (worker running) the step shows the missing file and **Create it with a Starter kit** (the Own Dockerfile kit when a root Dockerfile exists) |
+| BS3 | Add the file on the PR's branch and push | The step says the new commit is not checked yet; **Check setup** passes; **What the app needs** lists port, health check, services and secret names |
+| BS4 | Use a service version the server does not offer, check | The problem names `services.<kind>`, its line and the versions offered |
+| BS5 | **Build preview** | Toast **Build requested**; the publish step follows the build; **Open preview** appears when live |
+| BS6 | **Open preview** | A new tab opens the preview; the Setup tab shows **Opened by you** and **Ready for review**; **Request review** is disabled and says why |
+| BS7 | As a Developer, open Setup | Secret names are hidden; the panel names the Owners and Admins to ask; there is no Secrets tab |
+| BS8 | As a Reviewer, open a repository's Setup address | You are sent to **Previews** |
+| BS9 | Stop the worker, **Check setup**, wait two minutes | The step says the check did not finish and offers **Check again** |
+| BS10 | Accept an invitation as a Reviewer, then as a Developer | Reviewer lands on **Previews**, Developer on the Overview's next steps; a toast names the workspace |
 
 ### C. Pull requests and mergeability
 

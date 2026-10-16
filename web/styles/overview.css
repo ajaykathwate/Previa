@@ -64,7 +64,7 @@
 .ov-setup-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; margin-bottom: 18px; }
 .ov-setup-progress { display: grid; gap: 7px; min-width: 210px; color: var(--text-muted); font-size: 12.5px; }
 .ov-setup-progress strong { color: var(--ink); font-weight: 650; }
-.ov-steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.ov-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
 .ov-step {
   display: flex;
   flex-direction: column;

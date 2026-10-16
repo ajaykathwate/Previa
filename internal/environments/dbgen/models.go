@@ -242,6 +242,13 @@ type PreviewCrash struct {
 	CrashedAt     pgtype.Timestamptz
 }
 
+type PreviewOpen struct {
+	PullRequestID int64
+	UserID        int64
+	DeployedSha   string
+	OpenedAt      pgtype.Timestamptz
+}
+
 type PreviewVisitCounter struct {
 	EnvironmentID int64
 	Service       string
@@ -331,6 +338,25 @@ type RepositoryMembership struct {
 	Revision    int64
 }
 
+type RepositorySetupCheck struct {
+	ID            int64
+	PullRequestID int64
+	Revision      int64
+	HeadSha       string
+	Generation    int64
+	State         string
+	FailureCode   string
+	RequestedBy   pgtype.Int8
+	RequestedAt   pgtype.Timestamptz
+	StartedAt     pgtype.Timestamptz
+	FinishedAt    pgtype.Timestamptz
+	ResultSha     string
+	Result        []byte
+	CheckedAt     pgtype.Timestamptz
+	ExpiresAt     pgtype.Timestamptz
+	Platform      string
+}
+
 type RouteTable struct {
 	Singleton bool
 	Version   int64
@@ -340,6 +366,12 @@ type Session struct {
 	Token  string
 	Data   []byte
 	Expiry pgtype.Timestamptz
+}
+
+type SetupCheckBudget struct {
+	WorkspaceID     int64
+	WindowStartedAt pgtype.Timestamptz
+	Used            int32
 }
 
 type User struct {

@@ -492,7 +492,10 @@ test('removing a member deactivates them, opens their profile and re-invites wit
   assert.ok(await invitee.page.locator('.app-sidebar .switcher-badge, .app-sidebar .workspace-switcher-empty').first().isVisible());
   await screenshot(invitee.page,'received-invitation');
   await received.getByRole('button',{name:'Join workspace',exact:true}).click();
+  // A Reviewer starts on the previews shared with them, in the workspace joined.
   await invitee.page.locator('.toast').filter({hasText:/^Welcome to/}).waitFor();
+  assert.equal(new URL(invitee.page.url()).pathname,'/previews');
+  await invitee.page.goto(`${origin}/workspaces/${team}/members`);
   assert.ok(await invitee.page.locator('.team-member-row').filter({has:invitee.page.locator('strong',{hasText:/^reviewer$/})}).count());
   assert.deepEqual(errors,[]);assert.deepEqual(invitee.errors,[]);
  }finally{await invitee?.context.close();await context.close()}
