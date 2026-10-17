@@ -102,23 +102,64 @@ func (q *Queries) CompleteTeardownRequest(ctx context.Context, arg CompleteTeard
 }
 
 const countRunningBuilds = `-- name: CountRunningBuilds :one
-SELECT count(*) FROM build_intents WHERE state = 'running' AND pull_request_id <> $1
+SELECT ((SELECT count(*) FROM build_intents WHERE state = 'running' AND pull_request_id <> $1)
+     + (SELECT count(*) FROM baseline_refreshes WHERE state = 'running'))::bigint
 `
 
 // An admitted build holds its slot until its final attempt ends, including
 // between River retries; another attempt of the same PR's request reuses it.
+// A running repository baseline refresh (docs/32) holds a slot too.
 func (q *Queries) CountRunningBuilds(ctx context.Context, pullRequestID int64) (int64, error) {
 	row := q.db.QueryRow(ctx, countRunningBuilds, pullRequestID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countRunningBuildsBesidesBaseline = `-- name: CountRunningBuildsBesidesBaseline :one
+SELECT ((SELECT count(*) FROM build_intents WHERE state = 'running')
+     + (SELECT count(*) FROM baseline_refreshes WHERE state = 'running' AND id <> $1::bigint))::bigint
+`
+
+// Running builds and baseline refreshes other than one refresh, for its
+// admission (docs/32).
+func (q *Queries) CountRunningBuildsBesidesBaseline(ctx context.Context, refreshID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countRunningBuildsBesidesBaseline, refreshID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countWorkspaceRunningBesidesBaseline = `-- name: CountWorkspaceRunningBesidesBaseline :one
+SELECT ((SELECT count(*) FROM build_intents b
+        JOIN pull_requests p ON p.id = b.pull_request_id
+        JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE b.state = 'running' AND i.workspace_id = $1::bigint)
+     + (SELECT count(*) FROM baseline_refreshes br
+        JOIN repos r ON r.id = br.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE br.state = 'running' AND br.id <> $2::bigint AND i.workspace_id = $1::bigint))::bigint
+`
+
+type CountWorkspaceRunningBesidesBaselineParams struct {
+	WorkspaceID int64
+	RefreshID   int64
+}
+
+func (q *Queries) CountWorkspaceRunningBesidesBaseline(ctx context.Context, arg CountWorkspaceRunningBesidesBaselineParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkspaceRunningBesidesBaseline, arg.WorkspaceID, arg.RefreshID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const countWorkspaceRunningBuilds = `-- name: CountWorkspaceRunningBuilds :one
-SELECT count(*) FROM build_intents b
-JOIN pull_requests p ON p.id = b.pull_request_id
-JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
-WHERE b.state = 'running' AND b.pull_request_id <> $1 AND i.workspace_id = $2::bigint
+SELECT ((SELECT count(*) FROM build_intents b
+        JOIN pull_requests p ON p.id = b.pull_request_id
+        JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE b.state = 'running' AND b.pull_request_id <> $1 AND i.workspace_id = $2::bigint)
+     + (SELECT count(*) FROM baseline_refreshes br
+        JOIN repos r ON r.id = br.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE br.state = 'running' AND i.workspace_id = $2::bigint))::bigint
 `
 
 type CountWorkspaceRunningBuildsParams struct {
@@ -126,12 +167,13 @@ type CountWorkspaceRunningBuildsParams struct {
 	WorkspaceID int64
 }
 
-// Running builds of other PRs in one stable workspace.
+// Running builds of other PRs, and running baseline refreshes, in one stable
+// workspace.
 func (q *Queries) CountWorkspaceRunningBuilds(ctx context.Context, arg CountWorkspaceRunningBuildsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countWorkspaceRunningBuilds, arg.PrID, arg.WorkspaceID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const failAbandonedExecution = `-- name: FailAbandonedExecution :execrows
@@ -498,6 +540,26 @@ func (q *Queries) ReadIntentWait(ctx context.Context, pullRequestID int64) (Read
 	var i ReadIntentWaitRow
 	err := row.Scan(&i.State, &i.WaitingSince)
 	return i, err
+}
+
+const recordBaselineUsage = `-- name: RecordBaselineUsage :exec
+INSERT INTO workspace_build_usage (workspace_id, day, build_seconds, builds)
+VALUES ($1::bigint, $2::date, $3::bigint, 1)
+ON CONFLICT (workspace_id, day) DO UPDATE SET build_seconds = workspace_build_usage.build_seconds + EXCLUDED.build_seconds,
+    builds = workspace_build_usage.builds + 1
+`
+
+type RecordBaselineUsageParams struct {
+	WorkspaceID int64
+	Day         pgtype.Date
+	Seconds     int64
+}
+
+// A baseline refresh's execution counts toward its workspace's daily build
+// time like a pull request build's.
+func (q *Queries) RecordBaselineUsage(ctx context.Context, arg RecordBaselineUsageParams) error {
+	_, err := q.db.Exec(ctx, recordBaselineUsage, arg.WorkspaceID, arg.Day, arg.Seconds)
+	return err
 }
 
 const recordFinishedBuildTime = `-- name: RecordFinishedBuildTime :exec

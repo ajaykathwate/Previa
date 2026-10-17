@@ -75,7 +75,9 @@ SELECT pg_advisory_xact_lock(hashtext('previa.build_slots.' || instance)) FROM p
 -- name: CountRunningBuilds :one
 -- An admitted build holds its slot until its final attempt ends, including
 -- between River retries; another attempt of the same PR's request reuses it.
-SELECT count(*) FROM build_intents WHERE state = 'running' AND pull_request_id <> $1;
+-- A running repository baseline refresh (docs/32) holds a slot too.
+SELECT ((SELECT count(*) FROM build_intents WHERE state = 'running' AND pull_request_id <> $1)
+     + (SELECT count(*) FROM baseline_refreshes WHERE state = 'running'))::bigint;
 
 -- name: MarkIntentWaiting :execrows
 -- Notes that the current request waits for capacity or disk space. Reports
@@ -101,11 +103,15 @@ WHERE pull_request_id = sqlc.arg(pr_id) AND waiting_revision = sqlc.arg(revision
 SELECT state, waiting_since FROM build_intents WHERE pull_request_id = $1;
 
 -- name: CountWorkspaceRunningBuilds :one
--- Running builds of other PRs in one stable workspace.
-SELECT count(*) FROM build_intents b
-JOIN pull_requests p ON p.id = b.pull_request_id
-JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
-WHERE b.state = 'running' AND b.pull_request_id <> sqlc.arg(pr_id) AND i.workspace_id = sqlc.arg(workspace_id)::bigint;
+-- Running builds of other PRs, and running baseline refreshes, in one stable
+-- workspace.
+SELECT ((SELECT count(*) FROM build_intents b
+        JOIN pull_requests p ON p.id = b.pull_request_id
+        JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE b.state = 'running' AND b.pull_request_id <> sqlc.arg(pr_id) AND i.workspace_id = sqlc.arg(workspace_id)::bigint)
+     + (SELECT count(*) FROM baseline_refreshes br
+        JOIN repos r ON r.id = br.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE br.state = 'running' AND i.workspace_id = sqlc.arg(workspace_id)::bigint))::bigint;
 
 -- name: WorkspaceBuildSeconds :one
 SELECT coalesce((SELECT build_seconds FROM workspace_build_usage WHERE workspace_id = sqlc.arg(workspace_id) AND day = sqlc.arg(day)), 0)::bigint;
@@ -195,3 +201,26 @@ UPDATE build_intents b SET state='failed',execution_error_code='',started_at=coa
  completed_at=coalesce(b.completed_at,clock_timestamp()),updated_at=clock_timestamp(),
  waiting_revision=NULL,waiting_reason=NULL,waiting_since=NULL,waiting_checked_at=NULL
 FROM previous WHERE b.pull_request_id=previous.pull_request_id RETURNING previous.state AS previous_state;
+
+-- name: CountRunningBuildsBesidesBaseline :one
+-- Running builds and baseline refreshes other than one refresh, for its
+-- admission (docs/32).
+SELECT ((SELECT count(*) FROM build_intents WHERE state = 'running')
+     + (SELECT count(*) FROM baseline_refreshes WHERE state = 'running' AND id <> sqlc.arg(refresh_id)::bigint))::bigint;
+
+-- name: CountWorkspaceRunningBesidesBaseline :one
+SELECT ((SELECT count(*) FROM build_intents b
+        JOIN pull_requests p ON p.id = b.pull_request_id
+        JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE b.state = 'running' AND i.workspace_id = sqlc.arg(workspace_id)::bigint)
+     + (SELECT count(*) FROM baseline_refreshes br
+        JOIN repos r ON r.id = br.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE br.state = 'running' AND br.id <> sqlc.arg(refresh_id)::bigint AND i.workspace_id = sqlc.arg(workspace_id)::bigint))::bigint;
+
+-- name: RecordBaselineUsage :exec
+-- A baseline refresh's execution counts toward its workspace's daily build
+-- time like a pull request build's.
+INSERT INTO workspace_build_usage (workspace_id, day, build_seconds, builds)
+VALUES (sqlc.arg(workspace_id)::bigint, sqlc.arg(day)::date, sqlc.arg(seconds)::bigint, 1)
+ON CONFLICT (workspace_id, day) DO UPDATE SET build_seconds = workspace_build_usage.build_seconds + EXCLUDED.build_seconds,
+    builds = workspace_build_usage.builds + 1;

@@ -11,6 +11,17 @@ JOIN installations i ON i.id = r.installation_id
 WHERE p.id = sqlc.arg(pull_request_id)::bigint AND i.workspace_id IS NOT NULL
 ON CONFLICT (workspace_id, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING;
 
+-- name: InsertRepositoryEvent :execrows
+-- One event about a repository rather than a pull request, such as a test
+-- data baseline refresh (docs/32); its workspace derives from it.
+INSERT INTO activity_events (workspace_id, repo_id, actor_user_id, kind, visibility, metadata, dedup_key)
+SELECT i.workspace_id, r.id, sqlc.narg(actor_user_id)::bigint,
+       sqlc.arg(kind)::text, sqlc.arg(visibility)::text, sqlc.arg(metadata)::jsonb, sqlc.narg(dedup_key)::text
+FROM repos r
+JOIN installations i ON i.id = r.installation_id
+WHERE r.id = sqlc.arg(repo_id)::bigint AND i.workspace_id IS NOT NULL
+ON CONFLICT (workspace_id, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING;
+
 -- name: PruneAgedEvents :one
 -- Deletes up to batch_size events older than cutoff, oldest first, and moves
 -- each affected pull request's pruned marker forward.

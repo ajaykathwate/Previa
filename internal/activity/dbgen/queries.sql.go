@@ -51,6 +51,42 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (int64
 	return result.RowsAffected(), nil
 }
 
+const insertRepositoryEvent = `-- name: InsertRepositoryEvent :execrows
+INSERT INTO activity_events (workspace_id, repo_id, actor_user_id, kind, visibility, metadata, dedup_key)
+SELECT i.workspace_id, r.id, $1::bigint,
+       $2::text, $3::text, $4::jsonb, $5::text
+FROM repos r
+JOIN installations i ON i.id = r.installation_id
+WHERE r.id = $6::bigint AND i.workspace_id IS NOT NULL
+ON CONFLICT (workspace_id, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING
+`
+
+type InsertRepositoryEventParams struct {
+	ActorUserID pgtype.Int8
+	Kind        string
+	Visibility  string
+	Metadata    []byte
+	DedupKey    pgtype.Text
+	RepoID      int64
+}
+
+// One event about a repository rather than a pull request, such as a test
+// data baseline refresh (docs/32); its workspace derives from it.
+func (q *Queries) InsertRepositoryEvent(ctx context.Context, arg InsertRepositoryEventParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertRepositoryEvent,
+		arg.ActorUserID,
+		arg.Kind,
+		arg.Visibility,
+		arg.Metadata,
+		arg.DedupKey,
+		arg.RepoID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const pruneAgedEvents = `-- name: PruneAgedEvents :one
 WITH doomed AS (
     SELECT id FROM activity_events

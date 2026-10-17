@@ -120,3 +120,38 @@ UPDATE build_log_streams SET next_sequence = next_sequence + sqlc.arg(lines)::bi
     updated_at = clock_timestamp()
 WHERE environment_id = sqlc.arg(environment_id) AND epoch = sqlc.arg(epoch) AND state = 'finished' AND pruned_at IS NULL
 RETURNING (next_sequence - sqlc.arg(lines)::bigint)::bigint AS first_sequence;
+
+-- Repository baseline refresh logs (docs/32-persistent-test-data.md): the
+-- refresh row holds the counters and fences writers while log_open.
+
+-- name: OpenBaselineStream :one
+SELECT log_lines, log_bytes, log_truncated FROM baseline_refreshes WHERE id = $1 AND state = 'running' AND log_open;
+
+-- name: AllocateBaselineLines :one
+UPDATE baseline_refreshes SET log_lines = log_lines + sqlc.arg(lines)::bigint,
+    log_bytes = log_bytes + sqlc.arg(bytes)::bigint,
+    log_truncated = log_truncated OR sqlc.arg(truncated)::boolean,
+    log_omitted = log_omitted + sqlc.arg(omitted)::bigint,
+    log_lost = log_lost + sqlc.arg(lost)::bigint
+WHERE id = sqlc.arg(refresh_id) AND log_open
+RETURNING (log_lines - sqlc.arg(lines)::bigint)::bigint AS first_sequence;
+
+-- name: InsertBaselineLines :exec
+INSERT INTO baseline_logs (refresh_id, sequence, kind, line, created_at)
+SELECT sqlc.arg(refresh_id)::bigint, sqlc.arg(first_sequence)::bigint + k.ord - 1, k.kind, t.line, a.at
+FROM unnest(sqlc.arg(kinds)::text[]) WITH ORDINALITY AS k(kind, ord)
+JOIN unnest(sqlc.arg(texts)::text[]) WITH ORDINALITY AS t(line, ord) ON t.ord = k.ord
+JOIN unnest(sqlc.arg(times)::timestamptz[]) WITH ORDINALITY AS a(at, ord) ON a.ord = k.ord;
+
+-- name: BaselineLinesBefore :many
+-- The latest matching lines before a position, newest first.
+SELECT sequence, kind, line, created_at FROM baseline_logs
+WHERE refresh_id = sqlc.arg(refresh_id) AND sequence < sqlc.arg(position)::bigint
+  AND (sqlc.arg(kind)::text = '' OR kind = sqlc.arg(kind)::text)
+  AND (sqlc.arg(query)::text = '' OR strpos(lower(line), lower(sqlc.arg(query)::text)) > 0)
+ORDER BY sequence DESC LIMIT sqlc.arg(max_lines)::int;
+
+-- name: BaselineLinesFrom :many
+SELECT sequence, kind, line, created_at FROM baseline_logs
+WHERE refresh_id = $1 AND sequence >= $2
+ORDER BY sequence LIMIT $3;

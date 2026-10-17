@@ -211,3 +211,69 @@ func waitDelay(job *rivertype.JobRow) time.Duration {
 	}
 	return min(delay, 5*time.Minute)
 }
+
+// Baseline admission outcomes (docs/32-persistent-test-data.md): a repository
+// baseline refresh waits like a pull request build when every build slot is
+// taken, its workspace runs its allowance of builds, or its workspace used
+// its daily build minutes.
+const (
+	BaselineCapacityWait = "capacity_wait"
+	BaselineQuotaBlocked = "quota_blocked"
+)
+
+// AdmitBaselineTx decides, under the build-slot lock, whether a baseline
+// refresh may run now. It returns "" when it may, otherwise why it waits and,
+// for the daily allowance, until when. The caller claims the refresh in the
+// same transaction, so the slot count stays exact.
+func (r *Repository) AdmitBaselineTx(ctx context.Context, tx pgx.Tx, workspaceID, refreshID int64, now time.Time) (string, time.Time, error) {
+	if r.buildSlots <= 0 && r.accounts == (AccountLimits{}) {
+		return "", time.Time{}, nil
+	}
+	q := dbgen.New(tx)
+	if err := q.LockBuildSlots(ctx); err != nil {
+		return "", time.Time{}, fmt.Errorf("lock build slots: %w", err)
+	}
+	if r.buildSlots > 0 {
+		running, err := q.CountRunningBuildsBesidesBaseline(ctx, refreshID)
+		if err != nil {
+			return "", time.Time{}, fmt.Errorf("count running builds: %w", err)
+		}
+		if running >= int64(r.buildSlots) {
+			return BaselineCapacityWait, time.Time{}, nil
+		}
+	}
+	if r.accounts.BuildsPerAccount > 0 {
+		mine, err := q.CountWorkspaceRunningBesidesBaseline(ctx, dbgen.CountWorkspaceRunningBesidesBaselineParams{WorkspaceID: workspaceID, RefreshID: refreshID})
+		if err != nil {
+			return "", time.Time{}, fmt.Errorf("count the workspace's running builds: %w", err)
+		}
+		if mine >= int64(r.accounts.BuildsPerAccount) {
+			return BaselineCapacityWait, time.Time{}, nil
+		}
+	}
+	if r.accounts.MinutesPerDay > 0 {
+		day := now.UTC()
+		used, err := q.WorkspaceBuildSeconds(ctx, dbgen.WorkspaceBuildSecondsParams{WorkspaceID: workspaceID, Day: pgtype.Date{Time: day, Valid: true}})
+		if err != nil {
+			return "", time.Time{}, fmt.Errorf("read the workspace's build minutes: %w", err)
+		}
+		if used >= int64(r.accounts.MinutesPerDay)*60 {
+			return BaselineQuotaBlocked, time.Date(day.Year(), day.Month(), day.Day()+1, 0, 0, 0, 0, time.UTC), nil
+		}
+	}
+	return "", time.Time{}, nil
+}
+
+// RecordBaselineUsage adds a baseline refresh's execution time to its
+// workspace's daily build time.
+func (r *Repository) RecordBaselineUsage(ctx context.Context, workspaceID int64, day time.Time, seconds int64) error {
+	if workspaceID <= 0 || seconds < 0 {
+		return nil
+	}
+	if err := dbgen.New(r.pool).RecordBaselineUsage(ctx, dbgen.RecordBaselineUsageParams{
+		WorkspaceID: workspaceID, Day: pgtype.Date{Time: day.UTC(), Valid: true}, Seconds: seconds,
+	}); err != nil {
+		return fmt.Errorf("record baseline build time: %w", err)
+	}
+	return nil
+}

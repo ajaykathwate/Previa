@@ -11,6 +11,39 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const allocateBaselineLines = `-- name: AllocateBaselineLines :one
+UPDATE baseline_refreshes SET log_lines = log_lines + $1::bigint,
+    log_bytes = log_bytes + $2::bigint,
+    log_truncated = log_truncated OR $3::boolean,
+    log_omitted = log_omitted + $4::bigint,
+    log_lost = log_lost + $5::bigint
+WHERE id = $6 AND log_open
+RETURNING (log_lines - $1::bigint)::bigint AS first_sequence
+`
+
+type AllocateBaselineLinesParams struct {
+	Lines     int64
+	Bytes     int64
+	Truncated bool
+	Omitted   int64
+	Lost      int64
+	RefreshID int64
+}
+
+func (q *Queries) AllocateBaselineLines(ctx context.Context, arg AllocateBaselineLinesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, allocateBaselineLines,
+		arg.Lines,
+		arg.Bytes,
+		arg.Truncated,
+		arg.Omitted,
+		arg.Lost,
+		arg.RefreshID,
+	)
+	var first_sequence int64
+	err := row.Scan(&first_sequence)
+	return first_sequence, err
+}
+
 const allocateFinishedLines = `-- name: AllocateFinishedLines :one
 UPDATE build_log_streams SET next_sequence = next_sequence + $1::bigint,
     stored_bytes = stored_bytes + $2::bigint,
@@ -86,6 +119,105 @@ func (q *Queries) AllocateLines(ctx context.Context, arg AllocateLinesParams) (i
 	var first_sequence int64
 	err := row.Scan(&first_sequence)
 	return first_sequence, err
+}
+
+const baselineLinesBefore = `-- name: BaselineLinesBefore :many
+SELECT sequence, kind, line, created_at FROM baseline_logs
+WHERE refresh_id = $1 AND sequence < $2::bigint
+  AND ($3::text = '' OR kind = $3::text)
+  AND ($4::text = '' OR strpos(lower(line), lower($4::text)) > 0)
+ORDER BY sequence DESC LIMIT $5::int
+`
+
+type BaselineLinesBeforeParams struct {
+	RefreshID int64
+	Position  int64
+	Kind      string
+	Query     string
+	MaxLines  int32
+}
+
+type BaselineLinesBeforeRow struct {
+	Sequence  int64
+	Kind      string
+	Line      string
+	CreatedAt pgtype.Timestamptz
+}
+
+// The latest matching lines before a position, newest first.
+func (q *Queries) BaselineLinesBefore(ctx context.Context, arg BaselineLinesBeforeParams) ([]BaselineLinesBeforeRow, error) {
+	rows, err := q.db.Query(ctx, baselineLinesBefore,
+		arg.RefreshID,
+		arg.Position,
+		arg.Kind,
+		arg.Query,
+		arg.MaxLines,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BaselineLinesBeforeRow
+	for rows.Next() {
+		var i BaselineLinesBeforeRow
+		if err := rows.Scan(
+			&i.Sequence,
+			&i.Kind,
+			&i.Line,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const baselineLinesFrom = `-- name: BaselineLinesFrom :many
+SELECT sequence, kind, line, created_at FROM baseline_logs
+WHERE refresh_id = $1 AND sequence >= $2
+ORDER BY sequence LIMIT $3
+`
+
+type BaselineLinesFromParams struct {
+	RefreshID int64
+	Sequence  int64
+	Limit     int32
+}
+
+type BaselineLinesFromRow struct {
+	Sequence  int64
+	Kind      string
+	Line      string
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) BaselineLinesFrom(ctx context.Context, arg BaselineLinesFromParams) ([]BaselineLinesFromRow, error) {
+	rows, err := q.db.Query(ctx, baselineLinesFrom, arg.RefreshID, arg.Sequence, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BaselineLinesFromRow
+	for rows.Next() {
+		var i BaselineLinesFromRow
+		if err := rows.Scan(
+			&i.Sequence,
+			&i.Kind,
+			&i.Line,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const deleteAttemptLines = `-- name: DeleteAttemptLines :execrows
@@ -177,6 +309,33 @@ func (q *Queries) FinishStream(ctx context.Context, arg FinishStreamParams) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const insertBaselineLines = `-- name: InsertBaselineLines :exec
+INSERT INTO baseline_logs (refresh_id, sequence, kind, line, created_at)
+SELECT $1::bigint, $2::bigint + k.ord - 1, k.kind, t.line, a.at
+FROM unnest($3::text[]) WITH ORDINALITY AS k(kind, ord)
+JOIN unnest($4::text[]) WITH ORDINALITY AS t(line, ord) ON t.ord = k.ord
+JOIN unnest($5::timestamptz[]) WITH ORDINALITY AS a(at, ord) ON a.ord = k.ord
+`
+
+type InsertBaselineLinesParams struct {
+	RefreshID     int64
+	FirstSequence int64
+	Kinds         []string
+	Texts         []string
+	Times         []pgtype.Timestamptz
+}
+
+func (q *Queries) InsertBaselineLines(ctx context.Context, arg InsertBaselineLinesParams) error {
+	_, err := q.db.Exec(ctx, insertBaselineLines,
+		arg.RefreshID,
+		arg.FirstSequence,
+		arg.Kinds,
+		arg.Texts,
+		arg.Times,
+	)
+	return err
 }
 
 const insertLines = `-- name: InsertLines :exec
@@ -366,6 +525,26 @@ func (q *Queries) MarkStreamPruned(ctx context.Context, arg MarkStreamPrunedPara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const openBaselineStream = `-- name: OpenBaselineStream :one
+
+SELECT log_lines, log_bytes, log_truncated FROM baseline_refreshes WHERE id = $1 AND state = 'running' AND log_open
+`
+
+type OpenBaselineStreamRow struct {
+	LogLines     int64
+	LogBytes     int64
+	LogTruncated bool
+}
+
+// Repository baseline refresh logs (docs/32-persistent-test-data.md): the
+// refresh row holds the counters and fences writers while log_open.
+func (q *Queries) OpenBaselineStream(ctx context.Context, id int64) (OpenBaselineStreamRow, error) {
+	row := q.db.QueryRow(ctx, openBaselineStream, id)
+	var i OpenBaselineStreamRow
+	err := row.Scan(&i.LogLines, &i.LogBytes, &i.LogTruncated)
+	return i, err
 }
 
 const openStream = `-- name: OpenStream :one

@@ -19,6 +19,7 @@ const (
 	PreviewPublished     = "preview.published"
 	ResetRequested       = "preview.reset_requested" // Reset test data: a Rebuild of the serving commit
 	VisibilityRepository = "repository"              // everyone who can read the repository
+	VisibilityOperators  = "operators"               // people who can build in the repository
 )
 
 // MaxMetadata bounds an event's metadata, encoded as JSON.
@@ -26,10 +27,12 @@ const MaxMetadata = 2048
 
 var kindPattern = regexp.MustCompile(`^[a-z]+(_[a-z]+)*\.[a-z]+(_[a-z]+)*$`)
 
-// Event is one thing that happened to a pull request. Its workspace and
-// repository derive from the pull request.
+// Event is one thing that happened to a pull request, or, with RepoID and no
+// pull request, to a repository. Its workspace (and repository) derive from
+// it.
 type Event struct {
 	PullRequestID int64
+	RepoID        int64 // for a repository event; ignored with a pull request
 	PublicationID int64 // the deployment it concerns; 0 for none
 	ActorID       int64 // the person who did it; 0 for the system
 	Kind          string
@@ -50,7 +53,7 @@ func NewRecorder() *Recorder { return &Recorder{} }
 
 // RecordTx adds e in tx. A repeated DedupKey is not an error.
 func (*Recorder) RecordTx(ctx context.Context, tx pgx.Tx, e Event) error {
-	if e.PullRequestID <= 0 || !kindPattern.MatchString(e.Kind) {
+	if e.PullRequestID <= 0 && e.RepoID <= 0 || !kindPattern.MatchString(e.Kind) {
 		return errors.New("invalid activity event")
 	}
 	visibility := e.Visibility
@@ -67,6 +70,15 @@ func (*Recorder) RecordTx(ctx context.Context, tx pgx.Tx, e Event) error {
 	}
 	if len(encoded) > MaxMetadata {
 		return errors.New("activity metadata too large")
+	}
+	if e.PullRequestID <= 0 {
+		if _, err := dbgen.New(tx).InsertRepositoryEvent(ctx, dbgen.InsertRepositoryEventParams{
+			RepoID: e.RepoID, ActorUserID: optional(e.ActorID), Kind: e.Kind, Visibility: visibility, Metadata: encoded,
+			DedupKey: pgtype.Text{String: e.DedupKey, Valid: e.DedupKey != ""},
+		}); err != nil {
+			return fmt.Errorf("record activity %s: %w", e.Kind, err)
+		}
+		return nil
 	}
 	if _, err := dbgen.New(tx).InsertEvent(ctx, dbgen.InsertEventParams{
 		PullRequestID: e.PullRequestID, PublicationID: optional(e.PublicationID), ActorUserID: optional(e.ActorID),
