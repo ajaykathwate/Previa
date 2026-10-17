@@ -83,13 +83,17 @@ func TestOutboundPorts(t *testing.T) {
 }
 
 func TestPreviewBackendSettings(t *testing.T) {
-	base := PreviewConfig{PreviewTmpfsSize: 256 << 20, PreviewPIDs: 512, PreviewStartupTimeout: time.Minute, PreviewMaxPerRepository: 10, PreviewSetupTimeout: 5 * time.Minute}
+	base := PreviewConfig{PreviewTmpfsSize: 256 << 20, PreviewPIDs: 512, PreviewStartupTimeout: time.Minute, PreviewMaxPerRepository: 10, PreviewSetupTimeout: 5 * time.Minute,
+		PreviewBaselineMaxSize: 64 << 20, PreviewDataCopyTimeout: 2 * time.Minute, PreviewBaselineMinInterval: time.Hour}
 	if err := base.check(); err != nil {
 		t.Fatal(err)
 	}
 	for _, tweak := range []func(*PreviewConfig){
 		func(c *PreviewConfig) { c.PreviewSetupTimeout = time.Second },
 		func(c *PreviewConfig) { c.PreviewSetupTimeout = time.Hour },
+		func(c *PreviewConfig) { c.PreviewBaselineMaxSize = 1 << 10 },
+		func(c *PreviewConfig) { c.PreviewDataCopyTimeout = time.Second },
+		func(c *PreviewConfig) { c.PreviewBaselineMinInterval = 0 },
 		func(c *PreviewConfig) { c.PreviewServiceCatalog = "postgres:17=postgres:17" },
 	} {
 		c := base
