@@ -52,6 +52,40 @@ type AppOutputWatch struct {
 	UpdatedAt     pgtype.Timestamptz
 }
 
+type BaselineLog struct {
+	RefreshID int64
+	Sequence  int64
+	Kind      string
+	Line      string
+	CreatedAt pgtype.Timestamptz
+}
+
+type BaselineRefresh struct {
+	ID            int64
+	RepoID        int64
+	Sequence      int64
+	Trigger       string
+	RequestedBy   pgtype.Int8
+	State         string
+	AvailableAt   pgtype.Timestamptz
+	WaitingReason pgtype.Text
+	Branch        pgtype.Text
+	CommitSha     pgtype.Text
+	FailureCode   pgtype.Text
+	FailureDetail pgtype.Text
+	Attempts      int32
+	BuildSeconds  pgtype.Int4
+	LogOpen       bool
+	LogLines      int64
+	LogBytes      int64
+	LogTruncated  bool
+	LogOmitted    int64
+	LogLost       int64
+	RequestedAt   pgtype.Timestamptz
+	StartedAt     pgtype.Timestamptz
+	FinishedAt    pgtype.Timestamptz
+}
+
 type BuildFailureDismissal struct {
 	UserID        int64
 	PullRequestID int64
@@ -83,6 +117,7 @@ type BuildIntent struct {
 	AuthorizationStamp pgtype.Text
 	ExecutionJobID     pgtype.Int8
 	ExecutionErrorCode string
+	StartSource        pgtype.Text
 }
 
 type BuildLog struct {
@@ -272,6 +307,10 @@ type PreviewComponent struct {
 	RecordedAt       pgtype.Timestamptz
 	ConfigHash       pgtype.Text
 	SetupMs          pgtype.Int4
+	Seed             bool
+	SeedMs           pgtype.Int4
+	DataSource       pgtype.Text
+	DataDetail       []byte
 }
 
 type PreviewCrash struct {
@@ -412,6 +451,25 @@ type Repo struct {
 	PublicID           pgtype.UUID
 }
 
+type RepositoryBaseline struct {
+	ID              int64
+	RepoID          int64
+	RefreshID       pgtype.Int8
+	ServiceKind     string
+	ServiceVersion  string
+	Branch          string
+	CommitSha       string
+	ConfigHash      pgtype.Text
+	RefreshSequence int64
+	StorageKey      string
+	SizeBytes       int64
+	Checksum        string
+	KeyVersion      int32
+	Status          string
+	BuiltAt         pgtype.Timestamptz
+	RetiredAt       pgtype.Timestamptz
+}
+
 type RepositoryDestination struct {
 	ID        int64
 	RepoID    int64
@@ -427,6 +485,21 @@ type RepositoryMembership struct {
 	WorkspaceID int64
 	UserID      int64
 	Revision    int64
+}
+
+type RepositorySampledataSetting struct {
+	RepoID         int64
+	Enabled        bool
+	KeepData       bool
+	UseBaseline    bool
+	BaselineBranch pgtype.Text
+	AutoRefresh    bool
+	Revision       int64
+	UpdatedBy      int64
+	UpdatedAt      pgtype.Timestamptz
+	CheckedAt      pgtype.Timestamptz
+	CheckedBranch  pgtype.Text
+	CheckedSha     pgtype.Text
 }
 
 type RepositorySetupCheck struct {
@@ -532,6 +605,7 @@ type WorkerCapability struct {
 	Services        []string
 	BuildTimeoutNs  int64
 	PrivatePreviews bool
+	Baselines       bool
 }
 
 type Workspace struct {

@@ -95,6 +95,7 @@ func newIntentFixture(t *testing.T) *intentFixture {
 	applyIntentMigration(t, pool, "0020_backend_previews.sql")
 	applyIntentMigration(t, pool, "0033_public_resource_ids.sql")
 	applyIntentMigration(t, pool, "0034_pr_details_and_execution_health.sql")
+	applyIntentMigration(t, pool, "0041_persistent_test_data.sql") // Reset test data's starting source
 	if _, err := pool.Exec(ctx, "UPDATE pull_requests SET mergeable=true, mergeable_state='clean', build_status='open', head_repo_id=501"); err != nil {
 		t.Fatal(err)
 	}
