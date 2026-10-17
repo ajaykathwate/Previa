@@ -36,17 +36,26 @@ adds an order while testing a discount. To check the fix from a clean state he a
 for **Reset test data**; when Deployment 2 is live the shop has its two seeded
 orders again. Ravi's findings stay attached to Deployment 1.
 
-## Seeding with `setup`
+## Seeding with `seed` (or `setup`)
 
 `setup` is an argv list run once per candidate, after its managed services are
-ready and before it can be published ([11](11-backend-previews.md)). A seed is just
-part of that command:
+ready and before it can be published ([11](11-backend-previews.md)). Seed data goes
+into its own `seed` key, which runs after `setup` only when the databases start
+empty:
 
 ```yaml
 services:
   postgres: 17
-setup: [sh, -c, "bin/rails db:prepare && bin/rails runner db/preview_seed.rb"]
+setup: ["bin/rails", "db:migrate"]
+seed: ["bin/rails", "runner", "db/preview_seed.rb"]
 ```
+
+Without Test data every database starts empty, so `seed` runs for every
+candidate. With Test data ([32](32-persistent-test-data.md)) a candidate may start
+from a copy of kept or baseline data instead; `setup` then runs on that data and
+`seed` is skipped, so data is never seeded twice. A seed can also stay part of
+`setup` (for example `sh -c "…migrate && …seed"`), as before persistent test data;
+it must then be repeatable.
 
 Rules that make a seed work in previews:
 
@@ -59,21 +68,23 @@ Rules that make a seed work in previews:
 - **Preview-only logins.** Create a limited account whose password comes from a
   repository secret (below), never an administrator of anything real.
 
-Starter kits offer a migrate-and-seed setup preset for each stack:
+Starter kits write migrations as `setup` and seed data as `seed` for each stack:
 
-- Prisma's `migrate deploy` then `db seed`;
-- Knex's `migrate:latest` then `seed:run`;
-- Django's `migrate` then `loaddata preview`;
-- Alembic's `upgrade head` then `python -m app.seed`;
-- `rails db:prepare`, which seeds a new database;
-- Laravel's `migrate --force --seed`;
-- a Go binary's own `setup` subcommand.
+- Prisma's `migrate deploy` and `db seed`;
+- Knex's `migrate:latest` and `seed:run`;
+- Django's `migrate` and `loaddata preview`;
+- Alembic's `upgrade head` and `python -m app.seed`;
+- Rails' `db:migrate` and `db:seed`;
+- Laravel's `migrate --force` and `db:seed --force`;
+- a Go binary's own `migrate` and `seed` subcommands.
 
 Spring apps get a note on a preview-only Flyway location instead. The kit's notes
 and its *Seed data for reviewers* answer repeat these rules.
 
-Every candidate starts from an empty database, so the seed runs for every new
-commit, Rebuild and Reset.
+Without Test data every candidate starts from an empty database, so the seed runs
+for every new commit, Rebuild and Reset. With Test data, new commits and Rebuilds
+keep the pull request's data, and Reset offers the repository baseline or empty
+databases and the seed ([32](32-persistent-test-data.md#reset-test-data)).
 
 ## Setup on the review page
 
@@ -83,7 +94,7 @@ The **Preview** card describes the deployment being reviewed:
 | --- | --- |
 | **Setup:** Completed in 12.4 s | The serving deployment declared `setup`, and it finished |
 | **Setup:** No setup declared | It declared none |
-| **Test data:** Fresh from setup for each deployment… | It runs managed databases. A refresh or idle sleep keeps the data; a new commit, Rebuild or Reset replaces it |
+| **Test data:** Fresh from setup for each deployment… | It runs managed databases. A refresh or idle sleep keeps the data; a new commit, Rebuild or Reset replaces it. With Test data on ([32](32-persistent-test-data.md)) the line says where this deployment's data started: *Kept from the previous version*, *Reset to the repository baseline* or *Fresh seeded data* |
 | *The newest commit … failed in its setup command, so this is the previous deployment.* | A newer commit's setup failed; the earlier deployment and its data keep serving |
 
 The facts belong to the deployment that serves (the newest publication), never to a

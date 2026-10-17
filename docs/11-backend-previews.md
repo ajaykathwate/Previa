@@ -35,7 +35,8 @@ health_check_path: /health
 services:
   postgres: 17          # a version the operator's catalog offers
   redis: 7
-setup: ["bin/api", "migrate", "--seed"]   # argv; runs once per candidate
+setup: ["bin/api", "migrate"]   # argv; runs once per candidate, on any data
+seed: ["bin/api", "seed"]       # argv; only when the databases start empty
 processes:              # at most 3, unrouted, from the same image
   - name: worker
     command: ["bin/api", "worker"]
@@ -47,11 +48,12 @@ docs_path: /docs        # a path on the preview's own host
 | --- | --- | --- |
 | `services` | mapping of `postgres`/`redis`/`mysql` to a version (`17`, `"17"` or `7.4`) | Each kind once; the version must be in the catalog. An unknown service or version fails preparation with a message naming what this server offers. |
 | `setup` | list of strings (argv) | Program first; at most 64 arguments and 4 KiB; no NUL bytes. It **replaces the image's entrypoint and command**; no shell parses it (use `["sh", "-c", "…"]` for one). |
-| `processes` | list of `{name, command, resource_tier}` | At most 3; names `^[a-z][a-z0-9-]{0,30}$`, unique, not `app`, `setup`, `postgres` or `redis`; command as for `setup`; tier default `small`, clamped like the app's. |
+| `seed` | list of strings (argv) | As for `setup`, and it needs a PostgreSQL or MySQL service. Runs after `setup` only when the databases start empty, and in Test data baseline builds ([32](32-persistent-test-data.md)). With `seed` declared, keep `setup` safe to repeat on existing data. |
+| `processes` | list of `{name, command, resource_tier}` | At most 3; names `^[a-z][a-z0-9-]{0,30}$`, unique, not `app`, `setup`, `seed`, `postgres` or `redis`; command as for `setup`; tier default `small`, clamped like the app's. |
 | `docs_path` | string | An absolute path on the preview, validated like `health_check_path`; never an external URL. |
 
 The effective configuration hash covers services (with their pinned images),
-setup, processes and the docs path; without these keys it is unchanged.
+setup, seed, processes and the docs path; without these keys it is unchanged.
 
 ### Examples
 
@@ -61,6 +63,7 @@ port: 3000
 health_check_path: /healthz
 services: { postgres: 17, redis: 7 }
 setup: ["npx", "prisma", "migrate", "deploy"]
+seed: ["npx", "prisma", "db", "seed"]
 processes:
   - name: queue
     command: ["node", "dist/worker.js"]
@@ -70,7 +73,8 @@ processes:
 # Ruby on Rails with Sidekiq
 port: 3000
 services: { postgres: 16, redis: 7 }
-setup: ["bin/rails", "db:prepare"]
+setup: ["bin/rails", "db:migrate"]
+seed: ["bin/rails", "db:seed"]
 processes:
   - name: sidekiq
     command: ["bundle", "exec", "sidekiq"]
@@ -84,7 +88,8 @@ env:
 port: 8000
 health_check_path: /health/
 services: { postgres: 17, redis: 8 }
-setup: ["sh", "-c", "python manage.py migrate && python manage.py loaddata seed.json"]
+setup: ["python", "manage.py", "migrate", "--noinput"]
+seed: ["python", "manage.py", "loaddata", "seed.json"]
 processes:
   - name: celery
     command: ["celery", "-A", "project", "worker", "--loglevel=info"]
@@ -127,15 +132,20 @@ to the Docker host can read them with `docker inspect`, as with secrets.)
 4. **Services** start and must answer their protocol from inside their container:
    PostgreSQL and MySQL an authenticated `SELECT 1`, Redis an authenticated `PING` (a TCP
    accept is not enough), within `PREVIEW_STARTUP_TIMEOUT`.
-5. **Setup** runs once, as a one-off container with the app's hardening, within
-   `PREVIEW_SETUP_TIMEOUT`; its output streams into the build log. A non-zero exit
-   or the timeout fails the build with `setup_failed`; the setup container is
-   removed.
+5. **Starting data and setup.** Without Test data every database starts empty.
+   With Test data on ([32](32-persistent-test-data.md)), each PostgreSQL and MySQL
+   database first loads a copy of the pull request's serving data or the
+   repository baseline; a copy or setup failure restarts the databases empty and
+   tries the next source. **Setup** runs as a one-off container with the app's
+   hardening, within `PREVIEW_SETUP_TIMEOUT`, and **seed** after it only on empty
+   databases; their output streams into the build log. On empty databases a
+   non-zero exit or the timeout fails the build with `setup_failed` or
+   `seed_failed`; the containers are removed.
 6. **Processes** start and must still be running after two seconds.
 7. The **app** starts and passes its readiness check ([10](10-preview-runtime.md)).
 8. Processes must still run and services still answer; then what the candidate
-   runs is recorded (`preview_components`, with how long setup ran) and it is
-   handed to publication.
+   runs is recorded (`preview_components`, with how long setup and seed ran and
+   where its data started) and it is handed to publication.
 9. Right before the route is accepted, `Runtime.Endpoint` checks the app and again
    that processes run and services answer (credential-free protocol checks).
 
@@ -221,19 +231,24 @@ removed with it.
 - **Build log:** pulls, each service becoming ready (with its hostname), the setup
   command's output, processes starting, replaced variable names and outbound
   connections given or withheld.
-- **PR page:** *Runs with* (services, setup, processes; "Data does not survive a
-  rebuild"), *Docs*, *Outbound*, and *Managed services* offered by the running
-  worker, labelled "None: no service catalog is configured" when there is none.
+- **PR page:** *Runs with* (services, setup, seed, processes; "Data does not
+  survive a rebuild", or that data is kept between builds with Test data), *Test
+  data* (where the databases started and why earlier sources were skipped),
+  *Docs*, *Outbound*, and *Managed services* offered by the running worker,
+  labelled "None: no service catalog is configured" when there is none.
   *Runs with* and *Docs* describe the deployment that serves (the newest
   publication), also while a newer commit's update has failed; a newer
   candidate's components never replace the serving deployment's record.
 - **PR comment:** the docs link and "Runs with PostgreSQL 17 and Redis 7 · setup ran ·
-  process worker" for a ready preview. Failures say which part failed:
-  `service_unavailable`, `service_failed`, `setup_failed`, `process_failed`.
+  process worker" for a ready preview, and with Test data a line such as "Test
+  data: kept from previous build". Failures say which part failed:
+  `service_unavailable`, `service_failed`, `setup_failed`, `seed_failed`,
+  `process_failed`.
 - **Review page:** *Setup: Completed in 12.4 s* (or *No setup declared*) for the
   deployment that serves, a Test data note, **Reset test data**, and the
-  repository's test login for reviewers. Seeding synthetic data in `setup`, the
-  reset and test access are described in [31](31-test-data.md).
+  repository's test login for reviewers. Seeding synthetic data, the reset and
+  test access are described in [31](31-test-data.md); kept data, baselines and
+  Reset's choice of source in [32](32-persistent-test-data.md).
 
 ## Configuration
 

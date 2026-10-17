@@ -144,3 +144,25 @@ Six scenarios in `reviews.test.cjs` cover:
 - the whole flow without JavaScript, a test-access reveal included (run with reduced motion, since the site's smooth scrolling never lets the test robot's own scrolling settle without scripts).
 
 Every scenario fails on any CSP violation. `UI_BROWSER_SCREENSHOTS=1` writes `review-*.png` captures (light, dark and phone, grown to the full content height).
+
+A repository's Test data tab has its own PostgreSQL-backed suite:
+
+```sh
+set -a; . ./.env; set +a
+export TEST_DATABASE_URL="$DATABASE_URL"
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-test-data-browser
+```
+
+`internal/sampledata/browser_test.go` migrates a temporary schema and serves the
+real session, CSRF, public-ID, workspace, pull request (its event stream) and Test
+data handlers, with live updates through `LISTEN`/`NOTIFY`. A test-only route
+stands in for the worker: the waiting refresh starts, then succeeds with a
+PostgreSQL 17 baseline and a short log. Three scenarios in `testdata.test.cjs`
+cover an Owner turning Test data on in a modal (Cancel first), following the
+refresh live to *Ready*, saving a switch and the baseline branch in place (a bad
+name explained beside the field, a live refresh never replacing the field while
+it is being typed in), confirming Refresh baseline and reading the refresh's build
+log; the Developer's read-only view and the Reviewer sent to Previews; and turning
+Test data off in a modal. Every scenario fails on any CSP violation.
+`UI_BROWSER_SCREENSHOTS=1` writes `test-data-*.png` captures at 1440 and 390 px in
+light and dark, checking that a phone never scrolls sideways.

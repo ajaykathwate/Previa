@@ -48,7 +48,8 @@ Ownership of routes: `internal/dashboard` (home, overview, session, tools, FAQ, 
 PR pages, Builds, Previews, the event stream), `internal/onboarding` (a
 repository's Setup tab and the Open preview action), `internal/reviews` (a pull
 request's review page and its forms), `internal/secrets` (a repository's Secrets
-tab).
+tab), `internal/sampledata` (a repository's Test data tab and its baseline refresh
+logs).
 
 ## Visual system: the "signal" theme
 
@@ -122,11 +123,15 @@ Making full-page navigation feel instant, without giving up MPA semantics:
   Failed requests keep current content and show retry feedback.
 - Live refreshes come from the event stream ([20](20-realtime-updates.md)). A hidden
   `[data-live-refresh]` element refetches `#repository-detail` (or the Setup tab's
-  `#setup-detail`, or a review's `#review-detail`) with the current URL's filters.
-  While PR search, a `[data-live-pause]` filter or a review form (`[data-draft-form]`)
-  has focus, a confirmation is open or a `details[data-menu]` menu is open, a refresh is deferred
-  (one that returns while a menu inside its target is open is not swapped in), then
-  run when the user leaves the field, closes the modal or closes the menu. Menus are
+  `#setup-detail`, a review's `#review-detail`, or the Test data tab's
+  `#test-data-detail`) with the current URL's filters. While PR search, a
+  `[data-live-pause]` form (a filter, the Test data tab's baseline branch) or a review
+  form (`[data-draft-form]`) has focus, a confirmation is open or a
+  `details[data-menu]` menu is open, a refresh is deferred (one that returns while a
+  menu inside its target is open, or while someone types in such a form inside it,
+  is not swapped in), then run when the user leaves the field, closes the modal or
+  closes the menu. In-place forms (`data-inline-form`) a refresh swaps in are bound
+  again. Menus are
   looked up when an event happens, so menus a refresh replaced still close on an
   outside click or Escape.
 - After a user-triggered results swap, the view scrolls back under the sticky
@@ -350,6 +355,31 @@ notice. **Open preview** links open a new tab through the recording `/open` rout
 Live updates replace `#setup-detail`, so a check, push, build or open shows up
 without reloading. See [29](29-guided-onboarding.md).
 
+## Test data tab
+
+`web/pages/sampledata` (styles in `web/styles/testdata.css`), next to **Setup** for
+people who can build. The main column has two cards:
+
+- **Repository baseline:** a status badge and **Refresh baseline**, then a compact
+  table of current baselines per database (branch and commit in monospace, build
+  time, size) and a note when the branch moved.
+- **Refreshes:** the five latest, each one row with its result badge, trigger,
+  commit, a safe failure or waiting reason, timing and a **Build log** link.
+
+The aside has two cards:
+
+- **Settings:** a field card whose switches (the Automatic builds switch style)
+  each post the whole settings form with one value flipped and the revision, and
+  return with a toast. The baseline branch is an in-place text field.
+- **How test data works.**
+
+Turning Test data on or off, Refresh baseline and Delete open confirmation modals
+over the page; only their submit navigates. Non-managers see the same switches
+disabled with *Owners and Admins change these*. Live updates replace
+`#test-data-detail` when a refresh starts, waits or finishes, or the settings
+change. A refresh's log page reuses the build log viewer (filters, search,
+download) without a live tail. See [32](32-persistent-test-data.md).
+
 ## Review page
 
 `web/pages/reviews` (styles in `web/styles/reviews.css`): the pull request's header,
@@ -474,8 +504,9 @@ view only beside the choices and never slides over the guidance.
 
 - **Choices.** Stacks are a row of chips (monogram and name) with the chosen stack's
   kind and language under them. Services and extras are switch rows: PostgreSQL,
-  Redis and MySQL with their version as a segmented control in the same row, migrations and a
-  background worker with ready-made commands or **My own command…**, and a docs link.
+  Redis and MySQL with their version as a segmented control in the same row, migrations, seed
+  data (only on empty databases; it needs PostgreSQL or MySQL) and a background worker
+  with ready-made commands or **My own command…**, and a docs link.
   **Advanced** holds the port, health check path, preview size and a stack detail
   (such as the Django project package).
 - **One form, swapped whole.** It is a plain GET form: every change sends it with

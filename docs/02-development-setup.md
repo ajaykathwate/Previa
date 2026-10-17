@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 40**, **River 007**. After pulling changes, run
+Current schema: **Goose 41**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker. When the egress proxy or the
 router changed (this version changed both), also run `make egress-image` (builds
 are metered and may be limited to package registries) and `make router-up` (the
@@ -18,8 +18,10 @@ members, in-app invitations, activity and workspace deletion by 0036, cached
 head-commit messages for the PR page by 0037, the repository Setup tab's
 checks, preview opens and hourly check allowance by 0038
 ([29](29-guided-onboarding.md)), pull request review pages, deployment
-records and activity by 0039 ([30](30-reviews.md)), and setup durations and the
-review page's sealed test access by 0040 ([31](31-test-data.md)). Internal
+records and activity by 0039 ([30](30-reviews.md)), setup durations and the
+review page's sealed test access by 0040 ([31](31-test-data.md)), and persistent
+test data (the Test data tab, repository baselines and kept data) by 0041
+([32](32-persistent-test-data.md)). Internal
 database keys and stored jobs remain unchanged. Apply migrations before
 starting the new binaries; old numeric HTML bookmarks redirect after access checks.
 Use UUIDs for forms, streams and downloads.
@@ -30,15 +32,20 @@ make run-server          # automatically loads .env; exported values win
 make run-worker          # restart separately after migration
 ```
 
-**Expected:** Goose reaches **40**, River stays **007**, and the new server accepts
-the schema (a server built for 40 refuses to start on an older schema with "run
+**Expected:** Goose reaches **41**, River stays **007**, and the new server accepts
+the schema (a server built for 41 refuses to start on an older schema with "run
 migrations first"). Restart the worker too: setup checks run on any worker with
 the GitHub App, including one without a preview domain; deployment records are
 written by the worker that activates routes, and every worker prunes activity.
 0039 records live previews as *Present at migration* deployments; it adds no
 configuration. 0040 adds none either: test access passwords use the existing
 `SECRETS_ENCRYPTION_KEYS` (without them only the account can be stored), and the
-worker records setup durations from the next build on. Sign in again (or use Your profile → GitHub account → Refresh)
+worker records setup durations from the next build on. 0041 adds four optional
+worker settings (`PREVIEW_BASELINE_DIR`, `PREVIEW_BASELINE_MAX_SIZE`,
+`PREVIEW_DATA_COPY_TIMEOUT`, `PREVIEW_BASELINE_MIN_INTERVAL`, all with defaults; see
+[technical-docs/config-setup.md](../technical-docs/config-setup.md)); Test data stays off for every repository until an Owner or Admin turns it on.
+Repository baselines are encrypted with the existing `SECRETS_ENCRYPTION_KEYS`:
+a worker without them stores none and says so at startup (kept data still works). Sign in again (or use Your profile → GitHub account → Refresh)
 to populate GitHub metadata. Login requests the read-only `user:email` OAuth scope
 for the verified primary email; tokens are still discarded. No repository OAuth
 scope is added. The account's first/last name is editable independently; refreshed
@@ -175,6 +182,12 @@ production only. The rules that most often stop a first run:
 - The `BUILD*`, `PREVIEW_*` and housekeeping settings (`ENV_TTL_HOURS`,
   `HOUSEKEEPING_*`, `BUILD_CACHE_BUDGET`) have working defaults; the worker validates
   them at start and stops with the variable's name if one is invalid.
+- **Repository baselines** (persistent test data, [32](32-persistent-test-data.md))
+  are encrypted with the two `SECRETS_*` values on the worker and written to
+  `PREVIEW_BASELINE_DIR` (an absolute, clean path; default `previa-baselines` in the
+  system temporary directory, created with mode 0700). Without the keys the worker
+  logs `capability unavailable … test-data baselines are not stored (kept data
+  still works)` and keeps refresh jobs waiting.
 - Routing is off until `PREVIEW_BASE_DOMAIN` is set. Then the worker requires
   `APP_BASE_URL` and an existing `ROUTER_DYNAMIC_DIR`, and both processes refuse a
   dashboard host equal to or below the preview domain (the server also warns when they
@@ -189,7 +202,7 @@ production only. The rules that most often stop a first run:
 | Command | Loads `.env`? |
 | --- | --- |
 | `make run-server`, `make run-worker`, `make dev` | Yes; already-exported variables take precedence. Restart Air after editing `.env`. |
-| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `river-ui`, `test-webhook`, `test-github-app`, `test-source`, `test-reporting`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e`, `test-reference`, `housekeeping-dry-run`, `router-up`, `router-down`, `route-sync` | Yes; falls back to `.env.example` for migrations and `river-ui` if `.env` is absent. `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e`, `test-reference` and `test-reporting` use `DATABASE_URL` as `TEST_DATABASE_URL` unless that is exported (they create and drop their own schemas). |
+| `make migrate-up`, `migrate-down`, `river-migrate-up`, `river-status`, `river-ui`, `test-webhook`, `test-github-app`, `test-source`, `test-reporting`, `secrets-reencrypt`, `egress-image`, `test-builder`, `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e`, `test-reference`, `test-test-data`, `housekeeping-dry-run`, `router-up`, `router-down`, `route-sync` | Yes; falls back to `.env.example` for migrations and `river-ui` if `.env` is absent. `test-runtime`, `test-routing`, `test-housekeeping`, `test-e2e`, `test-reference`, `test-test-data` and `test-reporting` use `DATABASE_URL` as `TEST_DATABASE_URL` unless that is exported (they create and drop their own schemas). |
 | Direct `go run`, manual Goose commands | No; run `set -a; . ./.env; set +a` once per terminal. |
 | `make build`, `make lint`, `make generate`, `make vuln`, `make observability-check`, `make release-images` | No configuration needed (the last two need Docker). |
 | `make prod-smoke` | No; it writes its own settings into a temporary directory ([25](25-production-deployment.md#local-staging-smoke-test)). |
@@ -257,6 +270,7 @@ is safe. Neither tool receives credentials as process arguments (Goose reads
 | 0038 | Guided onboarding ([29](29-guided-onboarding.md)): `repository_setup_checks` (the latest setup check per pull request, its last completed result and why an attempt failed), `preview_opens` (who opened which deployment from Previa) and `setup_check_budgets` (60 checks per workspace and hour). Changes to the first two wake live pages. No configuration; existing data is untouched. |
 | 0039 | Native review and feedback ([30](30-reviews.md)): `preview_publications` (one per route activation, numbered per pull request; live previews backfilled as *Present at migration*), `preview_components.config_hash`, `activity_events` and `activity_pruned` (90 days, 5,000 per pull request), `pr_review_instructions`, `preview_feedback_threads`, `preview_feedback_messages`, `pr_review_counters` and `review_write_budgets` (300 review changes per member and hour). Review changes wake live pages. No configuration. Rolling back drops reviews written since; back up first. |
 | 0040 | Ready-to-test sample data ([31](31-test-data.md)): `preview_components.setup_ms` (how long each candidate's setup ran, shown on the review page) and `review_test_access` (one per repository: account text and an optional password sealed with the secrets keyring, revision, who changed and last revealed it). Saves wake live pages; reveals do not. No configuration. Rolling back drops stored test access; back up first. |
+| 0041 | Persistent test data ([32](32-persistent-test-data.md)): `repository_sampledata_settings` (Test data settings, off by default), `baseline_refreshes` (requests, coalesced and fenced by sequence, with their log counters), `baseline_logs`, `repository_baselines` (metadata of encrypted dump files: never rows), starting-data columns on `preview_components` (`seed`, `seed_ms`, `data_source`, `data_detail`), `build_intents.start_source` (Reset's chosen source) and `worker_capabilities.baselines`. Settings, refresh and baseline changes wake live pages. Optional worker settings with defaults (§2). Rolling back drops Test data settings and baseline records; the files in `PREVIEW_BASELINE_DIR` are then unreferenced and can be deleted. |
 
 
 ### Shared workspace cutover
@@ -502,13 +516,20 @@ cannot overwrite a running development worker's approvals. Production continues
 to use the shared `previa-egress` gateway.
 
 ```sh
-make test-e2e             # about 15 minutes; the first run also pulls PostgreSQL and Redis
+make test-e2e             # about 20 minutes; the first run also pulls PostgreSQL and Redis
 make test-reference       # only the ready-to-test reference journeys, about 2 minutes
+make test-test-data       # only the persistent test data journeys, about 4 minutes
 ```
 
-`make test-e2e` runs `TestRealEndToEnd`, `TestRealBackendEndToEnd` and
-`TestRealReferenceJourneys`; `make test-reference` runs only the last
-([31](31-test-data.md#reference-journeys)). The backend test compiles
+`make test-e2e` runs `TestRealEndToEnd`, `TestRealBackendEndToEnd`,
+`TestRealReferenceJourneys` and `TestRealTestDataJourneys`; `make test-reference`
+runs only the reference journeys ([31](31-test-data.md#reference-journeys)) and
+`make test-test-data` only the persistent test data journeys
+([32](32-persistent-test-data.md#how-it-is-verified)): a baseline built from the
+default branch and refreshed by a merge, data kept across a commit and a Rebuild,
+Reset to the baseline or to empty and seed, a fallback, a broken migration and a
+fork. It logs one line per step, ending with `teardown: no container, image,
+network or volume remains`. The backend test compiles
 a small API fixture (`internal/app/testdata/backend`) for the Docker host's
 architecture, uses `github.com:22` as the approved outbound destination and the
 public names `localtest.me` and `169.254.169.254.nip.io` (which resolve to loopback
@@ -854,6 +875,30 @@ The browser suite (`RUN_REVIEW_BROWSER_TESTS=1` for direct Go runs) covers:
 
 `UI_BROWSER_SCREENSHOTS=1` writes `review-*.png` captures (light, dark, mobile).
 
+To verify persistent test data (the Test data tab, refreshes, kept data and
+baselines) against real PostgreSQL:
+
+```sh
+set -a; . ./.env; set +a
+export TEST_DATABASE_URL="$DATABASE_URL"
+go test -count=1 ./internal/sampledata ./internal/buildlogs ./internal/runtime ./internal/pullrequests ./internal/reviews ./internal/reporting ./internal/starterkits
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-test-data-browser
+```
+
+**Expected:** the Go tests create and drop isolated schemas. They cover the first
+baseline, coalesced and fenced refreshes, failures keeping the previous baseline,
+capacity and quota waits, retries, spacing, takeover after a crash, turning Test
+data off mid-build, settings permissions and conflicts, merges into the baseline
+branch, unusable baselines, the daily check, cleanup, the tab's HTTP behaviour,
+baseline logs, the PR page's *Test data* row, the Reset source and the review
+page's line. The browser suite (`RUN_TEST_DATA_BROWSER_TESTS=1` for direct Go runs)
+turns Test data on in a modal, follows a refresh live to a ready baseline, saves a
+switch and the baseline branch in place (a bad branch is explained beside the
+field), confirms Refresh baseline, opens a refresh's build log, checks the
+Developer and Reviewer views and turns Test data off in a modal, with no CSP
+errors. `UI_BROWSER_SCREENSHOTS=1` writes `test-data-*.png` captures at 1440 and
+390 px in light and dark.
+
 To verify the build-log viewer specifically:
 
 ```sh
@@ -1093,8 +1138,11 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
 ### Fresh local setup after deleting Docker data
 
 A new database can run all migrations from scratch, including workspace migrations
-0030–0040. Deleting the PostgreSQL volume erases users/sessions, workspace memberships,
-invitations, repository links, stored secrets, preview history, reviews, test access and usage. Remove
+0030–0041. Deleting the PostgreSQL volume erases users/sessions, workspace memberships,
+invitations, repository links, stored secrets, preview history, reviews, test access, Test data settings and usage.
+Repository baselines are files in `PREVIEW_BASELINE_DIR` (by default under the
+system temporary directory); with their records gone, the worker's cleanup removes
+them within hours, or delete the directory. Remove
 data only if you intend to discard it, or take a database backup first. Restrict
 cleanup to Previa resources; global Docker cleanup can erase other projects.
 

@@ -305,6 +305,21 @@ func TestRealReferenceJourneys(t *testing.T) {
 	if !page.Preview.SetupDeclared || page.Preview.SetupTook == "" || !page.Preview.Data || page.Preview.DocsPath != "/docs" {
 		t.Fatalf("review preview %+v", page.Preview)
 	}
+	// Without Test data (docs/32) builds stay as before: no starting source is
+	// recorded, and the comment names none.
+	if n := e2eCount(t, pool, "SELECT count(*) FROM preview_components WHERE pull_request_id=$1 AND data_source IS NOT NULL", shopPR); n != 0 {
+		t.Fatalf("a repository without Test data recorded %d starting sources", n)
+	}
+	e2eWait(t, ctx, "the Ready comment", 3*time.Minute, func() (string, error) {
+		comment := github.livingComment()
+		if strings.Contains(comment, "Test data:") {
+			return "", errStop("a repository without Test data names a test data source:\n" + comment)
+		}
+		if !strings.Contains(comment, "Previa preview: Ready") {
+			return "", fmt.Errorf("comment %q", comment)
+		}
+		return "", nil
+	})
 	if page.Reset == nil || page.Reset.Commit != shopCommit1 {
 		t.Fatalf("Reset test data is not offered: %+v", page.Reset)
 	}

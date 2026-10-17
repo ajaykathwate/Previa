@@ -35,7 +35,9 @@ If this file and those documents disagree, they win and this file is corrected.
 | Feature 1: shared team workspaces | Done, committed (`adfef83` and follow-ups) | [docs/28](docs/28-shared-workspaces.md) |
 | Feature 2: guided onboarding | Done, committed (`3562a78`) | [docs/29](docs/29-guided-onboarding.md) |
 | Feature 3: native review and feedback | Done, committed (`2ddaaef`) | [docs/30](docs/30-reviews.md), [report](test-docs/2026-10-16-review-feedback-report.md) |
-| Feature 5: ready-to-test sample data | Done, committed (`ea87e60`); the owner's manual test is pending (F0) | [docs/31](docs/31-test-data.md), [report](test-docs/2026-10-16-test-data-report.md) |
+| Feature 5: ready-to-test sample data | Done, committed (`ea87e60`); walked through (F0); the owner's hands-on pass is in Part 2 | [docs/31](docs/31-test-data.md), [report](test-docs/2026-10-16-test-data-report.md) |
+| F1: spec corrections and the PR page fix | Done by Claude, not committed | [report](test-docs/2026-10-17-persistent-test-data-report.md) |
+| Feature 5B: persistent test data (F2) | Done, not committed; defaults decided; walked through; the owner's hands-on pass is in Part 2 | [docs/32](docs/32-persistent-test-data.md), [report](test-docs/2026-10-17-persistent-test-data-report.md) |
 | Code on GitHub | Not pushed: all of the above is on the local `mvp-complete` branch; GitHub's `main` is at `6b07c5b` | `git log origin/main..mvp-complete` |
 | Out of this release | Feature 4, GitHub review-status projection (step E), paid subscriptions (§9.4, step J), the third reference journey, notification integrations | spec §1.2 |
 
@@ -49,33 +51,41 @@ decision → Part 2 → Part 3.
 
 ### F0 · Close out Feature 5
 
-**Outcome:** Feature 5 is confirmed by the owner's own test, not only by Claude's.
+**Outcome:** Feature 5 is confirmed by a walkthrough of its manual test rows, and
+the owner's own hands-on pass is scheduled with the release acceptance.
 
-- [ ] **Owner:** apply the new migration to the local development database:
-  `make migrate-up` (Goose 40), then restart the server and the worker.
-- [ ] **Owner:** run the manual tests in
-  [technical-docs/user-guide.md](technical-docs/user-guide.md), checklist section F2,
-  rows R12–R18. Storing a test-access password needs `SECRETS_ENCRYPTION_KEYS` in
-  `.env`.
-- [ ] **Claude:** fix anything the manual test finds; the owner asks for the commit.
+- [x] **Owner:** apply the new migration to the local development database:
+  `make migrate-up` (Goose 40), then restart the server and the worker. (Done; the
+  development database is at Goose 41 now, checked read-only on 17 October.)
+- [x] **Claude, 2026-10-17:** walked through
+  [technical-docs/user-guide.md](technical-docs/user-guide.md) checklist section F2,
+  rows R12–R18, through their automated equivalents on real Docker and in Chromium
+  (row-by-row evidence in the
+  [report](test-docs/2026-10-17-persistent-test-data-report.md#manual-checklist-walkthrough)).
+  Nothing to fix.
+- [x] **Owner (decided 17 October):** the owner's own hands-on pass of these rows
+  moves to Part 2's full manual pass, with every later feature's rows. Storing a
+  test-access password needs `SECRETS_ENCRYPTION_KEYS` in `.env`.
 
 ### F1 · Spec corrections and a known fix
 
 **Outcome:** 5B no longer depends on the deferred Feature 4, and the pull request
 page agrees with the review page after a failed update.
 
-- [ ] Remove Feature 4 dependencies from the 5B specification:
+- [x] Remove Feature 4 dependencies from the 5B specification:
   - §11.2, the step G explanation ("needs Features 3/4 publications and review
     rounds");
   - §8B.9 ("Reviews and activity (Features 3/4)");
   - §8B.13 ("a new review round").
 
   Keep the publication and activity references, which exist.
-- [ ] Pull request page: after a failed update, *Runs with* and the docs link
+- [x] Pull request page: after a failed update, *Runs with* and the docs link
   disappear, because they read the environment's applied revision (the failed
   attempt). Read the serving deployment (the newest publication), as the review
   page already does. **Evidence:** a test with a failed update; the PR page and the
   review page show the same setup, services and docs.
+  (Done: the PR page, the GitHub comment's snapshot and component retention read
+  the newest publication; three tests cover them.)
 
 ### F2 · Feature 5B: persistent test data (spec §8B, delivery step G)
 
@@ -88,7 +98,7 @@ page agrees with the review page after a failed update.
 
 Scope:
 
-- [ ] **Test data tab** for Owners and Admins, CSRF-protected and closed to
+- [x] **Test data tab** for Owners and Admins, CSRF-protected and closed to
   repository YAML. Its settings and defaults:
   - Test data: off;
   - Keep test data between builds: on;
@@ -96,15 +106,15 @@ Scope:
   - Baseline branch: the repository's GitHub default branch;
   - Refresh baseline automatically: on.
 
-  (§8B.3 item 1)
-- [ ] **`seed` key** in `.previewrc.yaml`:
+  (§8B.3 item 1) Developers with a grant see it read-only and may refresh.
+- [x] **`seed` key** in `.previewrc.yaml`:
   - argv, with the same limits as `setup`;
   - needs a PostgreSQL or MySQL service;
   - runs only on an empty database and in baseline builds;
   - part of the configuration hash.
 
   (§8B.8)
-- [ ] **Repository baseline** (§8B.4):
+- [x] **Repository baseline** (§8B.4):
   - a build that belongs to the repository, not a pull request, following build
     steps 1–8;
   - triggers: Test data turned on, a merge into the baseline branch (the existing
@@ -116,43 +126,58 @@ Scope:
   - dumps encrypted with the platform keyring, size-limited and checksummed.
 
   A failed refresh keeps the previous baseline and affects no pull request.
-- [ ] **Kept PR data** (§8B.5):
+- [x] **Kept PR data** (§8B.5):
   - copied from the pull request's serving candidate just before `setup`, streamed
     container to container;
   - per service kind, only into the same or a newer major version;
   - never stored by Previa.
-- [ ] **Starting-data selection with fallback** (§8B.6):
+- [x] **Starting-data selection with fallback** (§8B.6):
   - sources tried in order: kept data, then baseline, then empty;
   - `seed` runs only on an empty database;
   - at most two fallbacks, and copy failure categories are recorded;
   - the source used is stored on the candidate and referenced by its publication.
-- [ ] **Reset test data gains a source choice**: repository baseline, or empty
+- [x] **Reset test data gains a source choice**: repository baseline, or empty
   database and seed. The choice is recorded on the activity event (§8B.7).
-- [ ] **Visible outcomes** (§8B.3 items 7–9):
+- [x] **Visible outcomes** (§8B.3 items 7–9):
   - the PR page shows the source, any fallback and its reason, and the Setup and
     Seed outcomes;
   - the review page shows a one-line reviewer version;
-  - the Rebuild modal says data is kept and points to Reset;
+  - the Rebuild modal says data is kept and points to Reset (Rebuild has no modal:
+    the note is beside *Runs with* on the PR page);
   - the GitHub comment gets one source line;
   - the Test data tab shows status, **Refresh baseline** and **Delete baseline**
     (confirmed in a modal).
-- [ ] **Data and access rules** (§8B.10):
+- [x] **Data and access rules** (§8B.10):
   - Redis always starts fresh;
   - baseline builds get no secrets and no outbound approvals;
   - Owners and Admins change settings; Developers with a grant refresh and reset;
     Reviewers see the source line only;
   - turning Test data off deletes baselines after a confirmation.
-- [ ] **MySQL** as well as PostgreSQL (§8B.4 step 6, §8B.13).
-- [ ] **Housekeeping and crash cleanup** for baseline containers, networks and files
+- [x] **MySQL** as well as PostgreSQL (§8B.4 step 6, §8B.13). Proven on real Docker
+  at the runtime level (copy, capture, restore); the web journey runs PostgreSQL.
+- [x] **Housekeeping and crash cleanup** for baseline containers, networks and files
   (§8B.9, §8B.11).
-- [ ] **Starter kits and the reference journeys** show the setup/seed split for
+- [x] **Starter kits and the reference journeys** show the setup/seed split for
   Node.js (Prisma), Rails, Django and Go (goose) (§8B.8).
-- [ ] **Operator settings**: `PREVIEW_BASELINE_DIR`, `PREVIEW_BASELINE_MAX_SIZE`,
-  `PREVIEW_DATA_COPY_TIMEOUT` and `PREVIEW_BASELINE_MIN_INTERVAL` (§8B.8). The spec
-  proposes defaults. **Decision (owner):** confirm them or choose others (spec §13,
-  "Test-data storage and defaults").
-- [ ] Until F3 exists, baseline builds use today's admission (host capacity and the
-  existing operator limits). F3 must count them (§8B.4 step 3, §9.3).
+- [x] **Operator settings**: `PREVIEW_BASELINE_DIR`, `PREVIEW_BASELINE_MAX_SIZE`,
+  `PREVIEW_DATA_COPY_TIMEOUT` and `PREVIEW_BASELINE_MIN_INTERVAL` (§8B.8), with the
+  decided defaults below (a temporary directory locally, the worker's `baselines`
+  volume in production).
+- [x] **Decision (owner, delegated to Claude on 17 October):** 64 MiB per dump (the
+  spec proposed 128), 2-minute copies, automatic refreshes at most hourly per
+  repository (the spec proposed 10 minutes), baselines on the worker's volume and
+  not backed up. Reasons and the record: spec §8B.8 and §13.
+- [x] Until F3 exists, baseline builds use today's admission (host capacity and the
+  existing operator limits). F3 must count them (§8B.4 step 3, §9.3). They take
+  build slots, count toward `BUILDS_PER_ACCOUNT` and add their time to
+  `workspace_build_usage`.
+- [x] **Development database at Goose 41** (checked read-only on 17 October). Restart
+  the worker, which was started before F2 (`go run ./cmd/worker`); the server
+  restarts by itself under Air.
+- [x] **Claude, 2026-10-17:** walked through the user guide's checklist section F3,
+  rows T1–T14, through their automated equivalents (row-by-row evidence in the
+  [report](test-docs/2026-10-17-persistent-test-data-report.md#manual-checklist-walkthrough)).
+  The owner's own hands-on pass is in Part 2.
 
 **Done when:** every §8B.13 completion criterion holds:
 - the baseline is built from the default branch and from a chosen branch;
@@ -168,6 +193,14 @@ Scope:
 - the reference journeys pass with Test data on (PostgreSQL and MySQL) and off.
 
 The common gate below must also pass.
+
+- [x] **Claude, 2026-10-17:** the common gate passed for F1 and F2: build, lint
+  0 issues, `go test ./...` 48 of 48, migration 0041 up/down/up, browser suites
+  (the new `make test-test-data-browser` 3 of 3, review, setup, workspace, UI),
+  `make test-e2e` 4 of 4 (Test data off and on), `make test-runtime` 11 of 11,
+  screenshots at 1440 and 390 px in both themes reviewed, docs updated
+  ([report](test-docs/2026-10-17-persistent-test-data-report.md)). MySQL is proven
+  at the runtime level, not in a web journey; crash recovery by unit tests.
 
 ### F3 · Feature 6, free plan, part H: usage and free limits (spec §9.3, §9.7, step H)
 
@@ -375,7 +408,8 @@ and both of us agree it is ready to deploy.
   [test-docs/README.md](test-docs/README.md), recorded in a new dated report.
 - [ ] **Owner:** a full manual pass through the user guide's
   [Manual test checklist](technical-docs/user-guide.md#manual-test-checklist),
-  including the rows added by F2–F5.
+  including the rows added by F2–F5: Feature 5's rows R12–R18 and Feature 5B's rows
+  T1–T14 (moved here from F0 and F2), and the rows F3–F5 add.
 - [ ] The product journeys of spec §12.2 that can be proven before deployment:
   - new small team;
   - complete review;

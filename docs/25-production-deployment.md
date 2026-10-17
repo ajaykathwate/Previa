@@ -451,6 +451,7 @@ through durable operations. Expiry and housekeeping provide additional cleanup.
 | Docker volume `previa_postgres` | PostgreSQL data files | Logical database dump, not a raw copy of the live volume. |
 | Docker volume `previa_acme` | Let's Encrypt accounts, keys and certificates | Yes, encrypted ACME archive. |
 | Docker volume `previa_sources` | Temporary exact-commit source workspaces | No; refetched from GitHub. |
+| Docker volume `previa_baselines` | Encrypted test-data baselines (`PREVIEW_BASELINE_DIR`, [32](32-persistent-test-data.md)) | No: derived data, rebuilt from each repository's baseline branch on the next refresh. Their records are in the database; a missing file is marked missing and rebuilt. |
 | Labelled build cache volumes and local preview images | Rebuildable build artifacts | No. |
 | `previa_prometheus`, `previa_grafana` volumes | Metrics history and Grafana state | No; datasource/dashboard provisioning can be recreated, but local history/customizations are lost unless separately backed up. |
 | Root's rclone and Docker login configuration | Storage credentials and optional private-registry login | Not by default: these live outside `/etc/previa`. Store recovery copies separately. |
@@ -941,7 +942,9 @@ Other implemented optional controls retain their defaults unless you need them:
 | `PREVIEW_STARTUP_TIMEOUT` | `120s`; deadline for initial readiness. |
 | `PREVIEW_OCI_RUNTIME` | Empty: Docker's default runtime. `runsc` requires separately installing/configuring gVisor on the host. |
 | `PREVIEW_SERVICE_CATALOG` | Empty: Previa's pinned PostgreSQL 17/16 and Redis 8/7 images are offered to backend previews; `none` offers none. Entries are `kind:version=image@sha256:digest` ([11](11-backend-previews.md)). |
-| `PREVIEW_SETUP_TIMEOUT` | `5m` (10s–30m); limit of a backend preview's setup command. |
+| `PREVIEW_SETUP_TIMEOUT` | `5m` (10s–30m); limit of a backend preview's setup command, and of its seed command. |
+| `PREVIEW_BASELINE_DIR` | Set by the compose file to `/var/lib/previa/baselines` (the `baselines` volume); encrypted test-data baselines, which need `SECRETS_ENCRYPTION_KEYS` ([32](32-persistent-test-data.md)). |
+| `PREVIEW_BASELINE_MAX_SIZE`, `PREVIEW_DATA_COPY_TIMEOUT`, `PREVIEW_BASELINE_MIN_INTERVAL` | `64MiB`, `2m`, `1h`; the compressed size limit of one baseline dump, the limit of one test-data copy or restore, and the least time between automatic baseline refreshes of one repository. |
 | `PREVIEW_OUTBOUND_PORTS` | `5432,3306,6379,6380,27017,5671,5672,9092,1433`; the ports owners may approve on the **Outbound** tab; `none` turns approved outbound connections off. The server and the worker both read it, which the shared env file guarantees. |
 | `HOUSEKEEPING_DRY_RUN` | `false`; `true` observes deletion decisions without executing housekeeping deletions. |
 | `HOUSEKEEPING_GRACE` | `15m` before unreferenced resources count as orphans. |

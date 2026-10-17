@@ -1,15 +1,23 @@
-// Command reference is the reference journeys' fixture (docs/31-test-data.md):
-// two small apps a repository would build from its own Dockerfile, each with
-// a migrate-and-seed setup command run once per preview.
+// Command reference is the reference journeys' fixture (docs/31-test-data.md,
+// docs/32-persistent-test-data.md): two small apps a repository would build
+// from its own Dockerfile.
 //
 //	reference shop serve    an HTTP API with SQL data (synthetic orders)
 //	reference shop setup    create the schema, seed two orders (fails when SEED_FAIL=1)
+//	reference shop migrate  create or migrate the schema only, on any data:
+//	                        MIGRATION=2 adds a column to existing rows,
+//	                        REJECT_EXISTING=1 refuses a database that already
+//	                        has rows (a newer migration history), MIGRATE_FAIL=1
+//	                        always fails (a broken migration)
+//	reference shop seed     insert the two seed orders; not repeatable on
+//	                        purpose, so it fails on a database that has them
 //	reference notes serve   a web app with a test login
 //	reference notes setup   create the schema, seed three notes and the
 //	                        preview-only account reviewer@preview.test whose
 //	                        password is the TEST_LOGIN_PASSWORD secret
 //
-// Seeds are repeatable (they insert only what is missing) and synthetic.
+// The setup seeds are repeatable (they insert only what is missing); all
+// data is synthetic.
 package main
 
 import (
@@ -46,6 +54,10 @@ func main() {
 		err = serveShop()
 	case "shop setup":
 		err = setupShop()
+	case "shop migrate":
+		err = migrateShop()
+	case "shop seed":
+		err = seedShop()
 	case "notes serve":
 		err = serveNotes()
 	case "notes setup":
@@ -122,6 +134,54 @@ func setupShop() error {
 	return nil
 }
 
+// migrateShop brings the schema up to date on whatever data the database
+// starts with, and says how much was already there.
+func migrateShop() error {
+	ctx := context.Background()
+	if os.Getenv("MIGRATE_FAIL") == "1" {
+		fmt.Println("migrating: 0002_discounts.sql")
+		return errors.New("migration 0002_discounts.sql failed: syntax error at or near \"DISCOUNT\"")
+	}
+	conn, err := database(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	if err := run(ctx, conn, `CREATE TABLE IF NOT EXISTS orders (id SERIAL PRIMARY KEY, customer TEXT NOT NULL UNIQUE, total_cents INTEGER NOT NULL, source TEXT NOT NULL)`); err != nil {
+		return err
+	}
+	var existing int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM orders").Scan(&existing); err != nil {
+		return err
+	}
+	if existing > 0 && os.Getenv("REJECT_EXISTING") == "1" {
+		return fmt.Errorf("the database's migration history is newer than this branch (%d orders); refusing to migrate", existing)
+	}
+	if os.Getenv("MIGRATION") == "2" {
+		if err := run(ctx, conn, `ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_code TEXT`); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("shop: migrated; %d orders were already there\n", existing)
+	return nil
+}
+
+// seedShop inserts the seed orders. It is not repeatable on purpose: Previa
+// runs a seed only on an empty database.
+func seedShop() error {
+	ctx := context.Background()
+	conn, err := database(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	if err := run(ctx, conn, `INSERT INTO orders (customer, total_cents, source) VALUES ('Preview customer A', 1250, 'seed'), ('Preview customer B', 4999, 'seed')`); err != nil {
+		return err
+	}
+	fmt.Println("shop: seeded 2 orders")
+	return nil
+}
+
 func serveShop() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/orders", func(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +218,27 @@ func serveShop() error {
 		_ = json.NewEncoder(w).Encode(orders)
 	})
 	mux.HandleFunc("/docs", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "Shop API\n\nGET /orders lists orders (two are seeded: Preview customer A and B).\nPOST /orders with customer=<name> adds one.\n")
+		_, _ = io.WriteString(w, "Shop API\n\nGET /orders lists orders (two are seeded: Preview customer A and B).\nPOST /orders with customer=<name> adds one.\nGET /columns lists the orders table's columns.\n")
+	})
+	mux.HandleFunc("/columns", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := database(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		defer func() { _ = conn.Close(r.Context()) }()
+		rows, err := conn.Query(r.Context(), "SELECT column_name FROM information_schema.columns WHERE table_name = 'orders' ORDER BY ordinal_position")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		columns, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(columns)
 	})
 	return listen(mux)
 }

@@ -878,6 +878,13 @@ preview/
 │   ├── activity/                   # FEATURE: bounded timeline events (recorder + retention job)
 │   │   ├── recorder.go  prune.go
 │   │   └── queries.sql  dbgen/
+│   │
+│   ├── sampledata/                 # FEATURE: persistent test data (Test data tab, baselines)
+│   │   ├── handler.go  service.go  # tab, settings, Refresh/Delete/Turn off, refresh logs
+│   │   ├── store.go  storage.go    # settings, refresh requests, baselines; encrypted dump files
+│   │   ├── runner.go  github.go    # worker refresh: claim, admit, branch head, build, fence
+│   │   ├── jobs.go                 # refresh job, dispatcher, daily freshness, cleanup
+│   │   └── queries.sql  dbgen/
 │   ├── app/                        # composition root: builds and wires everything
 │   │   ├── server.go               # creates features, mounts routes, starts HTTP
 │   │   ├── worker.go               # starts River, the capability heartbeat, draining
@@ -953,6 +960,8 @@ preview/
 │   │   ├── endpoint.go  cleanup.go # pre-publication check; owner-verified cleanup executor
 │   │   ├── crashes.go              # stops of live previews -> build log; following app output
 │   │   ├── sleep.go                # stop and start an idle preview's app and processes
+│   │   ├── data.go                 # starting data: kept -> baseline -> empty, with fallbacks
+│   │   ├── baseline.go             # baseline builds: services, setup, seed, capture; no app
 │   │
 │   ├── routing/                    # FEATURE: hostnames, route controller, Traefik
 │   │   ├── hostname.go             # stable DNS-safe labels per lifetime environment
@@ -1049,6 +1058,7 @@ preview/
 │   │   ├── pullrequests/           # repository/PR detail and shared current activity
 │   │   ├── onboarding/             # a repository's Setup tab
 │   │   ├── reviews/                # a pull request's review page (instructions, findings)
+│   │   ├── sampledata/             # a repository's Test data tab, baseline refresh logs
 │   │   ├── builds/                 # Builds page, current-attempt build log page
 │   │   ├── appoutput/              # live app output page
 │   │   ├── idle/                   # "Waking the preview…" page (public)
@@ -1577,3 +1587,86 @@ deployment, a third journey with a background process and a *Setup declared* sta
 while a build runs are deferred. Forks get no repository secrets, so a seed that
 needs one must say the test login is unavailable. Details:
 [31-test-data.md](docs/31-test-data.md).
+
+## 25. Persistent test data
+
+### Requirement
+
+Implement approved Feature 5B of `README-MVP-PRODUCT-EXPANSION.md` (§8B): previews
+share copies of data, never a live database. A repository baseline is built from
+one branch with the repository's own migrations and `seed`, stored encrypted and
+restored into every pull request's first candidate; a pull request's next
+candidate starts from a copy of its own serving data; Reset test data starts
+again from the baseline or from empty databases and the seed; every source falls
+back automatically and says why.
+
+### Complexity
+
+High. A new build kind owned by a repository instead of a pull request, data
+copied between containers without disk or network paths, fallback that restarts
+databases mid-candidate, and coalesced, fenced refreshes that share build slots,
+quotas and capacity with pull request builds.
+
+### Tech stack (feature-specific)
+
+Existing Go, Docker exec streams, PostgreSQL/pgx/sqlc, Goose, River, templ/HTMX
+and the secrets keyring (streamed AES-256-GCM, repository- and purpose-bound).
+`pg_dump`/`pg_restore` and `mysqldump`/`mysql` run inside the managed service
+images Previa already uses. No new library.
+
+### Technical implementation
+
+- **Configuration.** `.previewrc.yaml` gains `seed` (argv, the same limits as
+  `setup`, a PostgreSQL or MySQL service required). Migration 0041 adds
+  `repository_sampledata_settings`, `baseline_refreshes`, `baseline_logs`,
+  `repository_baselines`, starting-data columns on `preview_components` and
+  `build_intents.start_source`, a realtime trigger and the workers'
+  `baselines` capability.
+- **Starting data** (`internal/runtime/data.go`). After services are ready and
+  before setup, each SQL service tries kept data (dumped inside the serving
+  candidate's service container and streamed into the new one's, same or newer
+  version only), then the baseline (decrypted from storage and streamed in), then
+  empty. `setup` runs after every source; `seed` only on the empty attempt. A
+  failed setup or copy on copied data restarts the database containers (their
+  tmpfs empties) and tries the next source, at most twice; the empty attempt
+  decides. The candidate records the source, every fallback and Setup/Seed
+  timings without data.
+- **Baselines** (`internal/runtime/baseline.go`, `internal/sampledata`). A refresh
+  resolves the branch head (the GitHub default branch unless one is chosen),
+  builds the image without repository secrets under its own cache scope, starts
+  the services on an internal network, runs setup and seed, and captures each SQL
+  database into a gzip-compressed file encrypted under the keyring
+  (`PREVIEW_BASELINE_DIR`, `PREVIEW_BASELINE_MAX_SIZE`, sha256-checked). Requests
+  coalesce (one waiting, one running per repository); a sequence fence keeps the
+  newest result; automatic refreshes are spaced by
+  `PREVIEW_BASELINE_MIN_INTERVAL`; refreshes take build slots, count running
+  builds and build minutes, and wait like pull request builds. One River job per
+  repository runs on the build queue; a dispatcher replaces lost jobs, a daily
+  check follows the branch head, and cleanup removes retired and orphaned files
+  and Docker leftovers.
+- **Triggers:** Test data turned on, the baseline used again or its branch changed
+  (a person's action, not spaced); a merged `closed` webhook into the baseline
+  branch (in the delivery transaction); the daily check; an unreadable baseline
+  or a catalog version no longer offered; Refresh baseline.
+- **Presentation.** The Test data tab (`web/pages/sampledata`) shows current
+  baselines, recent refreshes with safe failure categories and their build logs,
+  and in-place settings for Owners and Admins; Refresh, Delete, Turn on and Turn
+  off confirm in modals. The PR page, review page and GitHub comment name the
+  starting source; Reset test data offers the baseline or empty databases.
+- **Starter kits** split migrations (`setup`) from seed data (`seed`).
+
+### Design decisions and edge cases
+
+Baselines are derived data on one worker's disk: a lost file is rebuilt, backups
+exclude them, and several workers would need shared storage. Defaults, decided for a
+free early-access host: 64 MiB per dump (any database that fits a preview's tmpfs
+dumps to less), 2-minute copies, and automatic refreshes at most hourly per
+repository, because refreshes spend the build minutes pull requests share. With
+Test data off, builds record no starting source and look exactly as before. Spacing applies only
+to automatic triggers; enabling Test data, changing its branch and Refresh
+baseline start at once. Turning Test data off deletes baselines (confirmed);
+turning only the baseline off keeps them unused. A result whose branch or
+settings changed meanwhile is discarded with its files. A Reset never keeps data:
+without a choice it starts empty. Edited migrations on kept data and data written
+to the serving preview during a copy cannot be detected; the PR page and Reset say
+so. Details: [32-persistent-test-data.md](docs/32-persistent-test-data.md).

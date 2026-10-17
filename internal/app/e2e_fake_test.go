@@ -51,6 +51,10 @@ type fakeGitHub struct {
 	// branches are further PRs from this repository.
 	forks    map[int]string // PR number -> head commit
 	branches map[int]string // PR number -> head commit
+	// heads are the repository's branches (name -> head commit) and
+	// defaultBranch its GitHub default branch, for test-data baselines.
+	heads         map[string]string
+	defaultBranch string
 }
 
 type fakeRun struct {
@@ -141,6 +145,26 @@ func (f *fakeGitHub) pushBranch(number int, commit string, files map[string]stri
 		f.branches = map[int]string{}
 	}
 	f.branches[number] = commit
+}
+
+// pushToBranch makes commit the head of branch, which becomes the default
+// branch if there is none yet, and serves files as its tarball. Pull
+// requests keep their heads.
+func (f *fakeGitHub) pushToBranch(branch, commit string, files map[string]string) {
+	f.mu.Lock()
+	head := f.head
+	f.mu.Unlock()
+	f.push(commit, files)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.head = head
+	if f.heads == nil {
+		f.heads = map[string]string{}
+	}
+	f.heads[branch] = commit
+	if f.defaultBranch == "" {
+		f.defaultBranch = branch
+	}
 }
 
 // setReportsDown starts or ends an outage of GitHub's comment and check-run API.
@@ -258,7 +282,19 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"head": map[string]any{"sha": f.branches[number], "ref": "feature-" + strconv.Itoa(number), "repo": map[string]any{"id": e2eRepoID}},
 			"base": map[string]any{"ref": "main", "repo": map[string]any{"id": e2eRepoID}}})
 	case path == "/repositories/"+strconv.Itoa(e2eRepoID):
-		write(200, map[string]any{"id": e2eRepoID, "name": e2eRepo, "owner": map[string]any{"login": e2eOwner}})
+		repo := map[string]any{"id": e2eRepoID, "name": e2eRepo, "owner": map[string]any{"login": e2eOwner}}
+		if f.defaultBranch != "" {
+			repo["default_branch"] = f.defaultBranch
+		}
+		write(200, repo)
+	case strings.HasPrefix(path, repoPath+"/branches/"):
+		name, _ := url.PathUnescape(strings.TrimPrefix(path, repoPath+"/branches/"))
+		sha, ok := f.heads[name]
+		if !ok {
+			write(http.StatusNotFound, map[string]any{"message": "Branch not found"})
+			return
+		}
+		write(200, map[string]any{"name": name, "commit": map[string]any{"sha": sha}})
 	case path == repoPath+"/pulls/"+strconv.Itoa(e2ePRNumber):
 		write(200, map[string]any{"number": e2ePRNumber, "state": "open", "title": "Preview me", "html_url": "https://github.com/octo/app/pull/7",
 			"user": map[string]any{"login": "contributor"}, "mergeable": true, "mergeable_state": "clean", "updated_at": f.updated.Format(time.RFC3339),

@@ -81,8 +81,8 @@ Decided by the owner on 16 October 2026: Previa is marketed and built as a **pre
 | 2 | Feature 2: guided onboarding | Done ([29](docs/29-guided-onboarding.md)) |
 | 3 | Feature 3: native review and feedback, with step B (publications, activity) | Done ([30](docs/30-reviews.md)) |
 | 4 | Feature 5: ready-to-test sample data, with two reference journeys | Done ([31](docs/31-test-data.md)) |
-| 5 | Feature 5B: persistent test data (repository baseline, kept PR data) | Next |
-| 6 | Feature 6, free plan: usage and limits, disconnect and deletion, support and status, policy pages | After Feature 5B |
+| 5 | Feature 5B: persistent test data (repository baseline, kept PR data) | Done ([32](docs/32-persistent-test-data.md)); the owner's hands-on pass is part of release acceptance |
+| 6 | Feature 6, free plan: usage and limits, disconnect and deletion, support and status, policy pages | Next |
 | 7 | Deploy early access ([production deployment](docs/25-production-deployment.md)) and measure ([§12.3](#123-product-measurements)) | After Feature 6 |
 
 **Deferred until feedback asks for them:** Feature 4 (review requests, assignments, decisions, review queue, activity timeline view), GitHub projection of review status and counts (step E; the comment links the review only), paid subscriptions (step J), the third reference journey (an app with a background process), and separate notification integrations. Preview-centric growth (branch previews, multiple code bases or services per preview, a main-versus-PR compare view; see [NEXT-FEATURES.md](NEXT-FEATURES.md)) ranks ahead of review workflow depth.
@@ -684,14 +684,16 @@ Reset still executes the existing Rebuild path of the current authorized commit 
 
 When `seed` is declared, `setup` must be safe to run again on a database that already has data. Migration commands are; seeding commands usually are not. Starter kits and the Feature 5 reference journeys show the split for Node.js (Prisma), Rails, Django and Go (goose).
 
-Proposed operator settings, accepted by the executable only once Feature 5B is implemented:
+Operator settings (implemented; defaults decided 17 October 2026, §13):
 
-| Variable | Process | Proposed default | Meaning |
+| Variable | Process | Default | Meaning |
 | --- | --- | --- | --- |
-| `PREVIEW_BASELINE_DIR` | worker | a directory under the worker's data path | Where encrypted baseline dumps are written |
-| `PREVIEW_BASELINE_MAX_SIZE` | worker | `128MiB` | Compressed size limit per service dump |
+| `PREVIEW_BASELINE_DIR` | worker | the worker's `baselines` volume in production (`/var/lib/previa/baselines`); a temporary directory locally | Where encrypted baseline dumps are written |
+| `PREVIEW_BASELINE_MAX_SIZE` | worker | `64MiB` | Compressed size limit per service dump |
 | `PREVIEW_DATA_COPY_TIMEOUT` | worker | `2m` | Limit for one dump-and-restore (kept data or baseline) |
-| `PREVIEW_BASELINE_MIN_INTERVAL` | worker | `10m` | Minimum gap between automatic refreshes of one repository |
+| `PREVIEW_BASELINE_MIN_INTERVAL` | worker | `1h` | Minimum gap between automatic refreshes of one repository |
+
+Why these values: a preview's database lives in a 192 MiB (PostgreSQL) or 384 MiB (MySQL) tmpfs, so any database that fits dumps to well under 64 MiB compressed, and synthetic seeds are usually a few megabytes. Copies of such data take seconds, so two minutes leaves room while two fallbacks still fit the build deadline. Baseline refreshes spend the workspace's daily build minutes, which pull request builds share: one hour bounds automatic refreshes to 24 a day per repository, the first merge after a quiet hour still refreshes at once, and **Refresh baseline** is never spaced.
 
 ### 8B.9 Technical changes
 
@@ -1034,7 +1036,7 @@ Most behavior above is specified. The following inputs must be supplied or agree
 | Support operator IDs and staffing/contact | Native request/status workflow; restricted operator access; no invented SLA. | Operating customer support. |
 | Operator-approved privacy/terms and retained financial-record policy | Explicit live-data/backup/provider/GitHub boundaries; real deletion behavior. | Public account and paid release. |
 | Content limits | Bounded feedback text/counts, support text, instructions, and events with tested rejection/pruning. | Abuse resistance and storage behavior. |
-| Test-data storage and defaults | Baseline size limit, refresh spacing, copy timeout and worker storage location (§8B.8); Keep test data on by default once Test data is enabled. | Enabling Feature 5B on a hosted worker. |
+| Test-data storage and defaults | **Decided 17 October 2026** (§8B.8): baselines on the worker's `baselines` volume (not backed up), 64 MiB per dump, 2-minute copies, automatic refreshes at most hourly per repository; Keep test data on by default once Test data is enabled. | Enabling Feature 5B on a hosted worker. |
 
 Recommended starting technical bounds, to make implementation concrete: invitation expiry seven days; feedback message 8 KiB; instructions 32 KiB; 500 threads and 5,000 messages per PR; 50-item feedback/activity pages; activity 90 days/5,000 events per PR; preflight result expiry 15 minutes; support message 16 KiB and resolved support retention 90 days; usage execution reservations at most 60 seconds. Active unresolved reviews/support must not be silently deleted by age-based pruning. These are proposed defaults, not current configuration values, and must be validated against actual costs and enforced consistently.
 

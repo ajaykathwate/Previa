@@ -58,6 +58,10 @@ marked *command line* are typed before a `make` command instead.
 | [PREVIEW_OCI_RUNTIME](#preview_oci_runtime) | Optional | Previews | `.env` |
 | [PREVIEW_SERVICE_CATALOG](#preview_service_catalog) | Optional | Backend previews | `.env` |
 | [PREVIEW_SETUP_TIMEOUT](#preview_setup_timeout) | Optional | Backend previews | `.env` |
+| [PREVIEW_BASELINE_DIR](#preview_baseline_dir) | Optional | Persistent test data | `.env` (compose sets it in production) |
+| [PREVIEW_BASELINE_MAX_SIZE](#preview_baseline_max_size) | Optional | Persistent test data | `.env` |
+| [PREVIEW_DATA_COPY_TIMEOUT](#preview_data_copy_timeout) | Optional | Persistent test data | `.env` |
+| [PREVIEW_BASELINE_MIN_INTERVAL](#preview_baseline_min_interval) | Optional | Persistent test data | `.env` |
 | [PREVIEW_OUTBOUND_PORTS](#preview_outbound_ports) | Optional | Backend previews | `.env` |
 | [PREVIEW_BASE_DOMAIN](#preview_base_domain) | Required | Builds and previews | `.env`, `previa.env` |
 | [ROUTER_DYNAMIC_DIR](#router_dynamic_dir) | Required | Builds and previews | `.env` |
@@ -701,6 +705,55 @@ marked *command line* are typed before a `make` command instead.
 - **Where it's used:** the worker, for every candidate that declares `setup`.
 - **How to get it:** keep the default unless migrations are slow.
 - **Example:** `PREVIEW_SETUP_TIMEOUT=5m`
+
+### `PREVIEW_BASELINE_DIR`
+
+- **Type:** Optional. Default `previa-baselines` in the system temporary directory.
+- **What it is:** the directory where the worker writes repositories' encrypted
+  test-data baselines ([docs/32](../docs/32-persistent-test-data.md)). An absolute,
+  clean path; the worker creates it with mode 0700. Baselines are derived data: a
+  lost file is rebuilt from its branch, and backups exclude them.
+- **Where it's used:** the worker, when it captures and restores baselines. It
+  needs `SECRETS_ENCRYPTION_KEYS`; without them no baseline is stored.
+- **How to get it:** leave it empty locally. In production the compose file sets it
+  to `/var/lib/previa/baselines`, the worker's `baselines` volume.
+- **Example:** `PREVIEW_BASELINE_DIR=/var/lib/previa/baselines`
+
+### `PREVIEW_BASELINE_MAX_SIZE`
+
+- **Type:** Optional. Default `64MiB` (1MiB to 4GiB).
+- **What it is:** the most one service's baseline dump may hold after compression.
+  A larger capture fails the refresh as `capture_too_large`; restores are also
+  bounded by the service's data tmpfs.
+- **Where it's used:** the worker, while it captures a baseline.
+- **How to get it:** keep the default; seed less data rather than raising it. A
+  preview's database lives in a 192 MiB (PostgreSQL) or 384 MiB (MySQL) tmpfs, so
+  any database that fits dumps to well below 64 MiB compressed.
+- **Example:** `PREVIEW_BASELINE_MAX_SIZE=64MiB`
+
+### `PREVIEW_DATA_COPY_TIMEOUT`
+
+- **Type:** Optional. Default `2m` (10s to 30m).
+- **What it is:** how long one dump-and-restore may take: a pull request's kept
+  data copied into its next candidate, a baseline restored into a candidate, or a
+  baseline captured. A copy over the limit moves on to the next starting source.
+- **Where it's used:** the worker, for every candidate of a repository with Test
+  data on and every baseline refresh.
+- **How to get it:** keep the default.
+- **Example:** `PREVIEW_DATA_COPY_TIMEOUT=2m`
+
+### `PREVIEW_BASELINE_MIN_INTERVAL`
+
+- **Type:** Optional. Default `1h` (1m to 24h).
+- **What it is:** the least time between automatic baseline refreshes of one
+  repository (after merges, the daily check or an unusable baseline). Refreshes a
+  person asks for are not spaced.
+- **Where it's used:** the worker, when it starts a refresh.
+- **How to get it:** keep the default. Refreshes use the workspace's daily build
+  minutes, which pull request builds share; the first merge after a quiet hour
+  still refreshes at once, and later ones in that hour join one refresh. Lower it
+  only where build minutes are plentiful.
+- **Example:** `PREVIEW_BASELINE_MIN_INTERVAL=1h`
 
 ### `PREVIEW_OUTBOUND_PORTS`
 

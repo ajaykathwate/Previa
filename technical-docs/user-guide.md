@@ -29,9 +29,13 @@ and a checklist to test it all by hand, including the edge cases. Labels in
 - **Starter kits**: pick your stack and what it uses, and Previa writes the
   `Dockerfile` and `.previewrc.yaml` your repository needs, checked and editable,
   ready to copy or download.
-- **Ready to test**: your setup seeds sample data in every preview's own database,
+- **Ready to test**: your seed creates sample data in every preview's own database,
   the review page says how setup went, **Reset test data** starts again from the
   seed, and **Test access** hands reviewers a preview-only login.
+- **Test data that survives builds**: with **Test data** on, previews start from a
+  baseline built from your default branch, and a pull request keeps its testers'
+  records across new commits and rebuilds; every copy stays inside its own pull
+  request.
 
 ## The journey at a glance
 
@@ -422,8 +426,11 @@ link, which takes them there.
   preview runs a database or a setup command): a confirmation explains that Previa
   rebuilds the same commit into a new deployment whose setup seeds a fresh
   database, that the current preview keeps serving until then, and that findings
-  stay with the current deployment. **Reset test data** confirms; the page says
-  *Reset requested* and shows the new deployment when it is live.
+  stay with the current deployment. With **Test data** on and a baseline ready, it
+  also asks where to start: **Repository baseline** (the default) or **Empty
+  database** (then setup and seed). **Reset test data** confirms; the page says
+  *Reset requested* and shows the new deployment when it is live. The Preview
+  card's **Test data** line then says where the deployment's data started.
 - **Test access** (beside the Preview card): how to sign in to the repository's
   previews. Owners and Admins choose **Add test access** (or **Edit**): an account
   such as `reviewer@preview.test` and its password, stored encrypted and never shown
@@ -541,18 +548,21 @@ them in `.previewrc.yaml` (details and examples in
 
 ```yaml
 services: { postgres: 17, redis: 7 }   # versions this server offers
-setup: ["bin/api", "migrate", "--seed"]
+setup: ["bin/api", "migrate"]          # every build, also on kept data
+seed: ["bin/api", "seed"]              # only when the databases start empty
 processes:
   - name: worker
     command: ["bin/api", "worker"]
 docs_path: /docs
 ```
 
-1. Every build gets **its own fresh** PostgreSQL and Redis; the app, the setup
-   command and the processes receive `DATABASE_URL`, `PG*` and `REDIS_URL`.
-   **Data does not survive a rebuild.** Seed synthetic test data in `setup` (Starter
-   kits offer migrate-and-seed commands); a repeatable seed and a preview-only test
-   account make every preview ready to test ([docs/31](../docs/31-test-data.md)).
+1. Every build gets **its own** PostgreSQL and Redis; the app, the setup and seed
+   commands and the processes receive `DATABASE_URL`, `PG*` and `REDIS_URL`.
+   Without Test data **data does not survive a rebuild**: the databases start
+   empty and `seed` creates synthetic test data (Starter kits write migrations and
+   seed commands per stack); a preview-only test account makes every preview ready
+   to test ([docs/31](../docs/31-test-data.md)). With Test data on (below), a pull
+   request keeps its data between builds.
 2. The build log shows each service becoming ready, the setup command's output and
    the processes starting. If one fails, the build fails with that reason and the
    previous preview keeps serving.
@@ -563,6 +573,32 @@ docs_path: /docs
    repository's **Outbound** tab, enter the host name, choose an allowed port and
    **Approve**. **Remove** confirms in a dialog. Pull requests from forks never get
    these connections.
+
+### Test data that survives builds
+
+The repository's **Test data** tab (next to **Setup**; Owners, Admins and
+Developers with a grant) keeps reviewers' work and saves preparation
+([docs/32](../docs/32-persistent-test-data.md)):
+
+1. An Owner or Admin switches **Test data** on and confirms. Previa builds a
+   **baseline** from the repository's default branch (or a branch you choose):
+   its migrations and `seed`, without repository secrets. The tab shows it per
+   database with its branch, commit, time and size; the build uses build minutes.
+2. A pull request's first build **restores the baseline**: `setup` runs only the
+   pull request's new migrations, and `seed` is skipped.
+3. A tester's records **stay** when the developer pushes again or rebuilds: the
+   next build copies the serving preview's databases. The PR page says *Started
+   from: Previous build (…)*, and the GitHub comment *Test data: kept from previous
+   build*.
+4. If copied data does not work with a branch (its setup fails on it), the build
+   tries the baseline, then empty databases and the seed, and the PR page says why.
+5. **Reset test data** on the review page starts again from the baseline or from
+   empty databases and the seed.
+6. A pull request merged into the baseline branch refreshes the baseline, and a
+   daily check notices a moved branch. **Refresh baseline** (confirmed, uses build
+   minutes) rebuilds it now. Each refresh has its result and a **Build log**.
+7. **Turn off** (confirmed) deletes the baselines; builds start empty again.
+   Only data in PostgreSQL and MySQL is kept; Redis always starts empty.
 
 ## 16. Builds, Previews and Overview
 
@@ -816,6 +852,25 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | R16 | As a Reviewer, **Reveal** the password, use it to sign in to the preview | The password shows with a copy button; after a page reload it is hidden again and *Last revealed by …* names you |
 | R17 | Push a commit whose seed fails | The update fails in its setup command; the review says so and the earlier deployment keeps serving its data |
 | R18 | Turn JavaScript off and **Reveal** | The page comes back with the password shown |
+
+### F3. Test data
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| T1 | As a Developer, open a repository's **Test data** tab | Status, refreshes and the settings shown read-only (*Owners and Admins change these*); no **Turn on** |
+| T2 | As a Reviewer, open the same address | Sent to **Previews**; no tab |
+| T3 | As an Owner, switch **Test data** on, then **Cancel**; switch it on and confirm | Cancel changes nothing; confirming says *Test data is on*, and a refresh appears as **Waiting** then **Building** without reloading |
+| T4 | Wait for the refresh (the repository's default branch declares `seed` and PostgreSQL) | **Ready**; the baseline row shows *PostgreSQL 17*, the branch and commit, the time and size; **Build log** shows the seed's output and *Captured … encrypted* |
+| T5 | Open a pull request and build it | The PR page says *Started from: Repository baseline (main@…)*; the preview has the seeded records; the build log shows setup but no seed |
+| T6 | Add a record in the preview, push a commit, build | *Started from: Previous build (…)*; the record is still there; the GitHub comment says *Test data: kept from previous build* |
+| T7 | **Rebuild preview** | The record is still there |
+| T8 | On the review page, **Reset test data**, keep **Repository baseline**, confirm | The new deployment has only the baseline's records; the Preview card says *Reset to the repository baseline…* |
+| T9 | **Reset test data** with **Empty database** | Only the seeded records; *Fresh seeded data for this deployment.* |
+| T10 | Change **Baseline branch** to a branch that does not exist and press Enter | Saved with a toast; a refresh fails as *Branch not found* naming the branch; the previous baseline stays |
+| T11 | Type `two words` as the branch | *Branch names cannot contain spaces…* beside the field; nothing saved |
+| T12 | As a Developer, **Refresh baseline** and confirm | *Baseline refresh requested*; a new refresh row |
+| T13 | Merge a pull request into the default branch on GitHub | A refresh with trigger *Pull request merged* (a second merge within the hour joins one later refresh) |
+| T14 | As an Owner, switch **Test data** off and confirm | *Test data is off and its baselines are deleted*; the next build starts with empty databases and the seed, and the PR page and comment no longer name a test data source |
 
 ### G. GitHub feedback
 

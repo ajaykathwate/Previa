@@ -46,7 +46,7 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 
 | Queue | Workers per process | Work and timeout |
 | --- | --- | --- |
-| `build` | `MAX_CONCURRENT_BUILDS` | One build attempt: `BUILD_TIMEOUT` plus one minute to record it. Builds are also bounded across all workers by the same number (build slots). |
+| `build` | `MAX_CONCURRENT_BUILDS` | One build attempt: `BUILD_TIMEOUT` plus one minute to record it. Builds are also bounded across all workers by the same number (build slots). A repository's test-data baseline refresh (`baseline_refresh`, one job per repository) runs here too and takes a build slot ([32](32-persistent-test-data.md)): `BUILD_TIMEOUT` plus three minutes. |
 | `teardown` | 2 | Starts a teardown: 3 minutes. |
 | `environment_coordination` | 4 | Wake-ups (deadlines, handoffs): 15 seconds. |
 | `environment_route` | 2 | Route activation and removal: 2 minutes each (+30 s bookkeeping), under a 4-minute operation lease. |
@@ -58,6 +58,7 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 | `app_output` | 16 | One follower per watched preview: until nobody watched for a minute, at most 2 hours. |
 | `idle` | 4 | `preview_sleep` every 5 minutes (4-minute timeout) when `PREVIEW_IDLE_SLEEP` is set; `preview_wake` per waiting visitor (5 minutes). |
 | `route_sync` | 1 | Rewrites the router's file after a repository's previews turn private or public. |
+| `test_data` | 1 | Persistent test data, on workers with baseline storage ([32](32-persistent-test-data.md)): the refresh dispatcher every minute (1-minute timeout), the baseline freshness check hourly (10), baseline cleanup hourly (10). |
 
 Beside River, the worker runs two loops: the crash watch (Docker events) and the
 visit count read (every minute). Both end with the process.
