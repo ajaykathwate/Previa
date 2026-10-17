@@ -1,0 +1,60 @@
+package sampledata
+
+import (
+	"strconv"
+
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/logviewer"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+// Log is one baseline refresh's build log, for people who may build in the
+// repository. Lines are text nodes, so build output never becomes markup.
+templ Log(username, csrf string, p LogPage) {
+	@layouts.AppTrail("Baseline refresh #"+strconv.FormatInt(p.Number, 10)+" · "+p.Name, components.Crumb{Label: "Test data", Href: URL(p.RepoID)}, "Refresh #"+strconv.FormatInt(p.Number, 10), username, csrf, components.NavRepositories) {
+		<div class="repository-workspace build-logs-page">
+			<header class="page-hero">
+				<div class="page-hero-main">
+					<span class="page-hero-icon" aria-hidden="true">
+						@components.LogsIcon()
+					</span>
+					<div class="page-hero-text">
+						<p class="page-hero-kicker">
+							<span>{ p.Name }</span>
+							<span class="page-hero-kicker-sep" aria-hidden="true">·</span>
+							<span>Test data</span>
+						</p>
+						<h1>{ "Baseline refresh #" + strconv.FormatInt(p.Number, 10) }</h1>
+					</div>
+				</div>
+				<div class="page-hero-actions">
+					<a class="hero-link" href={ components.PublicURL(ctx, URL(p.RepoID)) }>
+						@components.DatabaseIcon()
+						Test data
+					</a>
+				</div>
+			</header>
+			<section class="workspace-panel log-status" aria-labelledby="log-status-title">
+				<div class="log-status-main">
+					<h2 id="log-status-title" class="sr-only">Refresh status</h2>
+					<span class={ "badge", p.Tone }><span class="badge-dot" aria-hidden="true"></span><span>{ p.Label }</span></span>
+					<p class="log-summary" role="status">{ p.Summary }</p>
+					if p.Commit != "" {
+						<code class="sha" title={ p.Branch + "@" + p.Commit }>{ p.Branch + "@" + Short(p.Commit) }</code>
+					}
+				</div>
+				if len(p.Notices) > 0 {
+					<ul class="log-notices">
+						for _, n := range p.Notices {
+							<li class="connection-notice tone-info">
+								@components.InfoIcon()
+								<span>{ n }</span>
+							</li>
+						}
+					</ul>
+				}
+			</section>
+			@logviewer.Viewer(p.Panel)
+		</div>
+	}
+}

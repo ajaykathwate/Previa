@@ -193,10 +193,13 @@ func repositoryAbility(r *http.Request) (string, bool) {
 	if p := strings.Split(path, "/"); mutation && len(p) >= 6 && p[1] == "repositories" && p[3] == "pull-requests" && p[5] == "review" {
 		return "preview", false
 	}
-	settings := strings.Contains(path, "/secrets") || strings.HasSuffix(path, "/policy") || strings.HasSuffix(path, "/preview-access") || strings.Contains(path, "/outbound")
+	// Test data settings, turning it off and deleting baselines are for
+	// managers; Refresh baseline and the refresh logs are for builders.
+	testData := strings.HasSuffix(path, "/test-data/settings") || strings.HasSuffix(path, "/test-data/off") || strings.HasSuffix(path, "/test-data/delete")
+	settings := strings.Contains(path, "/secrets") || strings.HasSuffix(path, "/policy") || strings.HasSuffix(path, "/preview-access") || strings.Contains(path, "/outbound") || testData
 	if settings {
 		source := mutation
-		if strings.HasSuffix(path, "/delete") || strings.HasSuffix(path, "/remove") || strings.HasSuffix(path, "/secrets/build") && r.PostFormValue("build") == "false" || strings.HasSuffix(path, "/preview-access") && r.PostFormValue("private") == "false" || strings.HasSuffix(path, "/policy") && r.PostFormValue("mode") == "manual" {
+		if strings.HasSuffix(path, "/delete") || strings.HasSuffix(path, "/remove") || strings.HasSuffix(path, "/secrets/build") && r.PostFormValue("build") == "false" || strings.HasSuffix(path, "/preview-access") && r.PostFormValue("private") == "false" || strings.HasSuffix(path, "/policy") && r.PostFormValue("mode") == "manual" || strings.HasSuffix(path, "/test-data/off") {
 			source = false
 		}
 		return "manage", source

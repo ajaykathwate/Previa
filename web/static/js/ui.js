@@ -207,6 +207,9 @@
   // others are sent with their saved values.
   function initInlineForms() {
     document.querySelectorAll('form[data-inline-form]').forEach(form => {
+      // A live refresh swaps in new forms; each is bound once.
+      if (form.dataset.inlineBound) return;
+      form.dataset.inlineBound = 'true';
       const fields = [...form.querySelectorAll('[data-inline-edit] .inline-input')];
       const error = form.querySelector('[data-inline-error]');
       const showError = (field, message) => {
@@ -752,11 +755,15 @@
     document.addEventListener('close', (event) => {
       if (event.target.matches?.('dialog[data-confirmation-dialog]') && livePending) setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
     }, true);
-    // A refresh that returns while a menu inside its target is open waits
-    // until the menu closes, so the menu never vanishes under the pointer.
+    // A refresh that returns while a menu inside its target is open, or
+    // while someone types in a paused form inside it, waits until the menu
+    // closes or the form loses focus, so nothing vanishes under the pointer
+    // or the cursor.
     document.addEventListener('htmx:beforeSwap', (event) => {
       const trigger = event.detail.requestConfig?.elt || event.detail.elt;
-      if (!trigger?.hasAttribute?.('data-live-refresh') || !event.detail.target?.querySelector?.('details[data-menu][open]')) return;
+      const target = event.detail.target;
+      const typing = document.activeElement?.closest(livePause) && target?.contains?.(document.activeElement);
+      if (!trigger?.hasAttribute?.('data-live-refresh') || !(target?.querySelector?.('details[data-menu][open]') || typing)) return;
       event.detail.shouldSwap = false;
       livePending = true;
     });
@@ -2101,6 +2108,7 @@
   initWorkspaceForms();
   initToasts();
   initInlineForms();
+  document.addEventListener('htmx:afterSwap', initInlineForms);
   initImageEditors();
   initConfirmMatch();
   initInfoTips();
