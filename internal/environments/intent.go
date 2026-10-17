@@ -98,7 +98,17 @@ type IntentCommand struct {
 	// Reset marks a Rebuild asked for to replace the preview's test data
 	// (docs/31-test-data.md); it builds exactly like any Rebuild.
 	Reset bool
+	// StartSource is the starting data a Reset asked for: StartFromBaseline
+	// or StartEmpty (docs/32-persistent-test-data.md). Empty for every other
+	// request, which follows the repository's Test data settings.
+	StartSource string
 }
+
+// Starting sources a Reset test data request may choose.
+const (
+	StartFromBaseline = "baseline"
+	StartEmpty        = "empty"
+)
 
 var intentKey = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
 
@@ -107,6 +117,9 @@ func (c IntentCommand) validate() error {
 		return errors.New("build command requires an owner, PR, nonnegative expected revision and a 16–128 character URL-safe idempotency key")
 	}
 	if c.Action != BuildLatest && c.Action != RetryBuild && c.Action != Rebuild || c.Reset && c.Action != Rebuild {
+		return ErrIntentAction
+	}
+	if c.StartSource != "" && (!c.Reset || c.StartSource != StartFromBaseline && c.StartSource != StartEmpty) {
 		return ErrIntentAction
 	}
 	return nil

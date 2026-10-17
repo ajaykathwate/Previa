@@ -59,6 +59,8 @@ func FailureMessage(code string) string {
 		return "A managed service (PostgreSQL or Redis) did not become ready or stopped."
 	case "setup_failed":
 		return "The setup command (migrations or seed data) failed or ran out of time."
+	case "seed_failed":
+		return "The seed command failed or ran out of time on the empty database."
 	case "process_failed":
 		return "A process declared next to the app stopped before the preview was ready."
 	case "preview_missing":

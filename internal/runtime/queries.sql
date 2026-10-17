@@ -3,10 +3,20 @@
 -- secrets: lifecycle, freshness, the authorized intent and repository access.
 SELECT workspace_intent_authorized(p.id)::boolean AS workspace_authorized, p.id AS pull_request_id, p.repo_id, p.number, p.head_sha, p.state, p.generation, p.is_fork, p.head_repo_id,
        r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status, b.workspace_id,
-       b.generation AS intent_generation, b.revision AS intent_revision, b.head_sha AS intent_head_sha, b.state AS intent_state
+       b.generation AS intent_generation, b.revision AS intent_revision, b.head_sha AS intent_head_sha, b.state AS intent_state,
+       coalesce(b.start_source, '')::text AS start_source
 FROM pull_requests p JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = p.id
 WHERE p.id = $1;
+
+-- name: ServingDeployment :one
+-- The candidate a pull request serves now, to copy its data into the next
+-- one (docs/32): the environment's active container, also while asleep or
+-- while a newer update failed, and its newest publication's number.
+SELECT e.container_id::text AS container_id, coalesce(e.head_sha, '')::text AS head_sha,
+       coalesce((SELECT max(x.sequence) FROM preview_publications x WHERE x.pull_request_id = e.pull_request_id), 0)::integer AS sequence
+FROM environments e
+WHERE e.pull_request_id = $1 AND e.status IN ('running', 'publishing', 'failed') AND e.container_id IS NOT NULL;
 
 -- name: AdmissionScope :one
 -- The PR's base repository and account, for the advisory capacity check.
@@ -19,13 +29,16 @@ JOIN installations i ON i.id = r.installation_id WHERE p.id = $1;
 -- serving candidate is the newest publication's: after a failed update the
 -- environment's applied revision names the failed attempt instead.
 WITH recorded AS (
-    INSERT INTO preview_components (pull_request_id, generation, revision, services, setup, processes, docs_path, outbound, outbound_withheld, config_hash, setup_ms)
+    INSERT INTO preview_components (pull_request_id, generation, revision, services, setup, processes, docs_path, outbound, outbound_withheld, config_hash, setup_ms,
+                                    seed, seed_ms, data_source, data_detail)
     VALUES (sqlc.arg(pull_request_id), sqlc.arg(generation), sqlc.arg(revision), sqlc.arg(services), sqlc.arg(setup),
-            sqlc.arg(processes), sqlc.narg(docs_path), sqlc.arg(outbound), sqlc.arg(outbound_withheld), sqlc.narg(config_hash), sqlc.narg(setup_ms))
+            sqlc.arg(processes), sqlc.narg(docs_path), sqlc.arg(outbound), sqlc.arg(outbound_withheld), sqlc.narg(config_hash), sqlc.narg(setup_ms),
+            sqlc.arg(seed), sqlc.narg(seed_ms), sqlc.narg(data_source), sqlc.arg(data_detail))
     ON CONFLICT (pull_request_id, generation, revision) DO UPDATE
     SET services = EXCLUDED.services, setup = EXCLUDED.setup, processes = EXCLUDED.processes, docs_path = EXCLUDED.docs_path,
         outbound = EXCLUDED.outbound, outbound_withheld = EXCLUDED.outbound_withheld, config_hash = EXCLUDED.config_hash,
-        setup_ms = EXCLUDED.setup_ms, recorded_at = now()
+        setup_ms = EXCLUDED.setup_ms, seed = EXCLUDED.seed, seed_ms = EXCLUDED.seed_ms, data_source = EXCLUDED.data_source,
+        data_detail = EXCLUDED.data_detail, recorded_at = now()
     RETURNING pull_request_id
 )
 DELETE FROM preview_components c

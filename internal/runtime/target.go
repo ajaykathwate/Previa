@@ -25,6 +25,9 @@ type Target struct {
 	BaseRepoID, HeadRepoID int64
 	Fork                   bool
 	WorkspaceID            int64 // the stable workspace ID, for shared limits; 0 if unknown
+	// StartSource is a Reset test data request's chosen starting data
+	// (SourceBaseline or SourceEmpty); empty otherwise (docs/32).
+	StartSource string
 }
 
 // secretSource is the source identity secrets are decided on. Anything GitHub
@@ -103,6 +106,18 @@ func (s *TargetStore) AdmissionScope(ctx context.Context, pullRequestID int64) (
 	return Target{PullRequestID: pullRequestID, BaseRepoID: row.GithubRepoID.Int64, WorkspaceID: row.WorkspaceID.Int64}, nil
 }
 
+// Serving returns the deployment a pull request serves now, if any.
+func (s *TargetStore) Serving(ctx context.Context, pullRequestID int64) (Serving, bool, error) {
+	row, err := dbgen.New(s.pool).ServingDeployment(ctx, pullRequestID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Serving{}, false, nil
+	}
+	if err != nil {
+		return Serving{}, false, fmt.Errorf("read the serving deployment: %w", err)
+	}
+	return Serving{ContainerID: row.ContainerID, HeadSHA: row.HeadSha, Sequence: row.Sequence}, row.ContainerID != "", nil
+}
+
 func currentTarget(row dbgen.ExecutionTargetRow, request environments.Request) (Target, error) {
 	switch {
 	case !row.WorkspaceAuthorized || !row.WorkspaceID.Valid || row.WorkspaceID.Int64 <= 0 || row.State != "open" || row.Generation != request.Generation || row.HeadSha != request.HeadSHA:
@@ -120,7 +135,7 @@ func currentTarget(row dbgen.ExecutionTargetRow, request environments.Request) (
 	return Target{
 		PullRequestID: row.PullRequestID, RepoID: row.RepoID, Number: row.Number, InstallationID: row.GithubInstallationID,
 		BaseRepoID: row.GithubRepoID.Int64, HeadRepoID: head, Fork: row.IsFork || head != row.GithubRepoID.Int64,
-		WorkspaceID: row.WorkspaceID.Int64,
+		WorkspaceID: row.WorkspaceID.Int64, StartSource: row.StartSource,
 	}, nil
 }
 
@@ -140,6 +155,15 @@ type Components struct {
 	// SetupTook is how long the setup command ran; recorded only when the
 	// candidate declares setup.
 	SetupTook time.Duration
+	// Seed is whether the candidate declares a seed command, SeedTook how
+	// long it ran when it ran (on empty databases only).
+	Seed     bool
+	SeedTook time.Duration
+	// DataSource is where its SQL databases started (SourceKept,
+	// SourceBaseline or SourceEmpty); empty without one. DataDetail records
+	// which deployment or baseline, and every fallback with its reason.
+	DataSource string
+	DataDetail map[string]any
 }
 
 // ServiceComponent is one managed service of a candidate.
@@ -159,12 +183,20 @@ func (s *TargetStore) RecordComponents(ctx context.Context, c Components) error 
 	if err != nil {
 		return err
 	}
+	detail := []byte("{}")
+	if len(c.DataDetail) > 0 {
+		if detail, err = json.Marshal(c.DataDetail); err != nil {
+			return err
+		}
+	}
 	if err := dbgen.New(s.pool).RecordComponents(ctx, dbgen.RecordComponentsParams{
 		PullRequestID: c.PullRequestID, Generation: c.Generation, Revision: c.Revision, Services: services, Setup: c.Setup,
 		Processes: processes, DocsPath: pgtype.Text{String: c.DocsPath, Valid: c.DocsPath != ""},
 		Outbound: int32(c.Outbound), OutboundWithheld: c.OutboundWithheld,
 		ConfigHash: pgtype.Text{String: c.ConfigHash, Valid: c.ConfigHash != ""},
 		SetupMs:    pgtype.Int4{Int32: int32(max(0, min(c.SetupTook.Milliseconds(), 1<<31-1))), Valid: c.Setup},
+		Seed:       c.Seed, SeedMs: pgtype.Int4{Int32: int32(max(0, min(c.SeedTook.Milliseconds(), 1<<31-1))), Valid: c.Seed && c.SeedTook > 0},
+		DataSource: pgtype.Text{String: c.DataSource, Valid: c.DataSource != ""}, DataDetail: detail,
 	}); err != nil {
 		return fmt.Errorf("record preview components: %w", err)
 	}

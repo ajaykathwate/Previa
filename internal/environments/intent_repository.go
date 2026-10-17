@@ -122,6 +122,7 @@ func (r *IntentRepository) requestIntentTx(ctx context.Context, tx pgx.Tx, comma
 		Source: modeManual, RequestAction: string(command.Action),
 		AvailableAt: pgtype.Timestamptz{Time: availableAt, Valid: !availableAt.IsZero()},
 		RequestedBy: pgtype.Int8{Int64: command.UserID, Valid: true}, IdempotencyKey: command.IdempotencyKey,
+		StartSource: pgtype.Text{String: command.StartSource, Valid: command.StartSource != ""},
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return IntentOutcome{}, ErrIntentConflict

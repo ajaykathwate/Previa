@@ -32,7 +32,8 @@ func (q *Queries) AdmissionScope(ctx context.Context, id int64) (AdmissionScopeR
 const executionTarget = `-- name: ExecutionTarget :one
 SELECT workspace_intent_authorized(p.id)::boolean AS workspace_authorized, p.id AS pull_request_id, p.repo_id, p.number, p.head_sha, p.state, p.generation, p.is_fork, p.head_repo_id,
        r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status, b.workspace_id,
-       b.generation AS intent_generation, b.revision AS intent_revision, b.head_sha AS intent_head_sha, b.state AS intent_state
+       b.generation AS intent_generation, b.revision AS intent_revision, b.head_sha AS intent_head_sha, b.state AS intent_state,
+       coalesce(b.start_source, '')::text AS start_source
 FROM pull_requests p JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = p.id
 WHERE p.id = $1
@@ -57,6 +58,7 @@ type ExecutionTargetRow struct {
 	IntentRevision       pgtype.Int8
 	IntentHeadSha        pgtype.Text
 	IntentState          pgtype.Text
+	StartSource          string
 }
 
 // Everything the runtime rechecks immediately before work that needs access or
@@ -83,6 +85,7 @@ func (q *Queries) ExecutionTarget(ctx context.Context, id int64) (ExecutionTarge
 		&i.IntentRevision,
 		&i.IntentHeadSha,
 		&i.IntentState,
+		&i.StartSource,
 	)
 	return i, err
 }
@@ -138,13 +141,16 @@ func (q *Queries) ListOutboundPreviews(ctx context.Context) ([]ListOutboundPrevi
 
 const recordComponents = `-- name: RecordComponents :exec
 WITH recorded AS (
-    INSERT INTO preview_components (pull_request_id, generation, revision, services, setup, processes, docs_path, outbound, outbound_withheld, config_hash, setup_ms)
+    INSERT INTO preview_components (pull_request_id, generation, revision, services, setup, processes, docs_path, outbound, outbound_withheld, config_hash, setup_ms,
+                                    seed, seed_ms, data_source, data_detail)
     VALUES ($1, $2, $3, $4, $5,
-            $6, $7, $8, $9, $10, $11)
+            $6, $7, $8, $9, $10, $11,
+            $12, $13, $14, $15)
     ON CONFLICT (pull_request_id, generation, revision) DO UPDATE
     SET services = EXCLUDED.services, setup = EXCLUDED.setup, processes = EXCLUDED.processes, docs_path = EXCLUDED.docs_path,
         outbound = EXCLUDED.outbound, outbound_withheld = EXCLUDED.outbound_withheld, config_hash = EXCLUDED.config_hash,
-        setup_ms = EXCLUDED.setup_ms, recorded_at = now()
+        setup_ms = EXCLUDED.setup_ms, seed = EXCLUDED.seed, seed_ms = EXCLUDED.seed_ms, data_source = EXCLUDED.data_source,
+        data_detail = EXCLUDED.data_detail, recorded_at = now()
     RETURNING pull_request_id
 )
 DELETE FROM preview_components c
@@ -171,6 +177,10 @@ type RecordComponentsParams struct {
 	OutboundWithheld bool
 	ConfigHash       pgtype.Text
 	SetupMs          pgtype.Int4
+	Seed             bool
+	SeedMs           pgtype.Int4
+	DataSource       pgtype.Text
+	DataDetail       []byte
 }
 
 // What a ready candidate runs next to its app. Rows of earlier requests that
@@ -190,6 +200,10 @@ func (q *Queries) RecordComponents(ctx context.Context, arg RecordComponentsPara
 		arg.OutboundWithheld,
 		arg.ConfigHash,
 		arg.SetupMs,
+		arg.Seed,
+		arg.SeedMs,
+		arg.DataSource,
+		arg.DataDetail,
 	)
 	return err
 }
@@ -229,4 +243,27 @@ func (q *Queries) RecordPreviewCrash(ctx context.Context, arg RecordPreviewCrash
 	var environment_id int64
 	err := row.Scan(&environment_id)
 	return environment_id, err
+}
+
+const servingDeployment = `-- name: ServingDeployment :one
+SELECT e.container_id::text AS container_id, coalesce(e.head_sha, '')::text AS head_sha,
+       coalesce((SELECT max(x.sequence) FROM preview_publications x WHERE x.pull_request_id = e.pull_request_id), 0)::integer AS sequence
+FROM environments e
+WHERE e.pull_request_id = $1 AND e.status IN ('running', 'publishing', 'failed') AND e.container_id IS NOT NULL
+`
+
+type ServingDeploymentRow struct {
+	ContainerID string
+	HeadSha     string
+	Sequence    int32
+}
+
+// The candidate a pull request serves now, to copy its data into the next
+// one (docs/32): the environment's active container, also while asleep or
+// while a newer update failed, and its newest publication's number.
+func (q *Queries) ServingDeployment(ctx context.Context, pullRequestID int64) (ServingDeploymentRow, error) {
+	row := q.db.QueryRow(ctx, servingDeployment, pullRequestID)
+	var i ServingDeploymentRow
+	err := row.Scan(&i.ContainerID, &i.HeadSha, &i.Sequence)
+	return i, err
 }

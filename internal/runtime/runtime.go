@@ -99,6 +99,11 @@ type Parts struct {
 	// (with an egress gateway that forwards); nil leaves them off.
 	Destinations Destinations
 	Outbound     OutboundTargets
+	// StartingData and Deployments enable persistent test data
+	// (docs/32-persistent-test-data.md); nil starts every candidate's
+	// databases empty, as before.
+	StartingData StartingData
+	Deployments  Deployments
 }
 
 // Runtime turns an admitted request into a healthy, hardened preview
@@ -121,6 +126,8 @@ type Runtime struct {
 	components      ComponentRecorder
 	destinations    Destinations
 	outboundTargets OutboundTargets
+	startingData    StartingData
+	deployments     Deployments
 }
 
 var (
@@ -145,6 +152,7 @@ func New(parts Parts, policy Policy, logger *slog.Logger) (*Runtime, error) {
 		instance: parts.Instance, admission: parts.Admission, docker: parts.Docker, egress: parts.Egress, targets: parts.Targets, sources: parts.Sources,
 		builder: parts.Builder, secrets: parts.Secrets, logs: parts.Logs, policy: policy, logger: logger, now: time.Now,
 		components: parts.Components, destinations: parts.Destinations, outboundTargets: parts.Outbound,
+		startingData: parts.StartingData, deployments: parts.Deployments,
 	}, nil
 }
 
@@ -163,7 +171,8 @@ func PolicyFrom(c config.PreviewConfig) Policy {
 	return Policy{
 		AllowRoot: c.PreviewAllowRoot, WritableRootfs: c.PreviewWritableRootfs, TmpfsBytes: int64(c.PreviewTmpfsSize),
 		PIDs: c.PreviewPIDs, OCIRuntime: c.PreviewOCIRuntime, StartupTimeout: c.PreviewStartupTimeout, SetupTimeout: c.PreviewSetupTimeout,
-		MemoryBudget: int64(c.PreviewMemoryBudget), CPUBudget: c.PreviewCPUBudget, MaxPerRepo: c.PreviewMaxPerRepository, MaxPerAccount: c.PreviewMaxPerAccount,
+		DataCopyTimeout: c.PreviewDataCopyTimeout,
+		MemoryBudget:    int64(c.PreviewMemoryBudget), CPUBudget: c.PreviewCPUBudget, MaxPerRepo: c.PreviewMaxPerRepository, MaxPerAccount: c.PreviewMaxPerAccount,
 	}
 }
 
@@ -176,6 +185,11 @@ func (r *Runtime) Build(ctx context.Context, request environments.Request, attem
 		return environments.Artifact{}, failure(CodeUnavailable, "This runtime only inventories objects.", false, nil)
 	}
 	target, err := r.targets.Current(ctx, request)
+	if err != nil {
+		return environments.Artifact{}, err
+	}
+	// The Test data settings in effect now apply to the whole candidate.
+	start, err := r.dataPlan(ctx, target)
 	if err != nil {
 		return environments.Artifact{}, err
 	}
@@ -229,7 +243,7 @@ func (r *Runtime) Build(ctx context.Context, request environments.Request, attem
 	if notice != "" {
 		startLogs.System(notice)
 	}
-	containerID, err := r.startCandidate(ctx, id, target, image, settings, appEnv, plan, startLogs)
+	containerID, err := r.startCandidate(ctx, id, target, image, settings, appEnv, plan, start, startLogs)
 	if err != nil {
 		startLogs.System("The preview did not start: " + messageOf(err))
 		return environments.Artifact{}, err
@@ -240,6 +254,21 @@ func (r *Runtime) Build(ctx context.Context, request environments.Request, attem
 		return environments.Artifact{}, err
 	}
 	return environments.Artifact{ContainerID: containerID, ImageTag: image.Ref}, nil
+}
+
+// dataPlan reads where the candidate's databases may start: the
+// repository's Test data settings and baselines, and a Reset's choice.
+func (r *Runtime) dataPlan(ctx context.Context, t Target) (dataPlan, error) {
+	start := dataPlan{reset: t.StartSource}
+	if r.startingData == nil {
+		return start, nil
+	}
+	plan, err := r.startingData.Plan(ctx, t.RepoID)
+	if err != nil {
+		return dataPlan{}, failure(CodeUnavailable, "The repository's test data settings could not be read.", true, err)
+	}
+	start.DataPlan = plan
+	return start, nil
 }
 
 // announceBuildSecrets says, by name only, what this build may read.

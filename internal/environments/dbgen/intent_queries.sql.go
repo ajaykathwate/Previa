@@ -325,20 +325,20 @@ func (q *Queries) ReadOwnedIntentView(ctx context.Context, arg ReadOwnedIntentVi
 
 const replaceBuildIntent = `-- name: ReplaceBuildIntent :one
 INSERT INTO build_intents(pull_request_id, revision, base_revision, generation,
-    head_sha, source, request_action, requested_by, idempotency_key, state, available_at)
+    head_sha, source, request_action, requested_by, idempotency_key, state, available_at, start_source)
 SELECT pr.id, $1::bigint + 1, $1::bigint,
     pr.generation, pr.head_sha, $2::text, $3::text,
     $4::bigint, $5::text, 'pending',
-    COALESCE($6::timestamptz, clock_timestamp())
+    COALESCE($6::timestamptz, clock_timestamp()), $7::text
 FROM pull_requests pr
-WHERE pr.id = $7 AND pr.generation = $8
-    AND pr.head_sha = $9 AND pr.state = 'open'
+WHERE pr.id = $8 AND pr.generation = $9
+    AND pr.head_sha = $10 AND pr.state = 'open'
 ON CONFLICT (pull_request_id) DO UPDATE
 SET revision = build_intents.revision + 1, base_revision = EXCLUDED.base_revision,
     generation = EXCLUDED.generation, head_sha = EXCLUDED.head_sha,
     source = EXCLUDED.source, request_action = EXCLUDED.request_action,
     requested_by = EXCLUDED.requested_by, idempotency_key = EXCLUDED.idempotency_key,
-    state = 'pending', available_at = EXCLUDED.available_at,
+    state = 'pending', available_at = EXCLUDED.available_at, start_source = EXCLUDED.start_source,
     requested_at = clock_timestamp(), updated_at = clock_timestamp(),
     started_at = NULL, completed_at = NULL, execution_job_id=NULL, execution_error_code=''
 WHERE build_intents.revision = $1::bigint
@@ -352,11 +352,14 @@ type ReplaceBuildIntentParams struct {
 	RequestedBy    pgtype.Int8
 	IdempotencyKey string
 	AvailableAt    pgtype.Timestamptz
+	StartSource    pgtype.Text
 	PrID           int64
 	Generation     int64
 	HeadSha        string
 }
 
+// start_source is a Reset test data request's chosen starting data
+// (docs/32-persistent-test-data.md); NULL for every other request.
 func (q *Queries) ReplaceBuildIntent(ctx context.Context, arg ReplaceBuildIntentParams) (BuildIntent, error) {
 	row := q.db.QueryRow(ctx, replaceBuildIntent,
 		arg.BaseRevision,
@@ -365,6 +368,7 @@ func (q *Queries) ReplaceBuildIntent(ctx context.Context, arg ReplaceBuildIntent
 		arg.RequestedBy,
 		arg.IdempotencyKey,
 		arg.AvailableAt,
+		arg.StartSource,
 		arg.PrID,
 		arg.Generation,
 		arg.HeadSha,

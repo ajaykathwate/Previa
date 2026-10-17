@@ -610,7 +610,7 @@ func TestRealRuntimeAdmitsConcurrentCandidatesAtomically(t *testing.T) {
 			t.Fatal(err)
 		}
 		go func() {
-			_, err := r.startCandidate(buildCtx(t), id, target, image, settings, nil, plan, sink)
+			_, err := r.startCandidate(buildCtx(t), id, target, image, settings, nil, plan, dataPlan{}, sink)
 			results <- err
 		}()
 	}

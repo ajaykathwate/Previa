@@ -38,12 +38,14 @@ WHERE pr.id = sqlc.arg(pr_id) AND workspace_repository_access(r.id,sqlc.narg(use
     AND i.status = 'active' AND r.accessible;
 
 -- name: ReplaceBuildIntent :one
+-- start_source is a Reset test data request's chosen starting data
+-- (docs/32-persistent-test-data.md); NULL for every other request.
 INSERT INTO build_intents(pull_request_id, revision, base_revision, generation,
-    head_sha, source, request_action, requested_by, idempotency_key, state, available_at)
+    head_sha, source, request_action, requested_by, idempotency_key, state, available_at, start_source)
 SELECT pr.id, sqlc.arg(base_revision)::bigint + 1, sqlc.arg(base_revision)::bigint,
     pr.generation, pr.head_sha, sqlc.arg(source)::text, sqlc.arg(request_action)::text,
     sqlc.narg(requested_by)::bigint, sqlc.arg(idempotency_key)::text, 'pending',
-    COALESCE(sqlc.narg(available_at)::timestamptz, clock_timestamp())
+    COALESCE(sqlc.narg(available_at)::timestamptz, clock_timestamp()), sqlc.narg(start_source)::text
 FROM pull_requests pr
 WHERE pr.id = sqlc.arg(pr_id) AND pr.generation = sqlc.arg(generation)
     AND pr.head_sha = sqlc.arg(head_sha) AND pr.state = 'open'
@@ -52,7 +54,7 @@ SET revision = build_intents.revision + 1, base_revision = EXCLUDED.base_revisio
     generation = EXCLUDED.generation, head_sha = EXCLUDED.head_sha,
     source = EXCLUDED.source, request_action = EXCLUDED.request_action,
     requested_by = EXCLUDED.requested_by, idempotency_key = EXCLUDED.idempotency_key,
-    state = 'pending', available_at = EXCLUDED.available_at,
+    state = 'pending', available_at = EXCLUDED.available_at, start_source = EXCLUDED.start_source,
     requested_at = clock_timestamp(), updated_at = clock_timestamp(),
     started_at = NULL, completed_at = NULL, execution_job_id=NULL, execution_error_code=''
 WHERE build_intents.revision = sqlc.arg(base_revision)::bigint

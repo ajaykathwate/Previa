@@ -95,6 +95,9 @@ type ResetRecorder interface {
 type ResetRequest struct {
 	PullRequestID, ActorID, Revision int64
 	HeadSHA                          string
+	// Source is the chosen starting data (StartFromBaseline or StartEmpty);
+	// empty when the repository has no Test data choice.
+	Source string
 }
 
 // WithResets passes every accepted Reset test data to rec.

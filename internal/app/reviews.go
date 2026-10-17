@@ -42,10 +42,13 @@ func (a publicationActivity) PublishedTx(ctx context.Context, tx pgx.Tx, p envir
 type resetActivity struct{ recorder *activity.Recorder }
 
 func (a resetActivity) ResetRequestedTx(ctx context.Context, tx pgx.Tx, r environments.ResetRequest) error {
+	metadata := map[string]any{"sha": r.HeadSHA, "revision": r.Revision}
+	if r.Source != "" {
+		metadata["source"] = r.Source
+	}
 	return a.recorder.RecordTx(ctx, tx, activity.Event{
 		PullRequestID: r.PullRequestID, ActorID: r.ActorID, Kind: activity.ResetRequested,
-		Metadata: map[string]any{"sha": r.HeadSHA, "revision": r.Revision},
-		DedupKey: fmt.Sprintf("reset:%d:%d", r.PullRequestID, r.Revision),
+		Metadata: metadata, DedupKey: fmt.Sprintf("reset:%d:%d", r.PullRequestID, r.Revision),
 	})
 }
 
