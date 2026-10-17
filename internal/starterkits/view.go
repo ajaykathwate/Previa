@@ -19,7 +19,8 @@ func view(kit Kit, offer Offer) kitpages.Page {
 		Postgres: kitpages.Service{On: c.Postgres != "", Version: c.Postgres, Versions: offer.Postgres},
 		Redis:    kitpages.Service{On: c.Redis != "", Version: c.Redis, Versions: offer.Redis},
 		MySQL:    kitpages.Service{On: c.MySQL != "", Version: c.MySQL, Versions: offer.MySQL},
-		Setup:    command(c.Setup, c.SetupWith, c.SetupCommand, s.Setup, "npm run migrate && npm run seed"),
+		Setup:    command(c.Setup, c.SetupWith, c.SetupCommand, s.Setup, "npm run migrate"),
+		Seed:     command(c.Seed, c.SeedWith, c.SeedCommand, s.Seed, "npm run seed"),
 		Worker:   command(c.Worker, c.WorkerWith, c.WorkerCommand, s.Workers, "npm run worker"),
 		Docs:     c.Docs, DocsPath: cmpOr(c.DocsPath, cmpOr(s.Docs, "/docs")),
 		Port: c.Port, Health: c.Health, Tier: c.Tier, Tiers: Tiers,
@@ -51,6 +52,8 @@ func fieldLabel(s Stack, field string) string {
 		return "Docs path"
 	case "setup":
 		return "Migrations"
+	case "seed":
+		return "Seed data"
 	case "worker":
 		return "Worker"
 	case "postgres":
@@ -90,6 +93,9 @@ func summary(kit Kit) []string {
 	}
 	if c.Setup {
 		out = append(out, "migrations")
+	}
+	if c.Seed {
+		out = append(out, "seed data")
 	}
 	if c.Worker {
 		out = append(out, "worker")

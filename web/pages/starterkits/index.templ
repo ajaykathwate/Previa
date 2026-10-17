@@ -130,7 +130,8 @@ templ extrasSection(p Page) {
 	<fieldset class="kit-section">
 		<legend class="kit-section-title">Before and beside your app</legend>
 		<div class="kit-rows">
-			@commandRow("setup", "Migrations", "Run once before the app starts", p.Form.Setup, components.RestartIcon(), p.ProblemFor("setup"))
+			@commandRow("setup", "Migrations", "Run before the app in every deployment", p.Form.Setup, components.RestartIcon(), p.ProblemFor("setup"))
+			@commandRow("seed", "Seed data", "Only on an empty database", p.Form.Seed, components.DatabaseIcon(), p.ProblemFor("seed"))
 			@commandRow("worker", "Background worker", "A queue worker next to your app", p.Form.Worker, components.BuildIcon(), p.ProblemFor("worker"))
 			<div class={ "kit-row", templ.KV("is-on", p.Form.Docs) }>
 				<label class="kit-row-main" for="kit-docs">
@@ -448,7 +449,7 @@ templ more() {
 		</details>
 		<details>
 			<summary>Seed data for reviewers</summary>
-			<p>Every deployment starts with empty services. Under migrations, choose a command that also seeds (or <strong>My own command…</strong>, such as <code>npm run migrate &amp;&amp; npm run seed</code>) and keep the seed repeatable and synthetic. For a test login, the seed creates a preview-only account from a repository secret, and the same password goes under <strong>Test access</strong> on the review page. <strong>Reset test data</strong> there rebuilds the preview from the seed.</p>
+			<p>Put migrations under <strong>Migrations</strong> and synthetic starting data under <strong>Seed data</strong>. Migrations run in every deployment; the seed runs after them only when a database starts empty, so data a repository's <strong>Test data</strong> keeps between builds is never seeded twice. For a test login, the seed creates a preview-only account from a repository secret, and the same password goes under <strong>Test access</strong> on the review page. <strong>Reset test data</strong> there starts the preview again from the repository baseline or from empty databases and the seed.</p>
 		</details>
 	</section>
 }

@@ -186,3 +186,49 @@ func TestUserTextIsQuotedInTheConfig(t *testing.T) {
 		t.Fatalf("commands stay readable, without escapes:\n%s", config)
 	}
 }
+
+// Seed data (docs/32) is its own key: every stack's seed choices pass
+// Previa's rules next to a SQL database, and are refused without one.
+func TestSeedDataPassesConfigRulesWithADatabase(t *testing.T) {
+	for _, s := range Stacks() {
+		if s.Static {
+			continue
+		}
+		for _, seed := range append(presetKeys(s.Seed), Custom) {
+			for _, svc := range [][2]string{{"17", ""}, {"", "8.4"}, {"", ""}} {
+				name := fmt.Sprintf("%s/seed-%s/pg%s-mysql%s", s.ID, seed, svc[0], svc[1])
+				t.Run(name, func(t *testing.T) {
+					c := Fresh(s.ID)
+					c.Postgres, c.MySQL = svc[0], svc[1]
+					c.Seed, c.SeedWith, c.SeedCommand = true, seed, "bin/seed --preview"
+					kit := Generate(c, defaults)
+					if svc == [2]string{} {
+						if !hasProblem(kit, "seed") || strings.Contains(kit.Config, "\nseed:") {
+							t.Fatalf("seed without a database must be refused: %+v\n%s", kit.Problems, kit.Config)
+						}
+						return
+					}
+					if len(kit.Problems) > 0 {
+						t.Fatalf("unexpected problems: %+v", kit.Problems)
+					}
+					cfg := parse(t, kit.Config)
+					if len(cfg.Seed) == 0 || !strings.Contains(kit.Config, "only on an empty database") {
+						t.Fatalf("seed missing:\n%s", kit.Config)
+					}
+					if len(cfg.Setup) > 0 && slices.Contains(cfg.Setup, "seed") {
+						t.Fatalf("setup must not seed when seed is set: %v", cfg.Setup)
+					}
+				})
+			}
+		}
+	}
+	// Rails splits migrations and seed data with its own tasks.
+	c := Fresh("rails")
+	c.Postgres, c.Seed = "17", true
+	kit := Generate(c, defaults)
+	for _, want := range []string{`setup: ["bin/rails", "db:migrate"]`, `seed: ["bin/rails", "db:seed"]`} {
+		if !strings.Contains(kit.Config, want) {
+			t.Fatalf("Rails kit lacks %s:\n%s", want, kit.Config)
+		}
+	}
+}

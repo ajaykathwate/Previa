@@ -13,7 +13,7 @@ const commentColumn = 30
 // renderConfig writes .previewrc.yaml with a short comment on every key. The
 // keys and value formats are the ones Previa's own parser accepts; a test
 // runs every kit through it.
-func renderConfig(s Stack, c Choices, setup, worker []string, workerName string) string {
+func renderConfig(s Stack, c Choices, setup, seed, worker []string, workerName string) string {
 	var b strings.Builder
 	b.WriteString("# .previewrc.yaml: how Previa runs this repository's previews.\n")
 	b.WriteString("# Starter kit: " + s.Name + ".\n\n")
@@ -29,7 +29,7 @@ func renderConfig(s Stack, c Choices, setup, worker []string, workerName string)
 	entry(&b, "resource_tier: "+c.Tier, "small, standard or large")
 	if c.Postgres != "" || c.Redis != "" || c.MySQL != "" {
 		b.WriteString("\n")
-		entry(&b, "services:", "fresh and empty for every preview")
+		entry(&b, "services:", "empty, or test data kept by Previa")
 		if c.Postgres != "" {
 			entry(&b, "  postgres: "+c.Postgres, "sets DATABASE_URL and PGHOST, PGUSER…")
 		}
@@ -41,8 +41,12 @@ func renderConfig(s Stack, c Choices, setup, worker []string, workerName string)
 		}
 	}
 	if len(setup) > 0 {
-		b.WriteString("\n# Runs once, after the services are ready and before the app.\n")
+		b.WriteString("\n# Runs before the app in every deployment, also on kept data: keep it\n# safe to repeat, such as migrations.\n")
 		b.WriteString("setup: " + flow(setup) + "\n")
+	}
+	if len(seed) > 0 {
+		b.WriteString("\n# Runs after setup only on an empty database: synthetic starting data.\n")
+		b.WriteString("seed: " + flow(seed) + "\n")
 	}
 	if len(worker) > 0 {
 		b.WriteString("\n")
@@ -102,7 +106,7 @@ func quote(s string) string {
 func notesFor(s Stack, c Choices) []string {
 	var notes []string
 	if c.Postgres != "" {
-		notes = append(notes, "Your app, setup and processes get DATABASE_URL (and PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE). Each preview starts with an empty database: to give reviewers data, pick a setup command that also seeds, with a repeatable, synthetic seed.")
+		notes = append(notes, "Your app, setup, seed and processes get DATABASE_URL (and PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE). Keep migrations in setup and synthetic starting data in seed: seed runs only on an empty database, so data a repository's Test data keeps is never seeded twice.")
 	}
 	if c.Redis != "" {
 		notes = append(notes, "They also get REDIS_URL for Redis.")

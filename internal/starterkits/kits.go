@@ -26,9 +26,10 @@ type Stack struct {
 	NoShell  bool   // the final image has no shell, so commands are never run by sh
 	Detail   *Detail
 	Setup    []Preset
+	Seed     []Preset // fills an empty database (docs/32); needs PostgreSQL or MySQL
 	Workers  []Preset
-	// Wrapper prefixes setup and process commands, which replace the image's
-	// entrypoint, so they get the same environment mapping as the app.
+	// Wrapper prefixes setup, seed and process commands, which replace the
+	// image's entrypoint, so they get the same environment mapping as the app.
 	Wrapper    []string
 	dockerfile func(Choices) string
 	notes      func(Choices) []string
@@ -41,7 +42,7 @@ type Detail struct {
 	Pattern              *regexp.Regexp // the text it accepts
 }
 
-// Preset is a ready-made command for setup or a process.
+// Preset is a ready-made command for setup, seed or a process.
 type Preset struct {
 	Key, Label string
 	Name       string // the process name, for workers
@@ -63,6 +64,9 @@ type Choices struct {
 	Setup         bool
 	SetupWith     string // a preset key or Custom
 	SetupCommand  string
+	Seed          bool
+	SeedWith      string // a preset key or Custom
+	SeedCommand   string
 	Worker        bool
 	WorkerWith    string
 	WorkerCommand string
@@ -120,6 +124,7 @@ func Fresh(id string) Choices {
 	if len(s.Setup) > 0 && !s.Static {
 		c.Setup, c.SetupWith = true, s.Setup[0].Key
 	}
+	c.SeedWith = presetKey("", s.Seed)
 	if s.Detail != nil {
 		c.Detail = s.Detail.Default
 	}
@@ -136,6 +141,13 @@ func Generate(c Choices, offer Offer) Kit {
 	if problem != "" {
 		kit.Problems = append(kit.Problems, Problem{Field: "setup", Message: problem})
 	}
+	seed, problem := commandFor(s, c.Seed, c.SeedWith, c.SeedCommand, s.Seed, c)
+	if problem == "" && len(seed) > 0 && c.Postgres == "" && c.MySQL == "" {
+		seed, problem = nil, "Seed data fills a database: turn on PostgreSQL or MySQL above."
+	}
+	if problem != "" {
+		kit.Problems = append(kit.Problems, Problem{Field: "seed", Message: problem})
+	}
 	worker, problem := commandFor(s, c.Worker, c.WorkerWith, c.WorkerCommand, s.Workers, c)
 	if problem != "" {
 		kit.Problems = append(kit.Problems, Problem{Field: "worker", Message: problem})
@@ -143,7 +155,7 @@ func Generate(c Choices, offer Offer) Kit {
 	if !s.OwnFile {
 		kit.Dockerfile = s.dockerfile(c)
 	}
-	kit.Config = renderConfig(s, c, setup, worker, workerName(s, c))
+	kit.Config = renderConfig(s, c, setup, seed, worker, workerName(s, c))
 	kit.Notes = notesFor(s, c)
 	return kit
 }
@@ -154,12 +166,13 @@ func normalize(s Stack, c Choices, offer Offer) (Choices, []Problem) {
 	c.Stack = s.ID
 	var problems []Problem
 	if s.Static {
-		c.Postgres, c.Redis, c.MySQL, c.Setup, c.Worker = "", "", "", false, false
+		c.Postgres, c.Redis, c.MySQL, c.Setup, c.Seed, c.Worker = "", "", "", false, false, false
 	}
 	c.Postgres, problems = serviceVersion("postgres", "PostgreSQL", c.Postgres, offer.Postgres, problems)
 	c.Redis, problems = serviceVersion("redis", "Redis", c.Redis, offer.Redis, problems)
 	c.MySQL, problems = serviceVersion("mysql", "MySQL", c.MySQL, offer.MySQL, problems)
 	c.SetupWith = presetKey(c.SetupWith, s.Setup)
+	c.SeedWith = presetKey(c.SeedWith, s.Seed)
 	c.WorkerWith = presetKey(c.WorkerWith, s.Workers)
 	if c.Port == 0 {
 		c.Port = s.Port
@@ -250,7 +263,7 @@ func cmpOr(a, b string) string {
 // sh -c, while plain ones are split into a program and its arguments.
 var shellSyntax = regexp.MustCompile("[|&;<>$*?(){}\\[\\]\"'\\\\`~]")
 
-// commandFor resolves setup or a process to argv: a preset's command, or the
+// commandFor resolves setup, seed or a process to argv: a preset's command, or the
 // user's own, prefixed by the stack's wrapper.
 func commandFor(s Stack, on bool, with, text string, presets []Preset, c Choices) ([]string, string) {
 	if !on || s.Static {

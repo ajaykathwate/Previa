@@ -39,7 +39,7 @@ type Form struct {
 	Stack, StackName       string
 	Static, OwnFile        bool
 	Postgres, Redis, MySQL Service
-	Setup, Worker          Command
+	Setup, Seed, Worker    Command
 	Docs                   bool
 	DocsPath               string
 	Port                   int
@@ -56,7 +56,7 @@ type Service struct {
 	Versions []string // offered; empty when the server offers none
 }
 
-// Command is setup or the background worker.
+// Command is setup, seed or the background worker.
 type Command struct {
 	Available   bool // the stack can run one
 	On          bool
