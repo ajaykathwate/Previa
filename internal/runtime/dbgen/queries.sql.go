@@ -153,6 +153,10 @@ WHERE c.pull_request_id = $1 AND e.pull_request_id = c.pull_request_id
   AND (c.generation, c.revision) < ($2::bigint, $3::bigint)
   AND NOT (c.generation = e.applied_generation AND c.revision = e.applied_revision)
   AND NOT (c.generation IS NOT DISTINCT FROM e.pending_generation AND c.revision IS NOT DISTINCT FROM e.pending_revision)
+  AND NOT EXISTS (
+      SELECT 1 FROM preview_publications x
+      WHERE x.pull_request_id = c.pull_request_id AND x.generation = c.generation AND x.revision = c.revision
+        AND x.sequence = (SELECT max(y.sequence) FROM preview_publications y WHERE y.pull_request_id = c.pull_request_id))
 `
 
 type RecordComponentsParams struct {
@@ -170,7 +174,9 @@ type RecordComponentsParams struct {
 }
 
 // What a ready candidate runs next to its app. Rows of earlier requests that
-// the PR serves neither as its deployed nor as its pending candidate go.
+// the PR serves neither as its deployed nor as its pending candidate go. The
+// serving candidate is the newest publication's: after a failed update the
+// environment's applied revision names the failed attempt instead.
 func (q *Queries) RecordComponents(ctx context.Context, arg RecordComponentsParams) error {
 	_, err := q.db.Exec(ctx, recordComponents,
 		arg.PullRequestID,

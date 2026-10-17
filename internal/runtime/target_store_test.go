@@ -264,3 +264,50 @@ func TestLegacyContainerAccountLabelResolvesStableWorkspaceAfterHandover(t *test
 		t.Fatalf("handover moved consumption: %d %v", after, err)
 	}
 }
+
+// A failed update moves the environment's applied revision to the failed
+// attempt while the earlier deployment keeps serving: a newer candidate's
+// components must not delete the serving deployment's.
+func TestRecordComponentsKeepsTheServingDeploymentAfterAFailedUpdate(t *testing.T) {
+	pool := isolatedPool(t)
+	ctx := t.Context()
+	store := NewTargetStore(pool)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec("INSERT INTO users(github_id, username) VALUES (92, 'd')")
+	exec("INSERT INTO installations(github_installation_id, owner_user_id) VALUES (92, (SELECT id FROM users WHERE github_id = 92))")
+	exec("INSERT INTO repos(installation_id, full_name, github_repo_id) VALUES ((SELECT id FROM installations WHERE github_installation_id = 92), 'd/r', 92)")
+	var pr int64
+	if err := pool.QueryRow(ctx, "INSERT INTO pull_requests(repo_id, number, head_sha, state, generation) VALUES ((SELECT id FROM repos WHERE github_repo_id = 92), 1, 'sha-2', 'open', 1) RETURNING id").Scan(&pr); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordComponents(ctx, Components{PullRequestID: pr, Generation: 1, Revision: 1, Setup: true, SetupTook: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	// Revision 1 published and serves; revision 2 failed in setup.
+	exec(`INSERT INTO preview_publications(pull_request_id, repo_id, workspace_id, sequence, head_sha, generation, revision, container_id, image_tag)
+		SELECT p.id, p.repo_id, i.workspace_id, 1, 'sha-1', 1, 1, 'container', 'image' FROM pull_requests p
+		JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id WHERE p.id = $1`, pr)
+	exec("INSERT INTO environments(pull_request_id, subdomain, status, head_sha, applied_generation, applied_revision, container_id, image_tag, last_error_code) VALUES ($1, 'pr-1-d-1', 'failed', 'sha-1', 1, 2, 'container', 'image', 'setup_failed')", pr)
+	// Revision 3 becomes ready.
+	if err := store.RecordComponents(ctx, Components{PullRequestID: pr, Generation: 1, Revision: 3, Setup: true, SetupTook: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	var rows []string
+	r, err := pool.Query(ctx, "SELECT generation || '.' || revision FROM preview_components WHERE pull_request_id = $1 ORDER BY 1", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for r.Next() {
+		var row string
+		_ = r.Scan(&row)
+		rows = append(rows, row)
+	}
+	if strings.Join(rows, ",") != "1.1,1.3" {
+		t.Fatalf("rows kept: %v", rows)
+	}
+}

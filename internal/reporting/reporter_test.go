@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/environments"
+	"github.com/ajaykathwatee/previa/internal/reporting/dbgen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -462,5 +463,27 @@ func TestReporterExecutesOnlyReports(t *testing.T) {
 	var failure *environments.OperationFailure
 	if !errors.As(err, &failure) || !failure.Permanent {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// After a failed update the previous deployment keeps serving: the report's
+// snapshot describes what it runs from the newest publication, not from the
+// failed attempt (which recorded no components).
+func TestReportSnapshotDescribesTheServingDeploymentAfterAFailedUpdate(t *testing.T) {
+	f := newReportFixture(t)
+	f.intent(t, "failed", 2)
+	f.environment(t, "failed", headA, 2, "setup_failed")
+	f.exec(t, `INSERT INTO preview_publications(pull_request_id, repo_id, workspace_id, sequence, head_sha, generation, revision, container_id, image_tag)
+		SELECT p.id, p.repo_id, i.workspace_id, 1, $2, 5, 1, 'container-aaaa', 'image' FROM pull_requests p
+		JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id WHERE p.id = $1`, f.prID, headA)
+	f.exec(t, `INSERT INTO preview_components(pull_request_id, generation, revision, services, setup, docs_path)
+		VALUES ($1, 5, 1, '[{"kind":"postgres","version":"17"}]', true, '/docs')`, f.prID)
+	row, err := dbgen.New(f.pool).ReadReportSnapshot(t.Context(), f.prID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := snapshotOf(row).Environment.Backend
+	if backend.Summary() != "PostgreSQL 17 · setup ran" || backend.DocsPath != "/docs" {
+		t.Fatalf("serving backend %+v", backend)
 	}
 }

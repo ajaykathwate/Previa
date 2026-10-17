@@ -224,6 +224,9 @@ removed with it.
 - **PR page:** *Runs with* (services, setup, processes; "Data does not survive a
   rebuild"), *Docs*, *Outbound*, and *Managed services* offered by the running
   worker, labelled "None: no service catalog is configured" when there is none.
+  *Runs with* and *Docs* describe the deployment that serves (the newest
+  publication), also while a newer commit's update has failed; a newer
+  candidate's components never replace the serving deployment's record.
 - **PR comment:** the docs link and "Runs with PostgreSQL 17 and Redis 7 · setup ran ·
   process worker" for a ready preview. Failures say which part failed:
   `service_unavailable`, `service_failed`, `setup_failed`, `process_failed`.

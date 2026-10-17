@@ -772,7 +772,8 @@ FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN users u ON u.id=b.requested_by
 LEFT JOIN environments e ON e.pull_request_id=p.id
-LEFT JOIN preview_components pc ON pc.pull_request_id=p.id AND pc.generation=e.applied_generation AND pc.revision=e.applied_revision
+LEFT JOIN LATERAL (SELECT x.generation, x.revision FROM preview_publications x WHERE x.pull_request_id=p.id ORDER BY x.sequence DESC LIMIT 1) pub ON true
+LEFT JOIN preview_components pc ON pc.pull_request_id=p.id AND pc.generation=pub.generation AND pc.revision=pub.revision
 WHERE r.id=$1::bigint AND workspace_repository_access(r.id,$2::bigint,'read') AND p.number=$3::integer
 `
 
@@ -853,6 +854,8 @@ type OwnedPRRow struct {
 
 // The PR's three lifecycle columns (observed, requested, deployed) and what
 // the owner may do next. A torn-down environment is shown as removed.
+// What the serving deployment runs: the newest publication's candidate. After a
+// failed update the environment's applied revision names the failed attempt.
 func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, error) {
 	row := q.db.QueryRow(ctx, ownedPR, arg.ID, arg.OwnerUserID, arg.Number)
 	var i OwnedPRRow

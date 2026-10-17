@@ -77,8 +77,12 @@ JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = pr.id
 LEFT JOIN environments e ON e.pull_request_id = pr.id
 LEFT JOIN pull_request_reports rep ON rep.pull_request_id = pr.id
+LEFT JOIN LATERAL (
+    SELECT x.generation, x.revision FROM preview_publications x
+    WHERE x.pull_request_id = pr.id ORDER BY x.sequence DESC LIMIT 1
+) pub ON true
 LEFT JOIN preview_components pc ON pc.pull_request_id = pr.id
-    AND pc.generation = e.applied_generation AND pc.revision = e.applied_revision
+    AND pc.generation = pub.generation AND pc.revision = pub.revision
 WHERE pr.id = $1
 `
 
@@ -135,6 +139,8 @@ type ReadReportSnapshotRow struct {
 
 // Reporting reads the PR's persisted truth and keeps its own bookkeeping in
 // pull_request_reports. It never changes lifecycle state.
+// What the serving deployment runs: the newest publication's candidate. After a
+// failed update the environment's applied revision names the failed attempt.
 func (q *Queries) ReadReportSnapshot(ctx context.Context, id int64) (ReadReportSnapshotRow, error) {
 	row := q.db.QueryRow(ctx, readReportSnapshot, id)
 	var i ReadReportSnapshotRow

@@ -405,6 +405,25 @@ func TestActionsRefuseAnotherOwnersPullRequest(t *testing.T) {
 	}
 }
 
+func TestThePullRequestPageDescribesTheServingDeploymentAfterAFailedUpdate(t *testing.T) {
+	h := newActionsHarness(t)
+	h.exec(t, `INSERT INTO build_intents(pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, started_at, completed_at)
+		SELECT id, 2, 1, generation, head_sha, 'manual', 'build', $2, 'key-failed-setup-0001', 'failed', now(), now(), now() FROM pull_requests WHERE id=$1`, h.prID, h.userID)
+	h.exec(t, `INSERT INTO environments(pull_request_id, subdomain, status, container_id, image_tag, head_sha, applied_generation, applied_revision, last_error_code, expires_at)
+		SELECT id, 'pr-7-2s-abcdefgh', 'failed', 'container-1', 'image-1', 'sha-old', generation, 2, 'setup_failed', now() + interval '2 days' FROM pull_requests WHERE id=$1`, h.prID)
+	h.exec(t, `INSERT INTO preview_publications(pull_request_id, repo_id, workspace_id, sequence, head_sha, generation, revision, container_id, image_tag)
+		SELECT p.id, p.repo_id, i.workspace_id, 1, 'sha-old', p.generation, 1, 'container-1', 'image-1' FROM pull_requests p
+		JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id WHERE p.id = $1`, h.prID)
+	h.exec(t, `INSERT INTO preview_components(pull_request_id, generation, revision, services, setup, docs_path)
+		SELECT id, generation, 1, '[{"kind":"postgres","version":"17"}]', true, '/docs' FROM pull_requests WHERE id=$1`, h.prID)
+	body := h.request(t, "GET", detailPath, "").Body.String()
+	for _, want := range []string{"PostgreSQL 17 · setup ran", "https://pr-7-2s-abcdefgh.preview.example.com/docs"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the PR page lacks %q", want)
+		}
+	}
+}
+
 func TestPreviewsAndBuildsShowRealDeliveryState(t *testing.T) {
 	h := newActionsHarness(t)
 	h.exec(t, `INSERT INTO environments(pull_request_id, subdomain, status, container_id, image_tag, head_sha, applied_generation, applied_revision, expires_at)

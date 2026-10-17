@@ -702,7 +702,7 @@ Proposed operator settings, accepted by the executable only once Feature 5B is i
 - **Webhooks and pull requests:** when a merged `closed` event targets the baseline branch of an enabled repository, enqueue a refresh in the same transaction.
 - **Environments:** Rebuild and Reset intents carry the requested starting source; Reset's source is validated server-side.
 - **Housekeeping:** orphaned baseline files and containers, retired files, and the daily freshness check.
-- **Reviews and activity (Features 3/4):** publications reference the candidate's starting-data record; activity records Reset and baseline-refresh events.
+- **Reviews and activity (Feature 3):** publications reference the candidate's starting-data record; activity records Reset and baseline-refresh events.
 - **Reporting:** the source line in the living PR comment.
 
 Proposed records: `repository_sampledata_settings` (repository, enabled, keep data, use baseline, baseline branch or null for the default branch, automatic refresh, revision, actor, time); `repository_baselines` (repository, service kind and major version, branch, commit, configuration hash, refresh sequence, storage key, size, checksum, key ID, status building/current/retired/failed/missing, failure category, times); `baseline_refresh_requests` (repository, trigger, actor, sequence, state, attempt, result); and starting-data fields on the existing candidate component record (source kind, source reference, fallback reasons, setup and seed outcomes).
@@ -746,7 +746,7 @@ Presentation follows the signal theme: status in semantic tones, commits and bra
 - A baseline is built from the GitHub default branch and from a chosen branch, refreshed on merge, button and daily check, coalesced and fenced; a failed refresh keeps the previous baseline and affects no PR.
 - A PR's first candidate restores the baseline, runs only its new migrations, skips `seed`, and a Reviewer can use the seeded accounts immediately.
 - After a new commit and after a Rebuild, records a Reviewer created are still present; a parallel PR never sees them.
-- Reset to the baseline and Reset to empty and seed each produce the expected data and a new review round.
+- Reset to the baseline and Reset to empty and seed each produce the expected data in a new deployment.
 - An incompatible migration history falls back to empty and seed with the reason shown; a genuinely broken migration still fails the build as `setup_failed`.
 - A fork PR receives the baseline, no secrets, and never another PR's data. Redis starts empty in every candidate.
 - Crash injection during refresh and copy leaves no orphaned containers, networks or files; disconnecting the repository deletes its baselines.
@@ -956,7 +956,7 @@ This is an ordered implementation plan, not permission to resume a previous road
 | I | Accounts, disconnect/delete, support/status | Resumable cleanup/erasure, including baselines; ownership constraints; working customer controls. |
 | J | Paid subscription mode | **Deferred** after the MVP release (§9.4). |
 
-Step G follows F because Feature 5B extends Feature 5's seed workflow, setup outcomes, Reset action and test-access guidance, and needs Features 3/4 publications and review rounds to show reviewers whether data was kept or reset. It precedes H and I so usage accounting and deletion cover baseline builds and stored baselines from their first release instead of being retrofitted.
+Step G follows F because Feature 5B extends Feature 5's seed workflow, setup outcomes, Reset action and test-access guidance, and needs Feature 3's publications to show reviewers, per deployment, whether data was kept or reset. It precedes H and I so usage accounting and deletion cover baseline builds and stored baselines from their first release instead of being retrofitted.
 
 Feature 2's onboarding part of step F was delivered after step A at the owner's request ([Guided onboarding](docs/29-guided-onboarding.md)). Steps B and C followed ([Native review and feedback](docs/30-reviews.md)). The rest of F (Feature 5) followed ([Ready-to-test sample data](docs/31-test-data.md)). For the MVP release the order continues with G (5B), H and I for the free plan, then deployment ([§1.2](#12-mvp-release-scope-and-order)); D, E and J are deferred.
 
