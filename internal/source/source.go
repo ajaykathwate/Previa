@@ -24,13 +24,19 @@ type Request struct {
 	PullRequestID int64
 	Generation    int64
 	Revision      int64
+	// BaselineRefreshID prepares a repository baseline's commit (docs/32)
+	// instead of a pull request's; PullRequestID, Generation and Revision are
+	// then zero.
+	BaselineRefreshID int64
 }
 
 var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 func (r Request) validate() error {
-	if r.InstallationID <= 0 || r.BaseRepoID <= 0 || r.PullRequestID <= 0 || r.Generation < 0 || r.Revision < 0 || !fullSHA.MatchString(r.CommitSHA) {
-		return errors.New("source preparation needs an installation, base repository, PR identity and full lowercase 40-character commit SHA")
+	owner := r.PullRequestID > 0 && r.BaselineRefreshID == 0 ||
+		r.BaselineRefreshID > 0 && r.PullRequestID == 0 && r.Generation == 0 && r.Revision == 0
+	if r.InstallationID <= 0 || r.BaseRepoID <= 0 || !owner || r.Generation < 0 || r.Revision < 0 || !fullSHA.MatchString(r.CommitSHA) {
+		return errors.New("source preparation needs an installation, base repository, PR or baseline identity and full lowercase 40-character commit SHA")
 	}
 	return nil
 }

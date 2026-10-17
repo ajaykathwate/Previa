@@ -79,7 +79,10 @@ type Job struct {
 	// Instance is this database's identity; it must match the builder's.
 	Instance                            string
 	PullRequestID, Generation, Revision int64
-	HeadSHA                             string
+	// BaselineRefreshID builds a repository baseline (docs/32) instead of a
+	// pull request: no pull request, generation or revision, its own cache.
+	BaselineRefreshID int64
+	HeadSHA           string
 	// GitHub repository IDs. HeadRepoID is 0 when the head repository is
 	// unknown (for example deleted); such a build gets a cache of its own.
 	BaseRepoID, HeadRepoID int64
@@ -111,7 +114,9 @@ func (j Job) validate() error {
 	switch {
 	case !dockerx.ValidInstance(j.Instance):
 		return errors.New("a build needs this database's instance identity")
-	case j.PullRequestID <= 0 || j.Generation < 0 || j.Revision <= 0:
+	case j.BaselineRefreshID > 0 && (j.PullRequestID != 0 || j.Generation != 0 || j.Revision != 0):
+		return errors.New("a baseline build has no PR, generation or revision")
+	case j.BaselineRefreshID <= 0 && (j.PullRequestID <= 0 || j.Generation < 0 || j.Revision <= 0):
 		return errors.New("a build needs a PR, generation and revision")
 	case !commitSHA.MatchString(j.HeadSHA):
 		return errors.New("a build needs a full lowercase commit SHA")

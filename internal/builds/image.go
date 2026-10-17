@@ -109,6 +109,9 @@ func (c *cappedWriter) Close() error { return c.w.Close() }
 // reusable returns the image an earlier attempt finished for this exact
 // revision, if it exists, carries this job's identity and fits the limit.
 func (b *Builder) reusable(ctx context.Context, job Job) (Image, bool) {
+	if job.BaselineRefreshID > 0 {
+		return Image{}, false // every refresh builds its branch head afresh
+	}
 	inspected, err := b.docker.ImageInspect(ctx, job.ImageRef())
 	if err != nil || inspected.Config == nil {
 		return Image{}, false

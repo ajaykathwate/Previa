@@ -92,6 +92,11 @@ func (r *Runtime) usage(ctx context.Context, t Target) (usage, error) {
 			u.cpuMillis += cpu
 			u.memory += memory
 		}
+		// A repository baseline's containers (docs/32) use host capacity but
+		// are no preview: they count towards no repository or account limit.
+		if c.Labels[dockerx.LabelPR] == "" {
+			continue
+		}
 		if c.Labels[dockerx.LabelInstance] == r.instance && c.Labels[dockerx.LabelBaseRepo] == strconv.FormatInt(t.BaseRepoID, 10) {
 			u.repoPRs[c.Labels[dockerx.LabelPR]] = true
 		}

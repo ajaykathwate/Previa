@@ -31,13 +31,15 @@ type Workspaces struct {
 
 // WorkspaceInfo describes one workspace on disk.
 type WorkspaceInfo struct {
-	Path          string    `json:"-"`
-	PullRequestID int64     `json:"pull_request_id"`
-	Generation    int64     `json:"generation"`
-	Revision      int64     `json:"revision"`
-	CommitSHA     string    `json:"commit_sha"`
-	CreatedAt     time.Time `json:"created_at"`
-	PID           int       `json:"pid"`
+	Path          string `json:"-"`
+	PullRequestID int64  `json:"pull_request_id"`
+	Generation    int64  `json:"generation"`
+	Revision      int64  `json:"revision"`
+	// BaselineRefreshID is set instead of the PR identity for a baseline.
+	BaselineRefreshID int64     `json:"baseline_refresh_id,omitempty"`
+	CommitSHA         string    `json:"commit_sha"`
+	CreatedAt         time.Time `json:"created_at"`
+	PID               int       `json:"pid"`
 	// Marked is false when the marker is missing or unreadable, for example after
 	// a crash immediately after the directory was created.
 	Marked bool `json:"-"`
@@ -73,7 +75,11 @@ func (w *Workspaces) create(request Request, now time.Time) (WorkspaceInfo, erro
 		return WorkspaceInfo{}, fmt.Errorf("generate workspace name: %w", err)
 	}
 	name := fmt.Sprintf("%s%d-g%d-r%d-%s", workspacePrefix, request.PullRequestID, request.Generation, request.Revision, hex.EncodeToString(suffix))
-	info := WorkspaceInfo{Path: filepath.Join(w.root, name), PullRequestID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, CommitSHA: request.CommitSHA, CreatedAt: now.UTC(), PID: os.Getpid(), Marked: true}
+	if request.BaselineRefreshID > 0 {
+		name = fmt.Sprintf("%sbaseline%d-%s", workspacePrefix, request.BaselineRefreshID, hex.EncodeToString(suffix))
+	}
+	info := WorkspaceInfo{Path: filepath.Join(w.root, name), PullRequestID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision,
+		BaselineRefreshID: request.BaselineRefreshID, CommitSHA: request.CommitSHA, CreatedAt: now.UTC(), PID: os.Getpid(), Marked: true}
 	if err := os.Mkdir(info.Path, 0o700); err != nil {
 		return WorkspaceInfo{}, fmt.Errorf("create workspace: %w", err)
 	}
@@ -139,7 +145,7 @@ func readMarker(dir string) (WorkspaceInfo, bool) {
 		return WorkspaceInfo{}, false
 	}
 	var info WorkspaceInfo
-	if json.Unmarshal(data, &info) != nil || info.PullRequestID <= 0 {
+	if json.Unmarshal(data, &info) != nil || info.PullRequestID <= 0 && info.BaselineRefreshID <= 0 {
 		return WorkspaceInfo{}, false
 	}
 	return info, true
