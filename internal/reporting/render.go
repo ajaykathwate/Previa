@@ -50,7 +50,14 @@ func CommentContent(v View) string {
 		}
 		b.WriteString("Commit " + short(v.Deployed) + ".\n")
 		if v.Backend != "" {
-			b.WriteString("Runs with " + v.Backend + ". Data does not survive a rebuild.\n")
+			kept := " Data does not survive a rebuild."
+			if v.KeepsData {
+				kept = " Data is kept between builds."
+			}
+			b.WriteString("Runs with " + v.Backend + "." + kept + "\n")
+		}
+		if v.TestData != "" {
+			b.WriteString("Test data: " + v.TestData + ".\n")
 		}
 	case PhaseWaiting:
 		b.WriteString("Commit " + short(v.HeadSHA) + " builds after five quiet minutes, at " + v.EligibleAt.UTC().Format("15:04 MST") + ".\n")

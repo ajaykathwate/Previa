@@ -405,6 +405,9 @@ func TestActionsRefuseAnotherOwnersPullRequest(t *testing.T) {
 	}
 }
 
+// After a failed update the previous deployment keeps serving: the pull
+// request page still says what it runs and links its docs, from the newest
+// publication rather than the failed attempt.
 func TestThePullRequestPageDescribesTheServingDeploymentAfterAFailedUpdate(t *testing.T) {
 	h := newActionsHarness(t)
 	h.exec(t, `INSERT INTO build_intents(pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, started_at, completed_at)
@@ -418,6 +421,36 @@ func TestThePullRequestPageDescribesTheServingDeploymentAfterAFailedUpdate(t *te
 		SELECT id, generation, 1, '[{"kind":"postgres","version":"17"}]', true, '/docs' FROM pull_requests WHERE id=$1`, h.prID)
 	body := h.request(t, "GET", detailPath, "").Body.String()
 	for _, want := range []string{"PostgreSQL 17 · setup ran", "https://pr-7-2s-abcdefgh.preview.example.com/docs"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the PR page lacks %q", want)
+		}
+	}
+}
+
+// With persistent test data the PR page says where the serving deployment's
+// databases started and why earlier sources were skipped, and that data is
+// kept between builds (docs/32).
+func TestThePullRequestPageNamesWhereTestDataStarted(t *testing.T) {
+	h := newActionsHarness(t)
+	h.exec(t, `INSERT INTO environments(pull_request_id, subdomain, status, container_id, image_tag, head_sha, applied_generation, applied_revision, expires_at)
+		SELECT id, 'pr-7-2s-abcdefgh', 'running', 'container-1', 'image-1', 'sha-old', generation, 1, now() + interval '2 days' FROM pull_requests WHERE id=$1`, h.prID)
+	h.exec(t, `INSERT INTO preview_publications(pull_request_id, repo_id, workspace_id, sequence, head_sha, generation, revision, container_id, image_tag)
+		SELECT p.id, p.repo_id, i.workspace_id, 1, 'sha-old', p.generation, 1, 'container-1', 'image-1' FROM pull_requests p
+		JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id WHERE p.id = $1`, h.prID)
+	h.exec(t, `INSERT INTO preview_components(pull_request_id, generation, revision, services, setup, seed, data_source, data_detail)
+		SELECT id, generation, 1, '[{"kind":"postgres","version":"17"}]', true, true, 'baseline',
+		       '{"baseline":{"branch":"main","sha":"a1b2c3d4e5f6","built_at":"2026-10-16T08:00:00Z"},"fallbacks":[{"source":"kept","reason":"setup_failed"}]}'
+		FROM pull_requests WHERE id=$1`, h.prID)
+	body := h.request(t, "GET", detailPath, "").Body.String()
+	for _, want := range []string{"Started from: Repository baseline (main@a1b2c3d).", "The previous build&#39;s data did not work with this branch (setup failed).", "Data does not survive a rebuild."} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the PR page lacks %q", want)
+		}
+	}
+	h.exec(t, `INSERT INTO repository_sampledata_settings(repo_id, enabled, updated_by) SELECT repo_id, true, $2 FROM pull_requests WHERE id=$1`, h.prID, h.userID)
+	h.exec(t, `UPDATE preview_components SET data_source='kept', data_detail='{"kept":{"sha":"d4e5f6a7b8c9","deployment":2}}', seed_ms=NULL WHERE pull_request_id=$1`, h.prID)
+	body = h.request(t, "GET", detailPath, "").Body.String()
+	for _, want := range []string{"Started from: Previous build (d4e5f6a).", "Data is kept between builds", "not included"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the PR page lacks %q", want)
 		}
@@ -542,6 +575,27 @@ func TestResetFromTheReviewPageReturnsThere(t *testing.T) {
 	}
 	if revision, _, _, _ := h.intent(t); revision != 2 {
 		t.Fatalf("the Rebuild was not requested: revision %d", revision)
+	}
+	// A Reset never keeps data: without a choice it starts empty (docs/32).
+	var source string
+	if err := h.pool.QueryRow(t.Context(), "SELECT coalesce(start_source,'') FROM build_intents WHERE pull_request_id=$1", h.prID).Scan(&source); err != nil || source != "empty" {
+		t.Fatalf("a Reset starts from empty databases: %q %v", source, err)
+	}
+	h.exec(t, "UPDATE build_intents SET state='succeeded', started_at=now(), completed_at=now() WHERE pull_request_id=$1", h.prID)
+	baseline := url.Values{"csrf_token": {values.Get("csrf_token")}, "action": {"rebuild"}, "reset": {"true"}, "return": {"review"},
+		"workspace_query": {"pr=7"}, "expected_revision": {"2"}, "request_key": {"review-reset-key-0000003"}, "start_source": {"baseline"}}
+	if w := h.request(t, "POST", detailPath+"/build", baseline.Encode()); w.Code != http.StatusSeeOther {
+		t.Fatalf("reset to the baseline: %d", w.Code)
+	}
+	if err := h.pool.QueryRow(t.Context(), "SELECT coalesce(start_source,'') FROM build_intents WHERE pull_request_id=$1", h.prID).Scan(&source); err != nil || source != "baseline" {
+		t.Fatalf("the chosen source is recorded: %q %v", source, err)
+	}
+	h.exec(t, "UPDATE build_intents SET state='succeeded', started_at=now(), completed_at=now() WHERE pull_request_id=$1", h.prID)
+	baseline.Set("expected_revision", "3")
+	baseline.Set("request_key", "review-reset-key-0000004")
+	baseline.Set("start_source", "kept")
+	if w := h.request(t, "POST", detailPath+"/build", baseline.Encode()); w.Code == http.StatusSeeOther && w.Header().Get("Location") == "/repositories/1/pull-requests/7/review?saved=reset" {
+		t.Fatal("a Reset cannot ask to keep data")
 	}
 	// A reset from a page that is out of date explains itself there.
 	reset.Set("request_key", "review-reset-key-0000002")

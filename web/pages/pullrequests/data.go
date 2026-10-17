@@ -65,6 +65,14 @@ type PR struct {
 	DocsURL          string
 	Outbound         int
 	OutboundWithheld bool
+	// Test data (docs/32-persistent-test-data.md): where the serving
+	// deployment's databases started, why earlier sources were not used,
+	// whether that was its previous build's data, and whether the repository
+	// keeps data between builds.
+	DataSource  string
+	DataReasons []string
+	DataKept    bool
+	KeepsData   bool
 	// ServicesOffered are the managed services a running worker offers
 	// ("postgres 17, 16"); ExecutionWorker says whether one runs at all.
 	ServicesOffered []string

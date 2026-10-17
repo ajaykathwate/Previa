@@ -767,11 +767,15 @@ SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.cr
  pc.services AS backend_services, coalesce(pc.setup, false)::boolean AS backend_setup, pc.processes AS backend_processes,
  coalesce(pc.docs_path, '')::text AS backend_docs_path, coalesce(pc.outbound, 0)::integer AS backend_outbound,
  coalesce(pc.outbound_withheld, false)::boolean AS backend_outbound_withheld,
+ coalesce(pc.data_source, '')::text AS backend_data_source, coalesce(pc.data_detail, '{}'::jsonb) AS backend_data_detail,
+ (pc.seed_ms IS NOT NULL)::boolean AS backend_seeded,
+ coalesce(tds.enabled AND tds.keep_data, false)::boolean AS keeps_test_data,
  (SELECT count(*) FROM preview_feedback_threads t WHERE t.pull_request_id=p.id AND t.state='open')::bigint AS open_findings
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN users u ON u.id=b.requested_by
 LEFT JOIN environments e ON e.pull_request_id=p.id
+LEFT JOIN repository_sampledata_settings tds ON tds.repo_id=r.id
 LEFT JOIN LATERAL (SELECT x.generation, x.revision FROM preview_publications x WHERE x.pull_request_id=p.id ORDER BY x.sequence DESC LIMIT 1) pub ON true
 LEFT JOIN preview_components pc ON pc.pull_request_id=p.id AND pc.generation=pub.generation AND pc.revision=pub.revision
 WHERE r.id=$1::bigint AND workspace_repository_access(r.id,$2::bigint,'read') AND p.number=$3::integer
@@ -849,6 +853,10 @@ type OwnedPRRow struct {
 	BackendDocsPath             string
 	BackendOutbound             int32
 	BackendOutboundWithheld     bool
+	BackendDataSource           string
+	BackendDataDetail           []byte
+	BackendSeeded               bool
+	KeepsTestData               bool
 	OpenFindings                int64
 }
 
@@ -925,6 +933,10 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 		&i.BackendDocsPath,
 		&i.BackendOutbound,
 		&i.BackendOutboundWithheld,
+		&i.BackendDataSource,
+		&i.BackendDataDetail,
+		&i.BackendSeeded,
+		&i.KeepsTestData,
 		&i.OpenFindings,
 	)
 	return i, err

@@ -330,6 +330,7 @@ func (s *Service) preview(t dbgen.ReviewTargetRow) pages.Preview {
 	}
 	if deployed {
 		p.SetupDeclared, p.Data = t.SetupDeclared, t.HasServices
+		p.DataSource, p.SeedDeclared = t.DataSource, t.SeedDeclared
 		if t.SetupDeclared && t.SetupMs.Valid {
 			p.SetupTook = duration(time.Duration(t.SetupMs.Int32) * time.Millisecond)
 		}
@@ -362,7 +363,11 @@ func resetForm(t dbgen.ReviewTargetRow, p pages.Preview) *pages.ResetForm {
 		!t.RequestCurrent || t.IntentState != "succeeded" || !p.Running() || p.Deployed != t.HeadSha {
 		return nil
 	}
-	return &pages.ResetForm{ExpectedRevision: t.RequestRevision, RequestKey: NewRequestKey(), Commit: t.HeadSha}
+	form := &pages.ResetForm{ExpectedRevision: t.RequestRevision, RequestKey: NewRequestKey(), Commit: t.HeadSha}
+	if t.UsesBaseline && t.BaselineLabel != "" {
+		form.Baseline = t.BaselineLabel
+	}
+	return form
 }
 
 // duration says how long something took, briefly.

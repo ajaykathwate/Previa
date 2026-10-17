@@ -94,11 +94,15 @@ SELECT p.*,(r.accessible AND i.status='active') AS available,i.github_installati
  pc.services AS backend_services, coalesce(pc.setup, false)::boolean AS backend_setup, pc.processes AS backend_processes,
  coalesce(pc.docs_path, '')::text AS backend_docs_path, coalesce(pc.outbound, 0)::integer AS backend_outbound,
  coalesce(pc.outbound_withheld, false)::boolean AS backend_outbound_withheld,
+ coalesce(pc.data_source, '')::text AS backend_data_source, coalesce(pc.data_detail, '{}'::jsonb) AS backend_data_detail,
+ (pc.seed_ms IS NOT NULL)::boolean AS backend_seeded,
+ coalesce(tds.enabled AND tds.keep_data, false)::boolean AS keeps_test_data,
  (SELECT count(*) FROM preview_feedback_threads t WHERE t.pull_request_id=p.id AND t.state='open')::bigint AS open_findings
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN users u ON u.id=b.requested_by
 LEFT JOIN environments e ON e.pull_request_id=p.id
+LEFT JOIN repository_sampledata_settings tds ON tds.repo_id=r.id
 -- What the serving deployment runs: the newest publication's candidate. After a
 -- failed update the environment's applied revision names the failed attempt.
 LEFT JOIN LATERAL (SELECT x.generation, x.revision FROM preview_publications x WHERE x.pull_request_id=p.id ORDER BY x.sequence DESC LIMIT 1) pub ON true

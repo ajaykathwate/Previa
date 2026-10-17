@@ -68,6 +68,10 @@ type Environment struct {
 	ExpiresAt         time.Time // zero: the preview does not expire
 	// Backend is what the deployed preview runs next to its app.
 	Backend environments.Backend
+	// Data is where its databases started; KeepsData, whether the
+	// repository keeps test data between builds (docs/32).
+	Data      environments.StartingData
+	KeepsData bool
 }
 
 // View is what the living comment and the check run say.
@@ -79,6 +83,8 @@ type View struct {
 	PreviewURL string    // only for a live, published preview
 	DocsURL    string    // the live preview's docs path, when it declares one
 	Backend    string    // what the live preview runs next to its app, one line
+	TestData   string    // where its databases started, such as "kept from previous build"
+	KeepsData  bool      // the repository keeps test data between builds
 	LogsURL    string    // only when a log page exists and the dashboard URL is known
 	ReviewURL  string    // the pull request's review page in Previa, when the dashboard URL is known
 	Failure    string    // safe sentence for a failed request
@@ -144,7 +150,7 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 	switch {
 	case s.State != environments.StateOpen || s.TeardownRequested:
 		v.Phase = removalPhase(s, env)
-		v.Deployed, v.PreviewURL, v.ExpiresAt, v.DocsURL, v.Backend = "", "", time.Time{}, "", ""
+		v.Deployed, v.PreviewURL, v.ExpiresAt, v.DocsURL, v.Backend, v.TestData = "", "", time.Time{}, "", "", ""
 		if v.Phase == PhaseRemoving && live {
 			v.Deployed = env.DeployedSHA
 		}
@@ -203,6 +209,7 @@ func (v *View) describePreview(env *Environment, settings Settings) {
 		}
 	}
 	v.Backend = env.Backend.Summary()
+	v.TestData, v.KeepsData = env.Data.Comment(), env.KeepsData
 }
 
 // unfinishedPhase is the phase of a request that has not finished: building,

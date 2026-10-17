@@ -386,7 +386,9 @@ func snapshotOf(row dbgen.ReadReportSnapshotRow) Snapshot {
 			Status: row.EnvironmentStatus.String, Hostname: row.Subdomain.String, DeployedSHA: row.DeployedSha.String,
 			AppliedGeneration: row.AppliedGeneration.Int64, AppliedRevision: row.AppliedRevision.Int64,
 			LastErrorCode: row.LastErrorCode.String, ExpiresAt: row.ExpiresAt.Time,
-			Backend: environments.ParseBackend(row.BackendServices, row.BackendProcesses, row.BackendSetup, row.BackendDocsPath.String, 0, false),
+			Backend:   environments.ParseBackend(row.BackendServices, row.BackendProcesses, row.BackendSetup, row.BackendDocsPath.String, 0, false),
+			Data:      environments.ParseStartingData(row.BackendDataSource, nil, row.BackendSeeded),
+			KeepsData: row.KeepsTestData,
 		}
 	}
 	return s

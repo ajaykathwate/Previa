@@ -565,6 +565,23 @@ func TestTheReviewShowsSetupAndOffersReset(t *testing.T) {
 	if page(f.owner).Reset == nil {
 		t.Fatal("restored state offers Reset test data again")
 	}
+	// With Test data and a ready baseline, Reset may start from it (docs/32);
+	// the reviewer's line says where this deployment's data started.
+	if r := page(f.owner).Reset; r.Baseline != "" || page(f.owner).Preview.DataLine() == "" {
+		t.Fatalf("no baseline choice without Test data: %+v", r)
+	}
+	exec(`INSERT INTO repository_sampledata_settings(repo_id, enabled, updated_by) SELECT repo_id, true, $2 FROM pull_requests WHERE id=$1`, f.pr, f.owner)
+	exec(`INSERT INTO repository_baselines (repo_id, service_kind, service_version, branch, commit_sha, refresh_sequence, storage_key, size_bytes, checksum, key_version, status)
+		SELECT repo_id, 'postgres', '17', 'main', $2, 1, 'abcdef0123456789abcdef0123456789', 1, $3, 1, 'current' FROM pull_requests WHERE id=$1`, f.pr, shaA, strings.Repeat("0", 64))
+	exec(`UPDATE preview_components SET data_source='kept', seed=true WHERE pull_request_id=$1`, f.pr)
+	p = page(f.owner)
+	if p.Reset == nil || p.Reset.Baseline != "main@"+shaA[:7] || !strings.HasPrefix(p.Preview.DataLine(), "Kept from the previous version") || !p.Preview.SeedDeclared {
+		t.Fatalf("baseline choice and data line: %+v %q", p.Reset, p.Preview.DataLine())
+	}
+	exec(`UPDATE preview_components SET data_source='empty' WHERE pull_request_id=$1`, f.pr)
+	if line := page(f.reviewer).Preview.DataLine(); line != "Fresh seeded data for this deployment." {
+		t.Fatalf("empty: %q", line)
+	}
 	// A newer commit failed in setup: the earlier deployment still serves
 	// with its own setup facts, and there is nothing to reset.
 	exec("UPDATE pull_requests SET head_sha=$2 WHERE id=$1", f.pr, shaB)

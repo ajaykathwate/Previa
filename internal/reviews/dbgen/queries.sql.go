@@ -966,6 +966,11 @@ SELECT p.id, p.repo_id, p.number, p.title, p.author, p.head_branch, p.state, p.h
        coalesce(pc.docs_path, '')::text AS docs_path,
        coalesce(pc.setup, false)::boolean AS setup_declared, pc.setup_ms,
        coalesce(jsonb_array_length(pc.services) > 0, false)::boolean AS has_services,
+       coalesce(pc.data_source, '')::text AS data_source, coalesce(pc.seed, false)::boolean AS seed_declared,
+       -- Reset test data may start from the repository baseline (docs/32).
+       coalesce(tds.enabled AND tds.use_baseline, false)::boolean AS uses_baseline,
+       coalesce((SELECT rb.branch || '@' || left(rb.commit_sha, 7) FROM repository_baselines rb
+                 WHERE rb.repo_id = r.id AND rb.status = 'current' ORDER BY rb.built_at DESC LIMIT 1), '')::text AS baseline_label,
        coalesce(e.last_error_code, '')::text AS failure_code,
        coalesce(b.revision, 0)::bigint AS request_revision,
        coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
@@ -987,6 +992,7 @@ LEFT JOIN LATERAL (
     ORDER BY x.sequence DESC LIMIT 1
 ) pub ON true
 LEFT JOIN preview_components pc ON pc.pull_request_id = p.id AND pc.generation = pub.generation AND pc.revision = pub.revision
+LEFT JOIN repository_sampledata_settings tds ON tds.repo_id = r.id
 WHERE p.repo_id = $2::bigint AND p.number = $3::integer
   AND workspace_repository_access(r.id, $1::bigint, 'preview')
 `
@@ -1026,6 +1032,10 @@ type ReviewTargetRow struct {
 	SetupDeclared         bool
 	SetupMs               pgtype.Int4
 	HasServices           bool
+	DataSource            string
+	SeedDeclared          bool
+	UsesBaseline          bool
+	BaselineLabel         string
 	FailureCode           string
 	RequestRevision       int64
 	RequestCurrent        bool
@@ -1081,6 +1091,10 @@ func (q *Queries) ReviewTarget(ctx context.Context, arg ReviewTargetParams) (Rev
 		&i.SetupDeclared,
 		&i.SetupMs,
 		&i.HasServices,
+		&i.DataSource,
+		&i.SeedDeclared,
+		&i.UsesBaseline,
+		&i.BaselineLabel,
 		&i.FailureCode,
 		&i.RequestRevision,
 		&i.RequestCurrent,

@@ -215,6 +215,27 @@ func TestReadyCommentNamesTheBackendAndDocs(t *testing.T) {
 	}
 }
 
+// With persistent test data the Ready comment names where the data started,
+// in one line without data, and says that data is kept between builds.
+func TestReadyCommentNamesTheTestDataSource(t *testing.T) {
+	s := Snapshot{PullRequestID: 1, RepoID: 2, Number: 3, HeadSHA: "abcdef1234567", State: "open", Generation: 1, BuildStatus: "open",
+		Intent: &Intent{Generation: 1, Revision: 1, HeadSHA: "abcdef1234567", State: "succeeded"},
+		Environment: &Environment{Status: "running", Hostname: "pr-3-x-abc", DeployedSHA: "abcdef1234567", AppliedGeneration: 1, AppliedRevision: 1,
+			Backend:   environments.Backend{Services: []environments.BackendService{{Kind: "postgres", Version: "17"}}, Setup: true},
+			Data:      environments.ParseStartingData("kept", nil, false),
+			KeepsData: true}}
+	body := CommentContent(Derive(s, Settings{PreviewBaseDomain: "preview.example.com"}, false, time.Now()))
+	for _, want := range []string{"Runs with PostgreSQL 17 · setup ran. Data is kept between builds.", "Test data: kept from previous build."} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("comment lacks %q:\n%s", want, body)
+		}
+	}
+	s.Environment.Data, s.Environment.KeepsData = environments.ParseStartingData("empty", nil, true), false
+	if body := CommentContent(Derive(s, Settings{PreviewBaseDomain: "preview.example.com"}, false, time.Now())); !strings.Contains(body, "Test data: empty database and seed.") || !strings.Contains(body, "Data does not survive a rebuild.") {
+		t.Fatalf("empty:\n%s", body)
+	}
+}
+
 // The living comment links the pull request's review in Previa and nothing
 // more: no review status, counts, people or feedback text reach GitHub.
 func TestCommentLinksTheReviewOnly(t *testing.T) {

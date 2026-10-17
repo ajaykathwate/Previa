@@ -164,6 +164,27 @@ type Preview struct {
 	SetupFailed bool
 	// Data: the deployment runs managed databases, so it has test data.
 	Data bool
+	// DataSource is where its databases started (docs/32): kept, baseline
+	// or empty; SeedDeclared, whether the repository declares seed.
+	DataSource   string
+	SeedDeclared bool
+}
+
+// DataLine is the reviewer's one-line version of where the test data
+// started.
+func (p Preview) DataLine() string {
+	switch p.DataSource {
+	case "kept":
+		return "Kept from the previous version. A refresh or sleep keeps it; Reset test data replaces it."
+	case "baseline":
+		return "Reset to the repository baseline for this deployment. A new commit or Rebuild keeps what testers add."
+	case "empty":
+		if p.SeedDeclared {
+			return "Fresh seeded data for this deployment."
+		}
+		return "Fresh from setup for this deployment."
+	}
+	return "Fresh from setup for each deployment. A refresh or sleep keeps it; a new commit, Rebuild or Reset replaces it."
 }
 
 // ResetForm rebuilds the serving commit to start again from the seed.
@@ -171,6 +192,9 @@ type ResetForm struct {
 	ExpectedRevision int64
 	RequestKey       string
 	Commit           string
+	// Baseline names the repository baseline a Reset may start from
+	// ("main@a1b2c3"); empty when only empty databases apply.
+	Baseline string
 }
 
 // TestAccess is how reviewers sign in to the repository's previews.
@@ -554,7 +578,9 @@ func (p Page) PublicReferences() []components.ResourceRef {
 }
 
 // DocumentTitle is the browser tab's title.
-func (p Page) DocumentTitle() string { return "Review · #" + strconv.Itoa(int(p.Number)) + " " + p.Title }
+func (p Page) DocumentTitle() string {
+	return "Review · #" + strconv.Itoa(int(p.Number)) + " " + p.Title
+}
 
 // RepositoryName is the repository's name without its owner.
 func (p Page) RepositoryName() string {

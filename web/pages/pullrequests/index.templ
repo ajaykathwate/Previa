@@ -1277,7 +1277,28 @@ templ backendFacts(pr PR) {
 		if pr.Live() && pr.Backend != "" {
 			<div>
 				<dt>Runs with</dt>
-				<dd>{ pr.Backend }. <span class="pr-backend-note">Data does not survive a rebuild.</span></dd>
+				<dd>
+					{ pr.Backend }.
+					if pr.KeepsData {
+						<span class="pr-backend-note">Data is kept between builds; Reset test data on the review page starts clean.</span>
+					} else {
+						<span class="pr-backend-note">Data does not survive a rebuild.</span>
+					}
+				</dd>
+			</div>
+		}
+		if pr.Live() && pr.DataSource != "" {
+			<div>
+				<dt>Test data</dt>
+				<dd data-test-data-source>
+					{ "Started from: " + pr.DataSource + "." }
+					for _, reason := range pr.DataReasons {
+						<span class="pr-backend-note">{ reason }</span>
+					}
+					if pr.DataKept {
+						<span class="pr-backend-note">Changes made in the previous preview while this build prepared are not included.</span>
+					}
+				</dd>
 			</div>
 		}
 		if pr.Live() && pr.DocsURL != "" {

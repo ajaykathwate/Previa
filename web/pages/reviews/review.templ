@@ -360,7 +360,7 @@ templ previewCard(p Page) {
 					if p.Preview.Data {
 						<li>
 							<span class="review-label">Test data</span>
-							<span>Fresh from setup for each deployment. A refresh or sleep keeps it; a new commit, Rebuild or Reset replaces it.</span>
+							<span data-test-data-line>{ p.Preview.DataLine() }</span>
 						</li>
 					}
 				</ul>
@@ -405,6 +405,28 @@ templ resetDialog(p Page) {
 			<input type="hidden" name="action" value="rebuild"/>
 			<input type="hidden" name="reset" value="true"/>
 			<input type="hidden" name="return" value="review"/>
+			if p.Reset.Baseline != "" {
+				<fieldset class="review-reset-sources">
+					<legend>Start from</legend>
+					<label>
+						<input type="radio" name="start_source" value="baseline" checked/>
+						<span><strong>Repository baseline</strong> <code>{ p.Reset.Baseline }</code>, then setup</span>
+					</label>
+					<label>
+						<input type="radio" name="start_source" value="empty"/>
+						<span>
+							<strong>Empty database</strong>
+							if p.Preview.SeedDeclared {
+								, then setup and seed
+							} else {
+								, then setup
+							}
+						</span>
+					</label>
+				</fieldset>
+			} else {
+				<input type="hidden" name="start_source" value="empty"/>
+			}
 			<button type="button" class="secondary-action" autofocus commandfor="review-reset" command="close" data-close-dialog>Cancel</button>
 			<button type="submit" class="primary-action busy-button">
 				<span class="busy-text">Reset test data</span>
@@ -417,6 +439,10 @@ templ resetDialog(p Page) {
 func resetText(p Page) string {
 	fresh := "that runs its setup command again"
 	switch {
+	case p.Reset.Baseline != "":
+		fresh = "whose databases start from the source you choose"
+	case p.Preview.Data && p.Preview.SeedDeclared:
+		fresh = "whose databases start empty and run setup and seed again"
 	case p.Preview.Data && p.Preview.SetupDeclared:
 		fresh = "whose databases start empty and are seeded again by its setup command"
 	case p.Preview.Data:

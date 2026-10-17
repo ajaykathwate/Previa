@@ -108,6 +108,10 @@ func categoryDiagnosis(code string) Diagnosis {
 		return Diagnosis{Title: "Your setup command failed", Stage: "start",
 			Summary: "The setup command (migrations or seed data) failed or ran out of time.",
 			Steps:   []string{"Read the setup command's output in the build log.", "Fix the migration or seed step.", stepPushBuild}}
+	case "seed_failed":
+		return Diagnosis{Title: "Your seed command failed", Stage: "start",
+			Summary: "The seed command failed or ran out of time on the empty database.",
+			Steps:   []string{"Read the seed command's output in the build log.", "Fix the seed step.", stepPushBuild}}
 	case "process_failed":
 		return Diagnosis{Title: "A background process stopped", Stage: "start",
 			Summary: "A process declared in .previewrc.yaml stopped before the preview was ready.",

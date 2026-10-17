@@ -1,6 +1,7 @@
 package pullrequests
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -206,6 +207,12 @@ func (h *Handler) describePreview(pr *pages.PR, row dbgen.OwnedPRRow) {
 	}
 	backend := environments.ParseBackend(row.BackendServices, row.BackendProcesses, row.BackendSetup, row.BackendDocsPath, row.BackendOutbound, row.BackendOutboundWithheld)
 	pr.Backend, pr.Outbound, pr.OutboundWithheld = backend.Summary(), backend.Outbound, backend.OutboundWithheld
+	if row.BackendSeeded {
+		pr.Backend += " · seed ran"
+	}
+	data := environments.ParseStartingData(row.BackendDataSource, row.BackendDataDetail, row.BackendSeeded)
+	pr.DataSource, pr.DataReasons, pr.KeepsData = data.Title(), data.Reasons(), row.KeepsTestData
+	pr.DataKept = data.Source == "kept"
 	if pr.PreviewURL != "" && backend.DocsPath != "" {
 		pr.DocsURL = pr.PreviewURL + backend.DocsPath
 	}
@@ -515,9 +522,15 @@ func (h *Handler) build(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, id, err)
 		return
 	}
+	// Reset test data starts from the chosen source: the repository baseline
+	// or empty databases; never from the serving deployment's data.
+	reset, source := action == environments.Rebuild && r.PostForm.Get("reset") == "true", ""
+	if reset {
+		source = cmp.Or(r.PostForm.Get("start_source"), environments.StartEmpty)
+	}
 	if _, err := h.actions.Builds.RequestBuild(r.Context(), environments.IntentCommand{
 		UserID: user, PullRequestID: row.ID, ExpectedRevision: expected, IdempotencyKey: key, Action: action,
-		Reset: action == environments.Rebuild && r.PostForm.Get("reset") == "true",
+		Reset: reset, StartSource: source,
 	}); err != nil {
 		h.refuse(w, r, id, err)
 		return

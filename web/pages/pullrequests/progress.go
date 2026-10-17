@@ -99,7 +99,13 @@ func (pr PR) Diagnosis() Diagnosis {
 	if pr.Failure == "" {
 		return Diagnosis{}
 	}
-	return Diagnose(pr.FailureCode, pr.FailureLog)
+	d := Diagnose(pr.FailureCode, pr.FailureLog)
+	// Kept test data can be what an app fails on (docs/32); Previa cannot
+	// tell that from an app bug, so it offers a clean start.
+	if pr.KeepsData && (pr.FailureCode == "unhealthy" || pr.FailureCode == "crashed") {
+		d.Steps = append(d.Steps, "If the app fails on the test data it kept, use Reset test data on the review page to start clean.")
+	}
+	return d
 }
 
 // Diagnosis explains a Builds or Previews row's failure, from its

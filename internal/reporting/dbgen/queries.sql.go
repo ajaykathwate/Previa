@@ -70,10 +70,13 @@ SELECT pr.id, pr.number, pr.head_sha, pr.state, pr.generation, pr.build_status, 
        rep.wanted_version, rep.reported_version, rep.comment_digest, rep.check_head_sha,
        rep.check_revision, rep.check_run_id, rep.check_open, rep.check_digest,
        pc.services AS backend_services, COALESCE(pc.setup, false)::boolean AS backend_setup,
-       pc.processes AS backend_processes, pc.docs_path AS backend_docs_path
+       pc.processes AS backend_processes, pc.docs_path AS backend_docs_path,
+       COALESCE(pc.data_source, '')::text AS backend_data_source, (pc.seed_ms IS NOT NULL)::boolean AS backend_seeded,
+       COALESCE(tds.enabled AND tds.keep_data, false)::boolean AS keeps_test_data
 FROM pull_requests pr
 JOIN repos r ON r.id = pr.repo_id
 JOIN installations i ON i.id = r.installation_id
+LEFT JOIN repository_sampledata_settings tds ON tds.repo_id = r.id
 LEFT JOIN build_intents b ON b.pull_request_id = pr.id
 LEFT JOIN environments e ON e.pull_request_id = pr.id
 LEFT JOIN pull_request_reports rep ON rep.pull_request_id = pr.id
@@ -135,6 +138,9 @@ type ReadReportSnapshotRow struct {
 	BackendSetup                bool
 	BackendProcesses            []byte
 	BackendDocsPath             pgtype.Text
+	BackendDataSource           string
+	BackendSeeded               bool
+	KeepsTestData               bool
 }
 
 // Reporting reads the PR's persisted truth and keeps its own bookkeeping in
@@ -193,6 +199,9 @@ func (q *Queries) ReadReportSnapshot(ctx context.Context, id int64) (ReadReportS
 		&i.BackendSetup,
 		&i.BackendProcesses,
 		&i.BackendDocsPath,
+		&i.BackendDataSource,
+		&i.BackendSeeded,
+		&i.KeepsTestData,
 	)
 	return i, err
 }
