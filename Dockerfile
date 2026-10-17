@@ -27,7 +27,8 @@ set -eu
 sh deploy/install-tailwind.sh bin/tailwindcss
 bin/tailwindcss -i web/styles/app.css -o web/static/css/app.css --minify
 go tool -modfile=tools/go.mod templ generate -path web
-mkdir -p /out/bin /out/state/sources /out/state/router
+mkdir -p /out/bin /out/state/sources /out/state/router /out/state/baselines
+chmod 0700 /out/state/baselines
 for command in server worker migrate route-sync housekeeping secrets-reencrypt egress; do
   GOOS="${TARGETOS}" GOARCH="${TARGETARCH:-$(go env GOARCH)}" go build -buildvcs=false -ldflags="-s -w -X github.com/ajaykathwatee/previa/internal/platform/version.Version=${VERSION}" \
     -o "/out/bin/previa-${command}" "./cmd/${command}"
@@ -44,12 +45,13 @@ ENTRYPOINT ["/usr/local/bin/previa-server"]
 
 FROM ${RUNTIME_IMAGE} AS worker
 COPY --from=build /out/bin/previa-worker /out/bin/previa-route-sync /out/bin/previa-housekeeping /usr/local/bin/
-# Source workspaces and the route file live here (named volumes inherit the
-# ownership, so the non-root worker can write them).
+# Source workspaces, the route file and encrypted test-data baselines live
+# here (named volumes inherit the ownership, so the non-root worker can write
+# them).
 COPY --from=build --chown=65532:65532 /out/state /var/lib/previa
 USER 65532:65532
 EXPOSE 9091
-ENV WORKER_INTERNAL_ADDR=0.0.0.0:9091 APP_ENV=production SOURCE_WORKSPACE_ROOT=/var/lib/previa/sources ROUTER_DYNAMIC_DIR=/var/lib/previa/router
+ENV WORKER_INTERNAL_ADDR=0.0.0.0:9091 APP_ENV=production SOURCE_WORKSPACE_ROOT=/var/lib/previa/sources ROUTER_DYNAMIC_DIR=/var/lib/previa/router PREVIEW_BASELINE_DIR=/var/lib/previa/baselines
 HEALTHCHECK --interval=15s --timeout=6s --start-period=60s --retries=3 CMD ["/usr/local/bin/previa-worker", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/previa-worker"]
 

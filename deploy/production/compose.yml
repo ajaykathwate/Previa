@@ -104,6 +104,8 @@ services:
       WORKER_INTERNAL_ADDR: 0.0.0.0:9091
       GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github_app_key
       SOURCE_WORKSPACE_ROOT: /var/lib/previa/sources
+      # Encrypted test-data baselines (docs/32): derived data, not backed up.
+      PREVIEW_BASELINE_DIR: /var/lib/previa/baselines
       ROUTER_DYNAMIC_DIR: /var/lib/previa/router
       ROUTER_CONTAINER: previa-router
       # Preview request counts ("Last opened"), read inside the router.
@@ -118,6 +120,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - sources:/var/lib/previa/sources
+      - baselines:/var/lib/previa/baselines
       - ${PREVIA_ROUTER_DIR:-/var/lib/previa/router}:/var/lib/previa/router
     tmpfs: [/tmp]
     depends_on:
@@ -290,6 +293,7 @@ networks:
 volumes:
   postgres:
   sources:
+  baselines:
   acme:
   prometheus:
   grafana:

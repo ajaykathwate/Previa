@@ -34,6 +34,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/reviews"
 	"github.com/ajaykathwatee/previa/internal/routing"
+	"github.com/ajaykathwatee/previa/internal/sampledata"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/starterkits"
 	"github.com/ajaykathwatee/previa/internal/webhooks"
@@ -126,6 +127,7 @@ type serverFeatures struct {
 	publicIDs      *publicid.Catalog
 	setup          *onboarding.Handler
 	reviews        *reviews.Handler
+	testData       *sampledata.Handler
 }
 
 func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
@@ -168,7 +170,11 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 		service = installations.NewService(installations.NewRepository(pool, syncService), appClient, installations.NewGitHubAuthorization(cfg), nil)
 	}
 	f.installations = installations.NewHandler(service, f.auth, f.sessions, cfg.GitHubAppSlug, logger)
-	f.deliveries = webhooks.NewDeliveryService(pool, coordinator, invalidate, syncService)
+	testDataStore, err := sampledata.NewStore(pool, producer, environments.BuildQueue)
+	if err != nil {
+		return nil, err
+	}
+	f.deliveries = webhooks.NewDeliveryService(pool, coordinator, invalidate, syncService).WithMerges(testDataStore)
 	policyStore := installations.NewRepository(pool)
 	if appClient != nil {
 		policyStore.WithReports(coordinator) // a switch to Manual updates cancelled PRs' reports
@@ -209,6 +215,11 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	}
 	f.logs = buildlogs.NewHandler(logStore, f.auth, logger).WithLiveUpdates(hub, realtime.DefaultStreamOptions).
 		WithRetention(cfg.BuildLogRetention())
+	testData, err := sampledata.NewService(testDataStore, testDataActivity{recorder: activity.NewRecorder()}, workerTestData{capabilities: f.capabilities})
+	if err != nil {
+		return nil, err
+	}
+	f.testData = sampledata.NewHandler(testData, baselineLogs{store: logStore}, f.auth, hub, logger)
 	f.output = appoutput.NewHandler(appoutput.NewStore(pool), f.auth, producer, hub, realtime.DefaultStreamOptions, logger)
 	f.wake = idle.NewWakePage(pool, producer, cfg.PreviewBaseDomain, routing.UnavailablePage, logger)
 	var permissions previewaccess.Permissions
@@ -365,6 +376,7 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 		}
 		f.secrets.Mount(r, auth.RequireUser)
 		f.outbound.Mount(r, auth.RequireUser)
+		f.testData.Mount(r, auth.RequireUser)
 		f.logs.Mount(r, auth.RequireUser)
 		f.output.Mount(r, auth.RequireUser)
 		f.access.Mount(r, auth.RequireUser)

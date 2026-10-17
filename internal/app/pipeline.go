@@ -22,6 +22,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/runtime"
+	"github.com/ajaykathwatee/previa/internal/sampledata"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/source"
 	"github.com/google/go-github/v91/github"
@@ -144,13 +145,14 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 	}
 	cfg := in.cfg
 	if !cfg.SecretsConfigured() {
-		p.unavailable = append(p.unavailable, "SECRETS_ENCRYPTION_KEYS is not set: repositories with secrets cannot start previews")
+		p.unavailable = append(p.unavailable, "SECRETS_ENCRYPTION_KEYS is not set: repositories with secrets cannot start previews, and test-data baselines are not stored (kept data still works)")
 	}
 	p.addDiscovery(x.sync)
 	p.capabilities.Execution, p.capabilities.Routing, p.capabilities.Reporting, p.capabilities.Housekeeping = true, true, true, true
 	p.capabilities.Services = x.catalog.Offers()
 	p.capabilities.BuildTimeout = cfg.BuildTimeout
 	p.capabilities.PrivatePreviews = cfg.PreviewAccessURL != ""
+	p.capabilities.Baselines = x.testData != nil
 	if !p.capabilities.PrivatePreviews {
 		p.unavailable = append(p.unavailable, "PREVIEW_ACCESS_URL is not set: private previews deny access and their builds cannot be published; configure the router's server URL and restart this worker")
 	}
@@ -192,6 +194,11 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		sleeper.Register(rc)
 		river.AddWorker(rc.Workers, &routing.SyncWorker{Controller: x.controller})
 		rc.Queues[routing.SyncQueue] = river.QueueConfig{MaxWorkers: 1}
+		if x.testData != nil {
+			x.testData.Register(rc)
+		} else {
+			sampledata.RegisterWaiting(rc)
+		}
 	})
 	p.startup = append(p.startup,
 		func(ctx context.Context) error {

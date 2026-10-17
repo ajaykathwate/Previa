@@ -4,7 +4,8 @@ import "strconv"
 
 // RepositoryTabs switches between a repository's sections. Each is a full page,
 // so the switch works without JavaScript; view transitions keep it smooth.
-// Setup is for people who can build; Secrets and Outbound for managers.
+// Setup and Test data are for people who can build; Secrets and Outbound
+// for managers.
 templ RepositoryTabs(repoID int64, active string) {
 	<nav class="repo-tabs" aria-label="Repository sections">
 		<a
@@ -25,6 +26,15 @@ templ RepositoryTabs(repoID int64, active string) {
 			>
 				@ChecklistIcon()
 				<span>Setup</span>
+			</a>
+			<a
+				href={ PublicURL(ctx, "/repositories/"+strconv.FormatInt(repoID, 10)+"/test-data") }
+				if active == "test-data" {
+					aria-current="page"
+				}
+			>
+				@DatabaseIcon()
+				<span>Test data</span>
 			</a>
 		}
 		if CanManage(ctx) {

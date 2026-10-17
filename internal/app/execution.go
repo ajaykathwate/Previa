@@ -20,6 +20,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/reporting"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/runtime"
+	"github.com/ajaykathwatee/previa/internal/sampledata"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/source"
 	"github.com/ajaykathwatee/previa/internal/workspaces"
@@ -42,6 +43,8 @@ type execution struct {
 	sync       *pullrequests.SyncService
 	logs       *buildlogs.Store
 	repo       *environments.Repository
+	// testData runs baseline refreshes; nil without baseline storage.
+	testData *sampledata.Jobs
 }
 
 func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.GitHubSource) (*execution, error) {
@@ -58,9 +61,19 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 	if x.gateway, err = newEgressGateway(in); err != nil {
 		return nil, err
 	}
-	provider, err := newSecretsProvider(in)
+	provider, keyring, err := newSecretsProvider(in)
 	if err != nil {
 		return nil, err
+	}
+	testDataStore, err := sampledata.NewStore(pool, in.producer, environments.BuildQueue)
+	if err != nil {
+		return nil, err
+	}
+	var baselines *sampledata.Storage
+	if keyring != nil {
+		if baselines, err = sampledata.NewStorage(cfg.PreviewBaselineDir, keyring, int64(cfg.PreviewBaselineMaxSize)); err != nil {
+			return nil, fmt.Errorf("prepare PREVIEW_BASELINE_DIR: %w", err)
+		}
 	}
 	if x.catalog, err = cfg.ServiceCatalog(); err != nil {
 		return nil, err
@@ -78,7 +91,7 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 		return nil, err
 	}
 	x.logs = buildlogs.NewStore(pool)
-	if x.runtime, err = newRuntime(in, instance, x.gateway, preparer, builder, provider, x.logs); err != nil {
+	if x.runtime, err = newRuntime(in, instance, x.gateway, preparer, builder, provider, x.logs, startingData{store: testDataStore, storage: baselines}); err != nil {
 		return nil, err
 	}
 	operations, err := environments.NewOperationBroker(in.producer)
@@ -118,7 +131,33 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 	if x.keeper, err = newHousekeeper(cfg, pool, log, repo, x.broker, x.sweeper, x.controller, x.runtime, x.sync, builder, workspaces); err != nil {
 		return nil, err
 	}
+	if baselines != nil {
+		if x.testData, err = newTestDataJobs(in, testDataStore, baselines, x); err != nil {
+			return nil, err
+		}
+	}
 	return x, nil
+}
+
+// newTestDataJobs runs baseline refreshes on the build queue, and the
+// dispatcher, daily freshness check and cleanup of persistent test data.
+func newTestDataJobs(in pipelineInput, store *sampledata.Store, storage *sampledata.Storage, x *execution) (*sampledata.Jobs, error) {
+	branches, err := sampledata.NewGitHubBranches(in.github)
+	if err != nil {
+		return nil, err
+	}
+	runner, err := sampledata.NewRunner(store, sampledata.RunnerParts{
+		Builder: baselineBuilder{runtime: x.runtime, logs: x.logs, storage: storage, logger: in.logger}, Branches: branches,
+		Admission: x.repo, Activity: testDataActivity{recorder: activity.NewRecorder()}, Files: storage,
+		Timeout: in.cfg.BuildTimeout, MinInterval: in.cfg.PreviewBaselineMinInterval, Paused: in.cfg.BuildsPaused,
+	}, in.logger)
+	if err != nil {
+		return nil, err
+	}
+	return sampledata.NewJobs(store, sampledata.JobParts{
+		Runner: runner, Branches: branches, Directory: storage, Leftovers: x.runtime,
+		Offered: func(kind, version string) bool { _, ok := x.catalog.Image(kind, version); return ok },
+	}, in.logger)
 }
 
 // newEgressGateway prepares the egress proxy. The worker owns its
@@ -146,17 +185,20 @@ func newEgressGateway(in pipelineInput) (*egress.Gateway, error) {
 	return gateway, nil
 }
 
-// newSecretsProvider decrypts repository secrets for previews. Without a key
-// it still runs: previews of repositories with secrets do not start.
-func newSecretsProvider(in pipelineInput) (*secrets.Provider, error) {
+// newSecretsProvider decrypts repository secrets for previews and returns
+// the keyring, which also encrypts test-data baselines. Without a key it
+// still runs: previews of repositories with secrets do not start, and no
+// baseline is stored.
+func newSecretsProvider(in pipelineInput) (*secrets.Provider, *secrets.Keyring, error) {
 	var keyring *secrets.Keyring
 	if in.cfg.SecretsConfigured() {
 		var err error
 		if keyring, err = secrets.ParseKeyring(in.cfg.SecretsEncryptionKeys, in.cfg.SecretsActiveKeyVersion); err != nil {
-			return nil, fmt.Errorf("configure repository secrets: %w", err)
+			return nil, nil, fmt.Errorf("configure repository secrets: %w", err)
 		}
 	}
-	return secrets.NewProvider(secrets.NewRepository(in.pool), keyring)
+	provider, err := secrets.NewProvider(secrets.NewRepository(in.pool), keyring)
+	return provider, keyring, err
 }
 
 // newPreparer downloads and validates a commit's source and configuration,
@@ -169,12 +211,13 @@ func newPreparer(in pipelineInput, workspaces *source.Workspaces, catalog config
 	return source.NewPreparer(archives, workspaces, source.DefaultLimits(), repoconfig.Platform{Limits: repoconfig.DefaultLimits(), Services: catalog, BuildTimeout: in.cfg.BuildTimeout})
 }
 
-func newRuntime(in pipelineInput, instance string, gateway *egress.Gateway, preparer *source.Preparer, builder *builds.Builder, provider *secrets.Provider, logStore *buildlogs.Store) (*runtime.Runtime, error) {
+func newRuntime(in pipelineInput, instance string, gateway *egress.Gateway, preparer *source.Preparer, builder *builds.Builder, provider *secrets.Provider, logStore *buildlogs.Store, testData runtime.StartingData) (*runtime.Runtime, error) {
 	targets := runtime.NewTargetStore(in.pool).WithAuthorization(workspaces.NewService(workspaces.NewRepository(in.pool), nil, workspaceGitHub{app: in.github}, nil))
 	return runtime.New(runtime.Parts{
 		Instance: instance, Admission: runtime.NewAdmissionLock(in.pool), Docker: in.docker, Egress: gateway,
 		Targets: targets, Sources: preparer, Builder: builder, Secrets: provider,
 		Components: targets, Destinations: outbound.NewRepository(in.pool, nil), Outbound: targets,
+		StartingData: testData, Deployments: targets,
 		Logs: func(ctx context.Context, attempt environments.Attempt, redactor *secrets.Redactor) (runtime.LogSink, error) {
 			return logStore.Open(ctx, buildlogs.Binding{EnvironmentID: attempt.EnvironmentID, Epoch: attempt.LogEpoch}, redactor, buildlogs.DefaultLimits())
 		},
