@@ -237,6 +237,8 @@ func TestTestAccessSavesWakeLivePagesButRevealsDoNot(t *testing.T) {
 	if _, err := conn.Exec(ctx, "LISTEN previa_events"); err != nil {
 		t.Fatal(err)
 	}
+	// The channel is shared with every package's tests running in parallel
+	// (each in its own schema), so only this feature's tables count.
 	next := func() string {
 		t.Helper()
 		wait, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -246,7 +248,7 @@ func TestTestAccessSavesWakeLivePagesButRevealsDoNot(t *testing.T) {
 			if err != nil {
 				t.Fatal("no change signal:", err)
 			}
-			if strings.Contains(n.Payload, `"repository:`) {
+			if strings.Contains(n.Payload, `"repository:`) && (strings.Contains(n.Payload, "review_test_access") || strings.Contains(n.Payload, "preview_feedback")) {
 				return n.Payload
 			}
 		}
