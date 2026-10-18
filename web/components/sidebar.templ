@@ -27,6 +27,9 @@ templ SidebarNav(active NavItem) {
 			<div class="nav-group">
 				<p class="nav-group-label">Workspace</p>
 				@WorkspaceLink(WorkspaceURL(Workspace(ctx).ID, "members"), "Members", TeamIcon(), NavMembers, active)
+				if CanOperate(ctx) {
+					@WorkspaceLink(WorkspaceURL(Workspace(ctx).ID, "usage"), "Usage", BuildIcon(), NavUsage, active)
+				}
 				if CanManage(ctx) {
 					@WorkspaceLink(WorkspaceURL(Workspace(ctx).ID, "settings"), "Settings", WrenchIcon(), NavWorkspaceSettings, active)
 				}

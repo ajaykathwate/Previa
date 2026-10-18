@@ -14,6 +14,7 @@ const (
 	NavFAQ               NavItem = "faq"
 	NavWorkspaces        NavItem = "workspaces"
 	NavMembers           NavItem = "members"
+	NavUsage             NavItem = "usage"
 	NavWorkspaceSettings NavItem = "workspace-settings"
 )
 

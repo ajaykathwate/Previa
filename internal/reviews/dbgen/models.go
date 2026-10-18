@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// Legacy technical elapsed-time counter; never billed or imported into workspace execution accounting
 type AccountBuildUsage struct {
 	UserID       int64
 	Day          pgtype.Date
@@ -118,6 +119,7 @@ type BuildIntent struct {
 	ExecutionJobID     pgtype.Int8
 	ExecutionErrorCode string
 	StartSource        pgtype.Text
+	UsageWaitUntil     pgtype.Timestamptz
 }
 
 type BuildLog struct {
@@ -228,6 +230,21 @@ type EnvironmentRoute struct {
 	ServedImageTag     pgtype.Text
 	ServedAt           pgtype.Timestamptz
 	UnconfirmedTargets []byte
+}
+
+type FreePlanPolicy struct {
+	Singleton                bool
+	PeriodKind               string
+	IncludedSeconds          int64
+	ConcurrentBuilds         int32
+	PreviewSlots             int32
+	OperatorDailySeconds     int64
+	OperatorConcurrentBuilds int32
+	OperatorCheckedAt        pgtype.Timestamptz
+	PreviewLifetimeSeconds   pgtype.Int8
+	PreviewIdleSeconds       pgtype.Int8
+	LogRetentionSeconds      pgtype.Int8
+	CutoverAt                pgtype.Timestamptz
 }
 
 type Installation struct {
@@ -622,11 +639,25 @@ type Workspace struct {
 	DeletedAt       pgtype.Timestamptz
 }
 
+// Legacy technical elapsed-time counter; never billed or imported into workspace execution accounting
 type WorkspaceBuildUsage struct {
 	WorkspaceID  int64
 	Day          pgtype.Date
 	BuildSeconds int64
 	Builds       int32
+}
+
+type WorkspaceEntitlement struct {
+	WorkspaceID       int64
+	PlanKey           string
+	Revision          int64
+	PeriodKind        string
+	IncludedSeconds   int64
+	ConcurrentBuilds  int32
+	PreviewSlots      int32
+	ComputeRestricted bool
+	Source            string
+	VerifiedAt        pgtype.Timestamptz
 }
 
 type WorkspaceInvitation struct {
@@ -678,4 +709,40 @@ type WorkspaceTransfer struct {
 	ToUserID    int64
 	Revision    int64
 	ExpiresAt   pgtype.Timestamptz
+}
+
+type WorkspaceUsageAttempt struct {
+	AttemptKey        pgtype.UUID
+	WorkspaceID       int64
+	RepoID            pgtype.Int8
+	PullRequestID     pgtype.Int8
+	BaselineRefreshID pgtype.Int8
+	Generation        int64
+	Revision          int64
+	State             string
+	Outcome           string
+	Provisional       bool
+	AdmittedAt        pgtype.Timestamptz
+	StartedAt         pgtype.Timestamptz
+	FinishedAt        pgtype.Timestamptz
+}
+
+type WorkspaceUsagePeriod struct {
+	WorkspaceID int64
+	StartsAt    pgtype.Timestamptz
+	EndsAt      pgtype.Timestamptz
+	ConsumedUs  int64
+	MeasuredAt  pgtype.Timestamptz
+}
+
+type WorkspaceUsageSegment struct {
+	AttemptKey    pgtype.UUID
+	Sequence      int32
+	WorkspaceID   int64
+	PeriodStart   pgtype.Timestamptz
+	Day           pgtype.Date
+	StartsAt      pgtype.Timestamptz
+	ReservedUntil pgtype.Timestamptz
+	EndedAt       pgtype.Timestamptz
+	ConsumedUs    int64
 }

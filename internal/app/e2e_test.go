@@ -486,6 +486,34 @@ func e2eSchema(t *testing.T) *pgxpool.Pool {
 			t.Fatalf("%s: %v", file, err)
 		}
 	}
+	// Test allowances are explicit fixture inputs, independent of the owner's
+	// production business decisions. Every real worker still meters its work.
+	if _, err := pool.Exec(t.Context(), `UPDATE free_plan_policy SET included_seconds=600000,concurrent_builds=8,preview_slots=20`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		var mismatches int
+		err := pool.QueryRow(ctx, `SELECT count(*) FROM workspace_usage_periods p WHERE p.consumed_us<>(
+			SELECT coalesce(sum(s.consumed_us),0)::bigint FROM workspace_usage_segments s WHERE s.workspace_id=p.workspace_id AND s.period_start=p.starts_at)`).Scan(&mismatches)
+		if err != nil || mismatches != 0 {
+			t.Errorf("end-to-end usage does not reconcile: %d %v", mismatches, err)
+		}
+		if strings.HasPrefix(t.Name(), "TestReal") {
+			var attempts, baselines int
+			var consumed int64
+			err = pool.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE baseline_refresh_id IS NOT NULL),
+				coalesce((SELECT sum(consumed_us) FROM workspace_usage_segments),0)::bigint FROM workspace_usage_attempts`).Scan(&attempts, &baselines, &consumed)
+			if err != nil || attempts == 0 || consumed <= 0 {
+				t.Errorf("real execution was not accounted: attempts=%d consumed_us=%d error=%v", attempts, consumed, err)
+			}
+			if t.Name() == "TestRealTestDataJourneys" && baselines < 2 {
+				t.Errorf("baseline execution was not accounted: %d attempts", baselines)
+			}
+			t.Logf("usage: %d physical attempts (%d baselines), %.6f executed seconds; periods reconcile with segments", attempts, baselines, float64(consumed)/1000000)
+		}
+	})
 	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
 	if err != nil {
 		t.Fatal(err)

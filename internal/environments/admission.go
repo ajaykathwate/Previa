@@ -46,7 +46,17 @@ func (r *Repository) claimBuild(ctx context.Context, request Request, now time.T
 		if allowed = affected == 1; !allowed {
 			return nil
 		}
+		key, wait, e := r.reserveUsageTx(ctx, tx, request, now)
+		if e != nil {
+			return e
+		}
+		if wait != nil {
+			allowed = false
+			waiting = wait
+			return nil
+		}
 		attempt, e = r.openAttemptTx(ctx, tx, request)
+		attempt.UsageKey = key
 		return e
 	})
 	if err != nil {

@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser test-workspace-browser test-setup-browser test-review-browser test-test-data-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e test-reference test-test-data router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status river-ui
+.PHONY: generate templates watch-templates assets build test test-browser test-workspace-browser test-setup-browser test-review-browser test-test-data-browser test-usage-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e test-reference test-test-data router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status river-ui
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -60,7 +60,7 @@ browser-install:
 	npm exec --prefix web/tests/browser -- playwright install chromium
 
 test-browser: assets generate
-	RUN_BROWSER_TESTS=1 $(GO) test -count=1 -v ./web/tests/browser
+	RUN_BROWSER_TESTS=1 $(GO) test -count=1 -v -timeout 12m ./web/tests/browser
 
 test-workspace-browser: assets generate
 	RUN_WORKSPACE_BROWSER_TESTS=1 $(GO) test -count=1 -v ./internal/workspaces -run TestWorkspaceBrowser
@@ -73,6 +73,9 @@ test-review-browser: assets generate
 
 test-test-data-browser: assets generate
 	RUN_TEST_DATA_BROWSER_TESTS=1 $(GO) test -count=1 -v ./internal/sampledata -run TestTestDataBrowser
+
+test-usage-browser: assets generate
+	RUN_USAGE_BROWSER_TESTS=1 $(GO) test -count=1 -v ./internal/usage -run TestUsageBrowser
 
 # Opt-in real GitHub proof; reads credentials from .env, never CLI flags.
 test-github-app:
@@ -276,5 +279,6 @@ river-ui:
 
 # Signs a local fixture in memory; secret is never a command argument.
 .PHONY: test-webhook
+.PHONY: test-usage-browser
 test-webhook:
 	@$(load_run_env) python3 deploy/test-webhook.py

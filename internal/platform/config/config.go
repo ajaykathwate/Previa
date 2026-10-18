@@ -125,7 +125,8 @@ type WorkerConfig struct {
 	GitHubAppPrivateKeyPath string        `envconfig:"GITHUB_APP_PRIVATE_KEY_PATH"`
 	MaxConcurrentBuilds     int           `envconfig:"MAX_CONCURRENT_BUILDS" required:"true"`
 	BuildTimeout            time.Duration `envconfig:"BUILD_TIMEOUT" default:"12m"`
-	// Fair sharing between workspaces on one server; zero turns a limit off.
+	// Additional workspace safety ceilings; zero disables only the extra cap.
+	// The finite workspace entitlement still applies (docs/33).
 	// The existing account-named configuration keys retain their spelling.
 	BuildsPerAccount          int `envconfig:"BUILDS_PER_ACCOUNT" default:"0"`
 	BuildMinutesPerAccountDay int `envconfig:"BUILD_MINUTES_PER_ACCOUNT_DAY" default:"0"`

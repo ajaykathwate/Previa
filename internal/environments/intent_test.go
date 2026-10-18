@@ -96,6 +96,7 @@ func newIntentFixture(t *testing.T) *intentFixture {
 	applyIntentMigration(t, pool, "0033_public_resource_ids.sql")
 	applyIntentMigration(t, pool, "0034_pr_details_and_execution_health.sql")
 	applyIntentMigration(t, pool, "0041_persistent_test_data.sql") // Reset test data's starting source
+	applyIntentMigration(t, pool, "0042_workspace_usage.sql")      // compute wait deadlines in the current intent row
 	if _, err := pool.Exec(ctx, "UPDATE pull_requests SET mergeable=true, mergeable_state='clean', build_status='open', head_repo_id=501"); err != nil {
 		t.Fatal(err)
 	}
@@ -636,6 +637,16 @@ func TestIntentCurrentRequestTransitionRetryAndGenerationZero(t *testing.T) {
 
 func TestIntentMigrationRollbackAndReapplyInIsolatedSchema(t *testing.T) {
 	f := newIntentFixture(t)
+	// This historical test exercises 0006/0030. Remove the later ledger's
+	// workspace references before rolling back the tables it depends on.
+	usageMigration, err := os.ReadFile("../../db/migrations/0042_workspace_usage.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, usageDown, _ := strings.Cut(string(usageMigration), "-- +goose Down")
+	if _, err := f.pool.Exec(t.Context(), usageDown); err != nil {
+		t.Fatal(err)
+	}
 	workspace, err := os.ReadFile("../../db/migrations/0030_workspaces.sql")
 	if err != nil {
 		t.Fatal(err)

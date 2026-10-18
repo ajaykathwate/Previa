@@ -53,6 +53,7 @@ type Repository struct {
 	lifetime   time.Duration
 	buildSlots int
 	accounts   AccountLimits
+	usage      ComputeUsage
 	// publications hears about each new publication; nil records only the
 	// publication itself.
 	publications PublicationRecorder

@@ -1,0 +1,115 @@
+package usage
+
+import "github.com/ajaykathwatee/previa/web/layouts"
+import "github.com/ajaykathwatee/previa/web/components"
+
+templ Index(username string, p Page) {
+	@layouts.App("Usage", username, p.CSRF, components.NavUsage) {
+		<div class="usage-page">
+			<header class="usage-heading">
+				<div><p class="eyebrow">{ p.Name }</p><h1>Usage</h1><p class="field-meta">Build execution and limits shared by this workspace.</p></div>
+				<a class="field-card-action" href={ components.PublicURL(ctx, URL(p.WorkspaceID)) }>Refresh usage</a>
+			</header>
+			if p.Manager {
+				<div class="field-grid field-grid-wide">
+					<section class="workspace-panel field-card" aria-labelledby="usage-plan">
+						<header class="field-card-head"><h2 id="usage-plan">Free early access</h2><span class="badge tone-ok">Free</span></header>
+						<dl class="usage-facts">
+							<div><dt>Allowance period · UTC</dt><dd class="usage-period"><time datetime={ p.PeriodStart }>{ DateOnly(p.PeriodStart) }</time><span>→ </span><time datetime={ p.PeriodEnd }>{ DateOnly(p.PeriodEnd) }</time></dd></div>
+							<div><dt>Build minutes included</dt><dd>{ p.Included }</dd></div>
+							<div><dt>Consumed minutes</dt><dd>{ p.Consumed }</dd></div>
+							<div><dt>Reserved minutes</dt><dd>{ p.Reserved }</dd></div>
+						</dl>
+						<p class="field-card-foot">Reservations hold up to 60 seconds per running attempt. Unused time is released when the attempt ends.</p>
+					</section>
+					<section class="workspace-panel field-card" aria-labelledby="usage-capacity">
+						<header class="field-card-head"><h2 id="usage-capacity">Capacity</h2></header>
+						<dl class="usage-facts">
+							<div><dt>Concurrent builds</dt><dd>{ Number(p.Builds) } <span>of { Number(p.BuildLimit) }</span></dd></div>
+							<div><dt>Preview slots</dt><dd>{ Number(p.Slots) } <span>of { Number(p.SlotLimit) }</span></dd></div>
+							<div>
+								<dt>Operator daily ceiling</dt>
+								<dd>
+									if !p.OperatorKnown {
+										Not reported by an execution worker
+									} else if p.Daily!="" {
+										{ p.Daily } minutes · resets 00:00 UTC
+									} else {
+										No additional daily ceiling
+									}
+								</dd>
+							</div>
+						</dl>
+						<p class="field-card-foot">Sleeping previews keep a slot. Replacing the same pull request reuses its slot. Host capacity can also delay work.</p>
+						if p.OperatorChecked!="" {
+							<p class="field-card-foot">Worker policy reported <time datetime={ p.OperatorChecked }>{ DateTime(p.OperatorChecked) }</time>.</p>
+						}
+					</section>
+				</div>
+				if p.Pending>0 || p.Provisional>0 {
+					<p class="connection-notice tone-warn" role="status">{ Number(p.Pending) } expired reservations await reconciliation. { Number(p.Provisional) } recovered attempts have provisional usage, bounded by their last reservation deadline.</p>
+				}
+			} else {
+				<p class="connection-notice tone-info">You can see technical usage for repositories you are granted. Owners and Admins can see workspace totals and the free allowance.</p>
+			}
+			<section class="workspace-panel field-card" aria-labelledby="usage-repositories">
+				<header class="field-card-head"><h2 id="usage-repositories">Repositories</h2><span class="field-card-note">Current allowance period</span></header>
+				if len(p.Repositories)==0 {
+					<p class="field-card-foot">No authorized repositories.</p>
+				} else {
+					<div class="usage-table-wrap">
+						<table class="usage-table">
+							<thead><tr><th scope="col">Repository</th><th scope="col">Consumed min</th><th scope="col">Reserved min</th><th scope="col">Attempts</th></tr></thead>
+							<tbody>
+								for _,r:=range p.Repositories {
+									<tr>
+										<th scope="row"><a href={ components.PublicURL(ctx, "/repositories/"+Number(int(r.ID))) }>{ r.Name }</a></th>
+										<td data-label="Consumed min">{ r.Consumed }</td>
+										<td data-label="Reserved min">{ r.Reserved }</td>
+										<td data-label="Attempts">
+											{ Number(r.Attempts) }
+											if r.Provisional>0 {
+												<span class="field-meta">({ Number(r.Provisional) } provisional)</span>
+											}
+										</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</section>
+			<section class="workspace-panel field-card" aria-labelledby="usage-blocked">
+				<header class="field-card-head"><h2 id="usage-blocked">Blocked work</h2><span class="field-card-note">Up to 50 requests in authorized repositories</span></header>
+				if len(p.Blocked)==0 {
+					<p class="field-card-foot">No blocked work was recorded at this measurement.</p>
+				} else {
+					<ul class="usage-blocked">
+						for _,w:=range p.Blocked {
+							<li>
+								<strong>{ w.Repository } · { w.Label }</strong>
+								<p>{ w.Reason }</p>
+								<p class="field-meta">{ w.Action }</p>
+								if w.Until!="" {
+									<p class="field-meta">Next check: <time datetime={ w.Until }>{ DateTime(w.Until) }</time></p>
+								}
+							</li>
+						}
+					</ul>
+				}
+			</section>
+			<section class="workspace-panel field-card" aria-labelledby="usage-policy">
+				<header class="field-card-head"><h2 id="usage-policy">Execution and retention</h2></header>
+				<dl class="usage-facts"><div><dt>Published preview lifetime</dt><dd>{ p.PreviewExpiry }</dd></div><div><dt>Idle sleep after</dt><dd>{ p.IdleSleep }</dd></div><div><dt>Finished build log retention</dt><dd>{ p.LogRetention }</dd></div></dl>
+				<div class="usage-policy">
+					<p>Source preparation, image builds, startup, setup, seed and data fallbacks count. Failed and superseded work counts too; each physical retry is a new attempt. Queued work and capacity waits consume no build minutes.</p>
+					<p>Limits block new compute. Existing previews retain their published expiry; reading, feedback, teardown and account access remain available. Limits do not delete data. Feedback remains subject to the limits shown on its review page.</p>
+					if p.Manager {
+						<p class="field-meta">Accounting began <time datetime={ p.Cutover }>{ DateTime(p.Cutover) }</time>. Historical technical counters are legacy and are never billed.</p>
+					}
+				</div>
+			</section>
+			<p class="field-meta usage-measured">Measured <time datetime={ p.Measured }>{ DateTime(p.Measured) }</time>. Running time remains reserved until its next measurement. Refresh for current usage.</p>
+		</div>
+	}
+}

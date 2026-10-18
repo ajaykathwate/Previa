@@ -37,6 +37,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/sampledata"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/starterkits"
+	"github.com/ajaykathwatee/previa/internal/usage"
 	"github.com/ajaykathwatee/previa/internal/webhooks"
 	"github.com/ajaykathwatee/previa/internal/workspaces"
 	"github.com/ajaykathwatee/previa/web"
@@ -128,6 +129,7 @@ type serverFeatures struct {
 	setup          *onboarding.Handler
 	reviews        *reviews.Handler
 	testData       *sampledata.Handler
+	usage          *usage.Handler
 }
 
 func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
@@ -236,6 +238,7 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	f.auth.WithAvatarAudience(workspaceService).WithActivity(workspaceService)
 	f.workspaces = workspaces.NewHandler(workspaceService, f.auth, logger, cfg.AppBaseURL)
 	f.workspaceScope = workspaces.NewMiddleware(workspaceService, f.auth, logger)
+	f.usage = usage.NewHandler(usage.NewStore(pool, 0, 0), f.auth, logger)
 	return f, nil
 }
 
@@ -361,6 +364,9 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 		f.auth.Mount(r)
 		if f.workspaces != nil {
 			f.workspaces.Mount(r, auth.RequireUser)
+		}
+		if f.usage != nil {
+			f.usage.Mount(r, auth.RequireUser)
 		}
 		// Queue diagnostics are for development; production does not serve them.
 		dashboard.MountWithSummary(r, f.auth, auth.RequireUser, dashboard.Options{

@@ -123,11 +123,8 @@ func (r *Repository) AcceptRoute(ctx context.Context, op Operation, target Route
 		if err != nil {
 			return fmt.Errorf("lock environment for route activation: %w", err)
 		}
-		if !pendingCandidate(env, request, target.Artifact) {
-			return nil
-		}
-		if scope.private && !target.AuthConfigured {
-			return &OperationFailure{Code: "private_preview_unconfigured", Permanent: true}
+		if ready, err := routeCandidate(scope, env, request, target); err != nil || !ready {
+			return err
 		}
 		decision.EnvironmentID = env.ID
 		route, err := q.LockRoute(ctx, env.ID)
@@ -146,6 +143,9 @@ func (r *Repository) AcceptRoute(ctx context.Context, op Operation, target Route
 				decision.TableVersion = route.TableVersion
 				return nil
 			}
+		}
+		if err := r.publicationUsageTx(ctx, tx, request.PullRequestID); err != nil {
+			return err
 		}
 		version, err := saveActiveRoute(ctx, q, op, env.ID, target)
 		if err != nil {
@@ -205,6 +205,16 @@ func pendingCandidate(env dbgen.LockRouteEnvironmentRow, request Request, artifa
 	return env.PendingGeneration.Valid && env.PendingGeneration.Int64 == request.Generation &&
 		env.PendingRevision.Valid && env.PendingRevision.Int64 == request.Revision &&
 		env.PendingContainerID.String == artifact.ContainerID && env.PendingImageTag.String == artifact.ImageTag
+}
+
+func routeCandidate(scope intentScope, env dbgen.LockRouteEnvironmentRow, request Request, target RouteTarget) (bool, error) {
+	if !pendingCandidate(env, request, target.Artifact) {
+		return false, nil
+	}
+	if scope.private && !target.AuthConfigured {
+		return false, &OperationFailure{Code: "private_preview_unconfigured", Permanent: true}
+	}
+	return true, nil
 }
 
 // saveActiveRoute moves the PR's route forward to the target under a new

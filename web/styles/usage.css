@@ -1,0 +1,39 @@
+.usage-page { display: grid; gap: 1rem; }
+.usage-page .field-meta { display: block; }
+.usage-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.usage-heading h1 { font-size: 1.5rem; font-weight: 650; margin: .2rem 0; }
+.usage-facts { margin: 0; padding: .5rem 1rem; }
+.usage-facts > div { display: flex; gap: 1rem; justify-content: space-between; padding: .65rem 0; border-bottom: 1px solid var(--border); }
+.usage-facts > div:last-child { border-bottom: 0; }
+.usage-facts dt { color: var(--muted-foreground); font-size: .8rem; }
+.usage-facts dd { margin: 0; text-align: right; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.usage-facts dd span { color: var(--muted-foreground); }
+.usage-period { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .3rem; }
+.usage-table-wrap { overflow-x: auto; }
+.usage-table { width: 100%; text-align: left; border-collapse: collapse; font-size: .8rem; }
+.usage-table th,.usage-table td { padding: .75rem 1rem; border-bottom: 1px solid var(--border); }
+.usage-table thead { color: var(--muted-foreground); }
+.usage-table tbody th { font-family: var(--font-mono); font-weight: 500; }
+.usage-table tbody tr:last-child > * { border-bottom: 0; }
+.usage-table td { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-blocked { list-style: none; margin: 0; padding: 0 1rem; }
+.usage-blocked li { padding: .9rem 0; border-bottom: 1px solid var(--border); font-size: .85rem; }
+.usage-blocked li:last-child { border-bottom: 0; }
+.usage-blocked p { margin-top: .25rem; }
+.usage-policy { padding: .75rem 1rem; font-size: .8rem; line-height: 1.6; }
+.usage-policy p + p { margin-top: .6rem; }
+.usage-measured { padding-bottom: .5rem; }
+@media (max-width: 640px) {
+  .usage-heading { align-items: flex-start; flex-direction: column; }
+  .usage-facts > div { flex-direction: column; gap: .25rem; }
+  .usage-facts dd { text-align: left; }
+  .usage-period { justify-content: flex-start; }
+  .usage-table-wrap { overflow: visible; }
+  .usage-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+  .usage-table tbody { display: block; }
+  .usage-table tr { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); border-bottom: 1px solid var(--border); }
+  .usage-table tr:last-child { border-bottom: 0; }
+  .usage-table th { grid-column: 1 / -1; overflow-wrap: anywhere; }
+  .usage-table td { padding-top: .35rem; border: 0; }
+  .usage-table td::before { content: attr(data-label); display: block; white-space: normal; color: var(--muted-foreground); font-size: 12px; margin-bottom: .2rem; }
+}

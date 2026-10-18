@@ -791,6 +791,16 @@ For the first paid release, use **a flat workspace subscription with included li
 
 Free beta workspaces receive explicit finite plan allowances; existing operator defaults of zero/unlimited are not suitable customer plan defaults. Self-hosted mode can retain its documented operator controls and hide unavailable paid purchase actions, while exposing actual configured technical limits.
 
+**Free early-access amounts, decided 18 October 2026:** the owner delegated the
+choice: 300 build minutes per UTC calendar month, one concurrent build and two
+active preview slots per workspace. The allowance resets at 00:00 UTC on the first
+day of the next month. PR and baseline execution share it. One build per workspace
+preserves fair sharing; two preview slots support parallel review on the existing
+host budget. The owner confirmed there are no hosted users: migration 0042 grants
+all existing active workspaces fresh free allowances, without importing legacy
+elapsed-time counters. New workspaces receive the same plan. No paid state,
+subscription or charge is created.
+
 Allowance exhaustion blocks compute mutations, not reads, feedback, account access, cancellation, or teardown. Existing previews follow their already-published expiry. No limit behavior deletes customer data without the documented preview lifecycle or explicit deletion action.
 
 ### 9.4 Subscription and payment flow
@@ -1031,8 +1041,8 @@ Most behavior above is specified. The following inputs must be supplied or agree
 
 | Input | Defined behavior around it | Needed for |
 | --- | --- | --- |
-| Free early-access allowance amounts | Finite included limits; no charges; Reviewers are not per-seat. Paid prices and a payment provider are deferred with §9.4. | Displaying the free plan. |
-| Migration entitlement policy | No migration creates charges; legacy usage is labeled; stable resources/access preserved. | Backfilling existing hosted users. |
+| Free early-access allowance amounts | **Decided 18 October 2026** (§9.3): 300 build minutes per UTC month, one concurrent build and two preview slots. No charges; Reviewers are not per-seat. Paid prices and a payment provider are deferred with §9.4. | Displaying the free plan. |
+| Migration entitlement policy | **Decided 18 October 2026** (§9.3): no hosted users; existing active workspaces start with the free allowance. Legacy usage is preserved without importing or billing it; stable resources/access are preserved. | Migration 0042. |
 | Support operator IDs and staffing/contact | Native request/status workflow; restricted operator access; no invented SLA. | Operating customer support. |
 | Operator-approved privacy/terms and retained financial-record policy | Explicit live-data/backup/provider/GitHub boundaries; real deletion behavior. | Public account and paid release. |
 | Content limits | Bounded feedback text/counts, support text, instructions, and events with tested rejection/pruning. | Abuse resistance and storage behavior. |

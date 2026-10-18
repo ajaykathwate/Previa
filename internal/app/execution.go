@@ -23,6 +23,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/sampledata"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/source"
+	"github.com/ajaykathwatee/previa/internal/usage"
 	"github.com/ajaykathwatee/previa/internal/workspaces"
 	"github.com/google/go-github/v91/github"
 )
@@ -43,6 +44,7 @@ type execution struct {
 	sync       *pullrequests.SyncService
 	logs       *buildlogs.Store
 	repo       *environments.Repository
+	usage      *usage.Store
 	// testData runs baseline refreshes; nil without baseline storage.
 	testData *sampledata.Jobs
 }
@@ -57,7 +59,7 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 	if err != nil {
 		return nil, fmt.Errorf("read the GitHub App's identity for PR reports: %w", err)
 	}
-	x := &execution{}
+	x := &execution{usage: usage.NewStore(pool, cfg.BuildMinutesPerAccountDay, cfg.BuildsPerAccount).WithPreviewPolicy(cfg.PreviewLifetime(), cfg.PreviewIdleSleep, cfg.BuildLogRetention())}
 	if x.gateway, err = newEgressGateway(in); err != nil {
 		return nil, err
 	}
@@ -101,6 +103,7 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 	x.repo = environments.NewRepository(pool, operations).WithHostnames(routing.NewLabel).WithReports().
 		WithLifetime(cfg.PreviewLifetime()).WithBuildSlots(cfg.MaxConcurrentBuilds).
 		WithAccountLimits(environments.AccountLimits{BuildsPerAccount: cfg.BuildsPerAccount, MinutesPerDay: cfg.BuildMinutesPerAccountDay}).
+		WithUsage(x.usage).
 		WithPublications(publicationActivity{recorder: activity.NewRecorder()})
 	repo := x.repo
 	if x.controller, err = newRouteController(in, repo, x.runtime); err != nil {
@@ -148,7 +151,7 @@ func newTestDataJobs(in pipelineInput, store *sampledata.Store, storage *sampled
 	}
 	runner, err := sampledata.NewRunner(store, sampledata.RunnerParts{
 		Builder: baselineBuilder{runtime: x.runtime, logs: x.logs, storage: storage, logger: in.logger}, Branches: branches,
-		Admission: x.repo, Activity: testDataActivity{recorder: activity.NewRecorder()}, Files: storage,
+		Admission: x.repo, Usage: x.usage, Activity: testDataActivity{recorder: activity.NewRecorder()}, Files: storage,
 		Timeout: in.cfg.BuildTimeout, MinInterval: in.cfg.PreviewBaselineMinInterval, Paused: in.cfg.BuildsPaused,
 	}, in.logger)
 	if err != nil {

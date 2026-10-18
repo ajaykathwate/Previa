@@ -88,6 +88,14 @@ type Admission interface {
 	RecordBaselineUsage(ctx context.Context, workspaceID int64, day time.Time, seconds int64) error
 }
 
+// ExecutionUsage meters physical baseline attempts with the workspace's
+// shared allowance. It is independent of the legacy elapsed-time counter.
+type ExecutionUsage interface {
+	AdmitBaselineTx(context.Context, pgx.Tx, int64, int64, string, time.Time) (string, time.Time, error)
+	PublicationBaselineTx(context.Context, pgx.Tx, int64, time.Time) (string, time.Time, error)
+	Run(context.Context, string, func(context.Context) error) error
+}
+
 // Activity records repository events in the caller's transaction.
 type Activity interface {
 	RecordTx(ctx context.Context, tx pgx.Tx, e Event) error
@@ -112,6 +120,7 @@ type RunnerParts struct {
 	Builder   BaselineBuilder
 	Branches  Branches
 	Admission Admission
+	Usage     ExecutionUsage
 	Activity  Activity
 	Files     Files
 	// Timeout bounds one baseline build, as BUILD_TIMEOUT bounds a pull
@@ -156,6 +165,7 @@ func (r *Runner) JobTimeout() time.Duration { return r.parts.Timeout + 3*time.Mi
 
 // claimed is a refresh this run started.
 type claimed struct {
+	usageKey string
 	refresh  dbgen.BaselineRefresh
 	settings Settings
 	scope    dbgen.WorkerScopeRow
@@ -253,11 +263,15 @@ func (r *Runner) claimTx(ctx context.Context, tx pgx.Tx, repoID int64) (*claimed
 	if wait, err := r.admit(ctx, tx, q, scope, refresh, now); err != nil || wait > 0 {
 		return nil, wait, err
 	}
+	key, wait, err := r.reserveUsageTx(ctx, tx, q, scope, refresh, now)
+	if err != nil || wait > 0 {
+		return nil, wait, err
+	}
 	started, err := q.ClaimRefresh(ctx, refresh.ID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("start the refresh: %w", err)
 	}
-	return &claimed{refresh: started, settings: settings, scope: scope}, 0, nil
+	return &claimed{refresh: started, settings: settings, scope: scope, usageKey: key}, 0, nil
 }
 
 // waitingRefresh locks the repository and its settings and finds the refresh
@@ -339,6 +353,9 @@ func finishTx(ctx context.Context, q *dbgen.Queries, id int64, state, code, deta
 // over.
 func (r *Runner) run(ctx context.Context, c claimed) error {
 	refresh, scope := c.refresh, c.scope
+	if r.parts.Usage != nil {
+		return r.runMetered(ctx, c)
+	}
 	branch, sha, err := r.parts.Branches.BranchHead(ctx, scope.GithubInstallationID, scope.GithubRepoID.Int64, c.settings.Branch)
 	switch {
 	case ctx.Err() != nil:
@@ -385,6 +402,70 @@ func (r *Runner) run(ctx context.Context, c claimed) error {
 	case failed != nil && failed.Retryable:
 		return r.retryLater(ctx, refresh, failed)
 	case failed != nil:
+		return r.fail(ctx, refresh, failed, took)
+	}
+	return r.succeed(ctx, refresh, branch, sha, result, took)
+}
+
+// runMetered includes branch/source preparation and every builder fallback in
+// one bounded physical attempt. Persistence follows settlement; a limit leaves
+// the old baseline current and the refresh pending for its actual reset.
+func (r *Runner) runMetered(ctx context.Context, c claimed) error {
+	refresh, scope := c.refresh, c.scope
+	var branch, sha string
+	var result BuildResult
+	started := r.now()
+	buildCtx, cancel := context.WithTimeout(ctx, r.parts.Timeout)
+	defer cancel()
+	err := r.parts.Usage.Run(buildCtx, c.usageKey, func(execCtx context.Context) error {
+		var err error
+		branch, sha, err = r.parts.Branches.BranchHead(execCtx, scope.GithubInstallationID, scope.GithubRepoID.Int64, c.settings.Branch)
+		if err != nil {
+			return err
+		}
+		q := dbgen.New(r.store.pool)
+		if err := q.SetRefreshTarget(execCtx, dbgen.SetRefreshTargetParams{ID: refresh.ID, Branch: text(branch), CommitSha: text(sha)}); err != nil {
+			return fmt.Errorf("record refresh target: %w", err)
+		}
+		if err := q.MarkChecked(execCtx, dbgen.MarkCheckedParams{RepoID: refresh.RepoID, Branch: text(branch), Sha: text(sha)}); err != nil {
+			return fmt.Errorf("record baseline branch head: %w", err)
+		}
+		result, err = r.parts.Builder.BuildBaseline(execCtx, BuildJob{RepoID: refresh.RepoID, GitHubRepoID: scope.GithubRepoID.Int64,
+			InstallationID: scope.GithubInstallationID, WorkspaceID: scope.WorkspaceID.Int64, RefreshID: refresh.ID, Branch: branch, CommitSHA: sha})
+		return err
+	})
+	took := r.now().Sub(started)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	var coded interface {
+		FailureCode() string
+		RetryAt() time.Time
+	}
+	if errors.As(err, &coded) {
+		until := coded.RetryAt()
+		if until.IsZero() {
+			until = r.now().Add(r.retry)
+		}
+		if e := dbgen.New(r.store.pool).WaitRefresh(ctx, dbgen.WaitRefreshParams{ID: refresh.ID, WaitingReason: text(coded.FailureCode()), AvailableAt: timestamp(until)}); e != nil {
+			return fmt.Errorf("wait for baseline compute: %w", e)
+		}
+		return nil
+	}
+	if errors.Is(err, ErrBranchNotFound) {
+		return r.fail(ctx, refresh, &BuildError{Code: FailBranchNotFound, Detail: "The baseline branch does not exist on GitHub; choose another branch."}, took)
+	}
+	if err != nil {
+		var failed *BuildError
+		if !errors.As(err, &failed) {
+			failed = &BuildError{Code: FailUnavailable, Detail: "The baseline could not be built on the worker.", Retryable: true, Err: err}
+		}
+		if buildCtx.Err() != nil {
+			failed = &BuildError{Code: FailBuild, Detail: "The baseline reached BUILD_TIMEOUT.", Err: err}
+		}
+		if failed.Retryable {
+			return r.retryLater(ctx, refresh, failed)
+		}
 		return r.fail(ctx, refresh, failed, took)
 	}
 	return r.succeed(ctx, refresh, branch, sha, result, took)
@@ -459,6 +540,9 @@ func (r *Runner) succeedTx(ctx context.Context, tx pgx.Tx, refresh dbgen.Baselin
 			return false, fmt.Errorf("record the discarded refresh: %w", err)
 		}
 		return false, nil
+	}
+	if allowed, err := r.publicationUsageTx(ctx, tx, q, refresh); err != nil || !allowed {
+		return false, err
 	}
 	for _, b := range current {
 		if err := q.RetireBaseline(ctx, b.ID); err != nil {

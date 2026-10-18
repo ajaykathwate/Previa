@@ -4,7 +4,7 @@ Configure, build, run and check Previa locally. Run commands from the repository
 root in Bash or Zsh. On Windows, use WSL 2 with Docker Desktop's WSL integration
 enabled (or Docker Engine installed inside the distribution).
 
-Current schema: **Goose 41**, **River 007**. After pulling changes, run
+Current schema: **Goose 42**, **River 007**. After pulling changes, run
 `make migrate-up` and restart the server and worker. When the egress proxy or the
 router changed (this version changed both), also run `make egress-image` (builds
 are metered and may be limited to package registries) and `make router-up` (the
@@ -21,7 +21,10 @@ checks, preview opens and hourly check allowance by 0038
 records and activity by 0039 ([30](30-reviews.md)), setup durations and the
 review page's sealed test access by 0040 ([31](31-test-data.md)), and persistent
 test data (the Test data tab, repository baselines and kept data) by 0041
-([32](32-persistent-test-data.md)). Internal
+([32](32-persistent-test-data.md)). Migration 0042 adds finite workspace
+entitlements and bounded execution accounting ([33](33-usage-and-free-plan.md)).
+**Stop the old execution worker before this cutover**, then restart it
+after the migration installs the free plan as described below. Internal
 database keys and stored jobs remain unchanged. Apply migrations before
 starting the new binaries; old numeric HTML bookmarks redirect after access checks.
 Use UUIDs for forms, streams and downloads.
@@ -32,8 +35,8 @@ make run-server          # automatically loads .env; exported values win
 make run-worker          # restart separately after migration
 ```
 
-**Expected:** Goose reaches **41**, River stays **007**, and the new server accepts
-the schema (a server built for 41 refuses to start on an older schema with "run
+**Expected:** Goose reaches **42**, River stays **007**, and the new server accepts
+the schema (a server built for 42 refuses to start on an older schema with "run
 migrations first"). Restart the worker too: setup checks run on any worker with
 the GitHub App, including one without a preview domain; deployment records are
 written by the worker that activates routes, and every worker prunes activity.
@@ -51,6 +54,43 @@ for the verified primary email; tokens are still discarded. No repository OAuth
 scope is added. The account's first/last name is editable independently; refreshed
 GitHub data never overwrites it. If email lookup fails, sign-in still works and the
 profile explains that the email could not refresh. Existing saved email is retained.
+
+### F3: finite free-plan cutover
+
+The owner delegated the allowance choice and confirmed there are no hosted users
+on 18 October 2026. Migration 0042 grants every existing active workspace a fresh
+**300 build minutes per UTC calendar month, one concurrent build and two active
+preview slots**. New workspaces receive the same finite entitlement. No historical
+account/workspace elapsed time is imported, and no paid state or charge is created.
+The cutover timestamp is recorded by the migration. There are no new configuration
+variables or initialization commands.
+
+Stop the old execution worker, run `make migrate-up`, then restart the server and
+worker. `make migrate-up`, `make run-server` and `make run-worker` load `.env`
+automatically and preserve exported overrides. Direct Go commands and the browser
+test targets do not load `.env`; export the settings they need first
+(`set -a; . ./.env; set +a`), including a disposable `TEST_DATABASE_URL` for tests.
+**Expected:** Goose 42, normal startup, and **Usage** in the workspace sidebar.
+Owners/Admins see workspace totals; Developers see granted repository technical
+usage; Reviewers cannot open it. Existing previews, names and data remain intact.
+
+`BUILDS_PER_ACCOUNT` and `BUILD_MINUTES_PER_ACCOUNT_DAY` keep their environment-key
+spellings, but are additional **workspace** safety ceilings. Zero disables only
+that extra ceiling; it never makes the free entitlement unlimited. Restart all
+execution workers together when changing them. Usage reports the actual last
+worker policy, including preview lifetime, idle sleep and log retention. Missing
+worker policy is shown as unknown, not invented.
+
+`make test-usage-browser` adds the F3 Chromium suite, including no-JavaScript
+checks. It needs `TEST_DATABASE_URL` and uses isolated schemas. Set
+`UI_BROWSER_SCREENSHOTS=1` to save 1440/390 px images in both themes under
+`web/tests/browser/artifacts`; `UI_BROWSER_EXECUTABLE` selects a local Chromium.
+Usage tests include migration 0042 up/down/up, concurrency, replay, UTC boundaries,
+provisional crash recovery, and deadline cancellation during a database stall.
+The broader `make test-browser` suite allows ten minutes for its 55 scenarios
+(twelve minutes for the Go harness and cleanup) on a busy Docker development
+host. Individual browser-action deadlines are unchanged.
+See [33](33-usage-and-free-plan.md) for accounting and recovery details.
 
 ## 1. Prerequisites
 

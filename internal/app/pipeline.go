@@ -188,6 +188,7 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		rc.Queues[environments.CleanupOperationQueue] = river.QueueConfig{MaxWorkers: cleanupWorkers}
 		rc.Queues[environments.TeardownSweepQueue] = river.QueueConfig{MaxWorkers: 1}
 		x.keeper.Register(rc)
+		x.usage.Register(rc)
 		outbound.Register(rc, x.runtime)
 		river.AddWorker(rc.Workers, &appoutput.FollowWorker{Store: appoutput.NewStore(in.pool), Source: x.runtime, Logger: in.logger})
 		rc.Queues[appoutput.Queue] = river.QueueConfig{MaxWorkers: appoutput.MaxFollowers}
@@ -201,6 +202,7 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		}
 	})
 	p.startup = append(p.startup,
+		x.usage.Configure,
 		func(ctx context.Context) error {
 			if _, err := x.gateway.Ensure(ctx); err != nil {
 				return fmt.Errorf("start the egress proxy (make egress-image): %w", err)

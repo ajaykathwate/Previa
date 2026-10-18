@@ -73,7 +73,13 @@ func TestBaselineFilesAreEncryptedBoundAndChecked(t *testing.T) {
 	if _, err := readAll(s, 8, stored); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("another repository's baseline: %v", err)
 	}
-	if _, err := readAll(s, 7, Stored{Key: stored.Key, Checksum: stored.Checksum[:63] + "0"}); !errors.Is(err, ErrCorrupt) {
+	badChecksum := []byte(stored.Checksum)
+	if badChecksum[63] == '0' {
+		badChecksum[63] = '1'
+	} else {
+		badChecksum[63] = '0'
+	}
+	if _, err := readAll(s, 7, Stored{Key: stored.Key, Checksum: string(badChecksum)}); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("a checksum mismatch: %v", err)
 	}
 	if _, err := readAll(s, 7, Stored{Key: "00000000000000000000000000000000", Checksum: stored.Checksum}); !errors.Is(err, ErrMissing) {

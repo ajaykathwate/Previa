@@ -210,13 +210,13 @@ The common gate below must also pass.
 - Blocked work says why, until when, and what to do.
 - Existing previews, reading and feedback are never cut off by a limit.
 
-Today's limits are operator settings keyed to the installing account
-(`BUILDS_PER_ACCOUNT`, `BUILD_MINUTES_PER_ACCOUNT_DAY`); part H makes them
-per-workspace and visible (§9.1).
+F3 makes finite allowances per-workspace and visible (§9.1). Existing operator
+settings (`BUILDS_PER_ACCOUNT`, `BUILD_MINUTES_PER_ACCOUNT_DAY`) remain additional
+workspace safety ceilings; zero disables only that extra ceiling.
 
-- [ ] **Free plan entitlements** per workspace (`workspace_entitlements`): finite
+- [x] **Free plan entitlements** per workspace (`workspace_entitlements`): finite
   limits, no purchase controls and no paid states (§9.1, §9.3).
-- [ ] **Execution accounting** (§9.7):
+- [x] **Execution accounting** (§9.7):
   - reservations at admission, at most 60 seconds per slice (spec §13);
   - execution segments with a key per attempt, so a replay never double-counts;
   - crash reconciliation, and splitting at UTC boundaries;
@@ -224,7 +224,7 @@ per-workspace and visible (§9.1).
 
   The existing `account_build_usage` is labelled legacy and never billed. A
   documented cutover starts the new accounting.
-- [ ] **Limits** (§9.3 table):
+- [x] **Limits** (§9.3 table):
   - concurrent builds per workspace;
   - included build minutes, counting failed and superseded work and F2's baseline
     builds and fallback attempts;
@@ -232,7 +232,7 @@ per-workspace and visible (§9.1).
   - active preview slots, where a same-PR replacement reuses its slot.
 
   Host capacity and preview lifetimes stay as they are.
-- [ ] **Usage page** (§9.3):
+- [x] **Usage page** (§9.3):
   - plan and period;
   - consumed and reserved minutes;
   - the running-build limit and preview slots;
@@ -241,13 +241,15 @@ per-workspace and visible (§9.1).
   - measured timestamps and pending reconciliation.
 
   Authorized developers also see a breakdown per repository.
-- [ ] **Behavior at a limit:** only compute is blocked. Reads, feedback, account
+- [x] **Behavior at a limit:** only compute is blocked. Reads, feedback, account
   access, cancellation and teardown keep working, and no data is deleted (§9.3).
-- [ ] **Decision (owner):** the free plan's numbers: build minutes and their
-  period, concurrent builds, active preview slots (spec §13, "Free early-access
-  allowance amounts").
-- [ ] **Decision (owner):** the migration entitlement policy for existing hosted
-  users (spec §13). Confirm whether any exist before the first deployment.
+- [x] **Decision (owner, delegated 18 October 2026):** 300 build minutes per UTC
+  calendar month, one concurrent build and two active preview slots per workspace.
+  One build gives teams a fair share of the host; two slots allow parallel PR
+  reviews; baseline work shares the 300 minutes. Host budgets remain authoritative.
+- [x] **Decision (owner, 18 October 2026):** no hosted users exist. Migration 0042
+  grants existing active workspaces fresh free allowances and preserves legacy
+  technical counters without importing or billing them.
 
 **Done when:** spec §9.10's first three criteria hold:
 - totals reconcile with attempt records, and replays never count twice;
@@ -255,6 +257,15 @@ per-workspace and visible (§9.1).
 - running out and the reset reach the specified state.
 
 The common gate must also pass.
+
+- [x] **Codex, 2026-10-18:** F3's implementation and automated common gate passed:
+  build, vet/lint (0 issues), all 49 Go test packages against PostgreSQL, migration
+  0042 up/down/up, usage race tests, UI 55/55, workspace 14/14, setup 5/5, review
+  6/6, Test data 3/3, Usage 4/4, runtime 11/11, routing 8/8 and all four real-Docker
+  end-to-end journeys. Reviewed Owner/Developer Usage at 1440/390 in both themes.
+  Docs, user-guide rows U1–U10 and HANDOFF are updated. Evidence and recovery
+  boundaries: [F3 report](test-docs/2026-10-18-usage-and-free-limits-report.md).
+  The owner's hands-on acceptance and commit remain separate steps.
 
 ### F4 · Feature 6, free plan, part I: accounts, exits, support, status and policies (spec §9.5, §9.6, §9.8, step I)
 

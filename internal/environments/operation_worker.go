@@ -140,6 +140,14 @@ func (w *OperationWorker) Process(ctx context.Context, operationID int64, owner 
 		return w.supersede(ctx, op, owner)
 	}
 	if execErr != nil {
+		var waiting *WaitingError
+		if errors.As(execErr, &waiting) && usageWait(waiting.Reason) {
+			delay := max(time.Until(waiting.Until), 30*time.Second)
+			if err := w.repo.markOperationRetryable(ctx, op.ID, owner, waiting.Reason, delay); err != nil {
+				return err
+			}
+			return river.JobSnooze(delay)
+		}
 		var classified *OperationFailure
 		permanent := errors.As(execErr, &classified) && classified.Permanent
 		code := operationErrorCode(execErr)

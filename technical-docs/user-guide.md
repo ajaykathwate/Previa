@@ -632,6 +632,31 @@ to the other.
 
 ## 17. Everyday navigation
 
+### Usage and free limits
+
+Open **Usage** in the workspace sidebar. The free early-access plan includes
+**300 build minutes per UTC calendar month, one concurrent build and two active
+preview slots**. Minutes reset at 00:00 UTC on the first day of the next month.
+Owners and Admins see workspace totals and limits. Developers see technical usage
+for their granted repositories; Reviewers cannot open Usage.
+
+Consumed minutes measure execution, including failed/superseded attempts, baseline
+refreshes, setup, seed and data fallbacks. Each real retry counts separately.
+Queued and capacity-wait time is free. Reserved minutes are held for running
+attempts and released when unused; a reservation lasts at most 60 seconds. A worker
+crash can leave provisional usage bounded by that last reservation, clearly
+labelled on the page. **Refresh usage** reads a new timestamped measurement.
+
+Two slots allow two PRs to retain previews. Sleeping previews keep a slot; updating
+the same PR reuses its slot. To free one, tear down an unused preview or wait for
+its published expiry. Usage also shows the reported expiry, idle and log retention
+policy, and blocked work with its next check and permitted action. An additional
+operator daily ceiling resets at 00:00 UTC and cannot be bypassed.
+
+Running out stops new compute; existing previews, reading, feedback and teardown
+stay available. No data is deleted because minutes ran out. There are no payments
+or purchase controls in this release.
+
 - Sidebar: **Overview**, **Repositories**, **Starter kits**, **Builds**,
   **Previews**, **Developer tools** (development only) and **FAQ**. On phones, the menu button opens it.
 - **FAQ** answers common questions as a conversation with Previa; the home page has
@@ -658,7 +683,7 @@ to the other.
 | A container disappears | The preview is marked failed (its container went missing); Retry, Rebuild or a new commit brings it back |
 | A live preview's app crashes | Docker restarts it (three times at most); its last lines go into the build log |
 | Nobody opens a preview for a few hours (if the operator enabled it) | It sleeps; the next visit wakes it in seconds |
-| A shared server is busy | Accounts take turns; your build may wait for **your other build** or until your **daily build minutes** reset at midnight UTC |
+| A shared server is busy or a workspace reaches its free limits | Builds wait fairly; **Usage** explains build/preview slots, minutes and their reset, and any operator ceiling. Existing previews and feedback remain available |
 | Old history | Build logs go after 14 days, closed pull requests' records after 90 days |
 
 ## 19. When Previa says no
@@ -871,6 +896,21 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | T12 | As a Developer, **Refresh baseline** and confirm | *Baseline refresh requested*; a new refresh row |
 | T13 | Merge a pull request into the default branch on GitHub | A refresh with trigger *Pull request merged* (a second merge within the hour joins one later refresh) |
 | T14 | As an Owner, switch **Test data** off and confirm | *Test data is off and its baselines are deleted*; the next build starts with empty databases and the seed, and the PR page and comment no longer name a test data source |
+
+### F4. Usage and free limits (roadmap F3)
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| U1 | As Owner/Admin, open **Usage** | Free early access: 300 minutes/month (UTC), one concurrent build, two preview slots; actual consumed/reserved totals and measured time; no purchase control |
+| U2 | Open as a Developer with one granted repository, then as a Reviewer | Developer sees only that repository's technical usage; no workspace totals or ungranted names. Reviewer receives no usage access |
+| U3 | Two members request builds while one workspace build runs | One executes; the other waits for a workspace build slot. Usage shows the reservation and actionable wait, without a queue position |
+| U4 | Finish/fail a build, retry it, then replay a finished request | Execution is counted once per physical attempt; retry execution adds time; replay and queue time add none |
+| U5 | Build with baseline/kept data and force a starting-data fallback | Baselines and every attempted setup/seed/fallback spend the shared allowance; baselines take no preview slot |
+| U6 | Use both preview slots, build a third PR, then update an existing PR | Third PR waits; the same-PR update reuses its slot. Teardown/expiry frees a slot without deleting another preview |
+| U7 | On a disposable workspace, exhaust minutes or lower its entitlement for testing | Execution stops at its reserved deadline and waits; the current preview, feedback, reading and teardown keep working. Usage gives the actual next check/reset |
+| U8 | Cross a UTC day/month boundary and let an allowance reset | Execution is split into the correct UTC segments; a fresh period admits waiting work without importing legacy counters |
+| U9 | Stop a test worker during execution; restart after the reservation expires | Expired holds are released; crash usage is bounded and labelled provisional; recovery/replay cannot count twice |
+| U10 | Open Usage without JavaScript, at 1440 and 390 px, in both themes | Refresh and exact timestamps work; every repository value is visible on the phone; no sideways page scrolling or CSP errors |
 
 ### G. GitHub feedback
 

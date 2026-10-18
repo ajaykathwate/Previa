@@ -544,7 +544,7 @@ High. Reconciliation logic is subtle, and getting it wrong can delete live envir
 - **Disk exhaustion is the most likely real outage;** a build short of disk waits and triggers an emergency prune. Metrics and alerts are Prompt 11.
 - **Current implementation:** `internal/housekeeping` (recovery, resources, PR reconciliation, expiry, prune, River jobs) with capacity in `internal/environments` (build slots, waiting), `internal/runtime` (admission lock, headroom) and `internal/builds` (disk check, caches), migration 0016. The worker registers housekeeping with builds and applies build slots and preview headroom at admission. See [15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md).
 - **Retention of records (an addition):** an hourly job deletes webhook delivery records and finished operations after 30 days (keeping route operations that protect a live preview and failed cleanups), daily build-minute ledgers after 90 days, and closed or merged pull requests with everything recorded about them 90 days after closing, once their teardown finished and nothing is pending. Backups keep deleted rows until they expire. See [15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md#retention-of-records).
-- **Fair sharing (an addition):** optional per-account limits on running builds, daily build minutes and previews; waiting builds take turns by account, and a finished build wakes the next in turn. See [17-build-scheduling.md](docs/17-build-scheduling.md#fair-sharing-between-accounts).
+- **Fair sharing:** finite workspace limits on running builds, allowance minutes and previews, with additional operator ceilings; waiting builds take turns by workspace, and a finished build wakes the next in turn. See [17-build-scheduling.md](docs/17-build-scheduling.md#fair-sharing-between-accounts) and [33-usage-and-free-plan.md](docs/33-usage-and-free-plan.md).
 
 ---
 
@@ -933,6 +933,13 @@ preview/
 │   │   ├── actions.go              # owner actions: Build/Retry/Rebuild, teardown
 │   │   ├── observation.go  github.go  sync.go
 │   │   ├── commits.go              # cached head-commit message for the PR page
+│   │
+│   ├── usage/                      # FEATURE: finite workspace plans and execution ledger
+│   │   ├── handler.go  overview.go # authorized Usage screen and snapshot
+│   │   ├── repository.go          # transactional entitlement, allowance and slot gates
+│   │   ├── execution.go           # bounded reservations, renewal, idempotent settlement
+│   │   ├── reconcile.go  jobs.go   # expired reservation recovery (River, every minute)
+│   │   └── accounting_test.go     # execution, races, boundaries and recovery tests
 │   │
 │   ├── repoconfig/                 # FEATURE: .previewrc.yaml parse + validate
 │   │   ├── config.go               # typed struct + defaults
@@ -1670,3 +1677,67 @@ settings changed meanwhile is discarded with its files. A Reset never keeps data
 without a choice it starts empty. Edited migrations on kept data and data written
 to the serving preview during a copy cannot be detected; the PR page and Reset say
 so. Details: [32-persistent-test-data.md](docs/32-persistent-test-data.md).
+
+## 26. Workspace usage and finite free limits
+
+### Requirement
+
+Give every workspace finite visible free allowances, count bounded physical build
+execution once, and explain blocked compute without cutting off serving previews,
+feedback, reads or cleanup. This is expansion specification §9.3/§9.7, step H;
+paid billing and F4 account lifecycle remain outside this task.
+
+### Complexity
+
+High: admission, physical execution, retries, crashes, UTC boundaries, preview
+replacement and publication need one consistent entitlement and ledger contract.
+
+### Tech stack
+
+Existing PostgreSQL/pgx transactions, River, chi, templ and signal theme tokens.
+`internal/usage` owns feature-local parameterized SQL, accounting, recovery and
+handlers; `web/pages/usage` receives display data. No new dependency or global layer.
+
+### Technical implementation
+
+- Migration 0042 installs the owner-delegated free policy (300 minutes per UTC
+  calendar month, one concurrent build, two preview slots), backfills active
+  workspaces with fresh allowances and grants future workspaces through a trigger.
+  The owner confirmed no hosted users. Legacy elapsed-time counters are retained
+  and labelled; the migration records the new accounting cutover.
+- `workspace_entitlements` is the workspace reservation lock;
+  `workspace_usage_periods`, `workspace_usage_attempts` and
+  `workspace_usage_segments` capture stable ownership, physical attempt UUIDs,
+  unique segment sequences, consumed microseconds and bounded reservations.
+  Target-history pruning cannot erase segment consumption.
+- PR and baseline admission share the existing global slot lock and reserve under
+  the entitlement lock. Admission waits are uncharged. Execution start rechecks
+  limits, then a renewable cancellation context bounds source/build/startup/setup/
+  seed/fallback execution. Each reservation totals at most 60 seconds; segments
+  split at UTC day/month boundaries. Failed/superseded work counts, and repeated
+  settlement cannot count twice.
+- A timer independent of database renewal cancels at the last committed deadline.
+  Admission and a one-minute River recovery job settle expired holds. A running
+  crash uses only its reserved upper bound and stays labelled provisional; an
+  admission that never started costs zero. Period totals reconcile with segments.
+- Preview slots count PR identities, retaining active/sleeping/pending previews
+  and admitted new ones. Same-PR replacement reuses a slot. Publication checks
+  current entitlement at route acceptance; baseline publication checks compute
+  limits. Restricted work waits without exhausting River retries. Existing routes
+  are never removed by quota logic.
+- Usage snapshots authorize active membership and repository grants. Owners/Admins
+  see totals; Developers see granted repository technical usage only; Reviewers
+  are denied. Exact reset/checked times, pending/provisional recovery and unknown
+  policy are explicit. There are no purchase controls or quota middleware on
+  reads, feedback, cancellation or teardown.
+
+### Design decisions and edge cases
+
+An execution fitting its already-accounted balance may publish when that balance
+is exactly exhausted. Lowered/restricted entitlements are rechecked. Reserved
+minutes can free before reset, so their wait ends by the relevant lease deadline.
+`BUILDS_PER_ACCOUNT`/`BUILD_MINUTES_PER_ACCOUNT_DAY` are additional workspace
+ceilings; zero never makes the free plan unlimited. Workers are restarted together
+when these operator settings change. Host capacity, lifetime and idle rules remain
+unchanged and their last worker report is shown. Unknown crash time is not claimed
+as an exact measurement. Details: [33](docs/33-usage-and-free-plan.md).

@@ -50,7 +50,9 @@ func TestEncryptedStreamsRoundTripAnySize(t *testing.T) {
 		if err != nil || !bytes.Equal(got, plain) {
 			t.Fatalf("size %d: %v", size, err)
 		}
-		if size > 0 && bytes.Contains(sealed, plain[:min(size, 32)]) {
+		// A single plaintext byte can occur in random ciphertext by chance.
+		// Look for a meaningful prefix; all sizes still prove exact round trips.
+		if size >= 32 && bytes.Contains(sealed, plain[:32]) {
 			t.Fatalf("size %d: plaintext visible", size)
 		}
 	}

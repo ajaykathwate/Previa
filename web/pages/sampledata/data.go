@@ -209,6 +209,16 @@ func FailureTitle(code string) string {
 // WaitingText explains why a refresh waits.
 func WaitingText(reason string, until time.Time, attempts int32, now time.Time) string {
 	switch {
+	case reason == "workspace_accounting":
+		return "Waiting for usage accounting. The previous baseline stays current; this refresh retries automatically."
+	case reason == "workspace_builds":
+		return "Waiting for a workspace build slot. This refresh retries when another build finishes."
+	case reason == "workspace_minutes":
+		return "Waiting for workspace build minutes. See Usage for the allowance reset; the previous baseline stays current."
+	case reason == "workspace_daily":
+		return "The operator's daily safety ceiling is reached. This refresh retries at 00:00 UTC."
+	case reason == "workspace_restricted":
+		return "Workspace compute is restricted. Ask the workspace owner to contact the operator."
 	case reason == "capacity_wait":
 		return "Waiting for a free build slot."
 	case reason == "quota_blocked":

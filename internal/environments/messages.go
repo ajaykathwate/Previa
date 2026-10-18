@@ -16,6 +16,18 @@ func WaitingTitle(reason string) string {
 		return "Waiting for your other build"
 	case WaitQuota:
 		return "Daily build minutes used"
+	case "workspace_builds":
+		return "Waiting for a workspace build slot"
+	case "workspace_accounting":
+		return "Waiting for usage accounting"
+	case "workspace_minutes":
+		return "Workspace build minutes unavailable"
+	case "workspace_daily":
+		return "Daily safety ceiling reached"
+	case "workspace_previews":
+		return "Workspace preview slots in use"
+	case "workspace_restricted":
+		return "Workspace compute restricted"
 	}
 	return "Waiting for capacity"
 }
@@ -30,6 +42,18 @@ func WaitingMessage(reason string) string {
 		return "Your account already has a build running on this server. This build starts automatically when it finishes, so every account gets a turn."
 	case WaitQuota:
 		return "Your account used today's build minutes on this server. This build starts automatically after midnight UTC."
+	case "workspace_builds":
+		return "The workspace is using its concurrent build limit. This work retries automatically when a build finishes."
+	case "workspace_accounting":
+		return "The worker could not renew its execution reservation. This work stopped at its reserved deadline and retries automatically when accounting is available."
+	case "workspace_minutes":
+		return "The workspace's build minutes are consumed or reserved. This work retries after the allowance resets or reserved time is released. See Usage for the reset time. Existing previews and feedback remain available."
+	case "workspace_daily":
+		return "The workspace reached the operator's daily safety ceiling. This work retries after 00:00 UTC. A plan change cannot bypass this ceiling."
+	case "workspace_previews":
+		return "The workspace's preview slots are in use. Tear down an unused preview or wait for expiry. Existing previews stay available; a same-PR replacement reuses its slot."
+	case "workspace_restricted":
+		return "Compute is restricted for this workspace. Ask the workspace owner to contact the operator. Existing previews and feedback remain available."
 	}
 	return "Builds or previews already use this host's capacity. This build starts automatically once some frees up."
 }

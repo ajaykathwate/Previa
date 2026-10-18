@@ -420,7 +420,9 @@ func TestBrowserRegression(t *testing.T) {
 	server.Start()
 	t.Cleanup(server.Close)
 	t.Cleanup(hub.Close) // Runs first, ending open event streams so Close returns.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// The full suite now has 55 scenarios. Keep per-action browser deadlines,
+	// but allow the complete process to finish alongside local Docker tests.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	args := []string{"--test"}
 	if pattern := os.Getenv("UI_TEST_PATTERN"); pattern != "" {

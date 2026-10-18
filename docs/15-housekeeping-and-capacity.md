@@ -154,8 +154,8 @@ teardown; the next recovery pass recreates a missing wake-up.
 
 | Control | How it holds |
 | --- | --- |
-| Global build concurrency (`MAX_CONCURRENT_BUILDS`, across every worker) | Admission takes a transaction-scoped advisory lock and counts running requests. A running request holds its slot from admission until its final attempt ends, across River retries and restarts. When all slots are taken the request stays queued, notes that it waits, and its job is snoozed. |
-| Fair sharing between accounts | Optional limits per account (installation owner): `BUILDS_PER_ACCOUNT` running builds, `BUILD_MINUTES_PER_ACCOUNT_DAY` and `PREVIEW_MAX_PER_ACCOUNT`; waiting builds take turns by account ([17](17-build-scheduling.md#fair-sharing-between-accounts)). |
+| Global build concurrency (`MAX_CONCURRENT_BUILDS`, across every worker) | Admission takes a transaction-scoped advisory lock and counts running requests. A running request holds its slot from admission until its final attempt ends, across ordinary River retries and restarts. F3 quota/accounting waits release the executing slot and keep the request queued. When all slots are taken the request stays queued and its job is snoozed. |
+| Workspace usage and fair sharing | Finite free entitlements: 300 minutes/UTC calendar month, one concurrent build and two preview slots. `BUILDS_PER_ACCOUNT`, `BUILD_MINUTES_PER_ACCOUNT_DAY` and `PREVIEW_MAX_PER_ACCOUNT` remain additional workspace safety ceilings. PR and baseline execution share bounded reservations; [33](33-usage-and-free-plan.md) describes accounting/recovery. Existing turns apply ([17](17-build-scheduling.md#fair-sharing-between-accounts)). |
 | Idle previews | With `PREVIEW_IDLE_SLEEP`, a preview nobody opened for that long stops its app and processes until the next visit wakes it, which frees their memory and CPU ([10](10-preview-runtime.md#idle-previews-sleep)). |
 | Preview CPU, memory and per-repository previews | A session advisory lock (`runtime.AdmissionLock`) is held from the capacity check until the candidate container exists with its labels, so concurrent admissions on any worker see each other. Usage is read from the containers' labels: the active preview and its candidate both count during a swap, and capacity is released only when a container is actually removed. The per-repository limit counts PRs, so a PR's own swap never competes with its active preview. A worker that crashes loses its connection and with it the lock; there are no reservations to leak or reconcile. |
 | Before admission | The runtime's `Admit` checks that at least the smallest preview (0.5 CPU, 512 MiB) would fit; if not, the request waits queued instead of building an image it could not start. |
@@ -204,7 +204,7 @@ Dry run for instance 40faee5f0a2d (nothing was changed):
 | `HOUSEKEEPING_GRACE` | 15m | Minimum age of an orphan (1m–24h) |
 | `BUILD_CACHE_BUDGET` | 40GiB | All build caches together (at least 1GiB) |
 | `MAX_CONCURRENT_BUILDS` | (required) | Builds running at once across all workers |
-| `BUILDS_PER_ACCOUNT`, `BUILD_MINUTES_PER_ACCOUNT_DAY`, `PREVIEW_MAX_PER_ACCOUNT` | 0 (no limit) | Fair sharing between accounts |
+| `BUILDS_PER_ACCOUNT`, `BUILD_MINUTES_PER_ACCOUNT_DAY`, `PREVIEW_MAX_PER_ACCOUNT` | 0 (no extra ceiling) | Additional workspace safety ceilings; the finite free entitlement still applies |
 | `PREVIEW_IDLE_SLEEP` | 0 (never) | Time without a visit before a preview sleeps |
 | `BUILD_LOG_RETENTION_DAYS` | 14 | Days a finished attempt's logs are kept (1–90) |
 
