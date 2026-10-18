@@ -6,17 +6,21 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ajaykathwatee/previa/internal/app"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/errortracking"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/logging"
+	"github.com/ajaykathwatee/previa/internal/platform/version"
 )
 
 // main runs the server, or one of its subcommands:
 //
 //	server check-config  validate the environment and exit (deploy gate)
 //	server healthcheck   exit 0 when the running process is ready (container health check)
+//	server sentry-test   send one test error to Sentry and wait for it (deploy check)
 func main() {
 	if len(os.Args) > 1 {
 		os.Exit(command(os.Args[1]))
@@ -27,10 +31,16 @@ func main() {
 // run runs the server until it is told to stop and returns the exit code; its
 // deferred cleanup runs before the process exits.
 func run() int {
-	logger, err := logging.New(os.Stdout, os.Getenv("LOG_LEVEL"))
+	// Warnings and errors also go to Sentry when SENTRY_DSN is set (docs/25).
+	reporter, reportErr := errortracking.Start(errortracking.FromEnv("server", version.Version))
+	defer reporter.Flush(5 * time.Second)
+	logger, err := logging.New(os.Stdout, os.Getenv("LOG_LEVEL"), reporter.Handlers()...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
+	}
+	if reportErr != nil {
+		logger.Error("error reporting is off", "error", reportErr)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -48,6 +58,10 @@ func command(name string) int {
 			fmt.Fprintln(os.Stderr, logging.RedactString(err.Error()))
 			return 1
 		}
+		if err := errortracking.Check(errortracking.FromEnv("server", version.Version)); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 		fmt.Println("configuration is valid")
 		return 0
 	case "healthcheck":
@@ -60,8 +74,15 @@ func command(name string) int {
 			return 1
 		}
 		return 0
+	case "sentry-test":
+		if err := errortracking.Test(errortracking.FromEnv("server", version.Version)); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println("sent a test error to Sentry: it appears under Issues as \"Sentry test from previa-server\"")
+		return 0
 	default:
-		fmt.Fprintln(os.Stderr, "usage: server [check-config|healthcheck]")
+		fmt.Fprintln(os.Stderr, "usage: server [check-config|healthcheck|sentry-test]")
 		return 2
 	}
 }

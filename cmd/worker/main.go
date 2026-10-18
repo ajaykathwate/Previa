@@ -6,11 +6,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ajaykathwatee/previa/internal/app"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/ajaykathwatee/previa/internal/platform/errortracking"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/logging"
+	"github.com/ajaykathwatee/previa/internal/platform/version"
 )
 
 // main runs the worker, or one of its subcommands:
@@ -27,10 +30,16 @@ func main() {
 // run runs the worker until it is told to stop and returns the exit code; its
 // deferred cleanup runs before the process exits.
 func run() int {
-	logger, err := logging.New(os.Stdout, os.Getenv("LOG_LEVEL"))
+	// Warnings and errors also go to Sentry when SENTRY_DSN is set (docs/25).
+	reporter, reportErr := errortracking.Start(errortracking.FromEnv("worker", version.Version))
+	defer reporter.Flush(5 * time.Second)
+	logger, err := logging.New(os.Stdout, os.Getenv("LOG_LEVEL"), reporter.Handlers()...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
+	}
+	if reportErr != nil {
+		logger.Error("error reporting is off", "error", reportErr)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -46,6 +55,10 @@ func command(name string) int {
 	case "check-config":
 		if _, err := config.LoadWorker(); err != nil {
 			fmt.Fprintln(os.Stderr, logging.RedactString(err.Error()))
+			return 1
+		}
+		if err := errortracking.Check(errortracking.FromEnv("worker", version.Version)); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		fmt.Println("configuration is valid")

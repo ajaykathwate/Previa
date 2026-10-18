@@ -360,8 +360,10 @@ and reinstalling works.
   installation gone or suspended. This wakes the reconciler; nothing is revoked
   from the request path.
 - [ ] Reinstalling works after a missed deletion, for the same owner only.
-- [ ] Metrics with bounded labels, an alert whenever reconciliation finds a change,
-  and a runbook entry for webhook delivery outages.
+- [ ] Metrics with bounded labels, an alert whenever reconciliation finds a change
+  (logged at warning or error level, so Sentry shows or emails it in production;
+  a Prometheus rule as well for the optional observability profile), and a
+  runbook entry for webhook delivery outages.
 - [ ] Every test listed in Prompt 14, plus a `make test-e2e` phase that drops the
   uninstall webhook.
 - [ ] Docs: docs/04, 05, 12 and 14, docs/02 if configuration changes, the user
@@ -446,12 +448,19 @@ and both of us agree it is ready to deploy.
 
 ## Part 3 · Deployment
 
-Deployment follows [docs/25](docs/25-production-deployment.md) step by step: one
-OVHcloud VPS-2 (4 vCores, 8 GB RAM, 75 GB NVMe) running Ubuntu 24.04, PostgreSQL 17
-on that server, Cloudflare DNS and Cloudflare R2 for encrypted backups. It then
+Deployment follows [docs/25](docs/25-production-deployment.md) step by step. The
+final setup, agreed on 18 October 2026: one OVHcloud VPS-2 (4 vCores, 8 GB RAM,
+75 GB NVMe) running Ubuntu 24.04, with PostgreSQL 17, the server, the worker and
+Traefik in Docker Compose, the images built on the server from a release tag;
+`previa.live` for the landing page and dashboard and a separate preview domain,
+both on Cloudflare DNS; Cloudflare R2 for encrypted backups; GitHub for the code,
+CI, sign-in and the App; Sentry (free) for errors, uptime and backup alerts by
+email; Tailscale (free) for SSH, with port 22 closed to the internet; lazydocker
+for logs on the server. It costs about **€8 a month plus VAT** (the VPS and the
+preview domain) plus `previa.live`'s renewal
+([docs/25 "What it costs"](docs/25-production-deployment.md#what-it-costs)). It then
 works through the live proofs of
 [docs/22](docs/22-mvp-operations.md#live-proofs-still-required-before-a-public-rollout).
-Choosing other providers means adapting those steps first, as docs/25 explains.
 
 ### 3.1 What Claude needs from the owner, and how to give it
 
@@ -466,59 +475,69 @@ The owner provides these during the deployment phase, not before.
   in GitHub or in Cloudflare.
 - **Secrets the server generates itself** need nothing from the owner except a
   recovery copy kept in a password manager: the database password, session secret,
-  webhook secret, repository-secrets keyring and Grafana password (`setup.sh`
-  creates them, docs/25 Step 5).
+  webhook secret and repository-secrets keyring (`setup.sh` creates them, docs/25
+  Step 5).
 
 | # | What | Why | How the owner gives it | Needed at |
 | --- | --- | --- | --- | --- |
 | 1 | An OVHcloud account with two-factor authentication, its identity check completed | To rent the server | Create it; nothing to send | D2 |
-| 2 | **Decision:** a separate staging VPS for first-deployment and restore drills, as docs/25 Step 0 recommends | Rehearse without risking production | Yes or no, in the chat | D2 |
-| 3 | An SSH key on the owner's workstation (docs/25 Step 0) and a way for Claude to reach the server | To run the setup steps | Either make `ssh <name>` work from this WSL terminal (key plus a `~/.ssh/config` entry) and approve each command as Claude runs it, or run the commands Claude gives and paste back the non-secret output. Tell Claude which one, and the SSH name and user. | D2 |
-| 4 | The VPS's model, location and public IPv4 address | Inventory, DNS records, firewall | In the chat | D2 |
-| 5 | The owner's administration IP address or range | SSH firewall rule | In the chat | D2 |
-| 6 | Two domains on Cloudflare DNS: a dashboard domain (example: `previa.example.com`) and a **separate registrable domain** for previews (example: `preview.example.net`, with a wildcard record), as docs/25 Step 2 requires | Users reach the dashboard and every preview | Buy or choose them, move their nameservers to Cloudflare, then tell Claude both names in the chat | D2 |
+| 2 | ~~Decision: a separate staging VPS~~ **Decided 2026-10-18: none.** The production VPS is the rehearsal machine before launch; later drills use a server rented by the hour | No second monthly bill | Nothing to do | D9 |
+| 3 | An SSH key on the owner's workstation (docs/25 Step 0) and a way for Claude to reach the server | To run the setup steps | Until Tailscale is set up (D2), SSH over the public IP; afterwards make `ssh ops@previa-prod-01` work from this WSL terminal. Either approve each command as Claude runs it, or run the commands Claude gives and paste back the non-secret output. Tell Claude which one | D2 |
+| 4 | The VPS's model, location and public IPv4 address | Inventory, DNS records | In the chat | D2 |
+| 5 | A Tailscale account (free Personal plan, two-factor authentication) and its app on the owner's workstation (on Windows, and inside WSL if `ssh` from WSL cannot reach the tailnet) | SSH without port 22 open to the internet (docs/25 Step 3, "Move SSH to Tailscale") | Create it and sign in to the app; approve the server when `tailscale up` prints its login link; disable the server's key expiry | D2 |
+| 6 | The preview domain: a **separate registrable domain** bought on Cloudflare Registrar (about $10–11 a year for a .com; `previa.live` is already on Cloudflare) | Previews stay off `previa.live` (docs/25 Step 2 says why) | Buy it, then tell Claude its name in the chat | D2 |
 | 7 | A Cloudflare API token with Zone DNS Edit and Zone Read, scoped to the preview zone | Automatic HTTPS certificates (DNS-01) | **Secret.** Create it in Cloudflare, keep it in a password manager, and paste it yourself into `/etc/previa/dns-credential` on the server with the command Claude gives (docs/25 Step 4) | D3 |
 | 8 | A private Cloudflare R2 bucket and an API token scoped to it (access key and secret) | Encrypted off-server backups | The bucket name and R2 endpoint in the chat. **The keys are secret:** type them yourself into root's `rclone config` on the server (docs/25 B2–B3) | D5 |
 | 9 | A backup recovery key made with `age-keygen` on the owner's recovery workstation (docs/25 B1) | Only this key can open backups | Send only the public `age1…` recipient in the chat. The private key stays offline, in two copies, never on the server | D5 |
-| 10 | A production GitHub **OAuth App** (sign-in), with the field values Claude gives | Users sign in on the real domain | Register it on GitHub. Send the client ID in the chat; type the **client secret** yourself into `/etc/previa/previa.env` | D3 |
+| 10 | A production GitHub **OAuth App** (sign-in), with the field values Claude gives (`https://previa.live/…`) | Users sign in on the real domain | Register it on GitHub. Send the client ID in the chat; type the **client secret** yourself into `/etc/previa/previa.env` | D3 |
 | 11 | A production **GitHub App**, with the URLs and permissions Claude gives (docs/25 Step 4: Contents read, Pull requests write, Checks write, the Pull request event) | Repository access, webhooks, PR comments | Register it on GitHub. Send the App ID, slug and client ID in the chat. Type the **client secret** into `previa.env`; upload the **private key** with `scp` and install it with Claude's command; copy the **webhook secret** from the server's `previa.env` into GitHub yourself | D3 |
-| 12 | A monitored email address | The certificate account (`ACME_EMAIL`) and the host's abuse notices | In the chat | D3 |
-| 13 | GitHub repository settings: Actions enabled, `master` the default and protected branch, a `release` environment with reviewers (docs/25 "CI and releases") | Releases can be built and published | Set them on GitHub; tell Claude when done | D1 |
-| 14 | **Decision:** whether the GHCR images are public or private | Private images need a read credential on the host | In the chat. If private, configure the package-read credential on the host yourself | D1 |
-| 15 | Release approval | Only `master` commits that passed CI are tagged | Merge the `main` → `master` pull request after CI passes, create the release tag (or explicitly ask Claude to), and publish the draft release | D1 |
-| 16 | Where alerts go: an email address or a webhook receiver | Someone hears when builds, certificates or backups fail | An email address in the chat. A webhook URL that contains a token is a **secret**: put it yourself into the file Claude names | D8 |
-| 17 | An account with an external uptime service | Checks the dashboard and certificates from outside the server | Create it; Claude gives the check settings (docs/25) | D8 |
+| 12 | A monitored email address | Sentry's alerts, the certificate account (`ACME_EMAIL`) and the host's abuse notices | In the chat | D3 |
+| 13 | GitHub repository settings: Actions enabled, `master` the default branch (docs/25 "CI and releases"; branch protection is a habit on the free plan) | CI runs on pull requests into `master` | Set them on GitHub; tell Claude when done | D1 |
+| 14 | The server's **deploy key** (docs/25 Step 3) | The server clones and pulls the private repository; images are built there, so no registry credential is needed | Claude prints the public key on the server; add it in GitHub → repository → **Settings → Deploy keys**, read-only | D2 |
+| 15 | Release approval | Only `master` commits that passed CI are tagged | Merge the `main` → `master` pull request after CI passes, then create and push the version tag (or explicitly ask Claude to) | D1 |
+| 16 | ~~Where alerts go~~ **Decided 2026-10-18:** Sentry emails item 12's address; no Alertmanager or chat webhook | — | Nothing to do | D8 |
+| 17 | A Sentry account (free Developer plan, two-factor authentication, the EU data region for a European VPS) with a Go project named `previa` (docs/25 S1) | Errors, logs, the uptime monitor and the backup's cron monitor | Create it; send the project's DSN in the chat or paste it into `previa.env` yourself (it is not a password, but keep it out of public places) | D4 |
 | 18 | A disposable GitHub repository with the production App installed and an open pull request | The live GitHub proofs (`make test-source`, `make test-reporting`) | Create it; tell Claude its installation ID, repository ID and PR number in the chat | D7 |
-| 19 | **Decision:** gVisor (`PREVIEW_OCI_RUNTIME=runsc`) | Extra isolation, if the threat model needs it | Yes or no, in the chat | D4 |
+| 19 | ~~Decision: gVisor~~ **Decided 2026-10-18:** off for invited early-access users; revisit before open sign-up (an optional test fits the pre-launch rehearsal, D9) | — | Nothing to do now | D9 |
 | 20 | **Decision:** the account-safety settings from docs/25: `BUILD_EGRESS=registries`, the preview lifetime (`ENV_TTL_HOURS`) | Fewer abuse risks | In the chat | D4 |
 
 ### 3.2 Deployment checklist
 
 **D1 · Code and release**
 - [ ] **Claude** (when asked): push `mvp-complete` to `main`.
-- [ ] **Owner:** open the pull request `main` → `master`. When CI passes, merge it.
-- [ ] **Owner:** prepare the repository for releases (items 13–14).
+- [ ] **Owner:** open the pull request `main` → `master` when the work is ready to
+  release (each push to `main` while it is open costs a CI run). When CI passes,
+  merge it.
+- [ ] **Owner:** prepare the repository (item 13).
 - [ ] **Claude:** rehearse the release candidate locally: `make release-images` and
   `make prod-smoke` (docs/25 "Local staging smoke test").
-- [ ] **Owner:** tag a `master` commit whose CI passed (`v*.*.*`). The Release
-  workflow publishes images to GHCR as a draft release; review and publish it
-  (item 15).
+- [ ] **Owner:** tag a `master` commit whose CI passed (`vX.Y.Z`) and push the tag
+  (item 15). The tag publishes nothing; the server builds it in D6.
 
 **D2 · Host** (docs/25 Steps 0–3)
-- [ ] Step 0: the non-secret inventory is recorded in the owner's operations notes.
-- [ ] Step 1: the VPS is ordered, the firewall and SSH configured.
-- [ ] Step 2: DNS records created as DNS-only. `dig` resolves the dashboard name
-  and a test label under the preview domain to the VPS.
-- [ ] Step 3: the checkout is installed and `setup.sh` has prepared the host.
+- [ ] Step 0: the accounts exist (items 1, 5, 17) and the non-secret inventory is
+  recorded in the owner's operations notes.
+- [ ] Step 1: the VPS is ordered, the `ops` user created, SSH key-only.
+- [ ] Step 2: the preview domain is bought (item 6); `previa.live` and the
+  wildcard preview record are DNS-only. `dig` resolves `previa.live` and a test
+  label under the preview domain to the VPS.
+- [ ] Step 3: the deploy key is added (item 14), the release tag is checked out
+  at `/opt/previa`, `setup.sh` has prepared the host (Tailscale and lazydocker
+  installed).
+- [ ] Step 3: SSH works over Tailscale (`ssh ops@previa-prod-01`), the server's key
+  expiry is off, port 22 is closed to the internet (`ufw status` shows SSH on
+  `tailscale0` only), and `nc` from outside the tailnet times out.
 
 **D3 · GitHub integrations and credentials** (docs/25 Step 4)
-- [ ] The OAuth App and GitHub App are registered (items 10–11).
+- [ ] The OAuth App and GitHub App are registered with `https://previa.live` URLs
+  (items 10–11).
 - [ ] The App private key and DNS token are installed with the owners and modes
   docs/25 specifies.
 
 **D4 · Production settings** (docs/25 Step 5)
-- [ ] `/etc/previa/previa.env` is complete per the docs/25 table, plus any setting
-  F2–F5 added (listed in docs/02 by then) and the decisions in items 19–20.
+- [ ] `/etc/previa/previa.env` is complete per the docs/25 table, including
+  `SENTRY_DSN` (item 17), plus any setting F3–F5 add (listed in docs/02 by then)
+  and the decisions in item 20.
 - [ ] Both configuration checks pass: `server check-config` and
   `worker check-config` (docs/25 Step 7).
 
@@ -527,7 +546,8 @@ The owner provides these during the deployment phase, not before.
   configured (item 8), and `BACKUP_AGE_RECIPIENT` and `BACKUP_REMOTE` are set.
 
 **D6 · First start** (docs/25 Steps 7–9, then B4)
-- [ ] Release images are pulled and the stack starts.
+- [ ] The three images are built on the server from the tag
+  (`dc --profile images build server worker egress`) and the stack starts.
 - [ ] Certificates are issued with Let's Encrypt **staging**, then switched to
   production.
 - [ ] The first real backup succeeds and the backup schedule is enabled (B4).
@@ -553,17 +573,22 @@ The owner provides these during the deployment phase, not before.
   `MAX_CONCURRENT_BUILDS` concurrent builds.
 - [ ] The spec §12.2 GitHub integration journey.
 
-**D8 · Monitoring and alerts** (docs/25 "Monitor live traffic, jobs and containers")
-- [ ] Host CPU, memory and disk checks are understood. Grafana and metrics run, if
-  the observability profile is used.
-- [ ] The external uptime check for the dashboard and its certificate is configured
-  (item 17).
-- [ ] Alerts reach a person: Alertmanager and a receiver (item 16), plus
-  `BACKUP_FAILURE_WEBHOOK`. A test alert is received.
+**D8 · Monitoring and alerts** (docs/25 "Monitoring with Sentry" and "Logs, SSH
+and day-to-day checks")
+- [ ] S2: `server sentry-test` succeeds and the test issue appears in Sentry.
+- [ ] S3: the uptime monitor checks `https://previa.live/` every minute.
+- [ ] S4: the alert rule emails item 12's address; the test issue's email, an
+  uptime failure email (temporarily wrong URL) and the cron monitor
+  `previa-backup` with an OK check-in after B4 are all confirmed.
+- [ ] Host checks are understood: `free -h`, `df -h`, `docker stats` and
+  `lazydocker`, with docs/25's thresholds.
 
-**D9 · Rehearsals** (on the staging VPS, if item 2 is yes)
-- [ ] A restore (B5 and B6), including F4's deletion journal.
-- [ ] An upgrade and a rollback (U1–U5).
+**D9 · Rehearsals before launch** (docs/25 "Rehearse recovery before launch", on
+the production VPS while it holds only test data)
+- [ ] A full restore: backup, OS reinstall from the Control Panel, B6 recovery,
+  including F4's deletion journal; the recovery time is recorded.
+- [ ] An upgrade and a rollback (U1–U5, then the image rollback).
+- [ ] Optional: the gVisor test (item 19).
 
 **D10 · Account safety** (docs/25 "Account safety: abuse reports")
 - [ ] The abuse-notice email is monitored (item 12).

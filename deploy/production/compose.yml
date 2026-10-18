@@ -1,5 +1,6 @@
 # Previa on one host: PostgreSQL, the migration step, the server, the worker,
-# the router and (profile "observability") Prometheus and Grafana.
+# the router and (optional profile "observability", which the production
+# deployment does not run) Prometheus and Grafana.
 # docs/25-production-deployment.md walks through it; run it as
 #
 #   docker compose -f deploy/production/compose.yml --env-file /etc/previa/previa.env up -d

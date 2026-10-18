@@ -55,6 +55,19 @@ scope is added. The account's first/last name is editable independently; refresh
 GitHub data never overwrites it. If email lookup fails, sign-in still works and the
 profile explains that the email could not refresh. Existing saved email is retained.
 
+### Deployment setup update (2026-10-18)
+
+The final production setup ([25](25-production-deployment.md#the-final-deployment-at-a-glance))
+adds one optional setting, `SENTRY_DSN`. Keep it empty in `.env` (the
+`.env.example` line is already empty): nothing is reported and nothing leaves your
+machine. With a DSN, the server and worker also send their redacted warnings and
+errors to Sentry, `check-config` refuses a malformed value, and
+`go run ./cmd/server sentry-test` (or `previa-server sentry-test`) sends one test
+error. No migration and no image rebuild is needed for local work. CI now skips a
+push or pull request that changes documentation only, and the Release workflow
+runs only when started by hand from a tag: production builds its images on the
+server from the tag.
+
 ### F3: finite free-plan cutover
 
 The owner delegated the allowance choice and confirmed there are no hosted users
@@ -182,7 +195,8 @@ same command first; generated files are not passed between GitHub Actions jobs.
 
 CI runs for pull requests into `master` (the default and release branch), for
 merges into it, and when dispatched manually (**Actions → CI → Run workflow**,
-choosing your branch); a push to `main` alone runs nothing. To verify a CI fix,
+choosing your branch); a push to `main` alone runs nothing, and neither does a
+change to documentation only (`*.md`, `docs/`, `technical-docs/`, `test-docs/`). To verify a CI fix,
 push it, open or update a pull request into `master` (or dispatch CI on your
 branch), then open the new Actions run and compare its commit SHA with
 `git rev-parse HEAD`.
@@ -233,6 +247,8 @@ production only. The rules that most often stop a first run:
   dashboard host equal to or below the preview domain (the server also warns when they
   share a registrable domain). The router must be running (`make router-up`) for
   previews to be published.
+- `SENTRY_DSN` stays empty locally. A malformed value makes `check-config` fail;
+  at startup the processes log `error reporting is off` and run without it.
 - Over HTTPS the dashboard's session and OAuth state cookies are named
   `__Host-previa_session` and `__Host-previa_oauth_state`; switching `APP_BASE_URL`
   between HTTP and HTTPS signs everyone out once.

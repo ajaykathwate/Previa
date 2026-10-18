@@ -1,13 +1,27 @@
 # 24 · Incident runbook
 
-What to do when something goes wrong on a production host. Each alert in
-`deploy/observability/alerts.yml` links to one section here. The metrics and
-endpoints are described in [23](23-observability-and-hardening.md); the host
-layout in [25](25-production-deployment.md).
+What to do when something goes wrong on a production host. In production, Sentry
+tells you ([25](25-production-deployment.md#monitoring-with-sentry)): an email about
+a new issue, a failing uptime check or a backup that failed or never ran. The table
+says where each signal leads. The **Alerts** named in each section are the rules in
+`deploy/observability/alerts.yml`, which fire only with the optional observability
+profile; they name the same situations. The metrics and endpoints are described in
+[23](23-observability-and-hardening.md); the host layout in
+[25](25-production-deployment.md).
+
+| What Sentry shows | Start at |
+| --- | --- |
+| The uptime monitor for `https://previa.live` fails | [Server or worker down](#server-or-worker-down); if the VPS does not answer at all, the OVHcloud Control Panel (KVM console, the VPS's state) |
+| The cron monitor `previa-backup` reports an error or a missed check-in | [Backup failed](#backup-failed) |
+| An issue from `process=worker` about a job, a build or Docker | [Queue backlog](#queue-backlog), [Build failures](#build-failures) or [Pending operations](#pending-operations), by its message and `job_kind` |
+| An issue about GitHub (rate limit, authentication, an API error) | [GitHub outage or rate limits](#github-outage-or-rate-limits) |
+| An issue `HTTP handler panic` from `process=server` | Its stack field names the handler; `dc logs server` around that time |
+| An issue about certificates or ACME is **not** sent: Traefik's own logs do not reach Sentry | [Certificate renewal](#certificate-renewal); the uptime monitor catches an expired dashboard certificate, and the monthly check in [25](25-production-deployment.md#monthly-checks) the preview wildcard |
 
 ## First steps for any incident
 
 ```sh
+ssh ops@previa-prod-01              # over Tailscale; then sudo -i
 cd /opt/previa                      # the release checkout used to deploy
 dc() { docker compose -f deploy/production/compose.yml --env-file /etc/previa/previa.env "$@"; }
 probe() { docker run --rm --network previa_control curlimages/curl:8.15.0 -fsS "$@"; }
@@ -18,6 +32,10 @@ probe http://worker:9091/readyz; echo              # database, schema, River, he
 dc logs --since 30m worker | grep '"level":"ERROR"'
 dc logs --since 30m worker | grep '"pr_id":42'     # one pull request's story
 ```
+
+`lazydocker` shows the same containers and their logs on one screen. Sentry's
+issue shows the message, `process` and correlation fields (`job_kind`, `pr_id`,
+`operation_id`) to search the logs for.
 
 Logs never contain secrets or tokens (they are redacted), so they can be shared
 with whoever helps. Do not paste `/etc/previa/previa.env`.
@@ -84,7 +102,9 @@ and `dc up -d worker`.
 **Alerts:** PreviaQueueWaitHigh, PreviaBuildQueueWaitHigh, PreviaJobsFailing,
 PreviaBuildsWaitingForCapacity.
 
-1. Grafana "Queues and requests": which queue, and are jobs failing or just waiting?
+1. Which queue, and are jobs failing or just waiting?
+   `dc exec -T postgres psql -U previa -d previa -c "SELECT queue, state, count(*) FROM river_job GROUP BY 1, 2 ORDER BY 1, 2;"`
+   (or Grafana's "Queues and requests" with the optional profile).
 2. Builds waiting for capacity are normal under load: at most
    `MAX_CONCURRENT_BUILDS` run at once and the preview budget is bounded. Raise
    `MAX_CONCURRENT_BUILDS` only if the host has room
@@ -97,7 +117,8 @@ PreviaBuildsWaitingForCapacity.
 
 **Alerts:** PreviaBuildFailureSpike, PreviaPreviewsNotBecomingReady.
 
-1. Grafana "Build failures by code" tells which category dominates.
+1. The **Builds** page and Sentry's issues show which failure category dominates
+   (or Grafana's "Build failures by code" with the optional profile).
 2. `build_failed`, `unhealthy`, `crashed` across many repositories at once point
    to the platform: base image registry outage (the egress proxy must reach it),
    BuildKit image pull problems, or a host problem. One repository failing is
@@ -111,7 +132,8 @@ PreviaBuildsWaitingForCapacity.
 
 Operations are routes, reports and cleanups ([19](19-generation-ordering.md#the-decision)).
 
-1. Grafana "Operations by kind and state".
+1. `dc exec -T postgres psql -U previa -d previa -c "SELECT kind, state, count(*) FROM environment_operations GROUP BY 1, 2 ORDER BY 1, 2;"`
+   (or Grafana's "Operations by kind and state" with the optional profile).
 2. `activate_route`/`remove_route` failing: is the router healthy (`dc ps router`)?
    Is `/var/lib/previa/router` writable by UID 65532?
 3. `cleanup_artifact` backlog: Docker slow or refusing removal. `docker ps -a
@@ -175,7 +197,8 @@ Remove the dry-run line once explained.
 Builds waited for a build slot, preview memory or disk over a quarter of the last
 day. It is a planning signal, not an outage.
 
-1. Grafana "Queues and requests": is it every day, or one busy day?
+1. Is it every day, or one busy day? Watch the Builds page's waiting reasons over
+   a few days (or Grafana's "Queues and requests" with the optional profile).
 2. Cheaper first: `PREVIEW_IDLE_SLEEP=3h` frees idle previews' memory; a lower
    `ENV_TTL_HOURS` removes old ones sooner; `BUILDS_PER_ACCOUNT` and
    `PREVIEW_MAX_PER_ACCOUNT` stop one account taking everything.
@@ -204,17 +227,25 @@ bandwidth).
 
 ## Backup failed
 
-**Alerts:** PreviaBackupStale, PreviaBackupNeverRecorded.
+**Sentry:** the cron monitor `previa-backup` reports an error, or no check-in
+arrived within a day. **Alerts:** PreviaBackupStale, PreviaBackupNeverRecorded.
 
 1. `systemctl status previa-backup.service`, `journalctl -u previa-backup -n 50`.
+   A missed check-in with no failed run means the timer did not run
+   (`systemctl list-timers previa-backup.timer`), the host was down, or it could
+   not reach Sentry (`Sentry check-in … not sent` in the journal).
 2. Common causes: `BACKUP_AGE_RECIPIENT` or `BACKUP_REMOTE` unset, rclone
    credentials expired, the remote full, PostgreSQL down.
 3. Run it by hand to confirm: `systemctl start previa-backup.service`.
-4. The status file only changes after every file was uploaded, so the alert clears
-   only on a complete backup.
+4. The status file only changes after every file was uploaded, and only then does
+   the run check in *ok*, so the monitor and the alert clear only on a complete
+   backup.
 
 ## Certificate renewal
 
+**Sentry:** the uptime monitor fails when the dashboard's certificate is invalid.
+A failing wildcard renewal reaches no one until the
+[monthly check](25-production-deployment.md#monthly-checks) or a visitor sees it.
 **Alerts:** PreviaCertificateExpiringSoon, PreviaCertificateExpiring.
 
 Traefik renews 30 days before expiry. If it has not:

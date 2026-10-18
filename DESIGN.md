@@ -664,28 +664,41 @@ Make the system operable: know what it is doing, how it fails, and when it is ab
 Medium.
 
 ### Tech stack (feature-specific)
-- `slog` structured logs, Prometheus metrics, Grafana dashboards, optional OpenTelemetry tracing.
+- `slog` structured logs; Sentry (free plan) for errors, warning/error logs, an uptime monitor and the backup's cron monitor, with email alerts; Prometheus metrics on internal listeners; Prometheus and Grafana as an optional Compose profile; optional OpenTelemetry tracing.
 
 ### Technical implementation
 1. Structured logs everywhere, carrying correlation fields: delivery ID, repo, PR number, environment ID, job ID, commit SHA.
 2. Metrics: webhook deliveries by type and outcome, queue depth and wait time, build duration and outcome, active environments, container starts and failures, GitHub API errors and rate-limit headroom, disk usage.
 3. Dashboards for the health of the pipeline (webhook to running preview latency is the headline number).
 4. Alerts on: queue wait beyond a threshold, failure rate spike, disk above threshold, GitHub rate limit nearly exhausted, reconciler deleting unexpectedly many resources.
-5. Optional tracing follows one PR event from webhook through queue, build and comment.
+5. Production alerting that needs no server of its own: every error-level record reaches Sentry as an issue (emailed when new or returning), Sentry checks the dashboard from outside, and the nightly backup checks in with a Sentry cron monitor.
+6. Optional tracing follows one PR event from webhook through queue, build and comment.
 
 ### Design decisions and edge cases
 - **Correlation IDs** turn a scattered incident into one searchable story.
-- **Never log secrets or tokens;** redaction happens at the logging layer.
+- **Never log secrets or tokens;** redaction happens at the logging layer, before
+  any record reaches Sentry. A preview app's own output never goes to Sentry.
+- **Why Sentry rather than Prometheus and Grafana in production:** on an 8 GB
+  server the two take up to 1.5 GiB and their alerts reach nobody without an
+  Alertmanager and a receiver; Sentry's free plan runs outside the server, so it
+  also reports a dead host, and needs nothing installed. The Prometheus metrics,
+  the 27 alert rules and the Grafana dashboard stay as the optional
+  `observability` profile for when history graphs are needed.
 - **Current implementation:** `internal/platform/logging` (JSON at `LOG_LEVEL`,
   correlation fields from request, webhook and job contexts, redaction by key and
   by credential shape), `internal/platform/metrics` (bounded labels; durable state
   exported by the server at scrape time), River job middleware in
   `internal/platform/queue`, and `/livez`, `/readyz` and `/metrics` on an internal
-  listener per process (`internal/platform/httpx`). The headline number is
+  listener per process (`internal/platform/httpx`). `internal/platform/errortracking`
+  sends the server's and worker's redacted warnings and errors to Sentry when
+  `SENTRY_DSN` is set (`check-config` validates it; `previa-server sentry-test`
+  proves delivery), and `deploy/production/backup.sh` checks in with Sentry's cron
+  monitor. The headline number is
   `previa_request_to_preview_seconds`, measured from a request becoming eligible
   (after Automatic's quiet period) to its preview serving. `deploy/observability`
-  holds the Prometheus configuration, 24 alert rules with promtool tests and a
-  provisioned Grafana dashboard. Tracing stays optional and is not built. See
+  holds the Prometheus configuration, 27 alert rules with promtool tests and a
+  provisioned Grafana dashboard, run only by the optional Compose profile. Tracing
+  stays optional and is not built. See
   [23-observability-and-hardening.md](docs/23-observability-and-hardening.md) and
   [24-incident-runbook.md](docs/24-incident-runbook.md).
 
@@ -1045,6 +1058,7 @@ preview/
 │       ├── textlines/              # control-sequence stripping and bounded line splitting
 │       ├── httpx/                  # router, ingress controls, security headers, in-place form results, internal listener
 │       ├── logging/                # slog setup, correlation, secret redaction
+│       ├── errortracking/          # redacted warnings and errors to Sentry
 │       ├── metrics/                # Prometheus registry + bounded shared metrics
 │       └── version/                # release identity for logs, readiness and metrics
 │

@@ -31,8 +31,8 @@ Source behavior was reviewed on **2026-10-06**.
 | --- | --- | --- |
 | Your workstation | Git edits, commits, pushes and optional local checks | Your development environment |
 | GitHub-hosted runner | One CI job's commands, temporary test databases and Docker containers | Temporary build/test environment |
-| OVHcloud VPS | Deployed server, worker, production PostgreSQL, Traefik and live previews | Persistent production host |
-| GHCR | Published release images from the separate Release workflow | Registry storage, not an app server |
+| OVHcloud VPS | Deployed server, worker, production PostgreSQL, Traefik and live previews, from images it builds itself from a release tag | Persistent production host |
+| GHCR | Images published only when the optional Release workflow is run by hand | Registry storage, not an app server |
 
 Every CI job has `runs-on: ubuntu-24.04`. These are GitHub-hosted machines;
 there is no `self-hosted` runner or OVHcloud API/SSH deployment step in this
@@ -114,14 +114,19 @@ at `.github/workflows/ci.yml` so GitHub can discover it.
 on:
   push:
     branches: [master]
+    paths-ignore: ["**.md", "docs/**", "technical-docs/**", "test-docs/**", "LICENSE", "**.mp4"]
   pull_request:
     branches: [master]
+    paths-ignore: ["**.md", "docs/**", "technical-docs/**", "test-docs/**", "LICENSE", "**.mp4"]
   workflow_dispatch:
 ```
 
 `master` is the default and release branch, and changes reach it through pull
 requests. Day-to-day work happens on `main` (or other branches) and runs no CI
-until it is proposed for `master`.
+until it is proposed for `master`. `paths-ignore` skips a push or pull request
+whose changed files are **all** documentation: nothing builds, embeds or tests
+Markdown, and on the free plan a run costs about 46 of the month's 2,000 runner
+minutes (four jobs: 7, 14, 4 and 21 minutes on 2026-10-15).
 
 | Event | Behavior |
 | --- | --- |
@@ -130,8 +135,8 @@ until it is proposed for `master`.
 | Push directly to `master` | Runs CI; `master` is meant to change only through PRs ([9.1](#91-first-github-setup)) |
 | Push to `main` or any other branch | Runs nothing; open a PR into `master`, or dispatch CI manually on that branch |
 | Open a PR into another branch | Runs nothing |
-| Push a version tag | Does not match this CI push filter; may trigger Release instead |
-| Change only documentation on a qualifying push/PR | Runs CI; there is no path filter |
+| Push a version tag | Does not match this CI push filter; nothing else starts either (Release is manual) |
+| Change only documentation on a qualifying push/PR | Runs nothing (`paths-ignore`); a change touching any other file runs everything |
 | Manually dispatch CI | Runs on the selected branch/ref through the Actions interface |
 
 There is no PR base-branch filter, so the `pull_request` entry is not restricted
@@ -411,9 +416,9 @@ The Makefile runs the pinned Prometheus image's `promtool` to check alert rules,
 run their tests and check Prometheus configuration. A Python helper extracts
 Grafana expressions into temporary rules so their PromQL syntax can be checked.
 
-This validates configuration and rule tests. It does not send a production alert,
-prove an Alertmanager receiver works, or establish that live scrape targets are
-healthy.
+This validates configuration and rule tests for the optional observability
+profile, which production does not run (its alerts go through Sentry). It does not
+send a production alert or establish that live scrape targets are healthy.
 
 ## 5. The browser job
 
@@ -750,7 +755,9 @@ does not upgrade Actions or change configuration.
    and the CI checks, and block force pushes and deletion. Workflow YAML alone
    does not make green CI mandatory for a merge. On a private repository GitHub
    enforces these only on a paid plan (Pro, Team or Enterprise); without one,
-   "PRs only" is a team convention.
+   "PRs only" is a team convention. If you ever require the CI checks, note that a
+   documentation-only pull request runs none, so a required check would wait
+   forever; merge such a pull request as an administrator or drop the requirement.
 
 No OVHcloud API credential, production SSH key, production GitHub App PEM,
 Cloudflare DNS token or R2 token is required by this CI workflow. Its temporary

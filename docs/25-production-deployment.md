@@ -1,47 +1,48 @@
 # 25 · Production deployment
 
-Use **one OVHcloud VPS (model VPS-2) running Ubuntu 24.04, Docker Engine and
-Docker Compose**, **PostgreSQL 17 in Docker on that VPS**, **Cloudflare R2 for
-encrypted off-server backups**, and **Cloudflare DNS** for the dashboard and
-preview domains. The Go server, Go worker, Traefik, Prometheus and Grafana run on
-the VPS. The worker creates build containers and live PR preview containers
-on that same Docker host. This is the production arrangement described throughout
-this guide; infrastructure has not been provisioned by writing these instructions.
-It costs about €7 a month (excluding VAT) plus domains while traffic is low;
-[Choosing a host and keeping costs low](#choosing-a-host-and-keeping-costs-low)
-explains the choice and how the steps translate to other providers.
+Previa runs on **one OVHcloud VPS (model VPS-2) with Ubuntu 24.04, Docker Engine
+and Docker Compose**. PostgreSQL 17 runs in Docker on that VPS, beside the Go
+server, the Go worker and Traefik; the worker builds and runs every PR preview as
+Docker containers on the same host. Around the server: **Cloudflare** holds the
+domains (`previa.live` for the landing page and dashboard, a separate domain for
+previews), their DNS and the encrypted backups (R2); **GitHub** holds the code,
+runs CI and provides sign-in, webhooks and PR feedback; **Sentry** (free plan)
+watches errors, uptime and the nightly backup and emails you; **Tailscale** (free
+plan) carries SSH, so port 22 is closed to the internet; **lazydocker** shows
+containers and logs once you are logged in. It costs about **€8 a month plus VAT**
+(the VPS and the preview domain), plus `previa.live`'s renewal.
 
-Rent the VPS once. **A new PR creates Docker containers, not a new server or a
-separate VM.** The application runs unattended after SSH disconnects. R2 holds
-backup files; the live PostgreSQL database stays on the VPS.
+This is the final production arrangement: the rest of this guide sets it up
+step by step, explains why each piece is there, and how to operate, back up,
+restore and upgrade it. Writing it provisioned nothing; the
+[release report](26-release-report.md) records what has been proven so far.
+**A commit to `main` or `master` does not deploy Previa, and neither does a
+tag: the operator checks out a tag on the server and builds it there.**
 
-This follows [README §4.9](../README.md#49-infrastructure-and-deployment),
-[DESIGN](../DESIGN.md), and the actual files in `deploy/production`. It describes
-what exists, the manual steps an operator must perform, and the additions needed
-if you choose a different database or automated deployment. **A commit to `main`
-does not deploy Previa. A release tag publishes artifacts; the operator deploys
-them.**
-
-The [release report](26-release-report.md) records local evidence and pending live
-checks. It does not establish that a real production host is already running.
-Examples below use reserved example domains and illustrative version tags;
-replace them with your domains and an existing, tested release. Run commands one
-step at a time and stop when a check fails.
+Run commands one step at a time and stop when a check fails. `previa.live` is the
+real dashboard domain; `preview.example.net` stands for the preview domain until
+it is bought, and `YOUR_…` values are placeholders.
 
 ## Contents
 
+- [The final deployment at a glance](#the-final-deployment-at-a-glance):
+  [what you need and why](#what-you-need-and-why),
+  [how it all connects](#how-it-all-connects),
+  [cost](#what-it-costs),
+  [performance and capacity](#performance-and-capacity),
+  [what is left out](#what-this-deployment-leaves-out-on-purpose) and
+  [the whole deployment step by step](#the-whole-deployment-step-by-step)
 - [Deployment platform and external services](#deployment-platform-and-external-services)
 - [Choosing a host and keeping costs low](#choosing-a-host-and-keeping-costs-low)
 - [Account safety: abuse reports](#account-safety-abuse-reports)
-- [OVHcloud account, VPS, firewall and SSH setup](#fresh-host-setup)
 - [What runs](#what-runs)
+- [Fresh host setup](#fresh-host-setup): OVHcloud, domains, checkout, Tailscale, GitHub, settings
 - [First start, with staged certificates](#first-start-with-staged-certificates)
 - [Verify the deployment](#verify-the-deployment)
-- [Monitor live traffic, jobs and containers](#monitor-live-traffic-jobs-and-containers)
-- [Host CPU, memory and disk](#watch-the-hosts-cpu-memory-and-disk)
-- [External uptime checks](#configure-an-external-uptime-check-for-https-and-certificates)
-- [Backups and restore](#backups-and-restore)
-- [OVHcloud backups and snapshots](#step-b7--optional-ovhcloud-backups-and-snapshots)
+- [Monitoring with Sentry](#monitoring-with-sentry)
+- [Logs, SSH and day-to-day checks](#logs-ssh-and-day-to-day-checks)
+- [Backups and restore](#backups-and-restore), and
+  [rehearsing recovery before launch](#rehearse-recovery-before-launch)
 - [Upgrades and rollback](#upgrades-and-rollback)
 - [VPS upgrades, billing and ongoing operations](#ovhcloud-capacity-billing-and-ongoing-operations)
 - [CI and releases](#ci-and-releases)
@@ -49,54 +50,279 @@ step at a time and stop when a check fails.
 - [Security notes](#security-notes)
 - [Files behind these instructions](#files-behind-these-instructions)
 
-For the first deployment, complete Steps 0–6, including backup-key/R2 setup
-B1–B3; then run Steps 7–10. B4 needs the running PostgreSQL/router and makes the
-first actual backup. Configure host checks, uptime checks and application
-notifications, rehearse
-B5/B6 on isolated staging, then accept live traffic. Later releases use U1–U5
-and the rollback paths, rather than repeating the first-time certificate reset.
+## The final deployment at a glance
+
+### What you need and why
+
+Four accounts (OVHcloud, Cloudflare, GitHub, Sentry), one free Tailscale account
+for SSH, and one server.
+
+| # | Component | What it does for Previa | Where it lives | Cost / month |
+| ---: | --- | --- | --- | ---: |
+| 1 | **OVHcloud VPS-2** (4 vCores, 8 GB RAM, 75 GB NVMe, Ubuntu 24.04) | The one server: runs the control plane and every build and preview. Includes the IPv4 address, unlimited traffic (European locations), anti-DDoS and a daily disk backup kept 24 hours. | OVHcloud, a European datacenter | €7.21 |
+| 2 | **Docker Engine + Compose** (installed by `setup.sh`) | Runs Previa's containers; the worker uses its socket to build and run previews. | The VPS | €0 |
+| 3 | **Previa's containers**: `postgres`, `server`, `worker`, `router` (plus the one-shot `migrate` and `router-config`) | Database and job queue (River) · dashboard, sign-in and GitHub webhooks · builds, previews, routes, reports and cleanup · HTTPS and every preview URL (Traefik). One command starts them; Docker restarts them if they crash. | The VPS, built there from the tagged checkout | €0 |
+| 4 | **Let's Encrypt** | Free HTTPS certificates; the router obtains and renews them itself. | Public certificate authority | €0 |
+| 5 | **Cloudflare DNS** (free plan) | Points `previa.live` and `*.preview.<preview domain>` at the VPS; the router's scoped token proves the preview domain for the wildcard certificate. | Cloudflare | €0 |
+| 6 | **Two domains**: `previa.live` (owned) and a preview domain (to buy, Cloudflare Registrar) | Landing page and dashboard on `previa.live`; untrusted previews on a domain of their own, so an abusive preview cannot get `previa.live` blocklisted or suspended. | Cloudflare | about €0.80 for a .com, plus `previa.live`'s renewal |
+| 7 | **Cloudflare R2** | Stores the nightly age-encrypted backup (database, `/etc/previa`, certificates) off the server and outside OVHcloud. | Cloudflare | €0 up to 10 GB |
+| 8 | **GitHub OAuth App + GitHub App** | Sign-in; repository access, webhooks, PR comments and check runs. | GitHub | €0 |
+| 9 | **GitHub Actions** (CI only) | Tests every pull request into `master` before it can be released. | GitHub-hosted runners | €0 (2,000 minutes) |
+| 10 | **Deploy key** (read-only SSH key on the repository) | Lets the server clone and pull the private repository. | GitHub repository settings; `/root/.ssh` on the VPS | €0 |
+| 11 | **Tailscale** (Personal plan) | SSH reaches the server only over your private tailnet; port 22 is closed to the internet, and a changing home IP never locks you out. | Your workstation and the VPS | €0 |
+| 12 | **Sentry** (Developer plan) | Emails you about new errors from the server and worker, about the dashboard being down (uptime check every minute), and about a backup that failed or did not run; keeps searchable warning and error logs. | sentry.io | €0 |
+| 13 | **lazydocker** (installed by `setup.sh`) | One terminal screen with every container, including previews, their live logs and CPU/memory. Runs only while you use it. | The VPS | €0 |
+| 14 | **A password manager** | Recovery copies of the generated secrets, the repository-secrets keyring, the backup's age private key (also kept offline) and every account's recovery codes. | Your choice | €0 |
+
+### How it all connects
+
+Two diagrams: the services and accounts around the server, then what runs inside
+it. Paste either into [mermaid.live](https://mermaid.live) to explore it. Solid
+arrows carry traffic or data; dotted arrows are configuration, checks and alerts.
+
+```mermaid
+---
+title: Previa production, outside view
+---
+flowchart LR
+    subgraph PEOPLE["People"]
+        visitor(["Reviewers and visitors<br/>browser"])
+        owner(["Repository owners"])
+        operator(["Operator<br/>workstation with Tailscale"])
+        inbox(["Operator email inbox"])
+        vault(["Password manager + offline copy<br/>age key, keyring, recovery codes"])
+    end
+
+    subgraph GH["GitHub · free plan"]
+        userrepos["Users' repositories<br/>Dockerfile, .previewrc.yaml"]
+        ghapp["GitHub App<br/>webhooks, API,<br/>comments, check runs"]
+        oauth["OAuth App<br/>sign-in"]
+        repo["Previa repository · private<br/>main → PR → master, version tags<br/>deploy key: read-only"]
+        ci["Actions CI<br/>PRs into master"]
+    end
+
+    subgraph CF["Cloudflare · free plan"]
+        dns["Registrar + DNS<br/>A previa.live → VPS<br/>A *.preview.‹preview domain› → VPS"]
+        r2[("R2 private bucket<br/>encrypted backups")]
+    end
+
+    le["Let's Encrypt<br/>certificates"]
+
+    subgraph OVH["OVHcloud"]
+        panel["Control Panel<br/>KVM console, rescue,<br/>daily disk backup"]
+        vps["VPS-2 · Ubuntu 24.04<br/>Traefik, server, worker,<br/>PostgreSQL, previews<br/>(see Inside the VPS)"]
+    end
+
+    ts["Tailscale<br/>private tailnet"]
+
+    subgraph SN["Sentry · Developer plan"]
+        issues["Issues and Logs<br/>errors, warnings"]
+        uptime["Uptime monitor<br/>previa.live every minute"]
+        cron["Cron monitor<br/>previa-backup"]
+        alert["Alert rule<br/>new or returning issue"]
+    end
+
+    visitor -->|"DNS lookup"| dns
+    visitor -->|"HTTPS 443"| vps
+    owner --> userrepos
+    userrepos -->|"PR events"| ghapp
+    ghapp -->|"signed webhooks"| vps
+    vps -->|"source, comments, check runs"| ghapp
+    vps -->|"sign-in code exchange"| oauth
+    vps -->|"ACME orders"| le
+    vps -.->|"DNS-01 TXT record"| dns
+    vps -->|"warnings, errors"| issues
+    vps -->|"nightly encrypted backup"| r2
+    vps -.->|"backup check-ins"| cron
+    uptime -.->|"HTTPS check"| vps
+    issues & uptime & cron -.-> alert
+    alert -.->|"email"| inbox
+    panel -.->|"abuse notices, billing"| inbox
+    operator -->|"push, PR, tag"| repo
+    repo --> ci
+    vps -->|"git pull with deploy key"| repo
+    operator -->|"SSH"| ts
+    ts -->|"SSH over the tailnet"| vps
+    operator -.->|"emergency"| panel
+    panel -.->|"KVM console, rescue"| vps
+    vault -.->|"a restore needs the age key"| r2
+```
+
+```mermaid
+---
+title: Inside the VPS
+---
+flowchart LR
+    internet(["Internet: visitors, GitHub webhooks,<br/>Sentry uptime checks"])
+    tailnet(["Operator over Tailscale"])
+
+    subgraph VPS["VPS-2 · Ubuntu 24.04"]
+        ufw{{"UFW firewall<br/>80, 443 public · 22 only on tailscale0"}}
+        sshd["sshd, keys only<br/>tailscaled · lazydocker on demand"]
+        subgraph HOST["Host files and timer"]
+            checkout["/opt/previa<br/>tagged checkout, Dockerfile, scripts"]
+            etc["/etc/previa<br/>previa.env, App key, DNS token"]
+            timer["previa-backup.timer, 02:30 UTC<br/>backup.sh: pg_dump → age → rclone"]
+        end
+        subgraph COMPOSE["Docker Compose project previa · control network"]
+            routerconfig["router-config<br/>one-shot: dashboard route"]
+            migrate["migrate<br/>one-shot: Goose + River"]
+            router["router · Traefik<br/>TLS, dashboard and preview routes"]
+            server["server · Go<br/>dashboard, sign-in, webhooks"]
+            worker["worker · Go + River<br/>builds, previews, reports, cleanup"]
+            pg[("postgres · PostgreSQL 17<br/>data, sessions, logs, jobs")]
+        end
+        subgraph DYN["Created by the worker through the Docker socket"]
+            egress["egress proxy<br/>public internet, approved hosts"]
+            builder["BuildKit builders<br/>rootless, temporary"]
+            preview["Preview containers<br/>one per PR, private network"]
+            services[("Backend services<br/>PostgreSQL / Redis per preview")]
+        end
+    end
+
+    r2[("Cloudflare R2")]
+    sentry["Sentry"]
+
+    internet --> ufw
+    tailnet --> ufw
+    ufw -->|"80, 443"| router
+    ufw -->|"22"| sshd
+    router -->|"previa.live"| server
+    router -->|"preview hosts"| preview
+    preview --> services
+    server <--> pg
+    worker <--> pg
+    migrate --> pg
+    routerconfig --> router
+    worker -->|"route file"| router
+    worker --> builder & preview & egress
+    builder & preview -->|"outbound"| egress
+    checkout -->|"docker compose build"| COMPOSE
+    etc -.->|"settings, credential files"| COMPOSE
+    timer -->|"pg_dump"| pg
+    timer -->|"encrypted archives"| r2
+    timer -.->|"check-in"| sentry
+    server & worker -.->|"warnings, errors"| sentry
+```
+
+What the arrows mean, in words:
+
+- **A visitor** looks up the name in Cloudflare DNS and reaches the VPS on 443.
+  Traefik sends `previa.live` to the Go server and each preview host straight to
+  that PR's container; the server and worker are not in a preview's request path.
+- **GitHub** delivers signed webhooks to the server through Traefik; the worker
+  uses the GitHub App's installation token to fetch source and post the PR comment
+  and check run. Sign-in goes through the OAuth App.
+- **The worker** is the only container with the Docker socket. It creates the
+  builders, previews, their private networks, backend services and the shared
+  egress proxy, and writes the route file Traefik reads.
+- **Monitoring** leaves the server: errors and warnings go to Sentry as they
+  happen; Sentry checks `https://previa.live` from outside every minute; the
+  nightly backup checks in with Sentry's cron monitor. One Sentry alert rule emails
+  you about all three.
+- **You** reach the server only over Tailscale (or OVHcloud's console in an
+  emergency), deploy by checking out a tag and building it there, and keep the
+  backup's private key offline.
+
+### What it costs
+
+Prices checked in October 2026, before VAT; providers change them, so check before
+buying.
+
+| Item | Provider and plan | Per month | What raises it |
+| --- | --- | ---: | --- |
+| VPS-2, European location | OVHcloud | €7.21 | Upgrading to VPS-3 (€10.40, 6 vCores / 12 GB / 100 GB) or VPS-4 (€19.96, 8 / 24 GB / 200 GB) when builds or previews wait. Mumbai, Singapore and US locations cost about $8.50; Asia-Pacific ones include 1 TB of traffic a month, then 10 Mbps. |
+| Preview domain | Cloudflare Registrar, at cost | about €0.80 (about $10–11 a year for a .com) | A pricier ending. Avoid cheap, often-abused endings such as `.xyz` or `.top`: company web filters block them. |
+| `previa.live` | Already owned | Its renewal | — |
+| DNS | Cloudflare free | €0 | — |
+| Backups | Cloudflare R2 | €0 up to 10 GB-month | $0.015 per GB-month beyond; downloads (restores) are free. |
+| Certificates | Let's Encrypt | €0 | — |
+| Code, CI, sign-in, App, deploy key | GitHub Free | €0 | Over 2,000 Actions minutes in a month (a CI run used about 46 runner minutes on 2026-10-15, so about 43 runs): CI stops, or bills if you set a budget. See [CI and releases](#ci-and-releases). |
+| Monitoring and alerts | Sentry Developer | €0 | Beyond 5,000 errors or 5 GB of logs a month, Sentry drops events for the rest of the month instead of billing. |
+| SSH | Tailscale Personal | €0 | More than 6 users. |
+| Docker, Traefik, PostgreSQL, rclone, age, lazydocker | Open source | €0 | — |
+| **Total** | | **about €8 + VAT/GST** | plus `previa.live`'s renewal |
+
+The VPS is billed monthly whether it runs or not, until terminated
+([Paying nothing while it is unused](#paying-nothing-while-it-is-unused)). A new PR
+creates containers on this VPS, never another server.
+
+### Performance and capacity
+
+These are the configured limits of the [starter settings](#starter-settings-for-a-small-host)
+and the measured or documented behavior; there is no production load measurement
+yet.
+
+| Area | What to expect on a VPS-2 |
+| --- | --- |
+| Control plane | PostgreSQL, server, worker and router use about 1 GiB while idle; their ceilings are 2 GiB, 512 MiB, 1 GiB and 512 MiB. |
+| Builds | One at a time (`MAX_CONCURRENT_BUILDS=1`), each with 2 CPUs, 2 GiB of memory, 10 GiB of disk, a 2 GiB image limit and a 12-minute timeout. Others queue, taking turns by account. Automatic builds start after five quiet minutes; a manual build starts as soon as the slot is free. |
+| Previews | 4 GiB and 4 CPUs between them: one backend preview with PostgreSQL and Redis (about 1.75 GiB) and its replacement, or a few web previews (the usual `standard` tier is 1 vCPU / 1 GiB). At most 2 per repository and 4 per account; each expires 24 hours after its last publication. |
+| Idle previews | Stop after 3 hours without a visit, freeing their memory, and wake on the next visit in seconds. |
+| Preview requests | Go from Traefik straight to the app's container; their speed is the app's own plus the network. |
+| Fair sharing | Every workspace's free plan: 300 build minutes per calendar month (UTC), one build at a time and two preview slots ([33](33-usage-and-free-plan.md)). The server-wide ceilings add one build at a time and 120 build minutes a day per account. |
+| When full | New work waits with a reason on the Builds page (*Waiting for capacity*, *Waiting for disk space*) instead of failing; a disk shortage also triggers an immediate cleanup. |
+| Monitoring | A dashboard outage is reported after 3 failed checks a minute apart (about 3 minutes); a new kind of error is emailed when it first happens; a missed backup after about 25 hours. |
+| Recovery | Nightly backups: up to about one day of data can be lost. A small local drill took 1 second to back up and 21 seconds to restore; production recovery also includes a new server, keys and DNS ([recovery objectives](#backup-failure-retention-and-recovery-objectives)). |
+| When to upgrade | Builds or previews often wait, available memory stays under 15%, or the disk stays above 75%: move to a VPS-3 and raise the budgets ([When to upgrade the server](#when-to-upgrade-the-server)). |
+
+### What this deployment leaves out on purpose
+
+| Not used | Why not now | When to revisit |
+| --- | --- | --- |
+| Prometheus, Grafana, Alertmanager | Up to 1.5 GiB of an 8 GB server, and their alerts reach nobody without more setup. Sentry covers errors, uptime and backups; `docker stats`, `df` and the Builds page cover capacity. The `observability` Compose profile and its 27 alert rules stay in the repository, unused. | With active users who need history graphs: Grafana Cloud's free tier (an agent on the server) rather than running them on it. |
+| A separate uptime service or chat webhook | Sentry's uptime monitor and email do it. | — |
+| GitHub Container Registry, GoReleaser releases | The server builds its images from the tagged checkout: no registry token, no publish step. The Release workflow stays, manual-only. | A second host, or published downloads. |
+| Terraform | One server, created once in the Control Panel; `setup.sh` prepares it. | Several servers. |
+| A staging server | Before launch the production VPS is the rehearsal machine; afterwards, a server rented by the hour for a drill. | — |
+| Managed PostgreSQL, Redis | The local PostgreSQL is free and fastest; River needs no Redis. | Measured database load or a smaller data-loss window. |
+| Cloudflare proxying (orange cloud) | The wildcard preview records must stay DNS-only and the dashboard's certificate needs direct access on 443. | — |
+| gVisor | Untested in this repository; off for invited early-access users. | Before opening sign-up to the public. |
+| GitHub Pro, OVHcloud's paid backup options | Not needed by one developer; R2 holds the real backups. | A second person who can push. |
+
+### The whole deployment, step by step
+
+Each step links to its detailed instructions below.
+
+1. **Accounts (once).** OVHcloud with two-factor authentication
+   ([Step 0](#step-0--prepare-the-ovhcloud-account-and-record-deployment-inputs));
+   Cloudflare with `previa.live` and the new preview domain
+   ([Step 2](#step-2--set-up-domains-dns-and-the-dns-token)); Sentry with a
+   `previa` project ([S1](#step-s1--create-the-sentry-project-and-copy-its-dsn));
+   Tailscale on your workstation ([Step 3](#move-ssh-to-tailscale)); a password
+   manager.
+2. **Rent and secure the server.** Order the VPS-2, log in, create `ops` and
+   keep SSH key-only ([Step 1](#step-1--choose-the-host-and-release)).
+3. **Domains and DNS.** Point `previa.live` and `*.preview.<preview domain>` at
+   the VPS and create the DNS token ([Step 2](#step-2--set-up-domains-dns-and-the-dns-token)).
+4. **Code and host.** Add the deploy key, clone and check out the release tag,
+   run `setup.sh`, then move SSH to Tailscale and close port 22
+   ([Step 3](#step-3--install-the-checkout-and-prepare-the-host)).
+5. **GitHub registrations and credential files** ([Step 4](#step-4--register-github-integrations-and-install-credential-files)).
+6. **Settings** in `/etc/previa/previa.env`, including `SENTRY_DSN`
+   ([Step 5](#step-5--put-production-environment-variables-in-the-correct-file)).
+7. **Backups**: the offline age key, the R2 bucket and rclone
+   ([Step 6](#step-6--prepare-backups-before-treating-the-host-as-production), B1–B3).
+8. **Build and start** with Let's Encrypt staging certificates, then production
+   ones ([Steps 7–9](#step-7--define-the-production-commands-and-build-the-images)).
+9. **Verify** every process and the whole user flow ([Step 10](#step-10--check-each-process-and-the-complete-user-flow)),
+   take the first backup and enable the timer ([B4](#step-b4--take-a-real-backup-and-enable-the-schedule)).
+10. **Monitoring**: the uptime monitor, the alert rule and a test error
+    ([S2–S4](#monitoring-with-sentry)).
+11. **Rehearse before launch**: a full restore onto the reinstalled VPS and an
+    upgrade and rollback ([Rehearse recovery before launch](#rehearse-recovery-before-launch)).
+12. **Launch**, then operate: [logs and checks](#logs-ssh-and-day-to-day-checks),
+    [upgrades](#upgrades-and-rollback) (U1–U5) and
+    [capacity](#ovhcloud-capacity-billing-and-ongoing-operations).
 
 ## Deployment platform and external services
 
-### The deployment to use for this implementation
-
-The selected arrangement is **an OVHcloud VPS + Docker Compose + local PostgreSQL
-+ Cloudflare R2**, with Cloudflare as authoritative DNS. OVHcloud supplies the
-Linux server; Cloudflare supplies DNS and off-site backup storage; Previa manages
-Docker previews. This preserves the single-VPS design in README/DESIGN and uses
-the existing production scripts without adding a new runtime.
-
-| Piece | Where it lives | Why it is needed |
-| --- | --- | --- |
-| VPS | One OVHcloud VPS dedicated to Previa: VPS-2 (4 vCores, 8 GB RAM, 75 GB NVMe) | Provides a persistent Linux host, Docker socket, local disk, private Docker networks, and public ports 80/443. Dedicated to Previa means do not colocate unrelated sensitive workloads; upgrade the model according to measured load. |
-| Production PostgreSQL | `postgres` container on the VPS; Docker volume `previa_postgres` | Stores application state, sessions, encrypted repository secrets, build logs, durable operations, and River jobs. |
-| Dashboard and API | `server` container on the VPS | Serves the UI, sign-in, repository controls, signed webhooks and live updates. |
-| Background processing | `worker` container on the VPS | Runs River queues and creates builds, previews, routes, reports and cleanup. |
-| Public routing and certificates | `router` container on the VPS | Traefik terminates HTTPS and forwards each hostname to its correct backend. |
-| DNS | Cloudflare account and authoritative zones | Dashboard and wildcard preview records point to the VPS; the router uses a scoped token for DNS-01 certificate challenges. |
-| GitHub integration | Separate GitHub OAuth App and GitHub App | OAuth signs people in; the App grants repository access, receives webhooks and posts PR feedback. |
-| Release artifacts | GitHub Releases and GitHub Container Registry (GHCR) | Stores versioned binaries and the three Previa images. GitHub runners build them, then finish. |
-| Backup destination | Private Cloudflare R2 bucket, outside the VPS and outside OVHcloud | Holds encrypted database, configuration and certificate archives through the S3-compatible API; survives loss of the VPS, and of the OVHcloud account. |
-| Monitoring | Prometheus and Grafana on the VPS | Scrapes metrics, evaluates alert rules and provides the Previa dashboard. |
-| Host resources | `free`, `df` and `docker stats` on the VPS | Overall CPU, memory and disk use, independently of Previa's application metrics. OVHcloud sends no alerts about them. |
-| Public uptime | An external uptime service and its notification | Checks HTTPS from outside the VPS, including when monitoring containers on it are unavailable. |
-| Alert delivery | Operator-configured Alertmanager and receiver | Sends firing alerts to your email, chat or incident service; this is not supplied as a running service by the base Compose file. |
-| Backup encryption key | Private age identity in offline recovery storage | Decrypts backups during a restore; only its public recipient is needed on the VPS. |
-
-There is no separate frontend deployment: templates and static browser assets are
-compiled/generated and embedded into `previa-server`. Production does not need a
-Node server, Vercel, Netlify or Air. There is no Redis service for Previa's queue:
-River uses the same PostgreSQL database. There is no Kubernetes cluster, remote
-BuildKit service, or production Terraform configuration in the repository.
-
+This section explains the boundaries behind that table: what the VPS does and does
+not do, why the database stays on it, and where each item is configured.
 Provider references: [OVHcloud VPS](https://www.ovhcloud.com/en-ie/vps/),
-[getting started with a VPS](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/virtual-private-servers/starting-with-a-vps)
-and [Cloudflare R2](https://developers.cloudflare.com/r2/). Prices change
-(OVHcloud raised VPS prices in 2026), so check current ones rather than copying a
-figure from this guide. Budget for the VPS subscription, optional OVHcloud backup
-options, R2 storage beyond its free allowance, an uptime service, domains and
-alert receivers. Containers share the rented VPS; they consume its capacity
-rather than creating a per-PR VM bill.
+[getting started with a VPS](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/virtual-private-servers/starting-with-a-vps),
+[Cloudflare R2](https://developers.cloudflare.com/r2/),
+[Sentry](https://docs.sentry.io/) and [Tailscale](https://tailscale.com/kb).
 
 ### Docker previews, the VPS and the deployment boundary
 
@@ -114,8 +340,8 @@ CPU/network resources.
 
 Use one **OVHcloud VPS** for this guide. Kubernetes, a provider container
 registry, a load balancer and a VM per preview are not parts of the supplied
-deployment. Published platform images remain in GHCR; built PR images remain on
-this Docker host. CPU/RAM growth requires upgrading the VPS model or a separately
+deployment. Previa's own images are built on this host from the tagged checkout,
+and built PR images stay on this Docker host too. CPU/RAM growth requires upgrading the VPS model or a separately
 implemented multi-host architecture.
 
 ### Why PostgreSQL on the VPS, not a managed database?
@@ -165,23 +391,26 @@ connect to.
 | Item | Exact configuration location | How it connects to Previa |
 | --- | --- | --- |
 | Account, VPS model, location, image and SSH public key | OVHcloud website and [Control Panel](https://www.ovh.com/manager/) | Supplies the host; source/scripts are installed at `/opt/previa` over SSH. |
-| Firewall | `setup.sh`'s UFW on the VPS; optionally Control Panel → **Network → Public IP Addresses → Configure Edge Network Firewall** | Allows inbound SSH/80/443 only. This is separate from Docker's per-PR isolation. |
-| Host checks | `free`, `df` and `docker stats` on the VPS | CPU, memory and disk use; OVHcloud sends no resource alerts. |
-| External HTTPS checks | An external uptime service | Checks the public dashboard and a maintained preview from outside the host. |
+| Firewall | `setup.sh`'s UFW on the VPS; optionally Control Panel → **Network → Public IP Addresses → Configure Edge Network Firewall** | Allows inbound 80/443, and SSH only on the Tailscale interface once [moved](#move-ssh-to-tailscale). This is separate from Docker's per-PR isolation. |
+| SSH access | Tailscale admin console (the VPS joins your tailnet); your workstation's Tailscale app | SSH to the VPS's tailnet name; port 22 is closed to the internet. OVHcloud's KVM console and rescue mode stay as the emergency path. |
+| Code on the server | GitHub repository → **Settings → Deploy keys**; `/root/.ssh` on the VPS | A read-only key lets the VPS clone and pull the private repository. |
+| Host checks | `free`, `df`, `docker stats` and `lazydocker` on the VPS | CPU, memory and disk use; OVHcloud sends no resource alerts. |
+| Errors, uptime and backup alerts | Sentry project `previa`; its DSN in `/etc/previa/previa.env` | Server and worker report errors and warnings; Sentry checks `https://previa.live` and receives the backup's check-ins, and emails you ([Monitoring with Sentry](#monitoring-with-sentry)). |
 | Private backup bucket and API token | Cloudflare → **R2 Object Storage** | Root's `rclone` uploads encrypted archives using a token scoped to the bucket. |
-| Dashboard and wildcard preview records | Cloudflare authoritative zones | Both resolve to the VPS's public IPv4. |
+| Dashboard and wildcard preview records | Cloudflare zones `previa.live` and the preview domain | Both resolve to the VPS's public IPv4. |
 | DNS certificate credential | Cloudflare token settings, then `/etc/previa/dns-credential` on the VPS | Traefik mounts it as a file for DNS-01. |
 | OAuth App and GitHub App | GitHub → Settings → Developer settings | Their IDs/secrets go in `/etc/previa/previa.env`; App PEM goes in `/etc/previa/github-app.pem`. |
 | Application/release/runtime settings | `/etc/previa/previa.env` on the VPS | Compose reads this explicitly; there is no provider panel for application settings to populate. |
 | Backup storage key/secret | Root's protected rclone configuration on the VPS | Not Go application settings; retain a recovery copy separately. |
 | Backup private age identity | Offline recovery storage | Temporarily brought to a recovery host only when decrypting. |
 | User repositories' preview secrets | Previa → repository → Secrets | Encrypted in PostgreSQL; distinct from the platform's production credentials. |
-| Release environment and package access | GitHub repository Settings / Actions / Packages | Protects artifact publication; does not provision or update the VPS. |
+| CI | GitHub repository → **Actions** | Tests pull requests into `master`; never touches the VPS. |
 
 The manual Control Panel route requires no OVHcloud API credentials in Previa or
-GitHub Actions. The R2 token, your SSH private key, the Cloudflare DNS token and
-GitHub App credentials have different purposes and are not interchangeable; keep
-the R2 token and the DNS token separate even though both come from Cloudflare.
+GitHub Actions. The R2 token, your SSH private key, the deploy key, the Cloudflare
+DNS token, the Sentry DSN and the GitHub App credentials have different purposes
+and are not interchangeable; keep the R2 token and the DNS token separate even
+though both come from Cloudflare.
 Only a future OVHcloud API automation needs scoped provider credentials.
 
 ## Choosing a host and keeping costs low
@@ -219,15 +448,18 @@ excluding VAT. Providers change prices and plans, so check before you buy.
 | OVHcloud | VPS-3 | 6 / 12 GB / 100 GB | €10.40 | The first upgrade when builds queue or previews wait. |
 | OVHcloud | VPS-4 | 8 / 24 GB / 200 GB | €19.96 | For real traffic. |
 | OVHcloud | VPS-1 | 2 / 4 GB / 40 GB | €3.81 | Only to try Previa out: see [Minimum host](#minimum-host). |
+| Hetzner | CX33 | 4 / 8 GB / 80 GB | about €8.49, plus its IPv4 | Hourly billing and a polished API, but dearer than the VPS-2 since its June 2026 increase; strict on abuse reports about publicly served untrusted code. Good for an hour-long drill server. |
+| netcup | VPS 1000 G12 | 4 / 8 GB / 256 GB | about €8.70 (€10.37 with German VAT) | Three times the disk, but fair-use CPU throttles long builds. The fallback if disk becomes the limit. |
 | Contabo | Cloud VPS 10 | 4 / 8 GB / 75 GB | about €4.50 | Cheapest, but slower and weaker on uptime and support in independent tests. |
 | [Vultr](https://www.vultr.com/pricing/) | Regular, 8 GB | 4 / 8 GB / 160 GB | $40 | More regions; polished, but about five times the price. |
 | Akamai (Linode) | Shared, 8 GB | 4 / 8 GB / 160 GB | $48 | Mainstream, but about six times the price. |
 | Oracle Cloud | Always Free, Ampere A1 | 2 Arm OCPU / 12 GB (free-tier accounts, since June 2026) | $0 | **Not recommended.** Oracle may reclaim an Always Free instance whose CPU, network and memory use stay under 20% for 7 days, which describes a Previa nobody uses yet. |
 
 **This guide's setup:** OVHcloud VPS-2, Cloudflare's free DNS, and Cloudflare R2
-for backups (free up to 10 GB): about **€7 a month** plus two domains at roughly
-$10–15 a year each. Upgrade to a VPS-3 or VPS-4 when builds queue or previews wait
-for capacity. Every host acts on abuse reports, so [Account safety](#account-safety-abuse-reports)
+for backups (free up to 10 GB): about **€7.21 a month**, plus the preview domain
+(about $10–11 a year for a .com) and `previa.live`'s renewal; the full breakdown is
+in [What it costs](#what-it-costs). Upgrade to a VPS-3 or VPS-4 when builds queue
+or previews wait for capacity. Every host acts on abuse reports, so [Account safety](#account-safety-abuse-reports)
 matters more than the choice of host.
 
 ### On another provider
@@ -239,10 +471,10 @@ upgrades and restores. Only the provider's console steps differ:
 | In this guide (OVHcloud) | On another provider |
 | --- | --- |
 | Order a VPS-2 (Step 1); log in as `ubuntu` | Create a VM that meets the requirements above, with your SSH key. Many providers' Ubuntu images log in as `root`; create the `ops` user from there the same way. |
-| UFW, optionally the Edge Network Firewall | UFW as here, plus the provider's firewall if it has one (usually stateful) with inbound SSH/80/443 only. |
+| UFW and Tailscale, optionally the Edge Network Firewall | UFW and Tailscale as here, plus the provider's firewall if it has one (usually stateful) with inbound 80/443 only once SSH runs over Tailscale. |
 | Update DNS when replacing the VPS | The same, or a provider address that survives replacing the VM (often called a reserved, floating or primary IP). |
 | R2 bucket and token (B2, B3) | Unchanged: R2 works with any host. Or the provider's S3-compatible storage through rclone. |
-| Host checks and an external uptime check | The same checks, plus the provider's monitoring if it offers any. |
+| Host checks and the Sentry monitors | The same checks and monitors, plus the provider's monitoring if it offers any. |
 | Included daily backup and snapshot (B7) | The provider's backups and snapshots, if offered and at its price. |
 | Upgrade the model | The provider's resize; plan an outage the same way. |
 
@@ -290,11 +522,11 @@ fit (memory for builds, previews and about 1 GiB for Previa; CPUs; Docker's disk
 - **Docker logs:** each preview container keeps at most 2 × 5 MB of output; a
   backend preview with services and processes keeps about 50 MB at most.
 - **Control plane:** PostgreSQL, the server, the worker and the router have 4 GiB
-  of limits between them but use about 1 GiB while idle. Leave out the
-  `observability` profile (Prometheus and Grafana, up to 1.5 GiB) on this host:
-  use the [Step 7](#step-7--define-the-production-commands-and-obtain-images) `dc`
-  without it, and rely on the backup-failure webhook and an external uptime check
-  until you add it.
+  of limits between them but use about 1 GiB while idle. This deployment does not
+  run the optional `observability` profile (Prometheus and Grafana, up to 1.5 GiB):
+  the [Step 7](#step-7--define-the-production-commands-and-build-the-images) `dc`
+  leaves it out, and [Sentry](#monitoring-with-sentry) watches errors, uptime and
+  backups from outside.
 - **Swap:** add a 4 GiB swap file as a cushion against short memory peaks:
 
   ```sh
@@ -372,12 +604,12 @@ flowchart TD
     Engine --> Egress[Shared Previa egress proxy]
     Worker -->|accepted route file| Router
     Worker -->|installation token| GitHub[GitHub repository and PR APIs]
-    Prom[Prometheus] -.->|private metrics| Server
-    Prom -.->|private metrics| Worker
-    Prom -.->|private metrics| Router
-    Grafana[Grafana through SSH tunnel] --> Prom
+    Server -.->|warnings and errors| Sentry[Sentry: issues, logs, uptime, cron]
+    Worker -.->|warnings and errors| Sentry
+    Sentry -.->|HTTPS uptime check| Router
     Timer[Host systemd backup timer] --> Backup[pg_dump, config and ACME encrypted with age]
-    Backup --> Storage[Private off-host object storage]
+    Backup --> Storage[Cloudflare R2 private bucket]
+    Backup -.->|check-in| Sentry
 ```
 
 A dashboard request passes through Traefik to the Go server. A request to a
@@ -401,12 +633,11 @@ upgrade so the exact previous artifacts can be identified.
 | `worker` | `previa-worker:<release>` | Persistent Go River worker, not an HTTP app serving users. Only service with the Docker socket; has source and routing storage. | Health/metrics `9091` stay private. |
 | `router-config` | Pinned Traefik image, shell command | One-shot writes `previa-dashboard.yml` before the router starts. Exit 0 is success. | None; no network. |
 | `router` | `traefik:v3.7.13`, container `previa-router` | Persistent HTTPS proxy; watches dashboard and preview route files; renews certificates. No Docker socket. | Host TCP `80` and `443`; metrics `8082` on control network; API/ping `8080` on its own loopback. |
-| `egress` | `previa-egress:<release>` | Image staging service under profile `images`. Use it to **pull or build the image**, not to run the production proxy. | Do not start this Compose service. |
-| `prometheus` | `prom/prometheus:v3.5.0` | Optional `observability` profile; scrape/evaluation every 30 seconds, 30-day local metrics retention. | `prometheus:9090` private; no host port. |
-| `grafana` | `grafana/grafana:12.1.1` | Optional `observability` profile; provisioned Prometheus datasource and Previa dashboard. | Host `127.0.0.1:3000`, accessed over SSH. |
+| `egress` | `previa-egress:<release>` | Image staging service under profile `images`. Use it to **build the image**, not to run the production proxy. | Do not start this Compose service. |
+| `prometheus`, `grafana` | `prom/prometheus:v3.5.0`, `grafana/grafana:12.1.1` | Optional `observability` profile, **not run by this deployment** ([what is left out](#what-this-deployment-leaves-out-on-purpose)). | Would stay private (Grafana on host `127.0.0.1:3000`). |
 
-The `server`, `worker` and `egress` release images come from the multi-stage
-[Dockerfile](../Dockerfile). Runtime images contain static Go binaries; server and
+The `server`, `worker` and `egress` images are built on the VPS from the
+multi-stage [Dockerfile](../Dockerfile) of the checked-out tag (Step 7). Runtime images contain static Go binaries; server and
 worker use distroless images without a shell. Use their `healthcheck` and
 `check-config` commands, not `docker exec ... sh`. The server image also contains
 `previa-migrate` and `previa-secrets-reencrypt`; the worker image contains
@@ -442,7 +673,7 @@ through durable operations. Expiry and housekeeping provide additional cleanup.
 
 | Location | Contents | Included in the shipped backup? |
 | --- | --- | --- |
-| `/opt/previa` | Checkout of the exact release; scripts, Compose and monitoring definitions | Recover from GitHub/release artifacts. Keep this path stable: the systemd backup service references it. |
+| `/opt/previa` | Checkout of the exact release tag; scripts, Compose and the Dockerfile the images are built from | Recover by cloning from GitHub with a deploy key. Keep this path stable: the systemd backup service references it. |
 | `/etc/previa/previa.env` | Production settings and generated/application credentials | Yes, encrypted configuration archive. |
 | `/etc/previa/github-app.pem` | GitHub App private key | Yes, encrypted configuration archive. |
 | `/etc/previa/dns-credential` | DNS API token | Yes, encrypted configuration archive. |
@@ -453,8 +684,8 @@ through durable operations. Expiry and housekeeping provide additional cleanup.
 | Docker volume `previa_sources` | Temporary exact-commit source workspaces | No; refetched from GitHub. |
 | Docker volume `previa_baselines` | Encrypted test-data baselines (`PREVIEW_BASELINE_DIR`, [32](32-persistent-test-data.md)) | No: derived data, rebuilt from each repository's baseline branch on the next refresh. Their records are in the database; a missing file is marked missing and rebuilt. |
 | Labelled build cache volumes and local preview images | Rebuildable build artifacts | No. |
-| `previa_prometheus`, `previa_grafana` volumes | Metrics history and Grafana state | No; datasource/dashboard provisioning can be recreated, but local history/customizations are lost unless separately backed up. |
-| Root's rclone and Docker login configuration | Storage credentials and optional private-registry login | Not by default: these live outside `/etc/previa`. Store recovery copies separately. |
+| Local Docker images `previa-server`, `previa-worker`, `previa-egress` | One set per built version; the previous set is the rollback path | No; rebuilt from the tagged checkout. |
+| Root's rclone configuration, `/root/.ssh` deploy key, Tailscale state | Storage credentials, the read-only repository key, the server's tailnet identity | Not by default: these live outside `/etc/previa`. Keep the R2 key's recovery copy; a deploy key and the tailnet login are simply recreated on a new host. |
 
 Docker volumes normally live under the daemon's data root (`/var/lib/docker` on
 the expected host). Confirm with `docker info --format '{{.DockerRootDir}}'`;
@@ -474,8 +705,9 @@ configuration; changing only the subnet is insufficient.
 1. Create an OVHcloud account on the website for your region (the European site
    prices in euros). OVHcloud may ask for identity documents before activating
    services; allow time for that. Turn on two-factor authentication in the
-   [Control Panel](https://www.ovh.com/manager/) and keep its recovery codes. Use a
-   separate VPS for staging, first-deployment and restore drills.
+   [Control Panel](https://www.ovh.com/manager/) and keep its recovery codes. There
+   is no separate staging VPS: until launch this VPS is the rehearsal machine
+   ([Rehearse recovery before launch](#rehearse-recovery-before-launch)).
 2. Have an SSH key on your administration workstation; the private key stays on
    your workstation. For a new key, use an unused output filename and a
    passphrase:
@@ -485,10 +717,12 @@ configuration; changing only the subnet is insufficient.
    cat ~/.ssh/previa_ovh_ed25519.pub
    ```
 
-3. Have access to the dashboard domain and a separate preview domain, a
-   Cloudflare account for their DNS and for R2, GitHub App/OAuth settings, the
-   repository and a tested release. Domains are purchased through a registrar;
-   ordering a VPS does not register a domain or configure GitHub.
+3. Have the other accounts ready, each with two-factor authentication and its
+   recovery codes in your password manager: **Cloudflare** (the `previa.live` zone
+   already exists; buy the preview domain in Step 2; R2 in B2), **GitHub** (the
+   repository, and the OAuth App and GitHub App of Step 4), **Sentry**
+   ([S1](#step-s1--create-the-sentry-project-and-copy-its-dsn)) and **Tailscale**
+   (Step 3). Ordering a VPS does not register a domain or configure GitHub.
 4. Record the following **non-secret** inventory in your operations notes.
    Keep secret values separately in a password manager/recovery store:
 
@@ -497,16 +731,17 @@ configuration; changing only the subnet is insufficient.
    | VPS | Service name (`vps-xxxxxxxx.vps.ovh.net`), model (`VPS-2`) and the name you give it, such as `previa-prod-01` |
    | Location | Actual datacenter, such as Gravelines, Frankfurt or Warsaw |
    | Public endpoint | Actual public IPv4 |
-   | Admin source | Your current public administration IP/CIDR for SSH rules |
-   | Dashboard | `previa.example.com` |
-   | Preview domain | `preview.example.net`; wildcard `*.preview.example.net` |
+   | SSH name | The VPS's Tailscale machine name, such as `previa-prod-01`, and your `ops` user |
+   | Dashboard | `previa.live` |
+   | Preview domain | The domain bought in Step 2, here `example.net`: `PREVIEW_BASE_DOMAIN=preview.example.net`, wildcard `*.preview.example.net` |
+   | Sentry | Organization, data region (EU or US) and project `previa` |
    | Backup bucket | R2 bucket name, represented below by `YOUR_BUCKET` |
    | R2 endpoint | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` for your Cloudflare account |
    | Release | Existing tested tag and exact Git commit; never assume an example tag exists |
-   | Receiver/recovery contacts | Monitored email, alert destination and recovery owner |
+   | Recovery contacts | The monitored email address that receives Sentry alerts, abuse notices and certificate notices, and who holds the recovery keys |
 
 Use the same concrete values throughout this guide. `YOUR_BUCKET`,
-`YOUR_SERVER_IP`, domain names and version examples are placeholders.
+`YOUR_SERVER_IP`, `example.net` and version examples are placeholders.
 Never substitute an R2 URL for the database hostname.
 
 ### Step 1 — Choose the host and release
@@ -539,7 +774,8 @@ operator starting allocations, not a benchmark or promise of a specific request
 rate.
 
 The Compose ceilings are separately 2 GiB for PostgreSQL, 512 MiB server,
-1 GiB worker, 512 MiB router, 1 GiB Prometheus and 512 MiB Grafana. Also leave
+1 GiB worker and 512 MiB router (the unused observability profile would add
+1 GiB Prometheus and 512 MiB Grafana). Also leave
 capacity for Linux, Docker, egress, image builds, buffers and filesystem cache.
 Container memory limits are ceilings rather than a reservation of that entire
 amount. Inspect actual usage before raising `MAX_CONCURRENT_BUILDS` or preview
@@ -553,8 +789,9 @@ mount/data-root/backup design; the shipped setup does not move Docker data to it
 #### Firewalls: UFW, and optionally OVHcloud's Edge Network Firewall
 
 `setup.sh` turns on UFW with only SSH, 80 and 443 open, and Compose publishes only
-80 and 443 (Grafana stays on loopback), so that is the VPS's boundary.
-OVHcloud's anti-DDoS protection is always on.
+80 and 443, so that is the VPS's boundary. In Step 3 SSH moves to Tailscale and
+port 22 closes to the internet, leaving **only 80 and 443 public**. OVHcloud's
+anti-DDoS protection is always on.
 
 OVHcloud's **Edge Network Firewall** is optional. It filters inbound traffic only,
 holds up to 20 rules per IP, turns itself on during a detected attack, and is
@@ -564,8 +801,8 @@ If you enable it (Control Panel → **Network → Public IP Addresses** → the 
 
 | Priority | Action | Rule |
 | ---: | --- | --- |
-| 0 | Authorize | TCP with the **established** option: replies to the VPS's own connections (GitHub, registries, R2, certificates). |
-| 1 | Authorize | TCP, destination port 22, from your administration IP/CIDR. |
+| 0 | Authorize | TCP with the **established** option: replies to the VPS's own connections (GitHub, registries, R2, certificates, Sentry, Tailscale). |
+| 1 | Authorize | UDP, destination port 41641: direct Tailscale connections (without it Tailscale relays SSH, a little slower). |
 | 2 | Authorize | TCP, destination port 80. |
 | 3 | Authorize | TCP, destination port 443. GitHub webhooks and reviewers must reach it. |
 | 4 | Authorize | UDP, source port 53: DNS replies. |
@@ -576,12 +813,15 @@ If you enable it (Control Panel → **Network → Public IP Addresses** → the 
 Do not open inbound DB, internal API or monitoring ports: 5432, 8080, 8082,
 9090/9091, 9093 and 3000 are not public services in this deployment. Keep UFW as
 well; OVHcloud recommends a local firewall even with the Edge Network Firewall.
-If your admin IP changes, update the SSH rule (or use rescue mode) before
-expecting SSH to work.
+Do not add an Edge rule for port 22: SSH arrives inside Tailscale's encrypted
+connection, so the server is reachable from wherever you are signed in to
+Tailscale, whatever your home IP.
 [Edge Network Firewall](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/dedicated-servers/firewall-network).
 
-`setup.sh`'s UFW allows standard OpenSSH. If using a custom SSH port, arrange the
-matching UFW (and Edge Network Firewall) rules before running it. Docker's
+Until Step 3, `setup.sh`'s UFW allows standard OpenSSH from anywhere (key-only, as
+set below); once the SSH rule on `tailscale0` exists, rerunning `setup.sh` keeps
+SSH on Tailscale only. If using a custom SSH port, arrange the matching UFW rules
+before running it. Docker's
 published ports use its own firewall chains, which is why Compose publishes only
 80 and 443. These firewalls protect the VPS boundary; they do not implement
 Previa's per-PR Docker network isolation.
@@ -626,40 +866,69 @@ sudo sshd -T | grep -E '^(passwordauthentication|permitrootlogin) '
 then `sudo systemctl reload ssh` and test a new key login before closing the
 session.
 
-The `ops` account needs the password configured by `adduser` for `sudo`.
-Later SSH/SCP examples assume this key is selected by your SSH agent or local
-SSH configuration; add `-i ~/.ssh/previa_ovh_ed25519` when necessary. Keep
-OVHcloud's rescue mode (Control Panel → the VPS → **Boot** → **…**) available as
-the recovery path.
+The `ops` account needs the password configured by `adduser` for `sudo`; the same
+password logs in on OVHcloud's **KVM** console (Control Panel → the VPS → **KVM**),
+the browser terminal that works even when SSH and Tailscale do not. Keep it in
+your password manager. Rescue mode (Control Panel → the VPS → **Boot** → **…**) is
+the last resort. Later SSH/SCP examples assume this key is selected by your SSH
+agent or local SSH configuration; add `-i ~/.ssh/previa_ovh_ed25519` when
+necessary. Until Step 3 they use the public IP; afterwards, the Tailscale name.
 
-Use a separate staging VPS for first deployment, restores and upgrade drills.
-Choose a release only after checking the [CI and releases](#ci-and-releases)
+Choose the release tag only after checking the [CI and releases](#ci-and-releases)
 section and the [local staging smoke test](#local-staging-smoke-test).
 
 ### Step 2 — Set up domains, DNS and the DNS token
 
-For example, own `example.com` for the dashboard and a separate registrable domain
-`example.net` for untrusted previews. Set up their authoritative DNS first:
+`previa.live` serves the landing page and the dashboard. Previews run untrusted
+code from pull requests, so they get a **separate registrable domain**. Previa
+would also run with previews under `previa.live` (its login cookies are
+`__Host-` cookies a preview cannot plant, and the server only logs a warning),
+but a domain of their own protects the brand domain:
 
-| Record | Value | Previa setting |
-| --- | --- | --- |
-| `A previa.example.com` | VPS public IPv4 | `APP_BASE_URL=https://previa.example.com`, `PREVIA_DASHBOARD_HOST=previa.example.com` |
-| `A *.preview.example.net` | Same VPS public IPv4 | `PREVIEW_BASE_DOMAIN=preview.example.net` |
+| Risk if previews shared `previa.live` | What happens |
+| --- | --- |
+| A preview hosts phishing or malware | Blocklists and company filters often block the whole domain, taking the landing page and dashboard with it. |
+| Someone reports a preview to the registrar | The registrar can suspend the whole domain. |
+| The router's DNS token | It would be able to edit every `previa.live` record; scoped to the preview zone it can touch only preview records. |
+| Browser protections | Previews and dashboard would count as the same site, so `SameSite` cookies no longer separate them (Previa's CSRF tokens still protect forms). |
 
-The wildcard covers `<generated-label>.preview.example.net`, not the base domain
-itself. An additional base-domain A record is optional. Only add AAAA records if
-you actually configure and verify the corresponding public IPv6 path.
+GitHub does the same with `githubusercontent.com`. Moving previews to their own
+domain later changes every preview URL, so do it now:
 
-For Cloudflare, add each zone, complete the registrar's nameserver change, then
-create the records as **DNS only**. Direct access is the tested routing model;
-the dashboard's TLS-ALPN-01 challenge needs the internet to reach Traefik on 443.
-Cloudflare proxying or another TLS-terminating load balancer requires a separate
-certificate/proxy design and is not covered by copying these records unchanged.
+1. **Buy the preview domain.** In Cloudflare, open **Domain Registration →
+   Register Domains**, search for a name and buy it (at cost, renewing
+   automatically). A `.com` costs about $10–11 a year; avoid often-abused endings
+   such as `.xyz` or `.top`. Cloudflare creates its DNS zone in your account. This
+   guide writes it as `example.net`.
+2. **Check `previa.live`'s zone.** Open its **DNS → Records** and note any existing
+   record for `previa.live` itself (an old landing page or parking record): it is
+   replaced below. Leave unrelated records (mail, verification) alone.
+3. **Create the two records**, both **DNS only** (grey cloud):
 
-Create a Cloudflare API token with `Zone / DNS / Edit` and `Zone / Zone / Read`,
-scoped to the preview zone. One token with both permissions is supported by the
-[lego Cloudflare provider](https://go-acme.github.io/lego/dns/cloudflare/).
-Keep the token in a password manager until Step 4 installs it on the server.
+   | Record | Value | Previa setting |
+   | --- | --- | --- |
+   | `A previa.live` | VPS public IPv4 | `APP_BASE_URL=https://previa.live`, `PREVIA_DASHBOARD_HOST=previa.live` |
+   | `A *.preview.example.net` | Same VPS public IPv4 | `PREVIEW_BASE_DOMAIN=preview.example.net` |
+
+   The wildcard covers `<generated-label>.preview.example.net`, not
+   `preview.example.net` itself. Only add AAAA records if you configure and verify
+   the server's public IPv6 path. The server answers only `previa.live`: do not
+   point `www.previa.live` at the VPS (it would get 421); if you want it, use a
+   Cloudflare redirect rule to `https://previa.live`.
+
+Direct access is the tested routing model; the dashboard's TLS-ALPN-01 challenge
+needs the internet to reach Traefik on 443. Cloudflare proxying or another
+TLS-terminating load balancer requires a separate certificate/proxy design and is
+not covered by copying these records unchanged.
+
+4. **Create the DNS token** for the wildcard certificate: **My Profile → API
+   Tokens → Create Token → Create Custom Token**, permissions `Zone / DNS / Edit`
+   and `Zone / Zone / Read`, zone resources **Include → Specific zone →
+   `example.net`** (the preview zone only; the dashboard certificate needs no
+   token). One token with both permissions is supported by the
+   [lego Cloudflare provider](https://go-acme.github.io/lego/dns/cloudflare/).
+   Keep it in your password manager until Step 4 installs it on the server.
+
 Set `ACME_DNS_PROVIDER=cloudflare` and
 `ACME_DNS_CREDENTIAL_VARIABLE=CF_DNS_API_TOKEN`; do not put `_FILE` in that
 setting, because Compose appends it. Other providers require their corresponding
@@ -668,17 +937,17 @@ lego credential variable and possibly additional configuration.
 Confirm DNS from your workstation before certificate issuance:
 
 ```sh
-dig +short previa.example.com A
+dig +short previa.live A
 dig +short any-label.preview.example.net A
 ```
 
-Both should resolve to the VPS IP. `dig` can be installed through your OS's DNS
+Both should print the VPS IP. `dig` can be installed through your OS's DNS
 utilities package. Also check restrictive CAA records if certificate issuance
-fails: they must permit the chosen certificate authority.
+fails: they must permit Let's Encrypt (`letsencrypt.org`).
 
 ### Step 3 — Install the checkout and prepare the host
 
-**On your workstation**, SSH to the server:
+**On your workstation**, SSH to the server (for the last time over its public IP):
 
 ```sh
 ssh ops@YOUR_SERVER_IP
@@ -691,27 +960,63 @@ root so file modes, Docker and systemd commands are consistent:
 sudo -i
 apt-get update
 apt-get install -y git nano
+```
 
-git clone https://github.com/ajaykathwate/Previa.git /opt/previa
+#### Give the server read access to the repository
+
+The repository is private, so the server gets its own **deploy key**: an SSH key
+that can only read this one repository. As root on the VPS:
+
+```sh
+install -d -m 0700 /root/.ssh
+ssh-keygen -t ed25519 -N '' -C previa-prod-01-deploy -f /root/.ssh/previa_deploy
+cat /root/.ssh/previa_deploy.pub
+cat >> /root/.ssh/config <<'CONFIG'
+Host github.com
+  IdentityFile /root/.ssh/previa_deploy
+  IdentitiesOnly yes
+CONFIG
+chmod 600 /root/.ssh/config
+```
+
+In GitHub, open the repository → **Settings → Deploy keys → Add deploy key**,
+title it `previa-prod-01`, paste the printed public key and leave **Allow write
+access** unchecked. Then, on the VPS:
+
+```sh
+ssh -T git@github.com
+```
+
+On the first connection, compare the host key fingerprint with
+[GitHub's published fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints)
+(Ed25519: `SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU`) before answering
+`yes`. **Expected:** `Hi ajaykathwate/Previa! You've successfully authenticated,
+but GitHub does not provide shell access.` The key is not backed up; a new server
+simply gets a new one, and you delete the old one in GitHub.
+
+#### Check out the release and prepare the host
+
+```sh
+git clone git@github.com:ajaykathwate/Previa.git /opt/previa
 cd /opt/previa
 git fetch --tags origin
 PREVIA_RELEASE=v0.1.0
-# Replace the example above with the tested tag you actually published.
+# Replace the example above with the tag you created on a master commit whose CI passed.
 git checkout --detach "$PREVIA_RELEASE"
 
 deploy/production/setup.sh
 systemctl stop previa-backup.timer
 ```
 
-For a private repository, authenticate the checkout through an appropriate
-read-only credential, without embedding a token in the clone URL. Use a clean
-release checkout rather than editing application source on the production host.
+Use a clean release checkout rather than editing application source on the
+production host: Step 7 builds the images from exactly this tree.
 
 `setup.sh` installs Docker Engine/Compose/Buildx when Docker is absent, age,
-rclone, OpenSSL and UFW; enables Docker at boot; allows the user namespaces that
-rootless builds need; creates the state directories; and creates
-`/etc/previa/previa.env` only if it does not exist. If Docker already
-exists, verify its Compose and Buildx plugins yourself:
+rclone, OpenSSL, UFW, Tailscale and lazydocker (a pinned release, checked against
+its SHA-256); enables Docker at boot; allows the user namespaces that rootless
+builds need; creates the state directories; and creates `/etc/previa/previa.env`
+only if it does not exist. If Docker already exists, verify its Compose and Buildx
+plugins yourself:
 
 ```sh
 docker version
@@ -721,12 +1026,13 @@ systemctl is-enabled docker
 stat -c '%g' /var/run/docker.sock
 ```
 
-It generates database, session, webhook, repository-encryption and Grafana
-secrets and fills `DOCKER_GID` from the socket. It also installs/enables the backup
-timer immediately. The explicit stop above prevents scheduled failures while
-you are still configuring storage and the application. Re-enable it after the
-first successful backup. Re-running setup does not regenerate an existing env
-file, but does update its Docker group and credential file permissions.
+It generates database, session, webhook and repository-encryption secrets (and a
+Grafana password the unused observability profile would need) and fills
+`DOCKER_GID` from the socket. It also installs/enables the backup timer
+immediately. The explicit stop above prevents scheduled failures while you are
+still configuring storage and the application. Re-enable it after the first
+successful backup. Re-running setup does not regenerate an existing env file, but
+does update its Docker group and credential file permissions.
 
 Ubuntu 24.04 restricts unprivileged user namespaces, which the
 [rootless builder needs](https://github.com/moby/buildkit/blob/master/docs/rootless.md#ubuntu-2404-or-later);
@@ -743,8 +1049,62 @@ sysctl kernel.apparmor_restrict_unprivileged_userns
 on Debian 12 the key does not exist, which is fine.
 This changes the dedicated Docker host's handling of unprivileged user
 namespaces used by the rootless builder. Container capability, network and
-resource policies are configured separately by Previa. Rehearse a real preview
-build on staging after configuring the host.
+resource policies are configured separately by Previa. Step 10 proves a real
+preview build on this host.
+
+#### Move SSH to Tailscale
+
+[Tailscale](https://tailscale.com/kb) puts your workstation and the server on a
+private network (a *tailnet*); SSH then travels inside it and port 22 closes to
+the internet. The free Personal plan covers up to 6 users. Do these in order and
+keep your current SSH session open until the last check passes.
+
+1. **Your workstation:** create a Tailscale account (sign in with GitHub or
+   Google) and install the Tailscale app on the computer you SSH from. On Windows
+   with WSL, install the Windows app; if `ssh` inside WSL cannot reach the server's
+   tailnet name in step 4, also install Tailscale inside WSL.
+2. **The VPS** (root; `setup.sh` installed Tailscale):
+
+   ```sh
+   tailscale up --hostname=previa-prod-01
+   ```
+
+   Open the printed login URL, sign in with the same account and approve the
+   machine. Then `tailscale status` lists `previa-prod-01` and your workstation.
+3. **Stop the key from expiring:** in the [Tailscale admin console](https://login.tailscale.com/admin/machines),
+   open **Machines**, then `previa-prod-01`'s **…** menu → **Disable key expiry**.
+   Otherwise the server leaves the tailnet after 180 days and SSH stops.
+4. **Prove SSH over the tailnet, from a new workstation terminal:**
+
+   ```sh
+   ssh ops@previa-prod-01
+   sudo -v
+   ```
+
+   `previa-prod-01` resolves through Tailscale's MagicDNS (or use the address
+   `tailscale ip -4` prints on the VPS, `100.x.y.z`). Add a `Host previa` entry
+   to `~/.ssh/config` with `HostName previa-prod-01`, `User ops` and your key to
+   shorten later commands. Do not continue until this works.
+5. **Close port 22 to the internet** (root on the VPS):
+
+   ```sh
+   ufw allow in on tailscale0 to any port 22 proto tcp
+   ufw delete allow OpenSSH
+   ufw status verbose
+   ```
+
+   **Expected:** `22/tcp on tailscale0 ALLOW IN Anywhere` (and its v6 twin),
+   `80/tcp` and `443/tcp` allowed, and no `OpenSSH` rule. Rerunning `setup.sh`
+   keeps it that way.
+6. **Check from outside the tailnet** (for example a phone hotspot with Tailscale
+   off): `nc -vz -w 5 YOUR_SERVER_IP 22` must time out, while
+   `ssh ops@previa-prod-01` still works from your workstation.
+
+From now on every SSH or `scp` command in this guide uses `previa-prod-01` (or
+your `Host previa` alias) instead of `YOUR_SERVER_IP`. If Tailscale is ever down
+or misconfigured, use the OVHcloud **KVM** console with the `ops` password
+([Step 1](#first-ssh-login-and-the-administrator-account)), then
+`tailscale up` again or, temporarily, `ufw allow OpenSSH`.
 
 ### Step 4 — Register GitHub integrations and install credential files
 
@@ -753,18 +1113,18 @@ callbacks accidentally. The dashboard uses a GitHub **OAuth App**, while repo
 access uses a GitHub **App**; their client IDs/secrets are different.
 
 1. In GitHub **Settings → Developer settings → OAuth Apps → New OAuth App**, use
-   `https://previa.example.com` as the homepage and
-   `https://previa.example.com/auth/github/callback` as the authorization callback.
+   `https://previa.live` as the homepage and
+   `https://previa.live/auth/github/callback` as the authorization callback.
    Copy the OAuth client ID and create a client secret.
 2. In **GitHub Apps → New GitHub App**, use the same homepage. Set setup URL
-   `https://previa.example.com/installations/callback`, enable **Redirect on
+   `https://previa.live/installations/callback`, enable **Redirect on
    update**, and set callback URL
-   `https://previa.example.com/installations/authorize/callback`. Leave **Request
+   `https://previa.live/installations/authorize/callback`. Leave **Request
    user authorization during installation** unchecked: Previa starts that flow.
 3. Grant repository permissions **Contents: read**, **Pull requests: write**,
    **Checks: write**; Metadata read is automatic. Subscribe to **Pull request**.
    GitHub also delivers installation lifecycle events used by the implementation.
-4. Set webhook URL `https://previa.example.com/webhooks/github`. Copy the generated
+4. Set webhook URL `https://previa.live/webhooks/github`. Copy the generated
    `GITHUB_WEBHOOK_SECRET` from the host's env file into the App's webhook secret
    field. Keep verification enabled. Webhooks with staging-CA certificates will
    not be a successful live proof; verify deliveries after production TLS works.
@@ -778,7 +1138,7 @@ for the distinction and permission rationale.
 Upload the private key from your **workstation** to your SSH user's home:
 
 ```sh
-scp /path/to/downloaded-app-key.pem ops@YOUR_SERVER_IP:github-app.pem
+scp /path/to/downloaded-app-key.pem ops@previa-prod-01:github-app.pem
 ```
 
 Then, as root on the **VPS**, install it and create the DNS-token file:
@@ -822,13 +1182,13 @@ additional production env files to copy.
 
 | Settings in `previa.env` | What to set / where the value comes from |
 | --- | --- |
-| `PREVIA_VERSION` | Exact tested tag, e.g. `v0.1.0`; it must match the checkout and all three images. |
-| `PREVIA_SERVER_IMAGE`, `PREVIA_WORKER_IMAGE`, `PREVIA_EGRESS_IMAGE` | For published images: `ghcr.io/ajaykathwate/previa-server`, `ghcr.io/ajaykathwate/previa-worker`, `ghcr.io/ajaykathwate/previa-egress`. These are image names **without tags**; Compose adds `:${PREVIA_VERSION}`. Use your actual lowercase owner if it changes. Leave absent for local-image builds. |
+| `PREVIA_VERSION` | The tag checked out in `/opt/previa`, e.g. `v0.1.0`. Step 7 builds the three images with this tag and Compose runs them. |
+| `PREVIA_SERVER_IMAGE`, `PREVIA_WORKER_IMAGE`, `PREVIA_EGRESS_IMAGE` | **Leave absent**: the images are built on the server as `previa-server`, `previa-worker` and `previa-egress`. Only if you ever pull images published by the optional Release workflow instead: `ghcr.io/ajaykathwate/previa-server` and so on, names without tags. |
 | `DOCKER_GID` | Generated from the host Docker socket. Not the worker's UID. |
 | `POSTGRES_PASSWORD` | Generated by setup. Used when the database volume is initialized. |
 | `DATABASE_URL` | Setup writes `postgres://previa:<generated-password>@postgres:5432/previa?sslmode=disable`. `postgres` is a private Compose hostname, not `localhost`. Keep the password consistent. |
-| `APP_BASE_URL` | `https://previa.example.com`; an origin, without an extra path. |
-| `PREVIA_DASHBOARD_HOST` | `previa.example.com`; no scheme or port for this deployment. Must match `APP_BASE_URL`'s hostname. |
+| `APP_BASE_URL` | `https://previa.live`; an origin, without an extra path. |
+| `PREVIA_DASHBOARD_HOST` | `previa.live`; no scheme or port for this deployment. Must match `APP_BASE_URL`'s hostname. |
 | `SESSION_SECRET` | Generated random hex value; retain across restarts unless intentionally rotating. |
 | `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | OAuth App credentials from Step 4; dashboard sign-in. |
 | `GITHUB_APP_ID`, `GITHUB_APP_SLUG` | Numeric App ID and slug from the GitHub App page. |
@@ -837,7 +1197,7 @@ additional production env files to copy.
 | `GITHUB_WEBHOOK_SECRET` | Generated secret, also set identically in GitHub's webhook configuration. |
 | `SECRETS_ENCRYPTION_KEYS` | Generated `1:<base64-encoded-32-byte-key>`. Multiple rotation versions use commas: `1:<key>,2:<key>`. Back up every needed version offline. |
 | `SECRETS_ACTIVE_KEY_VERSION` | `1` initially; the version used to encrypt new repository secrets. |
-| `PREVIEW_BASE_DOMAIN` | `preview.example.net`; lowercase DNS name, no scheme or wildcard. |
+| `PREVIEW_BASE_DOMAIN` | `preview.` plus the preview domain from Step 2, here `preview.example.net`; lowercase DNS name, no scheme or wildcard. |
 | `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS` | Retain `websecure` and `127.0.0.1:8080`. This loopback is inside the router container. |
 | `ACME_EMAIL` | A monitored operator email for the certificate account. |
 | `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE` | `cloudflare` and `CF_DNS_API_TOKEN` for this example. |
@@ -847,15 +1207,19 @@ additional production env files to copy.
 | `BACKUP_AGE_RECIPIENT` | Public `age1...` recipient generated on your recovery workstation, as described below. |
 | `BACKUP_REMOTE` | `previa-backups:YOUR_BUCKET/production`; `previa-backups` is the root-owned Cloudflare R2 rclone remote, `YOUR_BUCKET` is the actual bucket, and `production` is an object-key prefix. It is not an HTTPS endpoint. |
 | `BACKUP_RETENTION_DAYS` | `30` initially; choose according to your recovery requirements. |
-| `BACKUP_FAILURE_WEBHOOK` | Optional receiver URL accepting the script's JSON `text` message. This only reports backup failures; it is not the whole Prometheus alert system. |
-| `GRAFANA_ADMIN_PASSWORD` | Generated password; initial Grafana admin login. |
-| `LOG_LEVEL` | `info`; use `debug` temporarily during a diagnosed incident, then restore. |
+| `SENTRY_DSN` | The `previa` project's DSN from [S1](#step-s1--create-the-sentry-project-and-copy-its-dsn). The server and worker report warnings and errors to it, and `backup.sh` derives its cron check-in URL from it. Empty turns all of that off. |
+| `GRAFANA_ADMIN_PASSWORD` | Generated; used only if the optional observability profile is ever enabled. |
+| `LOG_LEVEL` | `info`; use `debug` temporarily during a diagnosed incident, then restore. Sentry receives warnings and errors whatever this says. |
 
 #### Credential checklist: what is generated, supplied and kept offline
 
 | Credential | Obtain it from | Production location / scope |
 | --- | --- | --- |
-| SSH private key | Your workstation's key generation | Workstation/SSH agent only; the VPS receives the public key. |
+| SSH private key | Your workstation's key generation | Workstation/SSH agent only; the VPS receives the public key, and SSH reaches it over Tailscale. |
+| `ops` password | `adduser` in Step 1 | Your password manager; needed for `sudo` and the OVHcloud KVM console. |
+| Deploy key | `ssh-keygen` on the VPS (Step 3) | `/root/.ssh/previa_deploy`, read-only on this one repository. Not backed up: a new host gets a new key, and the old one is deleted in GitHub. |
+| Tailscale login | Your Tailscale account (two-factor authentication) | The VPS joins once with `tailscale up`; its key expiry is disabled. A new host joins again. |
+| Sentry DSN | Sentry → project `previa` → **Client Keys (DSN)** | `SENTRY_DSN` in `previa.env`. It only lets clients send events to that project; keep it out of public places anyway. |
 | Database password | `setup.sh` generates it | `POSTGRES_PASSWORD` and password portion of `DATABASE_URL` in `previa.env`. Not the R2 secret. |
 | Session secret | `setup.sh` generates it | `SESSION_SECRET` in `previa.env`. |
 | Webhook signing secret | `setup.sh` generates it | `GITHUB_WEBHOOK_SECRET` in `previa.env` and the same value in GitHub App webhook settings. |
@@ -867,9 +1231,8 @@ additional production env files to copy.
 | R2 access key and secret | Cloudflare → R2 → **Manage API tokens** | Root's protected rclone config; scoped to the production backup bucket. Separate recovery copy. |
 | age public backup recipient | Recovery workstation `age-keygen` | `BACKUP_AGE_RECIPIENT` in `previa.env`; public value can remain on host. |
 | age private recovery identity | Same recovery-key generation | Offline; not needed by the nightly service. |
-| Grafana admin password | `setup.sh` generates it | `GRAFANA_ADMIN_PASSWORD` in `previa.env`; initialize/manage Grafana account separately. |
-| GHCR pull credential | Authorized GitHub package-read credential, only if images are private | Root's Docker login configuration. It is not the GitHub App token. |
-| Alert receiver secret | Selected notification service | Protected host Alertmanager config/file, if the receiver needs it. |
+| Grafana admin password | `setup.sh` generates it | `GRAFANA_ADMIN_PASSWORD` in `previa.env`; unused unless the optional observability profile runs. |
+| Account recovery codes | OVHcloud, Cloudflare, GitHub, Sentry and Tailscale | Your password manager. Losing the Cloudflare account would lose both DNS and the backups. |
 
 No OVHcloud API credentials are required for this manual deployment.
 Do not add production secrets to provisioning scripts or order notes, the Git checkout,
@@ -903,7 +1266,7 @@ On the VPS-2, use the [starter settings](#starter-settings-for-a-small-host).
 On a VPS-3 (6 vCores / 12 GB / 100 GB), keep them but raise
 `PREVIEW_MEMORY_BUDGET=6GiB`, `PREVIEW_CPU_BUDGET=5` and `BUILD_CACHE_BUDGET=20GiB`.
 On a VPS-4 (8 vCores / 24 GB / 200 GB), edit or add these entries once each; they
-replace the env template's defaults, and the observability profile fits:
+replace the env template's defaults:
 
 ```dotenv
 MAX_CONCURRENT_BUILDS=2
@@ -923,7 +1286,7 @@ BUILDS_PAUSED=false
 ```
 
 Two 3 GiB builds and a 10 GiB preview budget leave about 8 GiB for PostgreSQL,
-monitoring, Docker and Linux. 10 GiB holds two backend previews with their
+Docker and Linux. 10 GiB holds two backend previews with their
 services and a replacement, or many web previews.
 
 Each build runs in a separate builder container, so the worker's own 1 GiB limit
@@ -970,25 +1333,19 @@ they are required if the original host disappears.
 
 ## First start, with staged certificates
 
-### Step 7 — Define the production commands and obtain images
+### Step 7 — Define the production commands and build the images
 
 Run this on the VPS, in the root shell. Recreate these functions after opening a
-new SSH session; they are shell helpers, not installed commands:
+new SSH session (or add them to root's `~/.bashrc`); they are shell helpers, not
+installed commands:
 
 ```sh
 cd /opt/previa
-# VPS-2 (starter settings): without Prometheus and Grafana.
 dc() {
   docker compose -p previa \
     -f /opt/previa/deploy/production/compose.yml \
     --env-file /etc/previa/previa.env "$@"
 }
-# VPS-3 or VPS-4: define dc like this instead, to run Prometheus and Grafana.
-# dc() {
-#   docker compose -p previa \
-#     -f /opt/previa/deploy/production/compose.yml \
-#     --env-file /etc/previa/previa.env --profile observability "$@"
-# }
 probe() {
   docker run --rm --network previa_control \
     curlimages/curl:8.15.0@sha256:4026b29997dc7c823b51c164b71e2b51e0fd95cce4601f78202c513d97da2922 \
@@ -996,46 +1353,37 @@ probe() {
 }
 ```
 
-Pick one `dc` and use it for every command on this host, so Compose always sees
-the same services; the monitoring steps below that use Prometheus or Grafana
-need the `observability` profile. `probe` uses the curl image pinned by digest,
-as the smoke test does. The `images` profile is used only while pulling/building
-images; **do not enable it on `up`**, because the worker creates the real
-`previa-egress` container itself.
+Use this `dc` for every command on this host, so Compose always sees the same
+services. It leaves out the optional `observability` profile, which this
+deployment does not run. `probe` uses the curl image pinned by digest, as the
+smoke test does. The `images` profile is used only while building images; **do
+not enable it on `up`**, because the worker creates the real `previa-egress`
+container itself.
 
-For **published GHCR images**, uncomment/set the three `PREVIA_*_IMAGE` names in
-`previa.env`, set the matching `PREVIA_VERSION`, then:
-
-```sh
-dc config --quiet
-dc --profile images pull
-```
-
-`config --quiet` validates Compose without printing interpolated secrets. A normal
-`dc config` dump contains secrets and should not be pasted into an issue.
-For public GHCR packages, pulling normally needs no login. For private packages,
-use an authorized token with package read access:
-
-```sh
-docker login ghcr.io -u YOUR_GITHUB_USERNAME
-```
-
-Enter the token at the password prompt rather than putting it in a command or
-URL. The host's registry login is different from Previa's OAuth/App credentials.
-A token used only to pull images is not needed inside application containers.
-
-Alternatively, **build the exact checked-out source manually on the host**, with
-the `PREVIA_*_IMAGE` overrides absent and `PREVIA_VERSION` set to your chosen tag:
+**Build the three images from the checked-out tag**, with the `PREVIA_*_IMAGE`
+settings absent and `PREVIA_VERSION` set to that tag:
 
 ```sh
 dc config --quiet
 dc --profile images build server worker egress
+docker image ls 'previa-*'
 ```
 
-Docker runs the pinned Go/template/CSS build stages; Go/Node do not need to be
-installed directly on the VPS. A binary release archive alone does not contain
-the full source/Dockerfile needed for this build path. With an archive, use the
-published images and retain its Compose/scripts/monitoring layout instead.
+Docker runs the pinned Go/template/CSS build stages; Go and Node are not installed
+on the VPS. The first build downloads the build images and Go modules and takes a
+few minutes; later builds reuse Docker's cache. **Expected:** `previa-server`,
+`previa-worker` and `previa-egress`, each tagged with `PREVIA_VERSION`. Earlier
+versions' images stay on the host until you remove them: they are the rollback
+path ([Application/image rollback](#applicationimage-rollback-preserving-the-database)).
+`config --quiet` validates Compose without printing interpolated secrets. A normal
+`dc config` dump contains secrets and should not be pasted into an issue.
+
+Only if you ever deploy images published by the optional Release workflow
+instead (see [CI and releases](#ci-and-releases)): set the three
+`PREVIA_*_IMAGE` names to the GHCR repositories, log in with a token that can
+read packages if they are private (`docker login ghcr.io -u YOUR_GITHUB_USERNAME`,
+typing the token at the prompt), and run `dc --profile images pull` instead of
+`build`.
 
 Check the environment before starting services:
 
@@ -1044,10 +1392,10 @@ dc run --rm --no-deps server check-config
 dc run --rm --no-deps worker check-config
 ```
 
-Both should print `configuration is valid` and exit 0. This validates config and
-file checks; it does not prove GitHub access, successful certificate issuance,
-valid encrypted repository data, database migrations or a complete preview.
-Those are separate startup/live checks below.
+Both should print `configuration is valid` and exit 0. This validates config,
+`SENTRY_DSN`'s format and file checks; it does not prove GitHub access,
+successful certificate issuance, valid encrypted repository data, database
+migrations or a complete preview. Those are separate startup/live checks below.
 
 ### Step 8 — Start with Let's Encrypt staging
 
@@ -1064,7 +1412,7 @@ dc up -d --wait --wait-timeout 180
 dc ps -a
 dc logs --tail 100 migrate router-config
 dc logs --since 10m router
-curl -ksS -D - -o /dev/null https://previa.example.com/
+curl -ksS -D - -o /dev/null https://previa.live/
 curl -ksS -D - -o /dev/null https://any-label.preview.example.net/
 ```
 
@@ -1079,8 +1427,7 @@ Expected behavior:
 4. Server starts only after migrations succeed. Worker starts after migrations
    and router health, ensures the egress proxy exists, synchronizes the accepted
    route table, starts River and records its capabilities.
-5. Prometheus and Grafana start too if your `dc` enables the `observability` profile.
-6. Traefik issues the wildcard preview certificate through DNS-01 and the
+5. Traefik issues the wildcard preview certificate through DNS-01 and the
    dashboard certificate through TLS-ALPN-01. Check both certificates; a green
    container health check alone is not proof of ACME success.
 
@@ -1106,7 +1453,7 @@ dc stop router
 dc rm -f router
 docker volume rm previa_acme
 dc up -d --wait --wait-timeout 180
-curl -fsS -D - -o /dev/null https://previa.example.com/
+curl -fsS -D - -o /dev/null https://previa.live/
 curl -sS -D - -o /dev/null https://any-label.preview.example.net/
 ```
 
@@ -1149,7 +1496,7 @@ than 0 needs investigation. The egress container appears in `docker ps`, not
 
 Then, from an external browser and GitHub:
 
-1. Open `https://previa.example.com` with trusted TLS. Sign in through GitHub.
+1. Open `https://previa.live` with trusted TLS. Sign in through GitHub.
 2. Install/link the GitHub App on a disposable repository you own. Wait for PR
    discovery to complete; the Overview should show the required pipeline stages
    connected.
@@ -1178,13 +1525,133 @@ Then, from an external browser and GitHub:
    `host:port` on the repository's **Outbound** tab and rebuild.
 10. Tear down from the PR page, then test close/merge cleanup. The URL should
    become unavailable and the owned containers/networks should be cleaned up.
-11. Take an encrypted backup, confirm off-host storage, rehearse a restore on a
-    different disposable host, and verify actual alert delivery.
+11. Take the first encrypted backup and enable the timer (B4), set up Sentry's
+    monitors and prove an alert email arrives (S2–S4), then rehearse recovery
+    ([before launch](#rehearse-recovery-before-launch)).
 
 The host/runtime recovery and live hosted GitHub/DNS checks remain deployment
 acceptance steps; local passing tests cannot substitute for them.
 
-## Monitor live traffic, jobs and containers
+## Monitoring with Sentry
+
+Sentry's free Developer plan is the deployment's only monitoring service. It sits
+outside the VPS, so it also reports when the VPS itself is down, and it emails you:
+
+| What can go wrong | How Sentry learns about it | What you receive |
+| --- | --- | --- |
+| The server or worker logs an error (a failed job, a GitHub or Docker failure, a handler panic) | The process sends every error-level record as an event; Sentry groups them into issues by message ([`internal/platform/errortracking`](../internal/platform/errortracking/errortracking.go)) | An email when a new issue appears, or a resolved one returns |
+| Warnings and errors you want to read back | The same records go to **Logs** | Searchable logs, kept by Sentry's plan |
+| The dashboard is down, its certificate is invalid, or the VPS is unreachable | The uptime monitor requests `https://previa.live` every minute from several regions | An email after 3 failed checks in a row (about 3 minutes) |
+| The nightly backup fails, or does not run at all (stopped timer, dead host) | `backup.sh` checks in with the cron monitor `previa-backup`: in progress, then ok or error | An email on an error check-in, or when none arrives within a day plus an hour |
+
+Everything reaching Sentry passed through Previa's logging redaction first
+(secret-looking keys, tokens, keys and URL passwords removed, [23](23-observability-and-hardening.md)).
+A preview app's own output never goes there: it is your users' app and can contain
+their secrets, so it stays on the server (`docker logs`, lazydocker). Free-plan
+limits: 5,000 errors and 5 GB of logs a month, 1 uptime monitor, 1 cron monitor,
+1 user, email alerts; beyond the limits Sentry drops events until the month
+resets rather than billing. Sentry's menus change from time to time; the steps
+name what to find.
+
+### Step S1 — Create the Sentry project and copy its DSN
+
+Do this before Step 5, which needs the DSN.
+
+1. Sign up at [sentry.io](https://sentry.io) on the free **Developer** plan, with
+   two-factor authentication. When asked for the **data storage location**, choose
+   the EU (Frankfurt) for a European VPS, or the US; it cannot be changed later.
+2. Create a project: platform **Go**, name `previa`. If it offers alert defaults,
+   keep "alert me on high-priority issues"; S4 adds the rule that covers everything.
+3. Open **Settings → Projects → previa → Client Keys (DSN)** and copy the DSN, of
+   the form `https://<key>@o<org>.ingest.<region>.sentry.io/<project>`. It goes in
+   `SENTRY_DSN` in Step 5, one line, unquoted.
+
+### Step S2 — Prove errors reach Sentry
+
+After Step 9, on the VPS:
+
+```sh
+dc run --rm --no-deps server sentry-test
+dc logs --since 10m server worker | grep -c 'error reporting is off'
+```
+
+**Expected:** `sent a test error to Sentry: it appears under Issues as "Sentry
+test from previa-server"`, and `0` from the second command (a malformed DSN would
+make the processes log that line and run without reporting; `check-config` refuses
+it first). Within a minute **Issues** shows the test issue with
+`process=server`, `environment=production` and the release tag. Resolve it once
+S4's email has arrived.
+
+### Step S3 — Watch the dashboard from outside
+
+Open **Uptime Monitors** (under Insights or Monitors, depending on the menu) and
+add one monitor:
+
+| Field | Value |
+| --- | --- |
+| URL | `https://previa.live/` (the public landing page answers 200; never expose `/livez`, `/readyz` or `/metrics` for this) |
+| Method | `GET` |
+| Interval | 1 minute |
+| Environment | `production` |
+| Name | `previa.live dashboard` |
+
+Sentry follows redirects and counts anything but a 2xx answer, a timeout or a DNS
+failure as a failed check; three in a row open an issue, one success resolves it.
+A certificate that expired because renewal failed also fails the check. The free
+plan has one uptime monitor, so preview hosts are not checked separately: their
+routing is proven by Step 10 and every real build, and their wildcard certificate
+by the [monthly check](#monthly-checks).
+
+### Step S4 — Make every alert reach your inbox
+
+Sentry creates uptime and cron issues, but it emails you only through an alert
+rule. In **Alerts**, create one **issue alert** for project `previa`:
+
+- **When:** a new issue is created, or an issue changes from resolved to
+  unresolved;
+- **Filter:** none (all issue categories: errors, uptime and crons);
+- **Then:** send a notification by email to you;
+- **Name:** `previa: email me about every new issue`.
+
+Then check each path once:
+
+1. The S2 test issue's email arrives (resend it with `sentry-test` if the rule was
+   created afterwards).
+2. After B4's first backup, **Crons** lists `previa-backup` with an OK check-in.
+   `backup.sh` created it with a one-day interval, a 60-minute margin and a
+   60-minute maximum runtime, so a changed timer schedule needs no change in
+   Sentry.
+3. The uptime monitor shows passing checks. To prove its email, edit its URL to
+   `https://previa.live/does-not-exist` for a few minutes, wait for the email, then
+   restore the URL.
+
+Keep the email address that receives these in daily use: the same inbox gets
+OVHcloud's abuse notices and Let's Encrypt's.
+
+## Logs, SSH and day-to-day checks
+
+### Log in
+
+```sh
+ssh ops@previa-prod-01      # over Tailscale; or your "Host previa" alias
+sudo -i
+cd /opt/previa
+```
+
+Then define `dc` and `probe` (Step 7). If SSH fails, check that Tailscale is
+connected on your workstation (`tailscale status`); if the server itself left the
+tailnet, use the OVHcloud KVM console with the `ops` password.
+
+### lazydocker: containers and logs on one screen
+
+`setup.sh` installed [lazydocker](https://github.com/jesseduffield/lazydocker). As
+root, run `lazydocker`: the left side lists Compose services and every other
+container, including builders and previews; the right side shows the selected
+container's logs, CPU/memory and configuration. Arrow keys move, `[` and `]` switch
+tabs, `x` opens the actions menu, `q` quits. It runs only while open and changes
+nothing by itself. Its configuration tab shows container environments, which can
+include repository secrets: do not share your screen while it is open, and
+stop or remove Previa's containers only through the procedures in this guide.
 
 ### What keeps services running after you disconnect?
 
@@ -1211,79 +1678,13 @@ This is recovery, not a guarantee that a process restarts at the exact Dockerfil
 instruction it was running. Existing healthy previews may continue serving during
 a worker/server restart if Traefik and the preview containers remain running.
 
-### Open Grafana and check metric collection
-
-This needs the `observability` profile (see Step 7). On your **workstation**:
-
-```sh
-ssh -N -L 3000:127.0.0.1:3000 ops@YOUR_SERVER_IP
-```
-
-Open `http://localhost:3000`, sign in as `admin` with the generated
-`GRAFANA_ADMIN_PASSWORD`, and open the **Previa** dashboard (UID `previa`). The
-provisioned datasource uses `http://prometheus:9090` on the private network.
-If you change Grafana's initial admin-password env value after its database was
-initialized, do not assume it rotates the stored password; manage that through
-Grafana's account/password controls.
-
-On the **VPS**, allow at least one scrape interval, then check:
-
-```sh
-probe http://prometheus:9090/-/ready
-probe http://grafana:3000/api/health
-probe http://prometheus:9090/api/v1/targets
-probe -G --data-urlencode 'query=up' http://prometheus:9090/api/v1/query
-probe http://prometheus:9090/api/v1/rules
-probe http://prometheus:9090/api/v1/alerts
-```
-
-The three configured scrape jobs are `previa-server`, `previa-worker`, and
-`traefik`; each should have `up=1`. Prometheus is not published on a host port.
-Use its API through the private-network probe or Grafana Explore. Internal health
-listeners and Traefik's control API are not public dashboards to expose.
-
-| What to watch | Existing signals / where to look | What it tells you |
-| --- | --- | --- |
-| User-facing Previa traffic | Grafana HTTP panels; `previa_http_requests_total`, HTTP duration, ingress rejections and SSE streams | Request rates, error ratio, latency, refused requests and active streams in the Go server. |
-| Traffic to actual preview apps | Traefik metrics at `router:8082/metrics`, queried in Grafana Explore | Requests traverse Traefik straight to the app, so Go-server HTTP counts do not count preview visits. Inspect Traefik service labels for dashboard versus preview backends. |
-| Build progress and failures | Previa PR page/logs; Grafana builds and failure-code panels | Which attempt is running, why it failed, and whether a candidate became healthy. |
-| Time to preview | `previa_request_to_preview_seconds` and dashboard p50/p95 | Time from eligibility to serving, excluding Automatic's initial quiet-period delay. |
-| Background queue backlog | `previa_queue_jobs`, `previa_queue_oldest_available_seconds`, queue wait p95 | Queues growing, oldest due work waiting, distinction between scheduled work and a stalled queue. |
-| Job execution | `previa_jobs_total`, `previa_job_duration_seconds`, correlated worker logs | Success, failure, snoozes and cancellations by job kind. A capacity/disk/paused wait is not necessarily a build failure. |
-| Worker availability | `previa_workers_live`, `previa_worker_capability`, worker `/readyz`, Overview | Whether a worker is alive and capable of discovery, building, routing, reporting and cleanup. |
-| Durable publication and teardown | `previa_operations`, `previa_environments`, operation logs | Route changes, GitHub reports and cleanup waiting/retrying independently of a build. |
-| Capacity and housekeeping | Build waiting reasons, housekeeping action counts, `previa_build_disk_free_bytes` | Admission limits, cleanup behavior, free disk **at the last build check**, not a continuous host disk monitor. |
-| Outbound connections from previews | `previa_egress_connections_total{outcome}`, `previa_egress_bytes_total` | Approved outbound connections opened, refused or failed, and the bytes they carried. |
-| GitHub and webhooks | Request/rate-limit metrics, webhook delivery outcomes, GitHub delivery screen | API failures, token/permission problems, exhausted API budget and signature failures. |
-| Backup health | `previa_backup_last_success_timestamp_seconds`, systemd status and R2 objects | Whether the entire encrypted backup and retention pass succeeded. |
-| TLS | `traefik_tls_certs_not_after`, router ACME logs, external HTTPS check | Upcoming expiry, failed renewal and public certificate acceptance. |
-| Database | `dc ps postgres`, readiness, PostgreSQL logs and read-only SQL checks | Connectivity/schema, active connections, volume disk pressure. A PostgreSQL exporter is not included. |
-
-For preview traffic, inspect available service labels and use queries such as:
-
-```promql
-sum by (service) (rate(traefik_service_requests_total[5m]))
-histogram_quantile(0.95, sum by (le, service) (rate(traefik_service_request_duration_seconds_bucket[5m])))
-sum by (queue, state) (previa_queue_jobs)
-max by (queue) (previa_queue_oldest_available_seconds)
-```
-
-The supplied Grafana dashboard primarily tracks the Previa pipeline and server;
-it does not automatically create a per-preview application dashboard. Preview
-apps' own business metrics, continuous host metrics, PostgreSQL query metrics,
-central log storage, tracing, and external uptime checks are separate integrations.
-Traefik's current production config has **access logs disabled**; `dc logs router`
-shows operational logs, not a complete visitor request log. Retain private backend
-metrics access and review series/storage growth if monitoring many preview routes.
-
 ### Watch the host's CPU, memory and disk
 
-OVHcloud sends no alerts about the VPS's CPU, memory or disk use, and the supplied
-stack has no host exporter. Previa's own metrics explain which builds, jobs, routes and
-operations are waiting or failing, and build admission refuses to start below
-`BUILD_MIN_FREE_DISK`; neither watches the whole host continuously.
-
-Check the host at least weekly, and whenever builds or previews wait:
+Neither OVHcloud nor Sentry alerts about the VPS's CPU, memory or disk use. Previa
+protects its own disk: a build waits (*Waiting for disk space*) below
+`BUILD_MIN_FREE_DISK` and triggers an immediate cleanup, and hourly housekeeping
+prunes caches and untagged images. The whole host is your weekly check, and a
+check whenever builds or previews wait:
 
 ```sh
 free -h
@@ -1291,6 +1692,8 @@ df -h / /var/lib/docker
 docker stats --no-stream
 docker system df
 ```
+
+`lazydocker` shows the same per-container CPU and memory live.
 
 Initial **operator thresholds**, not provider defaults or workload guarantees:
 
@@ -1301,51 +1704,14 @@ Initial **operator thresholds**, not provider defaults or workload guarantees:
 | Root disk (`df -h`) | Above 75% used | Inspect Docker images/cache, DB/log growth and backup temporary space before the build disk gate is reached. |
 | Root disk, urgent | Above 85% used | Pause new builds and follow controlled capacity recovery; do not broadly prune live objects. |
 
-For continuous host alerts, add a node exporter to the observability profile with
-memory and disk alert rules; that is an additional choice, not part of the
-supplied stack. If your Docker data root is moved to an additional disk later, watch
-that disk's free space too.
-
-Host figures do not tell you which PR URL was visited or which River job failed.
-Use Traefik metrics for preview HTTP traffic, Previa metrics and logs for the
-pipeline, and `docker stats` for individual containers.
-
-### Configure an external uptime check for HTTPS and certificates
-
-OVHcloud does not check your HTTPS endpoints from outside, so use an external uptime service;
-several have free plans, but check their terms. After trusted production TLS is
-working, create an **HTTPS** check for `https://previa.example.com/`, probing from
-more than one region if offered, named `previa-production-dashboard`. Confirm that
-this public unauthenticated URL actually returns 2xx; uptime services count other
-responses as failures. Do not expose internal `/livez`, `/readyz` or `/metrics`
-just to create this check.
-
-Configure alerts and recipients:
-
-| Alert | Example operator choice |
-| --- | --- |
-| Downtime | Notify after 2 minutes of failed checks. |
-| Latency | Notify above 2,000 ms for 5 minutes, where offered; tune after normal traffic is measured. |
-| Certificate expiry | Notify when fewer than 14 days remain, where offered. |
-
-Latency alerts do not replace downtime alerts. Set the monitored email/chat
-destination explicitly and verify a notification with a staging check; creating
-a check alone does not configure every notification.
-
-Add an HTTPS check for an actual maintained test-preview URL to exercise the
-preview routing path. Its app should have a stable 2xx public endpoint. Update
-or disable that check when the PR closes, the preview expires or its URL changes;
-intentional lifecycle cleanup is not a production outage. Rootless builds,
-queues and GitHub feedback still need their application alerts even when this
-URL is reachable.
-
-The uptime service runs outside the server and can detect its public path failing
-while local Prometheus/Grafana/Alertmanager are down. A successful dashboard check
-does not establish that PostgreSQL, the worker and every PR preview are healthy.
+Continuous host alerts are a later addition (Grafana Cloud's free tier with its
+agent, see [what is left out](#what-this-deployment-leaves-out-on-purpose)). If your
+Docker data root is moved to an additional disk later, watch that disk's free space
+too.
 
 ### Inspect logs, containers and PostgreSQL
 
-Run these on the VPS:
+Run these on the VPS (or open `lazydocker` for the same containers and logs):
 
 ```sh
 dc ps -a
@@ -1391,8 +1757,54 @@ dc exec -T postgres psql -U previa -d previa -c \
 
 River and durable operations handle retries; do not manually delete job/operation
 rows to make a dashboard look clear. The production developer queue-ping tools
-are deliberately disabled. Diagnose actual workloads through these metrics,
-logs and read-only state instead.
+are deliberately disabled. Diagnose actual workloads through these logs, Sentry
+and read-only state instead.
+
+### Where to look for each kind of problem
+
+| Question | Where to look |
+| --- | --- |
+| Is Previa up for users? | Sentry's uptime monitor; `curl -fsS -o /dev/null -w '%{http_code}\n' https://previa.live/` from anywhere |
+| What broke, and since when? | Sentry **Issues**: the message, `process` tag and correlation fields (`job_kind`, `pr_id`, `operation_id`…); then `dc logs --since …` around that time, or Sentry **Logs** |
+| Why is a build waiting or failing? | The PR page and **Builds** (waiting reason, build log); `dc logs worker` |
+| Is the job queue stuck? | The read-only SQL above (`river_job` by queue and state) |
+| Are previews running, and visited? | The PR page (status, *Last opened*); `docker ps --filter label=io.previa.managed=true`; lazydocker |
+| Is the server short of memory, disk or CPU? | `free -h`, `df -h`, `docker stats`, `docker system df` ([thresholds](#watch-the-hosts-cpu-memory-and-disk)) |
+| Did last night's backup work? | Sentry **Crons** → `previa-backup`; `systemctl status previa-backup.service`; `cat /var/lib/previa/backup/last-success` |
+| Are certificates valid? | The uptime monitor (dashboard); `dc logs router \| grep -i acme`; a preview's padlock in a browser |
+| Are GitHub webhooks arriving? | GitHub App → **Advanced → Recent deliveries**; `dc logs server` |
+| Can the worker build? | `probe http://worker:9091/readyz` (capabilities, `paused`); the dashboard's Overview |
+
+The server and worker still serve Prometheus-format metrics privately
+(`probe http://server:9090/metrics`, `probe http://worker:9091/metrics`) for an
+ad-hoc look; [23](23-observability-and-hardening.md) lists them. Traefik's access
+log is off, so `dc logs router` shows operational events, not every visit.
+
+### Monthly checks
+
+Sentry covers outages, errors and backups as they happen. These take a few minutes
+once a month (a calendar reminder works):
+
+```sh
+# The preview wildcard certificate: Sentry's one uptime monitor checks only the dashboard.
+echo | openssl s_client -connect any-label.preview.example.net:443 \
+  -servername any-label.preview.example.net 2>/dev/null | openssl x509 -noout -enddate
+dc logs --since 720h router | grep -ci 'acme.*error'
+# Backups really arrive: about BACKUP_RETENTION_DAYS × 3 files.
+rclone lsf previa-backups:YOUR_BUCKET/production | wc -l
+# Disk, memory, images and caches.
+df -h / /var/lib/docker; free -h; docker system df
+# Operating-system security updates.
+systemctl is-enabled unattended-upgrades; ls /var/run/reboot-required 2>/dev/null
+```
+
+**Expected:** a `notAfter` date more than 30 days away (Traefik renews 30 days
+before expiry), no ACME errors, the backup count steady, disk below 75%, Ubuntu's
+automatic security updates `enabled`, and no `reboot-required` file (if there is
+one, reboot in a maintenance window with the reboot checks of
+[What keeps services running](#what-keeps-services-running-after-you-disconnect)).
+Also glance at Sentry's and GitHub Actions' usage against their free limits, and
+remove old Previa images after a release's rollback window (U5).
 
 ### What scheduled work is live?
 
@@ -1412,125 +1824,6 @@ These run inside the worker through River, not in separate cron containers:
 | Approved outbound connections | Every minute and after every change on the **Outbound** tab; rewrites the egress proxy's approvals, so a removal takes effect within a minute. |
 | Database/config/ACME backup | Host systemd timer; independent of River, described below. |
 | TLS renewal | Traefik ACME; independent of River. |
-
-### Make alerts reach a person
-
-This needs Prometheus, so the `observability` profile. Without it (the VPS-2's
-starter setup), rely on `BACKUP_FAILURE_WEBHOOK` and the external uptime checks
-until you add the profile.
-
-The repository loads **24 alert rules**, including server/worker availability,
-queue delays, build failures, capacity, webhook errors, certificate expiry and
-backup staleness. Prometheus evaluates them, but the stock `prometheus.yml`
-comments out the Alertmanager target. Grafana charts or a firing Prometheus rule
-are not proof that a notification was delivered.
-
-Use an existing reachable Alertmanager, or deploy one separately. The following
-is an **optional host configuration**, not a service already shipped in Compose.
-Select an Alertmanager image version/digest you have tested and an actual receiver
-before running it; consult the [official receiver configuration](https://prometheus.io/docs/alerting/latest/configuration/).
-
-1. Create `/etc/previa/alertmanager.yml`. For a receiver that accepts Alertmanager
-   webhook JSON, a minimal configuration is:
-
-   ```yaml
-   route:
-     receiver: operations
-     group_by: [alertname]
-     group_wait: 30s
-     group_interval: 5m
-     repeat_interval: 4h
-   receivers:
-     - name: operations
-       webhook_configs:
-         - url: https://YOUR_ALERT_RECEIVER/alertmanager
-           send_resolved: true
-   ```
-
-   A Slack/Discord/email receiver needs its native Alertmanager configuration,
-   not this generic webhook payload. Keep receiver credentials in the protected
-   config or mounted credential files; `/etc/previa` is backed up encrypted.
-2. Make that file readable by the non-root user of the example container:
-
-   ```sh
-   chown 65534:65534 /etc/previa/alertmanager.yml
-   chmod 600 /etc/previa/alertmanager.yml
-   PREVIA_ALERTMANAGER_IMAGE='prom/alertmanager:<tested-tag>@sha256:<verified-digest>'
-   # Replace both placeholders above with an actual verified image reference.
-   docker run -d --name previa-alertmanager --restart unless-stopped \
-     --network previa_control --user 65534:65534 \
-     --read-only --cap-drop ALL --security-opt no-new-privileges:true \
-     -v /etc/previa/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro \
-     -v previa_alertmanager:/alertmanager \
-     "$PREVIA_ALERTMANAGER_IMAGE" \
-     --config.file=/etc/alertmanager/alertmanager.yml \
-     --storage.path=/alertmanager --web.listen-address=:9093
-   ```
-
-   There is no published host port. Check container logs/readiness and the
-   writable volume permissions for the selected image.
-3. Copy `/opt/previa/deploy/observability/prometheus.yml` to
-   `/etc/previa/prometheus.yml`. Enable its commented `alerting` block with target
-   `previa-alertmanager:9093`, preserving the existing rule and scrape sections:
-
-   ```yaml
-   alerting:
-     alertmanagers:
-       - static_configs:
-           - targets: ["previa-alertmanager:9093"]
-   ```
-
-4. Create `/etc/previa/observability.override.yml` to mount that host-specific
-   Prometheus file, leaving the repository unchanged:
-
-   ```yaml
-   services:
-     prometheus:
-       volumes:
-         - /etc/previa/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-   ```
-
-   Prometheus's config must be readable inside its container, for example mode
-   644 with no secrets embedded in that file. Redefine `dc` with the override for
-   subsequent operations on this host:
-
-   ```sh
-   dc() {
-     docker compose -p previa \
-       -f /opt/previa/deploy/production/compose.yml \
-       -f /etc/previa/observability.override.yml \
-       --env-file /etc/previa/previa.env --profile observability "$@"
-   }
-   dc up -d --force-recreate --no-deps prometheus
-   probe http://previa-alertmanager:9093/-/ready
-   probe http://prometheus:9090/api/v1/alertmanagers
-   ```
-
-   If you already use an external Alertmanager, use its private reachable
-   address instead and omit the container. Keep the override documented for a
-   restore. The base backup/restore scripts still use their own base Compose
-   command; this monitoring-only override does not change PostgreSQL.
-5. Send a synthetic alert through the selected Alertmanager and verify receipt
-   and resolution in the actual receiver. For the private container example:
-
-   ```sh
-   probe -H 'Content-Type: application/json' \
-     -d '[{"labels":{"alertname":"PreviaNotificationTest","severity":"info"},"annotations":{"summary":"Previa alert delivery test"}}]' \
-     http://previa-alertmanager:9093/api/v2/alerts
-   ```
-
-   Allow the configured grouping delay, check the notification, then confirm it
-   resolves. This tests Alertmanager-to-receiver delivery; separately verify that
-   Prometheus discovers Alertmanager and that a real test rule reaches it on
-   staging. Do not stop live services merely to test a notification.
-
-Use the external uptime check and host checks above alongside actual
-Alertmanager delivery. Prometheus and Alertmanager on the same failed VPS cannot
-report that whole-host outage. PostgreSQL/node/container exporters and Loki are
-not currently in the supplied stack; deployment of those is an additional choice.
-
-Use [23 · Observability](23-observability-and-hardening.md) for metric details and
-[24 · Incident runbook](24-incident-runbook.md) to respond to a firing alert.
 
 ## Backups and restore
 
@@ -1732,6 +2025,10 @@ previa-config-20261006T023000Z.tar.gz.age
 5. Only after all steps succeed, writes `last-success` atomically. The server
    exports that file's modification time as
    `previa_backup_last_success_timestamp_seconds`.
+6. With `SENTRY_DSN` set, it checks in with Sentry's cron monitor `previa-backup`:
+   *in progress* when it starts (creating the monitor on the first run), then *ok*
+   after step 5 or *error* on any failure. A check-in that cannot be sent is
+   reported in the service log and never fails the backup.
 
 Only encrypted files are uploaded. A failed run can leave partial files on the
 remote; do not assume one `.dump.age` file means the entire three-file set
@@ -1758,11 +2055,12 @@ so keep custom schedules in a systemd drop-in.
 
 ### Backup failure, retention and recovery objectives
 
-`PreviaBackupStale` fires when the last complete backup is over 26 hours old;
-`PreviaBackupNeverRecorded` covers a missing timestamp after its grace period.
-Those notifications still require configured alert delivery. Optional
-`BACKUP_FAILURE_WEBHOOK` receives the script's failure message even without
-Alertmanager, provided the host and outbound connectivity are still alive.
+Sentry's cron monitor `previa-backup` emails you (through S4's alert rule) when a
+run checks in *error*, and when no run checks in within a day plus the 60-minute
+margin, which also covers a disabled timer, a stopped server or a host that cannot
+reach the internet. It cannot tell a run that wrote all three archives from one
+that wrote them to the wrong place, so look at the bucket after configuration
+changes.
 
 If a run fails:
 
@@ -1906,9 +2204,10 @@ and install the **chosen recovery release** at `/opt/previa` using Steps 0–3.
 This primary recovery path uses the logical R2 archives, not an assumption
 that a provider disk snapshot contains the latest PostgreSQL state.
 
-Record the replacement's ID/IP, attach the firewall, verify SSH and disk
-capacity, and keep the backup timer stopped. The replacement has a new IPv4;
-DNS moves to it only at the cutover below.
+Record the replacement's ID/IP, join it to Tailscale and close port 22
+(Step 3), verify SSH and disk capacity, and keep the backup timer stopped. The replacement has a new IPv4;
+DNS moves to it only at the cutover below. Remove the old server from your
+tailnet and its deploy key from GitHub once it is retired.
 Recover root's rclone access from offline credentials; this config was not in
 the default archive. The bucket and its endpoint stay the same even though
 the server changed.
@@ -1968,8 +2267,8 @@ restrictive file permissions. Do not delete production ACME state as part of
 routine recovery; restoring a staging archive with a production env setting is
 not a substitute for valid production issuance.
 
-Pull/build all three release images, run the two `check-config` commands, and
-start the database/router prerequisites:
+Build all three images from the recovery release's checkout (Step 7), run the two
+`check-config` commands, and start the database/router prerequisites:
 
 ```sh
 dc up -d --wait postgres router
@@ -1977,9 +2276,8 @@ dc up -d --wait postgres router
 
 Then follow B5's route-file preparation and database restore command. On a fresh
 host there may be no preview route file to move; on an existing host that step
-removes the old route version. Bring back monitoring with
-`dc up -d --wait` **while the file still says `BUILDS_PAUSED=true`**, and restore
-any optional monitoring override/Alertmanager service. Validate internal readiness,
+removes the old route version. Bring back the stack with
+`dc up -d --wait` **while the file still says `BUILDS_PAUSED=true`**. Validate internal readiness,
 external HTTPS, GitHub delivery, repository-secret decryption and a real test
 preview. For a replacement server, finish the public cutover deliberately:
 
@@ -1987,8 +2285,8 @@ preview. For a replacement server, finish the public cutover deliberately:
    from your workstation:
 
    ```sh
-   curl --resolve previa.example.com:443:YOUR_NEW_SERVER_IPV4 \
-     -fsS -D - -o /dev/null https://previa.example.com/
+   curl --resolve previa.live:443:YOUR_NEW_SERVER_IPV4 \
+     -fsS -D - -o /dev/null https://previa.live/
    ```
 
    This preserves the hostname/TLS check while selecting the new IP. If the
@@ -1999,12 +2297,12 @@ preview. For a replacement server, finish the public cutover deliberately:
    A records to the new address; lowering their TTL a day ahead makes the
    switch quicker.
 3. Verify `dig` from outside, normal HTTPS without `-k`, GitHub callback/webhook
-   delivery, preview routing and the external uptime checks. The GitHub registrations can
+   delivery, preview routing and Sentry's uptime monitor. The GitHub registrations can
    retain their URLs when hostnames stay the same. Account for cached DNS and
    any external allowlist that used the old outbound IP.
 4. Rebuild missing previews through authorized requests, resume deliberately and
-   take a complete new R2 backup. Enable the timer and verify the uptime checks
-   and the firewall cover the replacement server.
+   take a complete new R2 backup. Enable the timer and confirm Sentry's uptime
+   and cron monitors are green for the replacement server.
 5. Keep the retired host stopped while validating recovery. Preserve needed
    evidence/backups before deleting it; inspect separately billed resources
    such as the old VPS's subscription and its backup options; terminate them
@@ -2014,11 +2312,13 @@ The live DB still has private hostname `postgres`; replacing the server does not
 require changing it into a public IP or an R2 URL. Data after the selected
 dump is not recovered by changing DNS.
 
-Rehearse this on isolated staging infrastructure. A copied production database
-still names production installations/PRs: `BUILDS_PAUSED` does **not** mute GitHub
-reporting or teardown. Use disposable GitHub registrations/repositories and test
-domains, or an isolated drill such as the smoke harness with the App disabled;
-do not let a restore rehearsal report to real production PRs accidentally.
+Rehearse this before launch on the production VPS itself
+([Rehearse recovery before launch](#rehearse-recovery-before-launch)). After
+launch, a copied production database still names production installations/PRs:
+`BUILDS_PAUSED` does **not** mute GitHub reporting or teardown. Rehearse then on a
+server rented by the hour with disposable GitHub registrations/repositories and
+test domains, or an isolated drill such as the smoke harness with the App
+disabled; do not let a restore rehearsal report to real production PRs.
 
 ### Step B7 — Optional OVHcloud backups and snapshots
 
@@ -2077,13 +2377,56 @@ loss of both the VPS and the OVHcloud account. Keep the offline identities and
 the Cloudflare account's recovery codes current, and add a separately controlled
 copy if losing the Cloudflare account must be covered too.
 
+### Rehearse recovery before launch
+
+A backup you have never restored is a guess. Until the first real user signs in,
+the production VPS holds only your test data, so it is the place to rehearse: no
+second server and no extra cost. Do this after Step 10, B4 and S2–S4.
+
+1. **Make something worth restoring.** Keep the disposable test repository from
+   Step 10 connected, with a repository secret and a built preview. Note what you
+   expect back: your sign-in, the workspace, the repository, the secret's name.
+2. **Back up.** `systemctl start previa-backup.service`, then note the timestamp of
+   the three new files (`rclone lsf previa-backups:YOUR_BUCKET/production`).
+   Sentry's `previa-backup` monitor shows the OK check-in.
+3. **Have the recovery material at hand, not on the server:** the age private key,
+   the R2 access key and secret, and this guide.
+4. **Wipe the server.** In the Control Panel, open the VPS and choose **Reinstall
+   my VPS** with Ubuntu 24.04 and your SSH key. The disk is erased; the IPv4
+   address and subscription stay, so DNS needs no change. On your workstation,
+   forget the old host key (`ssh-keygen -R YOUR_SERVER_IP`,
+   `ssh-keygen -R previa-prod-01`); in the Tailscale admin console remove the old
+   `previa-prod-01`; in GitHub delete the old deploy key.
+5. **Recover with [B6](#step-b6--recover-configurationcertificates-or-replace-the-whole-vps)**
+   exactly as for a lost host: Steps 1 and 3 (the `ops` user, a new deploy key, the
+   same release tag, `setup.sh`, Tailscale), root's rclone remote from your copy,
+   the matching encrypted set, the configuration and ACME archives, Step 7's image
+   build, then the database restore with B5's command. Builds stay paused.
+6. **Check what came back:** sign-in, the workspace and repository, the secret
+   listed on its Secrets tab (proof the keyring was restored), the dashboard's
+   certificate without a new issuance, a rebuilt preview after resuming, and
+   Sentry's uptime and cron monitors green after the next backup. Write down how
+   long it took from step 4: that is your real recovery time.
+7. **Rehearse an upgrade and a rollback** on the same host: create a new tag on a
+   `master` commit whose CI passed, follow U1–U5, then return to the previous tag
+   with [Application/image rollback](#applicationimage-rollback-preserving-the-database).
+8. **Decide on gVisor** (MVP-TODO item 19), only if you want it before launch:
+   install gVisor's `runsc`, set `PREVIEW_OCI_RUNTIME=runsc`, recreate the worker
+   and rebuild the test previews; any app that fails stays a reason to leave it
+   off.
+
+After launch, the production VPS holds real data, so rehearse on a server rented
+by the hour instead (a Hetzner CX33 costs a few cents for a few hours, see
+[Providers compared](#providers-compared)), with disposable GitHub registrations
+and test domains, and delete it afterwards.
+
 ## Upgrades and rollback
 
 ### What an upgrade changes
 
-A Previa upgrade changes the selected checkout, three versioned images and,
-possibly, application/River migrations and Compose configuration. Pulling images
-alone does not replace running containers. `dc up` reconciles their definitions;
+A Previa upgrade changes the selected checkout, builds three new versioned images
+from it and, possibly, applies application/River migrations and Compose
+configuration. Building images alone does not replace running containers. `dc up` reconciles their definitions;
 `dc restart` only restarts their existing definitions. Changing only a GitHub
 release or pushing code to GitHub does nothing to the running VPS.
 
@@ -2106,17 +2449,19 @@ before team records exist preserves newly recorded consumption. See
 
 Before touching the host:
 
-1. Confirm the candidate commit passed CI and the release notes describe schema,
-   configuration, third-party image and runtime changes. Test the exact candidate
-   and an upgrade/restore on staging. A successful release workflow alone does
-   not certify these checks.
+1. Confirm the candidate is a tag on a `master` commit whose CI passed, and that
+   its notes describe schema, configuration, third-party image and runtime
+   changes. Run [`make prod-smoke`](#local-staging-smoke-test) against it on your
+   machine. Before launch, the upgrade itself is rehearsed on this VPS; after
+   launch, rehearse risky schema changes on a server rented by the hour.
 2. Record the current checkout commit/tag, server/worker readiness versions,
    actual running image names/digests, schema versions and any host override.
    Keep the previous images available; do not prune them until the rollback
    window has ended.
-3. Confirm you can retrieve/decrypt backups and have the old release artifacts.
-   Decide whether this release supports image rollback on the newer schema or
-   requires a database restore.
+3. Confirm you can retrieve/decrypt backups and that the running version's images
+   are still on the host (`docker image ls 'previa-*'`). Decide whether this
+   release supports image rollback on the newer schema or requires a database
+   restore.
 4. Notify your operators of the intended maintenance and choose a recovery point.
 
 On the VPS, capture non-secret version/state information:
@@ -2170,18 +2515,19 @@ Set `PREVIA_VERSION` to that same tag. Apply documented required settings while
 retaining the database password, encryption keyring, session secret and
 production ACME state. Keep `BUILDS_PAUSED=true` during validation.
 
-For published images:
+Build the new images from the checked-out tag and validate the configuration:
 
 ```sh
 dc config --quiet
-dc --profile images pull
+dc --profile images build server worker egress
 dc run --rm --no-deps server check-config
 dc run --rm --no-deps worker check-config
 ```
 
-For a manual source deployment, replace the pull command with
-`dc --profile images build server worker egress` from the chosen checkout.
-Then, once the running PostgreSQL is healthy, run an explicit migration gate:
+The build runs on the VPS beside the live services; builds are paused (U2), so it
+does not compete with preview builds. The previous version's images stay tagged
+for rollback. Then, once the running PostgreSQL is healthy, run an explicit
+migration gate:
 
 ```sh
 dc run --rm --no-deps migrate
@@ -2228,7 +2574,7 @@ their next build. Readiness probes and new builds use the new proxy at once.
 If the worker cannot start the proxy, it exits with `prepare worker: start the
 egress proxy …` and Docker keeps restarting it, so nothing runs (builds, routing,
 reports and cleanup) until you fix the cause, usually a missing egress image:
-pull it with `dc --profile images pull`, then `dc up -d --wait worker`. The shared container and
+build it with `dc --profile images build egress`, then `dc up -d --wait worker`. The shared container and
 fixed host topology also mean that scaling workers onto another VPS is not
 supported by this deployment; multi-host runtime work needs its own architecture
 and tests.
@@ -2236,7 +2582,7 @@ and tests.
 ### Step U5 — Resume only after live checks pass
 
 Verify public HTTPS, sign-in, GitHub delivery, a disposable build, PR feedback,
-monitoring and cleanup. Check that existing preview routes still work. Then set
+cleanup, and that Sentry shows no new issues from the new release. Check that existing preview routes still work. Then set
 `BUILDS_PAUSED=false` and recreate the worker:
 
 ```sh
@@ -2246,14 +2592,16 @@ systemctl start previa-backup.service
 ```
 
 Record the deployed commit/tag, actual image versions, schema, checks, backup
-stamp and any remaining limitations. Keep the previous release and pre-upgrade
-backup until you no longer need that rollback path.
+stamp and any remaining limitations. Keep the previous release's images and the
+pre-upgrade backup until you no longer need that rollback path; then remove the
+old images (`docker image rm previa-server:OLD_TAG previa-worker:OLD_TAG
+previa-egress:OLD_TAG`; Docker refuses to remove an image a container still uses).
 
 ### If something goes wrong: choose the recovery action
 
 | Failure | First action | Does it need database restoration? |
 | --- | --- | --- |
-| Mistyped env value, wrong key permissions or unreachable registry | Keep builds paused, inspect logs and `check-config`, correct config/files and recreate the affected service. | Usually no. |
+| Mistyped env value, wrong key permissions or a failed image build | Keep builds paused, inspect logs and `check-config`, correct config/files and recreate the affected service. | Usually no. |
 | New application binary is broken, schema is compatible with the previous release | Revert checkout and image tag, keep the current database and keys, recreate server/worker and verify. | No, if compatibility has been verified. |
 | New schema/data change cannot be read safely by previous binaries | Select the previous release and restore the pre-upgrade encrypted backup. | Yes; writes after that recovery point are lost. |
 | Database corruption or accidental deletion | Preserve evidence/readable state, choose a known completed backup and use B5/B6. | Yes. |
@@ -2279,7 +2627,7 @@ PREVIA_PREVIOUS_RELEASE=v0.1.0
 git checkout --detach "$PREVIA_PREVIOUS_RELEASE"
 nano /etc/previa/previa.env
 # Set PREVIA_VERSION to the previous tag; keep BUILDS_PAUSED=true.
-dc --profile images pull
+docker image ls 'previa-*'   # the previous tag's three images are still here
 dc run --rm --no-deps server check-config
 dc run --rm --no-deps worker check-config
 dc up -d --wait --wait-timeout 180
@@ -2287,8 +2635,9 @@ probe http://server:9090/readyz
 probe http://worker:9091/readyz
 ```
 
-Use previous local images/builds instead if this host did not deploy from GHCR.
-Restoring the previous checkout also restores its Compose/config definitions;
+If the previous images were already removed, rebuild them from this checkout with
+`dc --profile images build server worker egress` first. Restoring the previous
+checkout also restores its Compose/config definitions;
 check your host-specific overlay remains compatible. Keep encryption key versions
 needed for data written since the upgrade rather than blindly restoring an old
 keyring. The newer compatible schema stays in place. Handle an upgraded egress
@@ -2395,10 +2744,12 @@ changed env values or a replaced credential mount.
 
 ### When to upgrade the server
 
-Upgrade when the queue says so, not before. `PreviaCapacityOutgrown` fires when
-builds waited for a slot, preview memory or disk over a quarter of the last day;
-Grafana's queue panels and `previa_build_requests{waiting=…}` show the same. Try
-the cheap levers first: `PREVIEW_IDLE_SLEEP`, a shorter `ENV_TTL_HOURS`, and the
+Upgrade when the queue says so, not before. The **Builds** page shows why each
+request waits (a build slot, preview memory or disk); when requests wait for a
+large part of the day, day after day, the server is too small. The server's
+private metrics count them too:
+`probe http://server:9090/metrics | grep previa_build_requests`. Try the cheap
+levers first: `PREVIEW_IDLE_SLEEP`, a shorter `ENV_TTL_HOURS`, and the
 per-account limits. Moving from a VPS-2 to a VPS-3 costs about €3 more a month for
 50% more CPU and memory (prices as of this guide); raise the budgets with it
 (Step 5).
@@ -2407,7 +2758,7 @@ per-account limits. Moving from a VPS-2 to a VPS-3 costs about €3 more a month
 
 First distinguish the constraint: queue concurrency, configured preview budget,
 host CPU/RAM, disk free space and a slow Dockerfile are different bottlenecks.
-Look at `free -h`, `docker stats`, Grafana queue/build panels and waiting reasons.
+Look at `free -h`, `docker stats` and the Builds page's waiting reasons.
 Raising concurrency without resources can make every build slower or exhaust
 memory.
 
@@ -2449,8 +2800,10 @@ implements a distributed preview runtime.
 | Backup and snapshot options | Optional paid options (7-day automated backup, snapshot); review them after their recovery window ends. |
 | Additional disks or IP addresses | Optional, billed separately. Review them when retiring a VPS. |
 | R2 | Encrypted archives: free up to 10 GB of storage a month, no egress fees; beyond that, billed per GB and per operation. |
-| Uptime service | Its plan and notification configuration. |
-| Domains / GitHub packages / notification service | Separate services with their own access and usage rules. |
+| Domains | `previa.live` and the preview domain renew yearly; Cloudflare Registrar renews at cost. |
+| Sentry | Free Developer plan; its usage page shows how close the month is to 5,000 errors and 5 GB of logs. |
+| GitHub Actions | 2,000 free minutes a month for the private repository; **Settings → Billing and plans** shows usage. |
+| Tailscale | Free Personal plan, up to 6 users. |
 
 Check current [OVHcloud VPS prices](https://www.ovhcloud.com/en-ie/vps/) and
 [R2 pricing](https://developers.cloudflare.com/r2/pricing/) for the selected model
@@ -2461,50 +2814,78 @@ contributes to usage.
 ### Maintain the host and prove recovery
 
 Keep Ubuntu, Docker, pinned infrastructure images and Previa releases maintained.
-Use a tested maintenance window for kernel/Docker restarts, with a backup and
-the reboot checks above. Test rootless BuildKit and isolation on staging after
-relevant kernel/runtime updates.
+Use a maintenance window for kernel/Docker restarts, with a backup and the reboot
+checks above. After a kernel or Docker update, build a preview of the Step 10 test
+repository before resuming normal work: it proves rootless BuildKit and isolation
+still work.
 
 Review failed jobs, disk/cache growth, active preview lifetimes, certificate
-renewal, complete backup timestamps and alert recipients routinely. Rehearse an
-R2 restore on a separate, isolated VPS and record the actual recovery
-time/data-loss window. Keep operator SSH/account recovery and offline encryption
+renewal, complete backup timestamps and Sentry's alert email routinely. Rehearse
+an R2 restore at least once a year on a server rented by the hour
+([Rehearse recovery before launch](#rehearse-recovery-before-launch)) and record
+the actual recovery time/data-loss window. Keep operator SSH/account recovery and offline encryption
 identities current. Compose restart policies do not provide automatic failover
 when this single server fails.
 
 ## CI and releases
 
-CI validates and never deploys; a tag publishes a release; an operator deploys it
-by hand. Nothing in GitHub Actions reaches the VPS.
+CI validates and never deploys; a version tag marks a release; the operator
+deploys it by checking it out and building it on the server (U1–U5). Nothing in
+GitHub Actions reaches the VPS.
+
+```mermaid
+flowchart LR
+    main["Push to main<br/>(nothing runs)"] --> pr["Pull request main → master"]
+    pr --> ci["CI on GitHub Actions<br/>about 46 runner minutes"]
+    ci --> merge["Merge; CI runs again on master"]
+    merge --> tag["Tag vX.Y.Z on that master commit<br/>(nothing runs)"]
+    tag --> deploy["On the VPS: check out the tag,<br/>build images, U1–U5"]
+    tag -.->|optional, by hand| release["Release workflow:<br/>GitHub release + GHCR images"]
+```
 
 | Event | Result | Deploys to the VPS? |
 | --- | --- | --- |
-| Open or update a pull request into `master`, merge it (a push to `master`), or **Actions → CI → Run workflow** | `CI` generates, builds, lints, scans and tests; fork pull requests skip the privileged real-Docker suite. | No |
+| Open or update a pull request into `master`, merge it (a push to `master`), or **Actions → CI → Run workflow** | `CI` generates, builds, lints, scans and tests; fork pull requests skip the privileged real-Docker suite. A change to documentation only (`*.md`, `docs/`, `technical-docs/`, `test-docs/`) runs nothing. | No |
 | Push to `main` or any other branch | Nothing runs: `master` is the release branch, and work reaches it through pull requests. | No |
-| Push a tag matching `v*.*.*` (for example `v0.1.0` or `v0.1.0-rc.1`) on a commit in `master` | `Release` drafts a GitHub Release (command archives, checksums, SBOMs) and pushes the three multi-arch images to GHCR. A tag on any other commit stops before anything is built. | No |
-| The operator selects a release on the host and follows [Upgrades and rollback](#upgrades-and-rollback) (or Fresh host setup) | The host runs that release. | **Yes, manually** |
+| Push a tag `vX.Y.Z` | Nothing runs. The tag names the version the server builds. | No |
+| **Actions → Release → Run workflow** from a version tag on `master` (optional) | `Release` drafts a GitHub Release (command archives, checksums, SBOMs) and pushes the three multi-arch images to GHCR. Run from anything but a version tag on `master`, it stops before building. | No |
+| The operator checks out the tag on the VPS and follows [Upgrades and rollback](#upgrades-and-rollback) (or Fresh host setup) | The host builds and runs that release. | **Yes, manually** |
 
-- `Release` does not wait for `CI`: tag only a commit on `master` whose CI run passed.
-- Images are pushed while the release is still a draft; a maintainer reviews and
-  publishes the draft, and nothing changes on the host until it is deployed.
+**Runner minutes.** A private repository on GitHub's free plan has 2,000 Actions
+minutes a month. One CI run used about 46 runner minutes on 2026-10-15 (7, 14, 4
+and 21 minutes for its four jobs), so about 43 runs fit in a month. While a
+`main` → `master` pull request is open, every push to `main` starts a new run (the
+older one is cancelled, but its minutes are spent), so open that pull request when
+the work is ready to release. When the minutes run out, CI stops until the next
+month unless you set a budget.
+
+**Tagging a release** (the owner, on a workstation):
+
+```sh
+git switch master
+git pull --ff-only origin master
+git log -1 --format='%H %s'     # the commit whose CI run passed
+git tag -a v0.1.0 -m "Previa v0.1.0"
+git push origin v0.1.0
+```
+
+Use a new, unused version each time; never move a tag that a server has built.
+
 - Production secrets (OAuth and App keys, database password, DNS token, keyring,
-  backup identity) never enter the workflows; they use the built-in `GITHUB_TOKEN`
-  and a disposable PostgreSQL.
-- Before the first release: enable Actions, make `master` the default branch and
-  protect it (pull requests only, CI checks required, no force pushes; on a
-  private repository GitHub enforces this only on a paid plan), create the
-  `release` environment with reviewers, and decide whether the GHCR
-  packages are public (a private one needs a read credential on the host).
+  backup identity, Sentry DSN) never enter the workflows; they use the built-in
+  `GITHUB_TOKEN` and a disposable PostgreSQL.
+- Before the first release: enable Actions and make `master` the default branch.
+  Branch protection ("pull requests only, CI required") is enforced on a private
+  repository only on a paid plan; on the free plan it is a habit, not a rule. The
+  `release` environment matters only for the optional Release workflow.
 
 Block by block: [CI in action](../technical-docs/ci-in-action.md) (each job, how to
 use the pipeline and
 [what a passing run establishes](../technical-docs/ci-in-action.md#10-what-a-passing-run-establishes))
-and [CD in action](../technical-docs/cd-in-action.md) (the Release workflow,
-GoReleaser and the Dockerfile,
-[how to publish a release](../technical-docs/cd-in-action.md#8-how-to-publish-a-release),
-[how it reaches the host](../technical-docs/cd-in-action.md#9-how-a-release-reaches-the-host),
-[which credentials go where](../technical-docs/cd-in-action.md#11-which-credentials-go-where)
-and [what a future automatic deployment would need](../technical-docs/cd-in-action.md#12-automation-boundaries-and-troubleshooting)).
+and [CD in action](../technical-docs/cd-in-action.md) (tags, building on the host,
+the optional Release workflow, GoReleaser and the Dockerfile,
+[how a release reaches the host](../technical-docs/cd-in-action.md#9-how-a-release-reaches-the-host)
+and [which credentials go where](../technical-docs/cd-in-action.md#11-which-credentials-go-where)).
 
 ## Local staging smoke test
 
@@ -2521,18 +2902,19 @@ The harness uses the production Compose file plus `compose.smoke.yml`, project
 rehearses startup, security headers, private listeners, metrics, graceful stops,
 core-image upgrade/rollback and encrypted database backup/restore. It is not a
 hosted GitHub or real Let's Encrypt test. It also does not prove rolling out a
-changed egress proxy to surviving real previews.
+changed egress proxy to surviving real previews. It still starts the optional
+`observability` profile, so that profile keeps working for a later move, although
+production does not run it; it sends nothing to Sentry (no `SENTRY_DSN`).
 
 `SMOKE_OLD_DUMP` can name an older `pg_dump -Fc` file for the older-schema restore
 drill. `SMOKE_KEEP=1` retains the isolated stack for inspection rather than normal
 cleanup. Use disposable data and a separate host; the harness is not a production
 backup or acceptance substitute.
 
-The tracked `smoke.sh` asserts Goose schema **20** after initial migration,
-upgrade and an optional older-backup restore, matching
-`internal/platform/database/schema.go` and the current migration set. When adding
-a migration, update those three expectations alongside the application's schema
-requirement.
+`smoke.sh` reads the required Goose schema from
+`internal/platform/database/schema.go` and the alert count from
+`deploy/observability/alerts.yml`, and asserts that schema after the initial
+migration, the upgrade and an optional older-backup restore.
 
 **Expected:** `smoke test passed: 40 checks` (43 with `SMOKE_OLD_DUMP`, 33 without
 `age`). Run it against the exact candidate images before treating its gate as
@@ -2544,9 +2926,10 @@ candidate.
 - Use a host dedicated to Previa. The worker's Docker socket is root-equivalent
   access by design; the server, router, builders and previews are not given that
   socket. Do not share the daemon with unrelated sensitive workloads.
-- Keep ports 5432, 8080, 8082, 9090/9091, Prometheus and Alertmanager private.
-  Grafana's host binding stays loopback. Only SSH and Traefik 80/443 are required
-  inbound on this host; preview container ports are never published individually.
+- Keep ports 5432, 8080, 8082 and 9090/9091 private. Only Traefik's 80/443 are
+  open to the internet; SSH is reachable only over Tailscale, with keys only, and
+  OVHcloud's KVM console is the emergency path. Preview container ports are never
+  published individually.
 - Untrusted previews run on their own networks, with non-root/read-only defaults,
   bounded resources and public-address-only proxy egress. Rootless BuildKit has
   its own documented namespace/security-profile requirements; it is not granted
@@ -2554,8 +2937,14 @@ candidate.
 - Previews serve untrusted code publicly from this host; follow
   [Account safety](#account-safety-abuse-reports) so abuse reports about a preview
   do not cost you the host account.
-- Keep previews on a separate registrable domain. Previa uses host-only secure
-  session cookies; do not put the dashboard beneath the wildcard preview domain.
+- Keep previews on their own registrable domain, apart from `previa.live`
+  ([Step 2](#step-2--set-up-domains-dns-and-the-dns-token)). Previa uses host-only
+  `__Host-` session cookies; do not put the dashboard beneath the wildcard preview
+  domain.
+- Sentry receives only the control plane's redacted warnings and errors, never a
+  preview's output. The deploy key reads one repository and cannot push; the
+  Cloudflare DNS token edits only the preview zone; the R2 token reaches only the
+  backup bucket.
 - Add repository secrets through the authenticated **repository Secrets** UI,
   not the production control-plane env file. They are encrypted in PostgreSQL,
   injected only into authorized preview runtimes, withheld from fork sources and
@@ -2585,20 +2974,21 @@ candidate.
 | [README](../README.md), [DESIGN](../DESIGN.md) | Single-VPS architecture, PostgreSQL/River, runtime isolation and scope. |
 | [Production Compose](../deploy/production/compose.yml) | Services, profiles, health dependencies, mounts, ports, resources and pinned images. |
 | [Production env template](../deploy/production/previa.env.example), [config loaders](../internal/platform/config/config.go) | Required/generated settings, defaults, file checks and production validation. |
-| [Setup script](../deploy/production/setup.sh) | Packages, directory ownership, generated secrets, Docker group and backup timer. |
-| [Dockerfile](../Dockerfile), [GoReleaser](../.goreleaser.yaml) | Embedded presentation, image targets, static commands and release archives. |
+| [Setup script](../deploy/production/setup.sh) | Packages (Docker, Tailscale, pinned lazydocker), the SSH rule that stays on Tailscale, directory ownership, generated secrets, Docker group and backup timer. |
+| [Dockerfile](../Dockerfile), [GoReleaser](../.goreleaser.yaml) | Embedded presentation, the image targets the server builds, static commands and the optional release archives. |
 | [Server](../internal/app/server.go), [worker](../internal/app/worker.go), [pipeline](../internal/app/pipeline.go) | Webhooks/queue production, actual execution dependencies, capabilities, startup and shutdown. |
 | [Runtime hardening](../internal/runtime/hardening.go), [builder](../internal/builds/sandbox.go), [egress lifecycle](../internal/platform/egress/gateway.go) | Dynamic Docker objects, restart policies, resource boundaries, and proxy reuse and replacement. |
 | [Routing](../internal/routing/controller.go), [housekeeping schedules](../internal/housekeeping/settings.go) | Accepted routes, reconciliation/expiry/pruning and recovery. |
 | [Backend preview services](../internal/runtime/services.go), [outbound approvals](../internal/outbound/) | Per-candidate PostgreSQL/Redis, setup and processes; approved outbound connections and their refresh. |
-| [Metrics](../internal/platform/metrics/metrics.go), [state collection](../internal/app/observe.go), [River observations](../internal/platform/queue/observe.go) | Traffic/build/job counters, queue state, capability and backup gauges. |
-| [Prometheus](../deploy/observability/prometheus.yml), [alerts](../deploy/observability/alerts.yml), [Grafana](../deploy/observability/grafana/dashboards/previa.json) | Actual scrape targets, missing alert-delivery configuration and provisioned panels. |
-| [Backup](../deploy/production/backup.sh), [restore](../deploy/production/restore.sh) | Local PostgreSQL target, encrypted artifacts, retention, destructive restore and paused startup. |
+| [Error reporting](../internal/platform/errortracking/errortracking.go), [server](../cmd/server/main.go) and [worker](../cmd/worker/main.go) entry points, [logging](../internal/platform/logging/logging.go) | Redacted warnings and errors to Sentry, `check-config`'s DSN check, `sentry-test`. |
+| [Metrics](../internal/platform/metrics/metrics.go), [state collection](../internal/app/observe.go), [River observations](../internal/platform/queue/observe.go) | Traffic/build/job counters, queue state, capability and backup gauges, served privately. |
+| [Prometheus](../deploy/observability/prometheus.yml), [alerts](../deploy/observability/alerts.yml), [Grafana](../deploy/observability/grafana/dashboards/previa.json) | The optional observability profile this deployment does not run. |
+| [Backup](../deploy/production/backup.sh), [restore](../deploy/production/restore.sh) | Local PostgreSQL target, encrypted artifacts, retention, Sentry check-ins, destructive restore and paused startup. |
 | [Migration runner](../internal/app/migrate.go), [schema requirement](../internal/platform/database/schema.go) | Forward-only embedded migrations and the current schema gate. |
-| [CI](../.github/workflows/ci.yml), [Release](../.github/workflows/release.yml) | Exact triggers, jobs, tokens, draft artifacts and absence of deployment automation. |
+| [CI](../.github/workflows/ci.yml), [Release](../.github/workflows/release.yml) | Exact triggers (documentation-only changes skipped; Release manual from a tag), jobs, tokens, draft artifacts and absence of deployment automation. |
 | [Smoke harness](../deploy/production/smoke.sh), [release report](26-release-report.md) | Candidate rehearsal, historical local evidence and live acceptance work. |
 
 For daily actions use [22 · Operating the MVP](22-mvp-operations.md); for response
-to failures use [24 · Incident runbook](24-incident-runbook.md). This runbook expands
-the implemented deployment; it does not change its architecture, add deployment
-code, or claim that any external infrastructure has been provisioned.
+to failures use [24 · Incident runbook](24-incident-runbook.md). This runbook
+describes the final production arrangement and the code and scripts behind it; it
+does not claim that any external infrastructure has been provisioned.

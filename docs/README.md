@@ -26,9 +26,9 @@ rest explain how and why it works.
 | 20 | [Realtime updates](20-realtime-updates.md) | Live dashboard updates with triggers, LISTEN/NOTIFY and SSE. |
 | 21 | [UI architecture](21-ui-architecture.md) | Templ/HTMX structure, theme, navigation, progressive enhancement. |
 | 22 | [Operating the MVP](22-mvp-operations.md) | What server and worker do, the capability and configuration matrix, queues and draining, running the full pipeline, what is proven and the live proofs still required. |
-| 23 | [Observability and hardening](23-observability-and-hardening.md) | Logs, metrics, readiness, dashboards and alerts; ingress controls, production mode, the kill switch and dependency checks. |
-| 24 | [Incident runbook](24-incident-runbook.md) | What to do for each alert: outages, backlogs, failures, disk, backups, certificates, key rotation. |
-| 25 | [Production deployment](25-production-deployment.md) | Release images, host setup, GitHub and DNS, staged certificates, backups and restore, upgrades and rollback, CI and releases, the smoke test. |
+| 23 | [Observability and hardening](23-observability-and-hardening.md) | Logs, Sentry error reporting, metrics, readiness, the optional dashboards and alert rules; ingress controls, production mode, the kill switch and dependency checks. |
+| 24 | [Incident runbook](24-incident-runbook.md) | What to do for each Sentry signal or alert: outages, backlogs, failures, disk, backups, certificates, key rotation. |
+| 25 | [Production deployment](25-production-deployment.md) | The final setup at a glance (components, diagrams, cost, capacity), host setup with Tailscale, domains and DNS, images built from a release tag, Sentry monitoring, logs and day-to-day checks, backups and a pre-launch restore rehearsal, upgrades and rollback, CI and releases, the smoke test. |
 | 26 | [Release report](26-release-report.md) | Evidence for each release acceptance item: what passed, how, and what is still pending. |
 | 27 | [Roadmap](27-roadmap.md) | Prompts 1–13 (13: backend previews), the planned Prompt 14 (missed uninstall detection), and the release checklist. |
 | 28 | [Shared team workspaces](28-shared-workspaces.md) | Roles, repository grants, invitation consent, ownership handover, revocation, shared quotas and migration cutover. |

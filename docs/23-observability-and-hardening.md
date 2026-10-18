@@ -2,8 +2,9 @@
 
 How an operator sees what Previa is doing and how it fails, and what protects the
 dashboard and its processes in production: structured, correlated, redacted logs;
-bounded Prometheus metrics; liveness and readiness on an internal listener; a
-Grafana dashboard and alert rules; ingress controls, security headers and
+errors and warnings reported to Sentry, which also watches uptime and the backup;
+bounded Prometheus metrics; liveness and readiness on an internal listener; an
+optional Grafana dashboard and alert rules; ingress controls, security headers and
 production mode; the execution kill switch; and dependency checks. What to do when
 an alert fires is in [24](24-incident-runbook.md); how it all runs on a host is in
 [25](25-production-deployment.md).
@@ -16,6 +17,7 @@ an alert fires is in [24](24-incident-runbook.md); how it all runs on a host is 
 | Who exports durable state (queue depth, environments, operations, workers) | The **server**, read from PostgreSQL at scrape time (at most every 10 s, 3 s timeout) | The server keeps running when no worker does, which is exactly when queue depth matters; one exporter means no double counting. |
 | Metric labels | Only fixed sets or code-defined names; anything else becomes `other` | PR IDs, URLs, hostnames and secrets never become label values, so cardinality stays bounded whatever users do. |
 | Headline number | `previa_request_to_preview_seconds`: from a request becoming eligible (after Automatic's quiet period) to its preview serving | DESIGN §18 names webhook-to-running-preview latency the headline; the deliberate quiet period is not latency. |
+| Production alerting | **Sentry's free plan**, fed by the same redacted logger: error records become issues (emailed when new or returning), warnings and errors become searchable logs; Sentry also checks the dashboard from outside and receives the backup's check-ins | It runs outside the server, so it also reports a dead host, and needs nothing installed; on an 8 GB server, Prometheus and Grafana would take up to 1.5 GiB and still need an Alertmanager and a receiver. |
 | Redaction | At the logging layer, by key (`secret`, `token`, `password`, `authorization`, `cookie`, `private_key`, `credential`, `dsn`, …) and by shape (GitHub tokens, bearer/basic credentials, PEM keys, URL passwords) in messages, strings and errors | A last line of defence; code still never logs secrets. |
 | Content-Security-Policy | A per-request nonce; no `unsafe-inline`, no `unsafe-eval`; HTMX configured not to inject styles or evaluate code | The one inline script (theme boot) carries the nonce; injected speculation rules reuse it. |
 | Production mode | `APP_ENV=production` turns on checks a developer machine cannot always meet | WSL's `/mnt/c` reports every file as world-readable; production must not accept that. |
@@ -36,6 +38,24 @@ correlation fields:
 
 `docker compose logs worker | grep '"pr_id":42'` follows one pull request through
 discovery, admission, build, publication and reports.
+
+### Errors and logs in Sentry
+
+With `SENTRY_DSN` set, the server and the worker also hand every record at
+`warn` or above, after redaction, to `internal/platform/errortracking`, whatever
+`LOG_LEVEL` says:
+
+- **every warning and error** goes to Sentry **Logs**, with its attributes;
+- **every error** also becomes a Sentry event named by its message (so Sentry
+  groups it into an issue), with the correlation fields as context, tags
+  `process` (`server` or `worker`), the environment (`APP_ENV`) and the release.
+
+A malformed DSN fails `check-config`; at startup it is logged as `error reporting
+is off` and the process runs on without reporting. `previa-server sentry-test`
+sends one test error and waits until Sentry accepted it. Without a DSN nothing
+leaves the process. The egress proxy and one-shot commands do not report, and a
+preview app's own output never reaches Sentry. How Sentry is set up and what it
+emails is in [25](25-production-deployment.md#monitoring-with-sentry).
 
 ## Metrics
 
@@ -94,8 +114,10 @@ requests, operations, housekeeping, disk, GitHub, webhooks, HTTP, streams, backu
 age and certificate expiry). `make observability-check` validates the rules,
 runs their tests, checks the Prometheus configuration and parses every dashboard
 query with the pinned promtool. The production Compose file runs both under the
-`observability` profile; delivering alerts needs an Alertmanager the operator
-configures ([25](25-production-deployment.md)).
+optional `observability` profile, which the production deployment does not run:
+its alerts go through Sentry instead ([25](25-production-deployment.md#monitoring-with-sentry)).
+The rules below stay tested so the profile can be enabled later, and
+[24](24-incident-runbook.md) names them in each section.
 
 | Alert | Fires when |
 | --- | --- |
@@ -156,8 +178,12 @@ images for fixable HIGH and CRITICAL vulnerabilities ([25](25-production-deploym
 
 ## What was verified
 
-- Unit tests: redaction by key and shape, correlation fields, levels
-  (`internal/platform/logging`); bounded labels and the state collector keeping its
+- Unit tests: redaction by key and shape, correlation fields, levels, extra
+  handlers receiving only redacted records at their own level
+  (`internal/platform/logging`); errors becoming one Sentry issue each with their
+  context and tags, warnings only logs, no DSN reporting nothing, a malformed DSN
+  refused, the test command (`internal/platform/errortracking`, against Sentry's
+  mock transport); bounded labels and the state collector keeping its
   last snapshot (`metrics`); client IP from trusted proxies only, host and
   forwarded-host validation, the nonce policy and headers, body limits, per-client
   rate limits and their memory bound, the webhook concurrency cap, `/livez`,
@@ -178,7 +204,9 @@ images for fixable HIGH and CRITICAL vulnerabilities ([25](25-production-deploym
 
 ## Not done here
 
-- Alert delivery (an Alertmanager and a receiver are the operator's choice).
+- Delivery of the optional Prometheus rules' alerts (an Alertmanager and a
+  receiver); production alerts go through Sentry. Sentry delivery itself is
+  proven on the live host (`sentry-test`, docs/25 S2–S4), not here.
 - Optional OpenTelemetry tracing (DESIGN §18 lists it as optional).
 - Every live proof in [22](22-mvp-operations.md#live-proofs-still-required-before-a-public-rollout)
   and [26](26-release-report.md).

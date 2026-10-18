@@ -75,3 +75,54 @@ func TestLevels(t *testing.T) {
 		t.Fatalf("level not applied: %s", out.String())
 	}
 }
+
+// collector keeps the records it is enabled for, as an error reporter would.
+type collector struct {
+	min     slog.Level
+	attrs   []slog.Attr
+	records *[]slog.Record
+}
+
+func (c collector) Enabled(_ context.Context, level slog.Level) bool { return level >= c.min }
+
+func (c collector) Handle(_ context.Context, r slog.Record) error {
+	r.AddAttrs(c.attrs...)
+	*c.records = append(*c.records, r)
+	return nil
+}
+
+func (c collector) WithAttrs(attrs []slog.Attr) slog.Handler {
+	c.attrs = append(append([]slog.Attr{}, c.attrs...), attrs...)
+	return c
+}
+
+func (c collector) WithGroup(string) slog.Handler { return c }
+
+func TestExtraHandlersGetRedactedRecordsAtTheirOwnLevel(t *testing.T) {
+	var out bytes.Buffer
+	var reported []slog.Record
+	logger, err := New(&out, "error", collector{min: slog.LevelWarn, records: &reported})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := With(context.Background(), slog.String("job_kind", "build"))
+	logger = logger.With("api_token", "hunter2")
+	logger.InfoContext(ctx, "quiet")
+	logger.WarnContext(ctx, "slow")
+	logger.ErrorContext(ctx, "failed", "error", errors.New("dial postgres://previa:s3cret@db/previa"))
+
+	if strings.Contains(out.String(), "slow") || !strings.Contains(out.String(), "failed") {
+		t.Fatalf("the JSON output ignored its own level: %s", out.String())
+	}
+	if len(reported) != 2 || reported[0].Message != "slow" || reported[1].Message != "failed" {
+		t.Fatalf("the extra handler got %d records; want the warning and the error", len(reported))
+	}
+	fields := map[string]string{}
+	reported[1].Attrs(func(a slog.Attr) bool {
+		fields[a.Key] = a.Value.String()
+		return true
+	})
+	if fields["job_kind"] != "build" || fields["api_token"] != Redacted || strings.Contains(fields["error"], "s3cret") {
+		t.Fatalf("the extra handler saw unredacted or uncorrelated fields: %v", fields)
+	}
+}

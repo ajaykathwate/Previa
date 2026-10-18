@@ -13,11 +13,12 @@ The full pipeline runs end to end as an operational **local/staging** MVP: the
 worker composes source fetching, isolated builds, hardened previews, fenced HTTPS
 routing, PR feedback, durable teardown and housekeeping from validated settings, and
 the dashboard's Build, Retry, Rebuild and Tear down controls drive it. It is
-observable (correlated logs, Prometheus metrics, readiness, a Grafana dashboard
-and alerts), hardened for production, and packaged as release images with a
-production Compose file, host setup, encrypted backups with a rehearsed restore,
-CI and releases. Live proofs against hosted GitHub, real DNS and a real host remain
-before a public rollout. See [operating the MVP](docs/22-mvp-operations.md),
+observable (correlated, redacted logs; errors, uptime and backup checks reported
+to Sentry; private Prometheus metrics and readiness), hardened for production, and
+packaged with a production Compose file whose images the server builds from a
+release tag, host setup, encrypted backups with a rehearsed restore, and CI.
+Live proofs against hosted GitHub, real DNS and a real host remain before a public
+rollout. See [operating the MVP](docs/22-mvp-operations.md),
 [production deployment](docs/25-production-deployment.md), the
 [release report](docs/26-release-report.md) and the [roadmap](docs/27-roadmap.md). Start with the [documentation index](docs/README.md)
 for a guided reading order. Quick references: [tech stack](technical-docs/tech-stack.md),
@@ -503,8 +504,8 @@ forward ([docs/12-routing-and-https.md](docs/12-routing-and-https.md)).
 | Container runtime | Docker Engine, hardened, optionally gVisor |
 | Image builds | BuildKit |
 | Frontend | templ + HTMX + SSE + Tailwind |
-| Deployment | Single VPS, Docker Compose |
-| Observability | Prometheus + Grafana (+ optional OpenTelemetry) |
+| Deployment | Single VPS (OVHcloud VPS-2), Docker Compose, images built on the server from a release tag; Cloudflare DNS and R2 backups; SSH over Tailscale |
+| Observability | `slog` logs and Sentry (errors, logs, uptime and backup monitors, email alerts); private Prometheus metrics (Prometheus + Grafana optional, + optional OpenTelemetry) |
 
 ### 4.3 Libraries in detail
 
@@ -532,6 +533,7 @@ forward ([docs/12-routing-and-https.md](docs/12-routing-and-https.md)).
 - Styling: Tailwind CSS via the standalone CLI (no Node toolchain needed)
 
 **Observability**
+- Errors, logs and alerts: `github.com/getsentry/sentry-go` (and its `slog` integration), sending the already-redacted warnings and errors to Sentry
 - Metrics: `github.com/prometheus/client_golang`
 - Tracing (optional): OpenTelemetry Go SDK
 
@@ -645,7 +647,7 @@ each one turns on, and what happens without it, is in
 [docs/22-mvp-operations.md](docs/22-mvp-operations.md).
 
 - `DATABASE_URL`
-- `APP_ENV` (`development` or `production`), `LOG_LEVEL`, `INTERNAL_ADDR` / `WORKER_INTERNAL_ADDR` (internal health and metrics listeners), `TRUSTED_PROXIES`, `BACKUP_STATUS_FILE` (server), `BUILDS_PAUSED` (worker; the execution kill switch); see [docs/23-observability-and-hardening.md](docs/23-observability-and-hardening.md)
+- `APP_ENV` (`development` or `production`), `LOG_LEVEL`, `SENTRY_DSN` (server and worker report warnings and errors to Sentry; the backup checks in with it), `INTERNAL_ADDR` / `WORKER_INTERNAL_ADDR` (internal health and metrics listeners), `TRUSTED_PROXIES`, `BACKUP_STATUS_FILE` (server), `BUILDS_PAUSED` (worker; the execution kill switch); see [docs/23-observability-and-hardening.md](docs/23-observability-and-hardening.md)
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
 - `APP_BASE_URL` (server; also the worker once previews are routed: unknown preview hosts redirect to it)
@@ -659,19 +661,23 @@ each one turns on, and what happens without it, is in
 
 ### 4.9 Infrastructure and deployment
 
-- One VPS (OVHcloud VPS-2 or similar) running Docker; control plane (Go server, worker, Postgres, Traefik) via Docker Compose
-- DNS: a wildcard A record (`*.preview.yourdomain.com`) pointing at the VPS
-- Provisioning: Terraform for the VPS and DNS, or a documented setup script for the MVP
-- CI/CD: GitHub Actions for tests and image builds; `goreleaser` for versioned releases
-- Backups: nightly `pg_dump` to object storage
+- One VPS (OVHcloud VPS-2) running Docker; control plane (Go server, worker, Postgres, Traefik) via Docker Compose
+- DNS on Cloudflare: `previa.live` for the landing page and dashboard, and a wildcard A record (`*.preview.<preview domain>`) on a separate registrable domain, both pointing at the VPS
+- Provisioning: a documented setup script, no Terraform (one server)
+- CI/CD: GitHub Actions runs CI on pull requests into `master`; a version tag marks a release, and the operator checks it out on the server and builds the images there (GoReleaser and GHCR publishing stay available as a manual, optional workflow)
+- Backups: nightly `pg_dump` to object storage (Cloudflare R2)
+- Monitoring: Sentry's free plan (errors and logs from the server and worker, an uptime monitor, the backup's cron monitor, email alerts)
+- Access: SSH only over Tailscale (port 22 closed to the internet); lazydocker for containers and logs
 
 Implemented as [docs/25-production-deployment.md](docs/25-production-deployment.md)
-describes: `deploy/production/compose.yml` (PostgreSQL, a migration step, server,
-worker, Traefik, optional Prometheus and Grafana), release images from the
-`Dockerfile`, the documented setup script `deploy/production/setup.sh` (Terraform
-is optional and not provided), GitHub Actions CI and tag-driven releases with
-GoReleaser, and a nightly `pg_dump` encrypted with age before it is copied to
-object storage through rclone, with a scripted, rehearsed restore.
+describes, at about €8 a month plus VAT: `deploy/production/compose.yml`
+(PostgreSQL, a migration step, server, worker, Traefik; Prometheus and Grafana as
+an optional profile production does not run), images built on the server from the
+`Dockerfile` of the checked-out tag, the setup script `deploy/production/setup.sh`
+(Docker, Tailscale, lazydocker, firewall, secrets, backup timer), GitHub Actions
+CI, error reporting in `internal/platform/errortracking`, and a nightly `pg_dump`
+encrypted with age before it is copied to R2 through rclone and checked in with
+Sentry, with a scripted, rehearsed restore.
 
 ### 4.10 Operational limits to set on day one
 

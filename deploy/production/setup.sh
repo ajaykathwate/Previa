@@ -6,12 +6,15 @@
 #   sudo deploy/production/setup.sh
 #
 # It is idempotent and never overwrites an existing /etc/previa/previa.env.
-# It installs Docker Engine, age and rclone; allows the user namespaces that
-# rootless image builds need (Ubuntu 24.04); opens only SSH, HTTP and HTTPS;
-# creates the directories and file modes Previa expects; generates the
-# secrets it can (session, database, webhook, repository-secrets key); and
-# installs the nightly backup timer. Values that come from outside (GitHub
-# App, domains, DNS token, backup recipient) are left for the operator.
+# It installs Docker Engine, age, rclone, Tailscale (for SSH; joining the
+# tailnet is the operator's `tailscale up`) and lazydocker (a terminal view of
+# containers and logs); allows the user namespaces that rootless image builds
+# need (Ubuntu 24.04); opens only SSH, HTTP and HTTPS, keeping SSH on
+# Tailscale only once the operator has moved it there; creates the
+# directories and file modes Previa expects; generates the secrets it can
+# (session, database, webhook, repository-secrets key); and installs the
+# nightly backup timer. Values that come from outside (GitHub App, domains,
+# DNS token, backup recipient, Sentry DSN) are left for the operator.
 set -Eeuo pipefail
 umask 022
 
@@ -27,6 +30,12 @@ REPO=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
 CONFIG=/etc/previa
 STATE=/var/lib/previa
 APP_UID=65532 # the images' non-root user
+# lazydocker release and the SHA-256 of its Linux archives (its checksums.txt).
+LAZYDOCKER_VERSION=0.25.2
+declare -A LAZYDOCKER_SHA256=(
+	[x86_64]=0d9dbfc26068b218e7ed84b104748cadc6e3cf733c0afd35465306fb39b9523c
+	[arm64]=005c38b685aaa557e7d646d83a3dadb5024340eeed8c6a2e1949eee6f530de23
+)
 
 echo "== packages"
 apt-get update -qq
@@ -42,6 +51,40 @@ if ! command -v docker >/dev/null; then
 fi
 systemctl enable --now docker >/dev/null
 
+# Tailscale carries SSH so port 22 can close to the internet
+# (docs/25-production-deployment.md, Step 3). Installing it changes nothing
+# until the operator runs `tailscale up`.
+if ! command -v tailscale >/dev/null; then
+	echo "== Tailscale"
+	install -d -m 0755 /usr/share/keyrings
+	curl -fsSL "https://pkgs.tailscale.com/stable/${ID}/${VERSION_CODENAME}.noarmor.gpg" \
+		-o /usr/share/keyrings/tailscale-archive-keyring.gpg
+	curl -fsSL "https://pkgs.tailscale.com/stable/${ID}/${VERSION_CODENAME}.tailscale-keyring.list" \
+		-o /etc/apt/sources.list.d/tailscale.list
+	apt-get update -qq
+	apt-get install -y -qq tailscale >/dev/null
+fi
+
+if [[ $(lazydocker --version 2>/dev/null || true) != *"Version: ${LAZYDOCKER_VERSION}"* ]]; then
+	echo "== lazydocker ${LAZYDOCKER_VERSION}"
+	case $(uname -m) in
+	x86_64) arch=x86_64 ;;
+	aarch64) arch=arm64 ;;
+	*) arch= ;;
+	esac
+	if [[ -n $arch ]]; then
+		download=$(mktemp -d)
+		curl -fsSL -o "$download/lazydocker.tar.gz" \
+			"https://github.com/jesseduffield/lazydocker/releases/download/v${LAZYDOCKER_VERSION}/lazydocker_${LAZYDOCKER_VERSION}_Linux_${arch}.tar.gz"
+		echo "${LAZYDOCKER_SHA256[$arch]}  $download/lazydocker.tar.gz" | sha256sum -c --quiet
+		tar -xzf "$download/lazydocker.tar.gz" -C "$download" lazydocker
+		install -m 0755 "$download/lazydocker" /usr/local/bin/lazydocker
+		rm -rf "$download"
+	else
+		echo "no lazydocker build for $(uname -m); skipped"
+	fi
+fi
+
 # Ubuntu 24.04 restricts unprivileged user namespaces, which every rootless
 # BuildKit builder needs; without this, every preview build fails. Kernels
 # without the switch (Debian 12) need nothing. The file reapplies it at boot.
@@ -54,12 +97,18 @@ fi
 echo "== firewall: SSH, HTTP and HTTPS only"
 ufw default deny incoming >/dev/null
 ufw default allow outgoing >/dev/null
-ufw allow OpenSSH >/dev/null
+# Once SSH has moved to Tailscale (a rule on tailscale0, docs/25 Step 3), a
+# rerun must not open it to the internet again.
+if ufw status | grep -q 'on tailscale0'; then
+	ufw allow in on tailscale0 to any port 22 proto tcp >/dev/null
+else
+	ufw allow OpenSSH >/dev/null
+fi
 ufw allow 80/tcp >/dev/null
 ufw allow 443/tcp >/dev/null
 ufw --force enable >/dev/null
 # Docker publishes ports through its own iptables chains; Compose publishes
-# only 80 and 443 (and Grafana on 127.0.0.1).
+# only 80 and 443 (and Grafana on 127.0.0.1 when its optional profile runs).
 
 echo "== directories"
 install -d -m 0700 -o root -g root "$CONFIG"
@@ -128,11 +177,14 @@ systemctl enable --now previa-backup.timer >/dev/null
 cat <<NEXT
 
 Host prepared. Next (docs/25-production-deployment.md):
-  1. Put the GitHub App key in $CONFIG/github-app.pem and the DNS token in
+  1. Move SSH to Tailscale: tailscale up, then follow Step 3's checks before
+     closing port 22 to the internet.
+  2. Put the GitHub App key in $CONFIG/github-app.pem and the DNS token in
      $CONFIG/dns-credential, then rerun this script to fix their modes.
-  2. Fill in the remaining values in $CONFIG/previa.env (domains, GitHub App,
-     OAuth, ACME, BACKUP_AGE_RECIPIENT, BACKUP_REMOTE). Keep a copy of
-     SECRETS_ENCRYPTION_KEYS and the age private key offline.
-  3. docker compose -f $REPO/deploy/production/compose.yml --env-file $CONFIG/previa.env pull   (or build)
-  4. docker compose -f $REPO/deploy/production/compose.yml --env-file $CONFIG/previa.env up -d --wait
+  3. Fill in the remaining values in $CONFIG/previa.env (domains, GitHub App,
+     OAuth, ACME, BACKUP_AGE_RECIPIENT, BACKUP_REMOTE, SENTRY_DSN). Keep a copy
+     of SECRETS_ENCRYPTION_KEYS and the age private key offline.
+  4. Build the images from this checkout (Step 7):
+     docker compose -f $REPO/deploy/production/compose.yml --env-file $CONFIG/previa.env --profile images build server worker egress
+  5. docker compose -f $REPO/deploy/production/compose.yml --env-file $CONFIG/previa.env up -d --wait
 NEXT

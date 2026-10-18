@@ -89,13 +89,15 @@ flowchart LR
 | Secrets at rest | Go `crypto/aes` + `crypto/cipher` (AES-256-GCM), versioned keys | Repository secrets given to previews | `internal/secrets` | [07](../docs/07-repository-secrets.md) |
 | Optional sandbox | gVisor (`runsc`) through `PREVIEW_OCI_RUNTIME` | An extra kernel boundary for previews | `internal/runtime` | [10](../docs/10-preview-runtime.md) |
 | Logs | `log/slog` JSON + redaction and correlation | Every process's logs | `internal/platform/logging` | [23](../docs/23-observability-and-hardening.md) |
+| Error reporting and alerts | sentry-go v0.49.0 and its `slog` integration; Sentry Developer plan (free) | Redacted warnings and errors from the server and worker as issues and logs; uptime monitor for `previa.live`; cron monitor for the backup; email alerts | `internal/platform/errortracking`, `deploy/production/backup.sh` | [23](../docs/23-observability-and-hardening.md), [25](../docs/25-production-deployment.md#monitoring-with-sentry) |
 | Metrics | prometheus/client_golang v1.24.1 | Bounded metrics on internal listeners | `internal/platform/metrics`, `internal/app/observe.go` | [23](../docs/23-observability-and-hardening.md) |
-| Monitoring | Prometheus v3.5.0, Grafana 12.1.1 (pinned) | Scraping, 24 alert rules, a provisioned dashboard | `deploy/observability` | [23](../docs/23-observability-and-hardening.md), [24](../docs/24-incident-runbook.md) |
+| Optional monitoring | Prometheus v3.5.0, Grafana 12.1.1 (pinned), Compose profile `observability`, not run in production | Scraping, 27 alert rules, a provisioned dashboard | `deploy/observability` | [23](../docs/23-observability-and-hardening.md), [24](../docs/24-incident-runbook.md) |
 | Ingress hardening | golang.org/x/time/rate v0.16.0 and own middleware | Rate limits, host checks, CSP nonce, body limits | `internal/platform/httpx/ingress.go` | [23](../docs/23-observability-and-hardening.md) |
-| Packaging | Docker multi-stage build: `golang:1.26.9-bookworm` to distroless static (UID 65532) | Release images `previa-server`, `previa-worker`, `previa-egress` | `Dockerfile`, `.dockerignore` | [25](../docs/25-production-deployment.md) |
+| Packaging | Docker multi-stage build: `golang:1.26.9-bookworm` to distroless static (UID 65532) | Images `previa-server`, `previa-worker`, `previa-egress`, built on the production server from the release tag | `Dockerfile`, `.dockerignore` | [25](../docs/25-production-deployment.md) |
 | Orchestration | Docker Compose | Local PostgreSQL; the whole production stack | `deploy/docker-compose.yml`, `deploy/production/compose.yml` | [25](../docs/25-production-deployment.md) |
 | Backups | `pg_dump`, age (encryption), rclone (object storage), systemd timer | Nightly encrypted backups and restore | `deploy/production/{backup,restore,setup}.sh` | [25](../docs/25-production-deployment.md#backups-and-restore) |
-| CI/CD | GitHub Actions, GoReleaser v2, Trivy, actionlint | Checks, tests, image scans, tag-driven releases | `.github/workflows`, `.goreleaser.yaml` | [25](../docs/25-production-deployment.md#ci-and-releases) |
+| CI/CD | GitHub Actions, Trivy, actionlint; GoReleaser v2 for the optional, manual Release workflow | Checks, tests and image scans on pull requests into `master` (documentation-only changes skipped); deployment is a tag built on the server | `.github/workflows`, `.goreleaser.yaml` | [25](../docs/25-production-deployment.md#ci-and-releases) |
+| Host access | Tailscale (free Personal plan), OpenSSH with keys only, UFW; lazydocker v0.25.2 (pinned, checksum-verified) | SSH only over the tailnet; containers and logs on one screen | `deploy/production/setup.sh` | [25](../docs/25-production-deployment.md#move-ssh-to-tailscale) |
 | Developer tools | Air v1.67.4, golangci-lint v2.14.0, govulncheck v1.8.0, sqlc, templ, Goose (all pinned in `tools/go.mod`), shellcheck, promtool | Live reload, linting, vulnerability scans, generation | `tools/go.mod`, `.air.toml`, `Makefile` | [02](../docs/02-development-setup.md) |
 | Browser tests | Playwright 1.58.2 (Node 20+), Chromium | 30 UI scenarios under the production CSP | `web/tests/browser` | [web/tests/browser/README.md](../web/tests/browser/README.md) |
 | Test infrastructure | Go `testing` (race detector), real Docker/BuildKit/Traefik suites, Pebble (test ACME), a fake GitHub over TLS | Unit, PostgreSQL, real-Docker and end-to-end tests | `*_test.go`, `internal/app/e2e_*_test.go` | [22](../docs/22-mvp-operations.md#what-is-proven-and-by-which-test) |
@@ -115,7 +117,7 @@ Design and code diagrams: [class-diagram.md](class-diagram.md) and
 | Egress proxy | `previa-egress` (`cmd/egress`) | Started by the worker; the only exit from build and preview networks | `:3128` on those networks only |
 | BuildKit | `moby/buildkit:v0.33.1-rootless` | Started by the worker, one per build, removed afterwards | private network only |
 | Previews | built from each PR | The pull request's app, hardened | the router reaches it on its own network |
-| Prometheus / Grafana | `prom/prometheus:v3.5.0`, `grafana/grafana:12.1.1` | Metrics, alerts, dashboard (Compose profile `observability`) | Grafana `127.0.0.1:3000` (production), `127.0.0.1:13000` (smoke test) |
+| Prometheus / Grafana | `prom/prometheus:v3.5.0`, `grafana/grafana:12.1.1` | Metrics, alerts, dashboard (optional Compose profile `observability`; production does not run it) | Grafana `127.0.0.1:3000` if enabled, `127.0.0.1:13000` (smoke test) |
 
 ## URLs, endpoints and built-in dashboards
 
@@ -167,10 +169,12 @@ inside the containers.
 | Tool | Is there a UI? | How to reach it |
 | --- | --- | --- |
 | Previa dashboard | Yes | The application URL above. |
-| Grafana (Previa dashboard, 30 panels) | Yes | Production: `ssh -L 3000:127.0.0.1:3000 <host>`, then `http://localhost:3000` (user `admin`, password `GRAFANA_ADMIN_PASSWORD`). Smoke test: `http://127.0.0.1:13000`. Needs the `observability` profile. |
-| Prometheus | Yes, but not published | Its UI listens only on the control network. To look temporarily: `docker run --rm -p 127.0.0.1:9095:9095 --network previa_control alpine/socat tcp-listen:9095,fork,reuseaddr tcp:prometheus:9090`, then `http://127.0.0.1:9095` (stop it afterwards). Alerts: `/alerts`; targets: `/targets`. |
+| Sentry (production errors, logs, uptime, backup monitor) | Yes | [sentry.io](https://sentry.io), project `previa` ([25](../docs/25-production-deployment.md#monitoring-with-sentry)). |
+| lazydocker (production containers and logs) | Terminal UI | `ssh ops@previa-prod-01`, `sudo -i`, `lazydocker`. |
+| Grafana (Previa dashboard, 30 panels) | Yes, when the optional profile runs | Only with the `observability` profile (production does not run it): `ssh -L 3000:127.0.0.1:3000 <host>`, then `http://localhost:3000` (user `admin`, password `GRAFANA_ADMIN_PASSWORD`). Smoke test: `http://127.0.0.1:13000`. |
+| Prometheus | Yes, when the optional profile runs; never published | Its UI listens only on the control network. To look temporarily: `docker run --rm -p 127.0.0.1:9095:9095 --network previa_control alpine/socat tcp-listen:9095,fork,reuseaddr tcp:prometheus:9090`, then `http://127.0.0.1:9095` (stop it afterwards). Alerts: `/alerts`; targets: `/targets`. |
 | Traefik | Dashboard disabled on purpose (`--api.dashboard=false`) | Its API answers only on 127.0.0.1:8080 inside the router container: `docker exec previa-router wget -qO- http://127.0.0.1:8080/api/http/routers`. The route file is `ROUTER_DYNAMIC_DIR/previa-routes.yml`. |
-| River (job queue) | No UI installed (River UI is a separate project, not part of Previa) | `make river-status`; SQL on `river_job` ([02 §7](../docs/02-development-setup.md#7-inspect-jobs-and-operations)); Grafana "Queues and requests"; metrics `previa_queue_jobs`, `previa_jobs_total`. |
+| River (job queue) | No UI installed (River UI is a separate project, not part of Previa) | `make river-status`; SQL on `river_job` ([02 §7](../docs/02-development-setup.md#7-inspect-jobs-and-operations)); metrics `previa_queue_jobs`, `previa_jobs_total`; Grafana "Queues and requests" with the optional profile. |
 | Egress proxy | No UI | Logs: `docker logs previa-egress`. It answers only inside build and preview networks. |
 | PostgreSQL | No UI | Development: `docker compose -f deploy/docker-compose.yml exec postgres psql -U previa -d previa`. Production: `docker compose -f deploy/production/compose.yml --env-file /etc/previa/previa.env exec postgres psql -U previa -d previa`. |
 | Developer tools (queue ping) | Yes, development only | `/developer-tools` on the dashboard. |
@@ -192,7 +196,7 @@ inside the containers.
 | `deploy/production/setup.sh`, `backup.sh`, `restore.sh`, `smoke.sh` | Host setup, backups, restore, smoke test |
 | `deploy/observability/` | `prometheus.yml`, `alerts.yml` + `alerts_test.yml`, Grafana provisioning and dashboard |
 | `deploy/egress/Dockerfile` | Development egress image (`make egress-image`) |
-| `.github/workflows/ci.yml`, `release.yml`, `.goreleaser.yaml` | CI and releases |
+| `.github/workflows/ci.yml`, `release.yml`, `.goreleaser.yaml` | CI, and the optional manual Release workflow |
 | `db/migrations/*.sql` | Schema migrations 0001–0020 |
 | A repository's `.previewrc.yaml` | How its previews build and run: port, health path, resources, environment ([06](../docs/06-source-and-configuration.md)) |
 
@@ -203,7 +207,7 @@ inside the containers.
 | Local development | Working on the dashboard, sign-in, linking, discovery, policies, secrets, logs | `docker compose -f deploy/docker-compose.yml up -d`, `make migrate-up`, `make run-server` + `make run-worker` (or `make dev`) ([02](../docs/02-development-setup.md)) |
 | Local previews without a domain | Building and opening previews on your machine | Add `PREVIEW_BASE_DOMAIN=preview.localtest.me` and a `ROUTER_DYNAMIC_DIR`, start the router with `make router-up` (see [user-guide.md](user-guide.md#0-before-you-start)); browsers warn about Traefik's default certificate |
 | Local staging of the production stack | Checking release images, Compose, backups, upgrades | `make release-images PREVIA_VERSION=x` then `make prod-smoke PREVIA_VERSION=x` |
-| Production (one VPS) | Real use | One OVHcloud VPS-2 (about €7 a month) with Cloudflare DNS and R2 backups: `deploy/production/setup.sh`, then the production Compose file ([25](../docs/25-production-deployment.md)) |
+| Production (one VPS) | Real use | One OVHcloud VPS-2 with `previa.live` and a preview domain on Cloudflare DNS, R2 backups, Sentry monitoring and SSH over Tailscale, about €8 a month plus VAT: `deploy/production/setup.sh`, the images built from a release tag, then the production Compose file ([25](../docs/25-production-deployment.md)) |
 
 ## Testing
 
@@ -229,6 +233,7 @@ Manual, end-user test cases are in [user-guide.md](user-guide.md#manual-test-che
 | --- | --- |
 | Apply migrations | `make migrate-up` (development); `previa-migrate up` runs automatically in production |
 | Check settings before starting | `previa-server check-config`, `previa-worker check-config` |
+| Prove Sentry receives errors | `previa-server sentry-test` (in production: `dc run --rm --no-deps server sentry-test`) |
 | Is a process ready? | `/readyz` on the internal listener, or `previa-server healthcheck` |
 | Pause all builds (kill switch) | `BUILDS_PAUSED=true`, restart the worker ([24](../docs/24-incident-runbook.md#execution-kill-switch)) |
 | Rotate the secrets key | add a key version, switch `SECRETS_ACTIVE_KEY_VERSION`, restart, `make secrets-reencrypt` ([07](../docs/07-repository-secrets.md)) |
@@ -236,7 +241,7 @@ Manual, end-user test cases are in [user-guide.md](user-guide.md#manual-test-che
 | See what housekeeping would delete | `make housekeeping-dry-run` |
 | River migration status | `make river-status` |
 | Back up / restore | `deploy/production/backup.sh` (nightly timer), `deploy/production/restore.sh --identity KEY --yes DUMP` |
-| Upgrade / roll back | change `PREVIA_VERSION`, `docker compose … up -d --wait` ([25](../docs/25-production-deployment.md#upgrades-and-rollback)) |
+| Upgrade / roll back | check out the tag, set `PREVIA_VERSION`, `docker compose … --profile images build server worker egress`, then `up -d --wait`; roll back to the previous tag's images still on the host ([25](../docs/25-production-deployment.md#upgrades-and-rollback)) |
 | Incidents | [24-incident-runbook.md](../docs/24-incident-runbook.md) |
 
 ## Security model in brief

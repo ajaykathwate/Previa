@@ -9,6 +9,8 @@ require (
 	github.com/alexedwards/scs/v2 v2.9.0
 	github.com/bradleyfalzon/ghinstallation/v2 v2.18.0
 	github.com/containerd/errdefs v1.0.0
+	github.com/getsentry/sentry-go v0.49.0
+	github.com/getsentry/sentry-go/slog v0.49.0
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/goccy/go-yaml v1.19.2

@@ -2,13 +2,35 @@
 Last updated: 2026-10-18
 
 ## Current state
-- Branch `mvp-complete`; F3 is committed locally. Commit only when the user asks;
-  push to `main`, never `master`. No deployment/push was performed.
+- Branch `mvp-complete`; F3 is committed locally (`f0fc89b`). The final deployment
+  setup below is **uncommitted** in the working tree. Commit only when the user
+  asks; push to `main`, never `master`. No deployment/push was performed.
 - **MVP-TODO.md is the roadmap.** F0–F3 are implemented and verified. Next
   implementation: F4 (account exits, support,
   status and policies), then F5 missed-uninstall detection and F6 early access.
 - README/DESIGN are authoritative; F3 design is DESIGN §26, docs/33. F2 is
   DESIGN §25, docs/32; F1/Feature 5 is docs/31.
+
+## Final deployment setup (agreed with the owner 2026-10-18; uncommitted)
+- One OVHcloud VPS-2 (EU, €7.21) + Docker Compose; images **built on the server**
+  from a release tag (no GHCR; `release.yml` is manual-only, refuses non-tags);
+  `previa.live` = landing/dashboard, previews on a separate domain still to buy
+  (placeholder `preview.example.net`); Cloudflare DNS + R2; Sentry free for
+  errors/logs, uptime (previa.live, 1 min) and backup cron monitor, email via one
+  alert rule; SSH only over Tailscale (port 22 closed); lazydocker. About €8/month
+  + VAT. No Prometheus/Grafana/Alertmanager in prod (profile kept, optional), no
+  Terraform, no staging VPS (rehearse restore on the prod VPS before launch), gVisor
+  off for early access. Docs: docs/25 (overview, two Mermaid diagrams, cost,
+  capacity, S1–S4, logs/SSH/monthly checks, pre-launch rehearsal), MVP-TODO Part 3.
+- Code: `internal/platform/errortracking` (sentry-go v0.49.0 + slog): `logging.New`
+  fans redacted records to it; error → issue, warn+ → Sentry Logs; `SENTRY_DSN`
+  (env `APP_ENV`); `check-config` validates it; `previa-server sentry-test`.
+  `backup.sh` derives the cron check-in URL from `SENTRY_DSN` (monitor
+  `previa-backup`, 1-day interval); `BACKUP_FAILURE_WEBHOOK` removed. `setup.sh`
+  installs Tailscale + lazydocker 0.25.2 (SHA-256 pinned), keeps SSH on tailscale0
+  once moved. CI `paths-ignore` for docs-only changes.
+- Gaps: wildcard cert unmonitored (docs/25 "Monthly checks"); GitHub CI runs of
+  Oct 11–15 failed. `inside-previa.md` untouched.
 
 ## F3: workspace usage and finite free limits
 - Owner delegated amounts and confirmed no hosted users: **300 build minutes per
@@ -40,16 +62,10 @@ Last updated: 2026-10-18
   rows U1–U10. Owner hands-on acceptance and commit remain separate release steps.
 
 ## Prior Feature 5B / F1 context
-- Migration 0041: repository Test data settings, baseline refresh/log/history,
-  starting-data and seed facts, `start_source`, worker baseline capability.
-- `internal/sampledata`: baseline admission, sequence/coalescing, encrypted gzip
-  AES-GCM storage, default-branch refreshes/merge triggers/freshness/cleanup.
-  Runtime source order per SQL service: kept PR data → baseline → empty + seed.
-- Production baseline volume `/var/lib/previa/baselines` is derived, not backed up;
-  defaults 64 MiB/dump, 2m copies, 1h automatic-refresh spacing. Test data stays off
-  until enabled; off records no starting source or GitHub comment line.
-- PR facts/report snapshot/component retention follow the serving publication.
-  See test-docs/2026-10-17-persistent-test-data-report.md for F1/F2 evidence.
+- Migration 0041 / `internal/sampledata`: Test data settings, encrypted baselines,
+  refresh/freshness/cleanup; source order kept PR data → baseline → empty + seed.
+  Baseline volume is derived, not backed up. Evidence:
+  test-docs/2026-10-17-persistent-test-data-report.md.
 
 ## Environments and verification
 - Dev DB `previa-postgres-1` remains Goose 41; not migrated by the agent. The
@@ -67,10 +83,13 @@ Last updated: 2026-10-18
   review 6/6, Test data 3/3, Usage 4/4. Runtime 11/11, routing 8/8; E2E four/four
   (945.591 s), including two metered baselines and period/segment reconciliation.
   All eight final Owner/Developer screenshots reviewed at 1440/390, light/dark.
-- Broad UI harness now allows 10m (Go timeout 12m) for 55 scenarios on loaded
-  hosts; individual action deadlines unchanged. Final run passed in 262.527 s.
-- Corrected historical intent migration fixture/dependency order and two existing
-  flaky assertions (checksum mutation and one-byte ciphertext coincidence).
+- Deployment-setup verification: build; vet/lint 0 issues; `go test ./...` 50/50
+  packages on the test DB; errortracking/logging race ×5; actionlint (ci, release);
+  shellcheck (setup, backup, restore, smoke); backup check-ins with stub tools;
+  lazydocker install/checksum/rerun; `check-config` with bad/good/empty DSN;
+  docs/25 Mermaid diagrams render (mermaid-cli 11.4.2); `make prod-smoke` 40/40
+  incl. backup/restore. Not run: browser/E2E suites (no UI or pipeline change),
+  anything against real Sentry, Tailscale or OVHcloud.
 
 ## Access and working invariants
 - Active membership is authoritative; Owner/Admin span repositories; Developer/
