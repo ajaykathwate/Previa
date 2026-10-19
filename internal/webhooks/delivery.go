@@ -180,10 +180,20 @@ func (s *DeliveryService) lifecycle(ctx context.Context, tx pgx.Tx, event any, s
 	if err != nil {
 		return err
 	}
+	var current string
+	if err := tx.QueryRow(ctx, `SELECT status FROM installations WHERE github_installation_id=$1`, change.ID).Scan(&current); err != nil {
+		return fmt.Errorf("read locked installation status: %w", err)
+	}
+	if current == "inactive" {
+		return nil
+	}
 	revoke := change.Cleanup || len(change.Removed) > 0
 	if _, repositoryEvent := event.(*github.InstallationRepositoriesEvent); repositoryEvent {
 		if err := acceptRepositoryChanges(ctx, q, &change, stamp); err != nil {
 			return err
+		}
+		if len(change.Added) == 0 && len(change.Removed) == 0 {
+			return nil
 		}
 		revoke = len(change.Removed) > 0
 	} else if change.Status != "inactive" && source.Valid && (stamp.Before(source.Time) || stamp.Equal(source.Time) && !revoke) {

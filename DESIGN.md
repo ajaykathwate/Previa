@@ -868,6 +868,7 @@ preview/
 │   └── egress/main.go              # previa-egress: proxy and prober, in its own container
 │
 ├── internal/
+│   ├── earlyaccess/                # FEATURE: operator workspace approval and audit
 │   ├── workspaces/                 # FEATURE: shared teams, grants, invitations, handover
 │   │   ├── handler.go  middleware.go  repository.go  service.go
 │   │   ├── membership.go  invitations.go  pages.go  queries.sql
@@ -954,6 +955,7 @@ preview/
 │   │   ├── reconcile.go  jobs.go   # expired reservation recovery (River, every minute)
 │   │   └── accounting_test.go     # execution, races, boundaries and recovery tests
 │   │
+│   ├── earlyaccess/           # Workspace approval and operator admission
 │   ├── accounts/                   # FEATURE: durable disconnect/deletion coordination
 │   │   ├── handler.go repository.go # account controls, authorized catalog reads
 │   │   ├── service.go disconnect.go deletion.go # scope locks, fences, child operations
@@ -1775,7 +1777,7 @@ Implement F4/spec §9.5–§9.6/§9.8: revocable sessions, scoped workspace exit
 explicit local repository/installation disconnection, ordered workspace erasure,
 personal deletion preserving team data, support requests, public status and
 plain policies. Include the optional finite Disconnected GitHub comment. Billing,
-missed-uninstall polling and review assignments remain deferred.
+review assignments remain deferred; missed-uninstall polling is specified in Section 28.
 
 ### Complexity and stack
 
@@ -1847,3 +1849,38 @@ and requested operator IDs remain unset with explanatory comments. Privacy/terms
 describe actual behavior; operator identity and legal review remain pre-launch
 checks. Reconnection uses a fresh explicit GitHub installation after cleanup;
 old credentials/history are not restored. Details: [34](docs/34-accounts-support-and-deletion.md).
+
+
+## 28. Missed GitHub installation lifecycle (F5)
+
+Requirement: recover dropped uninstall/suspension/repository-removal deliveries
+without treating an outage or partial listing as revocation. Complexity: high.
+Stack: existing App JWT/install-token clients, PostgreSQL and River.
+
+The installations feature captures revisions before GitHub IO. Every five minutes
+(and after a durable token-mint suspicion), a bounded 25-installation pass validates
+GET /app, checks exact installation IDs and complete paginated repository listings.
+All observations precede one short transaction through webhooks' existing lifecycle
+applier, source tombstones, RevokeTx, cleanup_pending and sweep wake-up. A concurrent
+webhook wins through the installation revision. Recovery never grants access.
+
+401, wrong App identity, outages, rate limits and incomplete listings abort without
+revocation. Removing every known installation or exceeding the configurable small
+change budget opens a circuit and alerts. A verified explicit reconnect may recover
+a confirmed deleted installation in the same authorized workspace; it cannot move
+history between workspaces. Reconnect still preserves Manual/Automatic semantics.
+Metrics have bounded outcomes; repairs warn through Sentry and Prometheus alerts.
+
+## 29. Early-access workspace approval (F6)
+
+Requirement: operator approval for each new workspace; preserve existing access.
+Complexity: medium. Stack: existing sessions/CSRF, PostgreSQL, templ and signal theme.
+Implementation: internal/earlyaccess owns approval service, repository and handler;
+presentation lives in web/pages/earlyaccess. Existing workspaces are grandfathered;
+new rows default Pending. The server guards connection/setup/build requests and
+checks connection persistence under its workspace lock. Worker usage independently
+checks PR/baseline admission, execution and renewal; teardown and account exits are
+never gated. Operators use the configured immutable GitHub-ID allowlist. The native
+approval form checks revision and audits atomically; retries are idempotent and
+approval never dispatches a build. Pending workspaces can still manage members,
+use support and request deletion. Disabled gate mode is explicit env configuration.

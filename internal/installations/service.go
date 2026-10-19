@@ -58,10 +58,24 @@ type Service struct {
 	app           appClient
 	authorization userAuthorization
 	cleanup       CleanupRequester
+	reconciler    interface {
+		ResolveLinkConflicts(context.Context, int64, int64, []RepositoryInfo) error
+	}
 }
 
 func NewService(store store, app appClient, authorization userAuthorization, cleanup CleanupRequester) *Service {
 	return &Service{store: store, app: app, authorization: authorization, cleanup: cleanup}
+}
+
+func (s *Service) WithReconciler(r interface {
+	ResolveLinkConflicts(context.Context, int64, int64, []RepositoryInfo) error
+}) *Service { s.reconciler = r; return s }
+
+func (s *Service) WithAdmission(g AdmissionGate) *Service {
+	if r, ok := s.store.(*Repository); ok {
+		r.admission = g
+	}
+	return s
 }
 func (s *Service) List(ctx context.Context, userID int64) ([]InstallationInfo, error) {
 	return s.store.List(ctx, userID)
@@ -106,6 +120,11 @@ func (s *Service) Link(ctx context.Context, code string, userID, githubUserID, i
 		}
 		if repo.GetID() != repos[0].ID {
 			return ErrForbidden
+		}
+	}
+	if s.reconciler != nil {
+		if err := s.reconciler.ResolveLinkConflicts(ctx, userID, installationID, repos); err != nil {
+			return fmt.Errorf("verify previous installation before relinking: %w", err)
 		}
 	}
 	if err := s.store.Link(ctx, installationID, userID, revision, installation.GetAccount().GetLogin(), repos); err != nil {

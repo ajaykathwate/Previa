@@ -296,6 +296,8 @@ type Installation struct {
 	WorkspaceID          pgtype.Int8
 	PublicID             pgtype.UUID
 	DisconnectedAt       pgtype.Timestamptz
+	ReconciledAt         pgtype.Timestamptz
+	ReconcileRequestedAt pgtype.Timestamptz
 }
 
 type InstallationRepositoryEvent struct {
@@ -730,17 +732,24 @@ type WorkerCapability struct {
 }
 
 type Workspace struct {
-	ID              int64
-	Name            string
-	OwnerUserID     int64
-	LegacyUserID    pgtype.Int8
-	State           string
-	Revision        int64
-	CreatedAt       pgtype.Timestamptz
-	Description     string
-	ProfileRevision int64
-	PublicID        pgtype.UUID
-	DeletedAt       pgtype.Timestamptz
+	ID               int64
+	Name             string
+	OwnerUserID      int64
+	LegacyUserID     pgtype.Int8
+	State            string
+	Revision         int64
+	CreatedAt        pgtype.Timestamptz
+	Description      string
+	ProfileRevision  int64
+	PublicID         pgtype.UUID
+	DeletedAt        pgtype.Timestamptz
+	EarlyAccessState string
+}
+
+type WorkspaceApproval struct {
+	WorkspaceID      int64
+	OperatorGithubID int64
+	ApprovedAt       pgtype.Timestamptz
 }
 
 // Legacy technical elapsed-time counter; never billed or imported into workspace execution accounting

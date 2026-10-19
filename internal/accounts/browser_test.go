@@ -16,6 +16,7 @@ import (
 
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/dashboard"
+	"github.com/ajaykathwatee/previa/internal/earlyaccess"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/publicid"
@@ -31,7 +32,10 @@ type browserIdentity struct{}
 func (browserIdentity) AuthCodeURL(state string) string {
 	return "/test-github?state=" + url.QueryEscape(state)
 }
-func (browserIdentity) Authenticate(context.Context, string) (auth.Identity, error) {
+func (browserIdentity) Authenticate(_ context.Context, code string) (auth.Identity, error) {
+	if code == "member" {
+		return auth.Identity{ID: 102, Username: "member"}, nil
+	}
 	return auth.Identity{ID: 101, Username: "owner"}, nil
 }
 func TestAccountsBrowser(t *testing.T) {
@@ -46,7 +50,11 @@ func TestAccountsBrowser(t *testing.T) {
 	root := httpx.NewRouter(logger)
 	root.Handle("/static/*", web.StaticHandler())
 	root.Get("/test-github", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/auth/github/callback?"+url.Values{"state": {r.URL.Query().Get("state")}, "code": {"owner"}}.Encode(), http.StatusSeeOther)
+		code := "owner"
+		if c, err := r.Cookie("fixture_login"); err == nil && c.Value == "member" {
+			code = "member"
+		}
+		http.Redirect(w, r, "/auth/github/callback?"+url.Values{"state": {r.URL.Query().Get("state")}, "code": {code}}.Encode(), http.StatusSeeOther)
 	})
 	root.Post("/__fixture/cleanup", func(w http.ResponseWriter, r *http.Request) {
 		j := f.journal(t)
@@ -77,6 +85,9 @@ func TestAccountsBrowser(t *testing.T) {
 	catalog := publicid.New(f.pool)
 	r := chi.NewRouter()
 	r.Use(sessions.LoadAndSave, users.LoadUser, users.CSRF, catalog.Middleware, workspaces.NewMiddleware(team, users, logger).Load)
+	admission := earlyaccess.NewHandler(earlyaccess.NewService(f.pool, true, []int64{101}), users, logger)
+	r.Use(admission.Guard)
+	admission.Mount(r, auth.RequireUser)
 	users.Mount(r)
 	dashboard.Mount(r, users, auth.RequireUser)
 	workspaces.NewHandler(team, users, logger, origin).Mount(r, auth.RequireUser)

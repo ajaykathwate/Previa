@@ -19,6 +19,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/dashboard"
+	"github.com/ajaykathwatee/previa/internal/earlyaccess"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/idle"
 	"github.com/ajaykathwatee/previa/internal/installations"
@@ -135,6 +136,7 @@ type serverFeatures struct {
 	usage          *usage.Handler
 	accounts       *accounts.Handler
 	support        *support.Handler
+	earlyAccess    *earlyaccess.Handler
 }
 
 func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
@@ -182,6 +184,17 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 		return nil, err
 	}
 	f.deliveries = webhooks.NewDeliveryService(pool, coordinator, invalidate, syncService).WithMerges(testDataStore)
+	if appClient != nil {
+		appClient.WithInstallationSignals(installations.SignalReconciliation(pool, producer))
+		service.WithReconciler(installations.NewReconciler(installations.NewRepository(pool), appClient, f.deliveries, logger, cfg.GitHubAppID, cfg.InstallationReconcileMaxChanges))
+	}
+	operatorIDs, err := cfg.OperatorIDs()
+	if err != nil {
+		return nil, err
+	}
+	admission := earlyaccess.NewService(pool, cfg.EarlyAccessEnabled, operatorIDs)
+	f.earlyAccess = earlyaccess.NewHandler(admission, f.auth, logger)
+	service.WithAdmission(admission)
 	policyStore := installations.NewRepository(pool)
 	if appClient != nil {
 		policyStore.WithReports(coordinator) // a switch to Manual updates cancelled PRs' reports
@@ -374,7 +387,13 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 		if f.workspaceScope != nil {
 			r.Use(f.workspaceScope.Load)
 		}
+		if f.earlyAccess != nil {
+			r.Use(f.earlyAccess.Guard)
+		}
 		f.auth.Mount(r)
+		if f.earlyAccess != nil {
+			f.earlyAccess.Mount(r, auth.RequireUser)
+		}
 		if f.accounts != nil {
 			f.accounts.Mount(r, auth.RequireUser)
 		}

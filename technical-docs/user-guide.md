@@ -693,6 +693,7 @@ out, and the box beside it shows the message and the fix below.
 
 | Message | Why | What to do |
 | --- | --- | --- |
+| This workspace needs early-access approval. | New workspaces wait for an operator | Open **Early access** for the workspace reference; contact support if needed. Approval starts no build. |
 | GitHub access to this repository is unavailable. | The App no longer has access | Restore access with **Choose repositories on GitHub** |
 | Closed and merged pull requests are not built. | The PR is closed | Reopen it on GitHub |
 | Build refused: resolve merge conflicts and push a new commit first. | **Conflicts** | Fix the conflict and push |
@@ -736,13 +737,22 @@ as the same Previa user. Your repositories, history and build mode return, and o
 pull requests are discovered again. Nothing rebuilds by itself: Manual waits for a
 click, and Automatic waits for the next push.
 
-**If Previa was offline when you uninstalled**, it missed GitHub's notification, and
-GitHub does not resend it on its own. Previews keep serving until they expire (48
-hours by default). Reinstalling then fails for those repositories with "This
-installation could not be linked…". To fix this, the App's owner opens the App on
-GitHub (**Developer settings → GitHub Apps → Advanced → Recent Deliveries**) and
-redelivers the failed `installation` delivery. GitHub allows this for 3 days. Previa
-then removes everything as described above.
+**If Previa missed GitHub's notification**, the worker checks installation access
+at startup and every five minutes. It only acts on verified deletion, suspension
+or a complete repository listing; outages and partial responses change nothing.
+A circuit breaker stops unusually broad losses (including the only known
+installation) for operator review. The operator checks GitHub delivery history
+and redelivers the real signed event. An explicit verified reconnect can also
+confirm a deleted old installation and preserve history in the same workspace.
+Nothing rebuilds just because access returns. See [the runbook](../docs/24-incident-runbook.md#missed-github-lifecycle-deliveries).
+
+**Early access:** new workspaces start Pending. The sidebar's **Early access** page
+shows their reference and status. An operator approves each workspace separately;
+being its Owner/Admin or creating another workspace does not bypass this. You can
+still manage members/settings, use support, sign out or delete while waiting.
+Existing workspaces are approved when the migration is applied. Operators set
+their numeric GitHub user IDs in `SUPPORT_OPERATOR_GITHUB_IDS` and use
+`/operator/early-access`. The gate defaults on in both server and worker.
 
 ---
 
@@ -1023,3 +1033,21 @@ with pseudonymous attribution.
 | K3 | Remove `BUILDS_PAUSED` and restart | Waiting requests build by themselves |
 | K4 | Open **Developer tools**, **Send a ping** (development) | "Ping queued. Job #N. Your worker will process it."; sending the same key again says an active ping already exists |
 | K5 | With `APP_ENV=production` | **Developer tools** says the queue ping is off in production |
+
+### L. Missed installation events and early access (F5/F6)
+
+Use a disposable workspace and preview for destructive checks. Operator review
+and real GitHub delivery redelivery are owner-run checks, separate from fake-TLS
+GitHub automated evidence.
+
+| ID | Action | Expected |
+| --- | --- | --- |
+| L1 | Create a workspace with early access enabled | Pending page with copyable reference; connect/build is refused; support and settings work |
+| L2 | Open `/operator/early-access` as a customer Owner/Admin without a configured operator ID | Unavailable; customer roles cannot approve |
+| L3 | Configure the operator numeric user ID, restart server/worker, approve the pending workspace | Audited Approved state; connecting works; no build starts |
+| L4 | Repeat L1–L3 without JavaScript and at phone width in both themes | Native forms work, no horizontal overflow or CSP errors |
+| L5 | Check a pre-migration workspace, then create another | Existing remains approved; the new workspace still needs separate approval |
+| L6 | On a disposable test installation with another known healthy installation, drop its uninstall delivery | Reconciliation removes the preview; cleanup completes without installation access |
+| L7 | Simulate GitHub outage/401/partial listing or all-known revocation | Access remains unchanged; warning/error and operator runbook apply |
+| L8 | Reinstall the deleted App into the same authorized workspace | History/Manual mode preserved; no build starts; another workspace cannot take history |
+| L9 | Redeliver the original loss after reconciliation; restore access | Teardown is not duplicated; restoration never starts a build |

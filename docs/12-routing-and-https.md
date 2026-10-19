@@ -343,3 +343,13 @@ router recreation. Both certificate files retained mode 600.
 | `internal/runtime/endpoint.go` | Pre-publication candidate check. |
 | `deploy/traefik/compose.yml` | Router deployment (staging CA default, secret file, loopback API). |
 | `db/migrations/0014_routes_and_teardown.sql` | Route rows, table counter, teardown requests, hostname check. |
+
+
+### Missed access-revocation deliveries (F5)
+
+App-authenticated installation reconciliation runs every five minutes and after
+a durable token-mint failure signal. Confirmed deletion/suspension/repository
+removal uses the existing transactional webhook revocation and cleanup path.
+Outages, wrong credentials, incomplete listings and circuits never authorize
+revocation. Polling never restores access or starts builds; verified same-workspace
+reinstall can recover missed deletion. See [35](35-installation-recovery-and-early-access.md).

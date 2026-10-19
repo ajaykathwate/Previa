@@ -627,7 +627,7 @@ func (q *Queries) LockMembership(ctx context.Context, arg LockMembershipParams) 
 }
 
 const lockWorkspace = `-- name: LockWorkspace :one
-SELECT id, name, owner_user_id, legacy_user_id, state, revision, created_at, description, profile_revision, public_id, deleted_at FROM workspaces WHERE id=$1 AND state='active' FOR UPDATE
+SELECT id, name, owner_user_id, legacy_user_id, state, revision, created_at, description, profile_revision, public_id, deleted_at, early_access_state FROM workspaces WHERE id=$1 AND state='active' FOR UPDATE
 `
 
 func (q *Queries) LockWorkspace(ctx context.Context, id int64) (Workspace, error) {
@@ -645,6 +645,7 @@ func (q *Queries) LockWorkspace(ctx context.Context, id int64) (Workspace, error
 		&i.ProfileRevision,
 		&i.PublicID,
 		&i.DeletedAt,
+		&i.EarlyAccessState,
 	)
 	return i, err
 }

@@ -697,3 +697,13 @@ Sentry, with a scripted, rehearsed restore.
 - Stronger isolation: Firecracker microVMs
 - Bigger logs: move build logs to S3/MinIO or Loki
 - Multi-service previews: more managed service kinds, or `docker-compose.yml` support beyond the managed PostgreSQL, Redis and MySQL of [docs/11](docs/11-backend-previews.md)
+
+
+### Installation recovery and early access
+
+[Installation recovery and workspace approval](docs/35-installation-recovery-and-early-access.md)
+adds App-authenticated missed-webhook recovery through the existing revocation
+path, and operator approval for new workspaces. Existing workspaces are preserved.
+`EARLY_ACCESS_ENABLED` defaults true; operators are numeric IDs configured in env.
+Approval gates connections and compute, while cleanup and account exits remain
+available. Migration 45 and matching server/worker configuration are required.

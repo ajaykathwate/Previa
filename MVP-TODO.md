@@ -36,12 +36,20 @@ If this file and those documents disagree, they win and this file is corrected.
 | Feature 2: guided onboarding | Done, committed (`3562a78`) | [docs/29](docs/29-guided-onboarding.md) |
 | Feature 3: native review and feedback | Done, committed (`2ddaaef`) | [docs/30](docs/30-reviews.md), [report](test-docs/2026-10-16-review-feedback-report.md) |
 | Feature 5: ready-to-test sample data | Done, committed (`ea87e60`); walked through (F0); the owner's hands-on pass is in Part 2 | [docs/31](docs/31-test-data.md), [report](test-docs/2026-10-16-test-data-report.md) |
-| F1: spec corrections and the PR page fix | Done by Claude, not committed | [report](test-docs/2026-10-17-persistent-test-data-report.md) |
-| Feature 5B: persistent test data (F2) | Done, not committed; defaults decided; walked through; the owner's hands-on pass is in Part 2 | [docs/32](docs/32-persistent-test-data.md), [report](test-docs/2026-10-17-persistent-test-data-report.md) |
-| Code on GitHub | Not pushed: all of the above is on the local `mvp-complete` branch; GitHub's `main` is at `6b07c5b` | `git log origin/main..mvp-complete` |
+| F1: spec corrections and the PR page fix | Done, committed with persistent test data | [report](test-docs/2026-10-17-persistent-test-data-report.md) |
+| Feature 5B: persistent test data (F2) | Done, committed; defaults decided; walked through; the owner's hands-on pass is in Part 2 | [docs/32](docs/32-persistent-test-data.md), [report](test-docs/2026-10-17-persistent-test-data-report.md) |
+| F3: finite free allowances | Engineering complete, committed (`f0fc89b`) | [docs/33](docs/33-usage-and-free-plan.md) |
+| F4: account exits, support and deletion | Engineering complete, committed (`9ca5c64`) | [docs/34](docs/34-accounts-support-and-deletion.md) |
+| F5: missed installation deliveries | Engineering complete, tested; not committed | [docs/35](docs/35-installation-recovery-and-early-access.md) |
+| F6: operator approval per workspace | Implemented, owner decision recorded; not committed | [docs/35](docs/35-installation-recovery-and-early-access.md) |
+| Current work | F5/F6 are local changes on `mvp-complete`; no commit, push or deployment in this task | [F5/F6 report](test-docs/2026-10-19-installation-recovery-and-early-access-report.md) |
 | Out of this release | Feature 4, GitHub review-status projection (step E), paid subscriptions (§9.4, step J), the third reference journey, notification integrations | spec §1.2 |
 
-Order of the remaining work, as agreed: F0 → F1 → **F2 Feature 5B** → **F3 and F4
+**Feature implementation status:** all in-scope F0–F6 engineering work is complete.
+This does **not** mark the whole file complete: owner hands-on/policy acceptance,
+commit/push, release-candidate rehearsal and deployment/live checks remain open.
+
+Original implementation order: F0 → F1 → **F2 Feature 5B** → **F3 and F4
 Feature 6 (free plan)** → F5 missed-uninstall detection → F6 the early-access
 decision → Part 2 → Part 3.
 
@@ -354,59 +362,77 @@ The development database has not been migrated; follow docs/02 before restart.
 uninstall, a suspension or a removed repository (for example while it was offline),
 and reinstalling works.
 
-- [ ] A periodic reconciliation job using App (JWT) authentication. It only
+- [x] A periodic reconciliation job using App (JWT) authentication. It only
   removes access, through the existing revocation path, in one short transaction
   with the existing fences.
-- [ ] **Fail safe:**
+- [x] **Fail safe:**
   - outages, 5xx responses, rate limits and partial listings change nothing;
   - a 401 or a wrong App ID stops the pass and alerts;
   - a circuit breaker stops a pass that would revoke too much.
-- [ ] Faster detection when creating an installation token reports the
+- [x] Faster detection when creating an installation token reports the
   installation gone or suspended. This wakes the reconciler; nothing is revoked
   from the request path.
-- [ ] Reinstalling works after a missed deletion, for the same owner only.
-- [ ] Metrics with bounded labels, an alert whenever reconciliation finds a change
+- [x] Reinstalling works after a missed deletion, for the same owner only.
+- [x] Metrics with bounded labels, an alert whenever reconciliation finds a change
   (logged at warning or error level, so Sentry shows or emails it in production;
   a Prometheus rule as well for the optional observability profile), and a
   runbook entry for webhook delivery outages.
-- [ ] Every test listed in Prompt 14, plus a `make test-e2e` phase that drops the
+- [x] Every test listed in Prompt 14, plus a `make test-e2e` phase that drops the
   uninstall webhook.
-- [ ] Docs: docs/04, 05, 12 and 14, docs/02 if configuration changes, the user
+- [x] Docs: docs/04, 05, 12 and 14, docs/02 if configuration changes, the user
   guide's section 19 and checklist, the tech stack, and the schema diagram if the
   schema changes.
 
-**Done when:** the reconciliation is enabled and documented, and every test above
-passes. The common gate must also pass.
+**Engineering complete (19 October 2026).** Reconciliation is enabled with App
+credentials and documented. Prompt14 failure/race/token/relink tests and all four
+real E2E journeys pass, including the dropped-uninstall phase. Same-owner history
+is scoped to the same authorized workspace, matching Feature1's authority model.
+See the [F5/F6 report](test-docs/2026-10-19-installation-recovery-and-early-access-report.md).
+The automated common gate passed; owner manual acceptance and commit remain.
 
-### F6 · Early-access gate (Proposed, not in the spec)
+### F6 · Early-access workspace approval
 
 **Why it was raised:** Previa builds and runs code from the repositories of anyone
 who signs in, on one server, and nothing limits who can sign up today.
 [docs/25 "Account safety"](docs/25-production-deployment.md#account-safety-abuse-reports)
 explains that abuse reports about previews go to the host.
 
-- [ ] **Decision (owner):** one of:
-  - (a) the operator approves each new workspace before it can connect
-    repositories or build;
-  - (b) an operator allowlist of GitHub accounts or organizations;
-  - (c) no gate, relying on F3's free limits and docs/25's abuse controls.
+- [x] **Decision (owner), 19 October 2026:** option (a), an operator approves
+  each new workspace before it can connect repositories or build. Existing
+  workspaces remain approved at migration.
+- [x] Add the decision to the product spec and DESIGN, then implement it.
+- [x] Native pending/approved status and a CSRF-protected operator approval queue;
+  operators use configurable immutable numeric GitHub user IDs, separate from roles.
+- [x] Enforce at connection persistence and physical PR/baseline admission,
+  execution, renewal and publication. Pending approval spends no allowance.
+- [x] Keep settings, members, support, account exits and cleanup usable. Audit
+  approvals with revision protection and idempotency; approval starts no build.
+- [x] Migration down/up and grandfathering; operator isolation, connection/compute
+  and JavaScript on/off browser checks. Configuration and manual rows L1–L9 documented.
 
-  For (a) or (b), Claude first adds it to the spec, then builds it like any feature.
+**Implementation:** [docs/35](docs/35-installation-recovery-and-early-access.md).
+Owner manual acceptance, requested commit and deployment remain separate gates.
 
 ### The common gate (every feature)
 
-- [ ] **Claude:** `make build`; `make lint` with 0 issues; `go test ./...` against
+Latest automated evidence: [F5/F6 report](test-docs/2026-10-19-installation-recovery-and-early-access-report.md).
+Build, vet/lint0, Go51 packages, all94 browser scenarios, migrations44/45,
+all4 E2E journeys, runtime/routing/housekeeping and observability pass. Screenshots
+of all3 new states were reviewed at both widths/themes. Review browser needed a
+fresh rerun; the report retains the initial timeout rather than concealing it.
+
+- [x] **Claude:** `make build`; `make lint` with 0 issues; `go test ./...` against
   PostgreSQL. A new migration is applied, rolled back and re-applied in a scratch
   schema.
-- [ ] **Claude:** the browser suites: `make test-browser`, `test-workspace-browser`,
+- [x] **Claude:** the browser suites: `make test-browser`, `test-workspace-browser`,
   `test-setup-browser`, `test-review-browser`, plus any new suite. These run with
   and without JavaScript and must show no CSP errors.
-- [ ] **Claude:** the affected real-Docker suites: `make test-e2e` (which includes
+- [x] **Claude:** the affected real-Docker suites: `make test-e2e` (which includes
   `make test-reference`), and `make test-runtime`, `test-routing` and
   `test-housekeeping` as affected.
-- [ ] **Claude:** screenshots of every new or changed screen at 1440 and 390 px,
+- [x] **Claude:** screenshots of every new or changed screen at 1440 and 390 px,
   light and dark, reviewed.
-- [ ] **Claude:** documentation updated:
+- [x] **Claude:** documentation updated:
   - the DESIGN section and the feature's document in `docs/`;
   - docs/02 for migrations, configuration and commands;
   - the user guide and its manual checklist rows;

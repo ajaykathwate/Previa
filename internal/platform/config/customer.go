@@ -12,15 +12,17 @@ import (
 // CustomerConfig contains operator-owned contact and product retention policy.
 // Operator identities are immutable GitHub IDs, independent of workspace roles.
 type CustomerConfig struct {
-	SupportEmail             string `envconfig:"SUPPORT_EMAIL"`
-	SupportOperatorGitHubIDs string `envconfig:"SUPPORT_OPERATOR_GITHUB_IDS"`
-	OperatorName             string `envconfig:"OPERATOR_NAME" default:"Previa operator"`
-	SupportMessageMaxBytes   int    `envconfig:"SUPPORT_MESSAGE_MAX_BYTES" default:"16384"`
-	SupportRequestsPerDay    int    `envconfig:"SUPPORT_REQUESTS_PER_DAY" default:"5"`
-	SupportRetentionDays     int    `envconfig:"SUPPORT_RETENTION_DAYS" default:"90"`
-	BackupRetentionDays      int    `envconfig:"BACKUP_RETENTION_DAYS" default:"30"`
-	DeletionJournalDays      int    `envconfig:"DELETION_JOURNAL_RETENTION_DAYS" default:"90"`
-	DeletionJournalMaxBytes  int    `envconfig:"DELETION_JOURNAL_MAX_BYTES" default:"1048576"`
+	EarlyAccessEnabled              bool   `envconfig:"EARLY_ACCESS_ENABLED" default:"true"`
+	InstallationReconcileMaxChanges int    `envconfig:"INSTALLATION_RECONCILE_MAX_CHANGES" default:"5"`
+	SupportEmail                    string `envconfig:"SUPPORT_EMAIL"`
+	SupportOperatorGitHubIDs        string `envconfig:"SUPPORT_OPERATOR_GITHUB_IDS"`
+	OperatorName                    string `envconfig:"OPERATOR_NAME" default:"Previa operator"`
+	SupportMessageMaxBytes          int    `envconfig:"SUPPORT_MESSAGE_MAX_BYTES" default:"16384"`
+	SupportRequestsPerDay           int    `envconfig:"SUPPORT_REQUESTS_PER_DAY" default:"5"`
+	SupportRetentionDays            int    `envconfig:"SUPPORT_RETENTION_DAYS" default:"90"`
+	BackupRetentionDays             int    `envconfig:"BACKUP_RETENTION_DAYS" default:"30"`
+	DeletionJournalDays             int    `envconfig:"DELETION_JOURNAL_RETENTION_DAYS" default:"90"`
+	DeletionJournalMaxBytes         int    `envconfig:"DELETION_JOURNAL_MAX_BYTES" default:"1048576"`
 }
 
 func (c CustomerConfig) OperatorIDs() ([]int64, error) {
@@ -39,6 +41,9 @@ func (c CustomerConfig) OperatorIDs() ([]int64, error) {
 }
 
 func (c CustomerConfig) checkCustomer() error {
+	if c.InstallationReconcileMaxChanges < 1 || c.InstallationReconcileMaxChanges > 100 {
+		return errors.New("INSTALLATION_RECONCILE_MAX_CHANGES must be between 1 and 100")
+	}
 	if c.SupportEmail != "" {
 		address, err := mail.ParseAddress(c.SupportEmail)
 		if err != nil || address.Address != c.SupportEmail || strings.ContainsAny(c.SupportEmail, "\r\n") {

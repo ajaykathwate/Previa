@@ -21,7 +21,7 @@ func (s *Store) execution(ctx context.Context, tx pgx.Tx, key string) (execution
 	if err := tx.QueryRow(ctx, `SELECT workspace_id FROM workspace_usage_attempts WHERE attempt_key=$1`, key).Scan(&a.workspace); err != nil {
 		return a, entitlement{}, fmt.Errorf("read usage attempt: %w", err)
 	}
-	e, err := lock(ctx, tx, a.workspace)
+	e, err := s.lock(ctx, tx, a.workspace)
 	if err != nil {
 		return a, e, err
 	}

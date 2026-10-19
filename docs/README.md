@@ -30,7 +30,7 @@ rest explain how and why it works.
 | 24 | [Incident runbook](24-incident-runbook.md) | What to do for each Sentry signal or alert: outages, backlogs, failures, disk, backups, certificates, key rotation. |
 | 25 | [Production deployment](25-production-deployment.md) | The final setup at a glance (components, diagrams, cost, capacity), host setup with Tailscale, domains and DNS, images built from a release tag, Sentry monitoring, logs and day-to-day checks, backups and a pre-launch restore rehearsal, upgrades and rollback, CI and releases, the smoke test. |
 | 26 | [Release report](26-release-report.md) | Evidence for each release acceptance item: what passed, how, and what is still pending. |
-| 27 | [Roadmap](27-roadmap.md) | Prompts 1–13 (13: backend previews), the planned Prompt 14 (missed uninstall detection), and the release checklist. |
+| 27 | [Roadmap](27-roadmap.md) | Prompts 1–13 (13: backend previews), Prompt 14 (missed uninstall detection), and the release checklist. |
 | 28 | [Shared team workspaces](28-shared-workspaces.md) | Roles, repository grants, invitation consent, ownership handover, revocation, shared quotas and migration cutover. |
 | 29 | [Guided onboarding](29-guided-onboarding.md) | The repository Setup tab: five steps from a connected repository to an opened preview, bounded setup checks, and where new members start. |
 | 30 | [Native review and feedback](30-reviews.md) | The review page: testing instructions, findings recorded against deployments, moderation, version conflicts, access, limits and activity records. |
@@ -38,6 +38,8 @@ rest explain how and why it works.
 | 32 | [Persistent test data](32-persistent-test-data.md) | The Test data tab, the `seed` key, repository baselines (build, storage, triggers, ordering), data kept between a pull request's builds, starting-data fallbacks, Reset sources, operation and verification. |
 | 33 | [Usage and the free plan](33-usage-and-free-plan.md) | Finite workspace allowances, measured execution, accounting recovery and role-scoped usage. |
 | 34 | [Accounts, support and deletion](34-accounts-support-and-deletion.md) | Session revocation, durable exits, support operators, status, policies and the independent encrypted restore journal. |
+
+| 35 | [Installation recovery and early access](35-installation-recovery-and-early-access.md) | Missed lifecycle delivery recovery, circuit breakers, operator workspace approval and verification. |
 
 Related files outside this folder:
 

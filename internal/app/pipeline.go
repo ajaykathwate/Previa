@@ -28,6 +28,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/sampledata"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/source"
+	"github.com/ajaykathwatee/previa/internal/webhooks"
 	"github.com/ajaykathwatee/previa/internal/workspaces"
 	"github.com/google/go-github/v91/github"
 	"github.com/google/uuid"
@@ -127,6 +128,20 @@ func buildPipeline(ctx context.Context, in pipelineInput) (*pipeline, error) {
 	if in.github == nil {
 		p.unavailable = append(p.unavailable, "GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH are not set: no discovery, builds or PR reports")
 		return p, nil
+	}
+	if api, ok := in.github.(installations.ReconciliationApp); ok && cfg.GitHubAppID > 0 {
+		broker := environments.NewRequestBroker(in.pool, in.producer)
+		deliveries := webhooks.NewDeliveryService(in.pool, broker, nil)
+		if client, ok := in.github.(interface{ Invalidate(int64) }); ok {
+			deliveries = webhooks.NewDeliveryService(in.pool, broker, client.Invalidate)
+		}
+		reconciler := installations.NewReconciler(installations.NewRepository(in.pool), api, deliveries, log, cfg.GitHubAppID, cfg.InstallationReconcileMaxChanges)
+		p.register = append(p.register, reconciler.Register)
+		if client, ok := in.github.(interface {
+			WithInstallationSignals(func(context.Context, int64) error)
+		}); ok {
+			client.WithInstallationSignals(installations.SignalReconciliation(in.pool, in.producer))
+		}
 	}
 	upstream := pullrequests.NewGitHubSource(in.github)
 	// Setup checks read a few files from GitHub; any worker with the App runs them.

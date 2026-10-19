@@ -341,6 +341,8 @@ func TestRealEndToEnd(t *testing.T) {
 	})
 	t.Log("Automatic: the burst built only the newest commit, back at " + host + "; one living comment throughout")
 
+	proveMissedUninstall(t, ctx, pool, github, broker, docker, router, instance, user, repoID, pr, host, marker)
+
 	// Closing the PR tears the preview down through the close path and leaves
 	// no container, image or network of it behind.
 	if _, err := events.ProcessPR(ctx, webhooks.PREvent{RepoID: repoID, Number: e2ePRNumber, HeadSHA: e2eCommit4, Action: "closed", MergeableState: "clean"}); err != nil {

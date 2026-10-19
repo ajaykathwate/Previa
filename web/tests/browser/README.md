@@ -176,9 +176,11 @@ UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-accounts-browser
 
 `internal/accounts/browser_test.go` creates an isolated schema and serves real
 auth, session/CSRF, workspace, account and support handlers with fixture GitHub
-authentication. Five scenarios cover persisted/escaped support messages, operator
+authentication. Seven scenarios cover persisted/escaped support messages, operator
 incidents, public status/policies, in-place typed disconnect confirmation, durable
-cleanup progress and ending another browser's session. Mutations also run with
+cleanup progress and ending another browser's session, plus pending workspace
+approval, operator isolation and approval with JavaScript enabled and disabled. Mutations also run with
 JavaScript disabled; CSP violations fail the suite. `UI_BROWSER_SCREENSHOTS=1`
 records account, support, operator, policy, progress and modal views at 1440/390
-in both themes. No live GitHub mutations occur.
+in both themes, including pending/approved early-access and operator approval
+views. No live GitHub mutations occur.

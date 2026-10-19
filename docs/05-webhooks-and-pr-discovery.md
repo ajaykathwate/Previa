@@ -215,3 +215,13 @@ Conflicts to Open, needs a disposable repository with write access. Steps:
    expect only the two open PRs after discovery.
 3. Create a conflicting change on the base branch; expect Conflicts and the refusal
    reason. Push a resolution; expect Checking, then Open.
+
+## Recovery when a lifecycle delivery is missed (F5)
+
+`installation_reconcile` observes GitHub outside transactions, then calls the
+same `DeliveryService.lifecycle` path used here under revision locks. Source-time
+fences, repository tombstones, `RevokeTx`, cleanup pending and sweep enqueueing
+commit together. A concurrent signed delivery wins; redelivery of an already
+applied loss does not advance teardown again. Polling only removes access.
+Installation-token creation failures enqueue suspicion without changing access
+from discovery, reporting or build code. See [35](35-installation-recovery-and-early-access.md).

@@ -415,3 +415,34 @@ erDiagram
   %%   wake-up and operation jobs; river_job has no foreign keys by design
   %% - worker_capabilities, platform_instance and route_table stand alone
 ```
+
+## F5/F6 admission and reconciliation supplement
+
+Migrations 0044/0045 extend the existing shared-workspace schema. The main diagram
+above describes the earlier core; this diagram shows the admission audit and
+reconciliation columns. No separate revocation state machine or resource table
+is added.
+
+```mermaid
+erDiagram
+    workspaces ||--o| workspace_approvals : "operator approval audit"
+    workspaces ||--o{ installations : owns
+    workspaces {
+        bigint id PK
+        uuid public_id UK
+        text early_access_state "pending or approved"
+        bigint revision
+    }
+    workspace_approvals {
+        bigint workspace_id PK,FK
+        bigint operator_github_id "immutable configured user ID"
+        timestamptz approved_at
+    }
+    installations {
+        bigint id PK
+        bigint workspace_id FK
+        bigint revision
+        timestamptz reconciled_at
+        timestamptz reconcile_requested_at
+    }
+```

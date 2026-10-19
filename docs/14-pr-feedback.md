@@ -225,3 +225,12 @@ and slug, used to recognise its own comments, come from the App itself
 - Expiry, PR reconciliation (which finds a close missed while webhooks were down)
   and the waiting states come from housekeeping and capacity
   ([15](15-housekeeping-and-capacity.md)).
+
+## Missed installation deliveries (F5)
+
+App-authenticated reconciliation can discover a lost installation or repository
+and use the normal local revocation/teardown path even when GitHub is unreachable
+for reporting. It does not rewrite an inaccessible PR comment or invent a final
+check result. Token-mint 403/404 failures in the shared client only signal a
+durable reconciliation job; reporting does not revoke access itself. Reconnects
+do not authorize builds. See [35](35-installation-recovery-and-early-access.md).

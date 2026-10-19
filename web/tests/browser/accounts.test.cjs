@@ -51,3 +51,34 @@ test('ending other sessions preserves this browser and revokes another signed-in
  const current=await session(),other=await session();
  try{await current.page.goto(`${origin}/protected`);await current.page.getByRole('button',{name:'End other sessions',exact:true}).first().click();await shots(current.page,'session-dialog');await current.page.getByRole('dialog',{name:'End other sessions?',exact:true}).getByRole('button',{name:'End other sessions',exact:true}).click();assert.equal(new URL(current.page.url()).pathname,'/protected');assert.equal((await other.context.request.get(`${origin}/account`,{maxRedirects:0})).status(),303);assert.deepEqual(current.errors,[]);}finally{await current.context.close();await other.context.close();}
 });
+for(const js of [true,false]){
+ test(`early access needs an operator approval and stays usable without scripts (JS ${js})`,async()=>{
+  const {context,page,errors}=await session(js);
+  try{
+   await page.goto(`${origin}/workspaces`);
+   await page.locator('main').getByRole('button',{name:'Create workspace',exact:true}).first().click();
+   await page.locator('#workspace-name').fill(`Approval ${js?'JS':'native'}`);
+   await page.locator('#create-workspace').getByRole('button',{name:'Create workspace',exact:true}).click();
+   await page.waitForURL(/\/early-access$/);
+   assert.match(await page.locator('main').innerText(),/awaiting approval/);
+   // A hard reload also verifies the pending state survives navigation; it avoids
+   // capturing the old workspace page during the create form's view transition.
+   if(js){await page.reload();await shots(page,'early-access-pending');}
+   const publicID=await page.locator('main code').first().innerText();
+   const csrf=await page.locator('input[name=csrf_token]').first().getAttribute('value');
+   assert.equal((await context.request.post(`${origin}/installations/start`,{form:{csrf_token:csrf},maxRedirects:0})).status(),403);
+   await page.goto(`${origin}/help`);assert.equal(await page.getByRole('button',{name:'Send request',exact:true}).count(),1);
+   const nonoperator=await browser.newContext({javaScriptEnabled:js});
+   try{
+    await nonoperator.addCookies([{name:'fixture_login',value:'member',url:origin}]);
+    const member=await nonoperator.newPage();await member.goto(`${origin}/auth/github/login`);
+    assert.equal((await nonoperator.request.get(`${origin}/operator/early-access`,{maxRedirects:0})).status(),404);
+   }finally{await nonoperator.close();}
+   await page.goto(`${origin}/operator/early-access`);if(js)await shots(page,'early-access-operator');
+   const card=page.locator('section').filter({has:page.locator('code').filter({hasText:publicID})});
+   await card.getByRole('button',{name:'Approve workspace',exact:true}).click();
+   await page.goto(`${origin}/early-access`);assert.match(await page.locator('main').innerText(),/is approved/);
+   if(js)await shots(page,'early-access-approved');assert.deepEqual(errors,[]);
+  }finally{await context.close();}
+ });
+}

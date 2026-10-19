@@ -2,81 +2,75 @@
 Last updated: 2026-10-19
 
 ## Current state
-- Branch mvp-complete; F4 included in this single owner-requested commit.
-  Previous HEAD205ae68; F3 commit f0fc89b. No push/deployment.
-- F0–F4 engineering complete. F5 missed-uninstall polling and F6 early access
-  remain out of scope. Owner manual acceptance and policy review precede launch.
-- User supplied support email in ignored local .env. Operator IDs deliberately
-  empty; comments explain comma-separated numeric GitHub USER IDs, not logins,
-  App IDs or installation IDs. Never commit .env or expose its other contents.
+- Branch mvp-complete; F4 commit9ca5c64 precedes the owner-requested single
+  F5/F6 commit. No push or deployment performed.
+- All in-scope F0–F6 engineering implemented. MVP-TODO marks automated F5/F6
+  requirements/common gate done; owner manual/policy acceptance, push, release
+  rehearsal and live deployment checks remain open.
+- Owner chose operator approval per new workspace, existing ones grandfathered.
+  Ignored .env retains configurable support email and empty numeric operator IDs
+  with comments. Two new env settings appended without exposing other values.
 
-## F4 implementation and decisions
-- Migration0043 / SchemaVersion43: durable lifecycle operations, revocation
-  tombstones, encrypted-journal metadata/events, support/audit/incidents/probes.
-  Rollback refuses after lifecycle/revocation data exists; forward-fix then.
-- internal/accounts coordinates feature-owned fences/cleanup/erasure contracts.
-  Repository/installation disconnect and workspace deletion deny access/new work
-  immediately, accept route tombstones, cancel intents/baselines, then retry
-  physical runtime/source/baseline/cache removal. Parents wait for children.
-  Completion requires physical cleanup AND independent journal upload ACK.
-- Explicit repository/installation revocation IDs survive erased product rows;
-  stale webhook inserts/updates cannot reconnect them. App uninstall is separate.
-- Personal deletion requires transfer/finished deletion of owned workspaces;
-  epoch/deleted_at revoke sessions immediately. Profile/avatar/support erased;
-  shared attribution remains Deleted member. Seven-day hashed progress receipt.
-- Auth checks epoch and original session on requests/live streams. End other
-  sessions retains current browser. Private grants also bind to a one-way SCS
-  session digest, so ordinary logout/idle expiry revoke them. Restore discards
-  old SCS sessions and advances all epochs.
-- internal/support: persisted bounded requests, immutable env operator allowlist,
-  audited reads/resolutions/incidents and safe cleanup references. Defaults:
-  16KiB,5 requests/user/UTC day,resolved retention90d. Independent daily counters
-  survive workspace/message erasure; empty operator IDs deny everyone.
-- Real Docker/router probes30s; stale90s Unknown. Public policies describe actual
-  behavior. Contact/operator name/limits/retention configurable in env.
-- Optional Disconnected comments update only existing marked App-owned comments;
-  normal report lease, <=3 attempts/10min, permission loss stops immediately.
-  GitHub outage cannot prevent local fences/teardown. Configured App ID fallback
-  permits execution-worker startup during provider identity-read failure.
-- Journal default1MiB/90d, backup30d; unfinished/unacknowledged never expire.
-  Host age/rclone publisher every minute via dynamic-IP maintenance journal
-  service; upload then ACK under channel lock. Restore stops server/worker/router,
-  fetches independent latest, checks identity/time/size/version, replays missing
-  events before traffic, clears generated route table and restarts builds paused.
-  Pre-F4 dumps lacking journal identity are refused. Off-host backup required.
-- DESIGN27/docs34, docs02/env/README/spec/production/runbook/user guide and roadmap
-  updated. Test report: test-docs/2026-10-19-accounts-support-and-deletion-report.md.
+## F5/F6 implementation and decisions
+- Migrations0044/0045; SchemaVersion45. Reconciled/requested timestamps, workspace
+  pending/approved and operator audit. SQLC/Templ regenerated; no new library.
+- App-JWT identity check then exact installation404/suspension or complete
+  paginated numeric repository IDs. Snapshot revision before ALL external IO.
+  Bound25 installations,100x100 repositories; observe whole batch before applying.
+  Outages/401/rate/partial/wrongApp change nothing. Defaultmax5 and all-known
+  circuit stop excessive losses, including sole-known installation/all its repos.
+- Uses existing webhook lifecycle/RevokeTx/tombstones/cleanup/sweep transaction.
+  Signed webhook revision wins races; late loss delivery does not advance cleanup
+  twice. Polling never restores access or authorizes a build.
+- Token-mint403/404 record suspicion + deduplicated River wake-up, never revoke
+  from request/build/report path. Startup/5min queue runs without Docker/paused.
+- Verified reconnect can confirm old404 and use same revocation path to preserve
+  history only in the same authorized workspace. Never moves another team's
+  history; restoration starts no build. Explicit reconnect can resolve sole oldID
+  despite automatic all-known breaker. Metrics6 bounded outcomes + Sentry/alerts.
+- Earlyaccess package native status/operator pages, CSRF, immutable operator IDs,
+  revision/audit/idempotency. Existing workspaces approved; new/default pending.
+  Connection transaction + physical PR/baseline admission/execution/renewal/
+  publication enforce approval without allowance spend. Support/settings/members/
+  account exits/cleanup usable. Approval starts no build. Callback authority stays
+  with original session workspace if another tab selects a different one.
+- EARLY_ACCESS_ENABLED=true and INSTALLATION_RECONCILE_MAX_CHANGES=5 in env
+  examples/local.env, documented range1–100. Server and worker must agree.
+  SUPPORT_OPERATOR_GITHUB_IDS uses numeric GitHub USER IDs, not names/App/install
+  IDs. Empty means nobody can approve; configure before inviting new workspaces.
+- README/spec/DESIGN28–29, docs35/02/04/05/12/14/24/27, user guide L1–L9,
+  stack/schema diagrams and MVP-TODO updated. No theme/architecture deviation;
+  old same-owner rule maps to current shared-workspace authority, documented.
 
 ## Final verification
-- Commit preparation: build, ordinary Go tests, vet and lint PASS (0 issues).
-  Tests reran outside the socket-restricted sandbox. DB/Docker/browser opt-ins
-  were not repeated; full implementation verification is recorded below.
-- Build, gofmt, git diff --check PASS. Vet/golangci-lint PASS0 issues.
-- All Go packages pass across full run plus fresh reruns: environments444.194s
-  with30m aggregate deadline; workspaces112.528s. Initial aggregate timeout and
-  concurrent fixture-import artifact are documented in the report.
-- Browsers PASS: broad55,workspaces14,setup5,review6,accounts5. JS on/off and CSP;
-  new screens captured1440/390 light/dark; representative screenshots reviewed.
-- Real TestData451.872s PASS:11 attempts,2 baselines,243.770071s metered; explicit
-  disconnect/ACK with complete physical, source, baseline and cache removal.
-- Real backend393.14s, ordinary e2e137.74s, reference189.222s PASS. Runtime343.909s,
-  routing261.820s,housekeeping28.756s PASS. Reference reran alone after its global
-  volume-delta assertion saw concurrent smoke volumes.
-- All3 release images f4-local built; encrypted production smoke PASS45 checks,
-  restore52s, including missing-journal refusal and post-backup deletion replay.
-  ShellCheck0.10 PASS. No live GitHub mutation or live host/R2 recovery claimed.
-- Logs /tmp/previa-f4-*.log; all verification jobs finished. Go cache
-  /tmp/previa-go-build; lint cache /tmp/previa-golangci-lint. GOFLAGS=-buildvcs=false
-  avoids slow Git metadata under WSL. Every shell command uses rtk prefix.
+- make build / go build ./... PASS; vet/golangci-lint PASS0 after final Go edits.
+- Full Go suite PostgreSQL -p2 timeout30m PASS51 tested packages. Later small
+  connection/revision-order refactors PASS targeted accounts58.301s/app0.025s,
+  full installations4.300s, callback guard0.008s. Both44/45 down/up PASS.
+- Browsers PASS94 scenarios: broad55,workspace14,setup5,review6,testdata3,usage4,
+  accounts7; JS on/off and CSP. Initial review modal timeout; all6 pass on fresh
+  rerun without product changes, retained in report. Final accounts7 PASS21.597s.
+- New pending/approved/operator screens all12 widths/themes captured/reviewed.
+  Capture reloads pending page to avoid previous-page view-transition snapshot.
+- All4 real E2E PASS620.029s: backend268.32,reference93.34,ordinary69.81,
+  persistent188.51. Dropped uninstall proves actual teardown/relink/no build.
+  Existing persistent disconnect/journal/source/baseline/cache cleanup retained.
+- Real runtime252.084s, routing212.071s, housekeeping17.375s PASS. First combined
+  routing process terminated143; standalone rerun passes. Old interrupted instance
+  ccfbea4fc23a exact labelled resources/ACME stack/scratch schema cleaned safely.
+- Promtool PASS29 alerts+tests/config/28 dashboard rules. Diff whitespace/local
+  doc links PASS. Report test-docs/2026-10-19-installation-recovery-and-early-access-report.md.
+  Logs /tmp/previa-f56-*.log; all jobs finished. No live GitHub mutations claimed.
 
-## Next steps / environment
-- Development DB was41 and was deliberately NOT migrated. Stop old Air/server
-  and worker, run make migrate-up (43 + River), then restart both.
-- Production: install/run minute deletion-journal timer with configured encrypted
-  off-host backup channel; otherwise deletion deliberately remains pending.
-- Disposable DB container previa-member-ux-test-postgres:55439,previa_ux_test;
-  leave intact. Isolated test schemas; no developer data erased.
-- Preserve deployment205ae68: one OVH VPS2, host-built images, Cloudflare DNS/R2,
-  Sentry, Tailscale SSH, lazydocker. No live deployment or extra infrastructure.
-- Do not edit technical-docs/inside-previa.md. No theme/library/architecture
-  deviation. CWD lowercase Windows path aliases original uppercase path.
+## Environment / next steps
+- Developer DB intentionally not migrated or processes stopped. Owner stops old
+  server/worker, make migrate-up to45+River007, then restarts both.
+- New disposable previa-f56-tests-postgres:55439,previa_ux_test,userprevia,
+  passwordprevia-test; root45/River7, isolated schemas. Leave container intact.
+  Old previa-member-ux-test-postgres no longer exists.
+- GOCACHE=/tmp/previa-go-build GOFLAGS=-buildvcs=false; lintcache
+  /tmp/previa-golangci-lint. DB/TLS/browser/Docker require socket sandbox approval.
+- Every shell command prefixes /home/ajaykathwatee/.local/bin/rtk. Do not edit
+  technical-docs/inside-previa.md. CWD lowercase aliases original uppercase path.
+- Preserve deployment205ae68: OVH VPS2, host-built images, Cloudflare DNS/R2,
+  Sentry,Tailscale,lazydocker, independent minute encrypted deletion journal.

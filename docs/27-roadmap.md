@@ -12,9 +12,11 @@ production; the release checklist at the end does.
 
 **Prompt 13 is done** ([11](11-backend-previews.md)): backend and API repositories
 (an app with a database, a cache, migrations and background workers) preview as well
-as web frontends do. **Prompt 14** is planned and not started:
-- **Prompt 14** closes a gap: Previa misses an uninstall, a suspension or a
-  repository removal whose webhook never arrived.
+as web frontends do. **Prompt 14 is implemented** in F5:
+[35](35-installation-recovery-and-early-access.md) describes bounded App-JWT
+recovery for missed uninstall, suspension and repository-removal deliveries, and
+the operator-approved F6 workspace gate. Verification is recorded in the
+[F5/F6 report](../test-docs/2026-10-19-installation-recovery-and-early-access-report.md).
 
 ## Verified starting point
 
@@ -749,6 +751,10 @@ resolver.
 > (gRPC or raw TCP).
 
 ## Prompt 14 — Detect missed App uninstalls, suspensions and repository removals
+
+Implemented by F5. The quoted task below preserves the original pre-feature
+problem statement; see [35](35-installation-recovery-and-early-access.md) for
+current behavior, limits and the shared-workspace interpretation of ownership.
 
 > Close the gap where Previa misses a webhook that removes access. Today only signed
 > `installation` and `installation_repositories` deliveries change access. GitHub

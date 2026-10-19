@@ -12,6 +12,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/builds"
+	"github.com/ajaykathwatee/previa/internal/earlyaccess"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/housekeeping"
 	"github.com/ajaykathwatee/previa/internal/installations"
@@ -75,6 +76,11 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 		identity = &github.App{ID: &appID}
 	}
 	x := &execution{usage: usage.NewStore(pool, cfg.BuildMinutesPerAccountDay, cfg.BuildsPerAccount).WithPreviewPolicy(cfg.PreviewLifetime(), cfg.PreviewIdleSleep, cfg.BuildLogRetention())}
+	operatorIDs, err := cfg.OperatorIDs()
+	if err != nil {
+		return nil, err
+	}
+	x.usage.WithAdmission(earlyaccess.NewService(pool, cfg.EarlyAccessEnabled, operatorIDs))
 	if x.gateway, err = newEgressGateway(in); err != nil {
 		return nil, err
 	}

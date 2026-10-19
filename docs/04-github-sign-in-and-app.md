@@ -212,3 +212,14 @@ profile, never in workspace member queries.
 
 Previa-owned public identifiers are random UUIDs, independent of immutable numeric
 GitHub IDs and GitHub PR numbers. Existing internal relational keys remain stable.
+
+## Missed deliveries and workspace admission (F5/F6)
+
+The App-JWT reconciler checks exact installation IDs and complete repository
+lists every five minutes. Confirmed losses share the signed lifecycle teardown
+path; observation errors cannot revoke access. Verified reconnects can confirm a
+same-workspace old installation was deleted and preserve repository history;
+access restoration never authorizes a build. New workspaces require operator
+approval before connection, enforced again in the connection transaction.
+Existing workspaces are approved by migration 0045. See [35](35-installation-recovery-and-early-access.md)
+for breaker limits, token-error wake-ups and operator setup.

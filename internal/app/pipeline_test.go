@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/onboarding"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/google/go-github/v91/github"
@@ -73,5 +74,31 @@ func TestPipelineRegistersOnlyWhatItsDependenciesAllow(t *testing.T) {
 	routed.PreviewBaseDomain = "preview.example.com"
 	if _, err := buildPipeline(t.Context(), pipelineInput{cfg: routed, pool: pool, github: noApp{}, logger: logger}); err == nil || !strings.Contains(err.Error(), "Docker") {
 		t.Fatalf("routing without Docker: %v", err)
+	}
+}
+
+// Registration requires neither a GitHub request nor Docker, even while paused.
+func (noApp) Installation(context.Context, int64) (*github.Installation, error) {
+	return nil, errors.New("unused")
+}
+func TestInstallationReconciliationRegisteredWithoutExecution(t *testing.T) {
+	pool, err := pgxpool.New(t.Context(), "postgres://previa@127.0.0.1:1/unused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	cfg := config.WorkerConfig{}
+	cfg.GitHubAppID = 77
+	cfg.BuildsPaused = true
+	p, err := buildPipeline(t.Context(), pipelineInput{cfg: cfg, pool: pool, github: noApp{}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := registered(t, p)
+	if queue, ok := rc.Queues[installations.ReconciliationQueue]; !ok || queue.MaxWorkers != 1 || p.capabilities.Execution {
+		t.Fatal("reconciliation depends on physical execution")
+	}
+	if len(rc.PeriodicJobs) == 0 {
+		t.Fatal("reconciliation has no periodic wakeup")
 	}
 }

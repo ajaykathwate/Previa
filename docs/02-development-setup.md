@@ -1243,7 +1243,7 @@ make egress-image
 make router-up
 ```
 
-**Expected:** PostgreSQL is healthy; Goose reaches 43 and River reaches 007;
+**Expected:** PostgreSQL is healthy; Goose reaches 45 and River reaches 007;
 the application builds, the egress image exists and Traefik starts with the fresh
 route table. These Make targets automatically read `.env`. Start `make dev`
 (or `make run-server`) and `make run-worker` in separate terminals. Sign in,
@@ -1266,7 +1266,7 @@ make run-server
 make run-worker
 ```
 
-**Expected:** Goose **0043**, River **007**, build succeeds. New sidebar links
+**Expected:** Goose **0045**, River **007**, build succeeds. New sidebar links
 reach Account & connections and Support & status; Your profile offers End other
 sessions. This task does not migrate your development database automatically.
 Make migration/run/dev commands load trusted `.env` assignments (exported
@@ -1333,3 +1333,50 @@ journal acknowledgement and physical erasure. Optional
 `web/tests/browser/artifacts`. Public status is unknown until an execution worker
 reports actual Docker/router probes. A database-only worker can erase personal
 data and empty workspaces; repository cleanup waits for an execution worker.
+
+
+## F5/F6: installation recovery and workspace approval
+
+Stop old server/worker processes, then run `make migrate-up` before restarting.
+Expected schema: **45**, with River migrations current. Migration 0044 adds fair
+installation reconciliation scheduling; 0045 preserves existing workspaces as
+Approved and makes new workspaces Pending. This task does not migrate your
+development database automatically.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `EARLY_ACCESS_ENABLED` | `true` | Both server and worker enforce approval of new workspaces. |
+| `INSTALLATION_RECONCILE_MAX_CHANGES` | `5` | Max installation/repository revocations in one automatic pass, 1–100. The all-known circuit remains enabled. |
+
+Both env examples include these settings. Make migration/run commands and Air
+load trusted `.env` settings as documented above; direct `go`/binary commands
+require manual exports. Keep server/worker settings consistent. Existing
+`GITHUB_APP_ID`/private-key credentials enable reconciliation automatically, every
+five minutes and at startup, even with builds paused. No installation token is
+stored in PostgreSQL. `SUPPORT_OPERATOR_GITHUB_IDS` also authorizes approvals at
+`/operator/early-access`; empty denies everyone. Use numeric GitHub user IDs from
+the GitHub user API response's numeric `id` (`https://api.github.com/users/YOUR_LOGIN`), not logins, App IDs or installation IDs.
+
+After creating a workspace, expect `/early-access` with Awaiting approval. A
+configured operator approves it in the console. Refresh status: Approved.
+Connections/builds then work under their normal roles and free limits. Settings,
+support, account exits and cleanup work while awaiting approval. Operator approval
+does not start a build. Preexisting workspaces continue without a new approval.
+
+Verification (explicitly export `TEST_DATABASE_URL` for a disposable database):
+
+```sh
+make build
+make lint
+go test -p=2 -timeout=30m ./...
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-accounts-browser
+TEST_E2E=1 go test ./internal/app -run '^TestRealEndToEnd$' -count=1 -v -timeout=30m
+make observability-check
+```
+
+The accounts browser suite now also verifies early-access approval with scripts
+on/off and denial of the operator console to a customer Admin. Screenshot mode
+uses `UI_BROWSER_SCREENSHOTS=1`. The ordinary real E2E journey now additionally
+drops the uninstall webhook, detects the exact installation 404, verifies real
+route/runtime cleanup, and relinks without rebuilding. See [35](35-installation-recovery-and-early-access.md)
+for circuit-breaker recovery; an all-known revocation deliberately needs review.

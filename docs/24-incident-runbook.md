@@ -300,3 +300,24 @@ A preview behaving maliciously, or a leaked credential:
 4. Previews never had the Docker socket, host networking, PostgreSQL or the
    control plane ([10](10-preview-runtime.md)); the worker did, and the server had
    the database. Investigate those first if host compromise is suspected.
+
+
+## Missed GitHub lifecycle deliveries
+
+A reconciliation repair means a signed webhook was missed. Review warning/error
+logs (Sentry in production), the bounded installation reconciliation metric and
+`PreviaMissedGitHubLifecycle` / `PreviaInstallationReconciliationBlocked` alerts.
+Check GitHub App delivery history, webhook reachability/signatures, the configured
+numeric App ID/private key and GitHub availability/rate limits. Reconciliation
+never restores access; do not activate an old deleted installation manually.
+
+If the all-known or change-budget circuit opens, inspect the affected identities
+and redeliver the real signed lifecycle events from GitHub after fixing delivery.
+Increasing `INSTALLATION_RECONCILE_MAX_CHANGES` does not disable the all-known
+check. A verified explicit same-workspace reconnect may confirm an old deletion
+and recover it; an outage or another workspace's history cannot be adopted.
+Local teardown needs no GitHub access and continues while builds are paused.
+
+For early-access approval, set `SUPPORT_OPERATOR_GITHUB_IDS` to numeric user IDs,
+restart the server, then use `/operator/early-access`. Never grant a customer
+Owner/Admin operator authority implicitly. Approval is audited and starts no build.

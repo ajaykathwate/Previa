@@ -1016,3 +1016,20 @@ erDiagram
 
 - `river_notification_created_at_idx`: `btree (created_at)`
 - `river_notification_topic_id_idx`: `btree (topic, id)`
+
+## F5/F6 schema supplement (migrations 0044–0045)
+
+The older table inventory above is supplemented by the feature migrations.
+`installations.reconciled_at` and `reconcile_requested_at` are non-null
+`timestamptz` values initially `-infinity`. An active/suspended partial index
+supports bounded polling. These timestamps track observations/suspicions, not
+access grants; the existing installation revision and lifecycle tombstones fence
+mutations. Durable wake-ups use River's existing job table.
+
+`workspaces.early_access_state` is constrained to `pending` or `approved`.
+Migration 0045 initially marks existing rows approved, then sets pending as the
+default for new rows. `workspace_approvals` contains one row per approved request:
+`workspace_id` (PK/FK, cascade on workspace erasure), positive immutable
+`operator_github_id`, and `approved_at`. The workspace revision changes atomically
+with approval. Grandfathered rows need no invented operator audit. An index on
+active pending workspaces supports the operator queue. See [the diagram](database-schema-diagram.md#f5f6-admission-and-reconciliation-supplement).

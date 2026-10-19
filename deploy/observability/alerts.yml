@@ -221,3 +221,19 @@ groups:
         annotations:
           summary: A TLS certificate expires within three days.
           runbook: docs/24-incident-runbook.md#certificate-renewal
+
+  - name: previa-installation-access
+    rules:
+      - alert: PreviaMissedGitHubLifecycle
+        expr: sum(increase(previa_installation_reconciliation_total{outcome=~"deleted|suspended|repository_removed"}[15m])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: Installation reconciliation recovered a missed GitHub lifecycle delivery.
+          runbook: docs/24-incident-runbook.md#missed-github-lifecycle-deliveries
+
+      - alert: PreviaInstallationReconciliationBlocked
+        expr: sum(increase(previa_installation_reconciliation_total{outcome=~"error|circuit_open"}[15m])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: Installation reconciliation stopped without accepting an unverified revocation.
+          runbook: docs/24-incident-runbook.md#missed-github-lifecycle-deliveries

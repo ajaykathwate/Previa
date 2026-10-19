@@ -892,6 +892,19 @@ Restore-safe erasure requires a deletion/revocation journal newer than the resto
 - Help, support requests, incident/status information, retention pages, and cancellation/delete controls are real and accessible inside Previa.
 - The free early access is labeled free and finite; no purchase control appears and nothing implies that paid billing exists.
 
+### Early-access admission (F6, owner approved 19 October 2026)
+
+New workspaces require explicit operator approval before repository connection or
+PR/baseline compute. Existing workspaces remain approved at migration. GitHub
+sign-in, collaboration settings, support, account exits and cleanup stay available.
+Only configured immutable numeric operator IDs may approve; workspace Owner/Admin
+roles do not confer this authority. Approvals are audited, idempotent, revision
+guarded and never start builds. Server connection persistence and worker admission/
+execution independently enforce approval; UI hiding alone is insufficient.
+`EARLY_ACCESS_ENABLED` defaults true, with a documented operator override for
+self-hosted instances. Server and worker must share its setting.
+
+
 ## 10. GitHub reporting across all features
 
 ### 10.1 Canonical data and visible result

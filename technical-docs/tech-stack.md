@@ -259,3 +259,23 @@ Manual, end-user test cases are in [user-guide.md](user-guide.md#manual-test-che
   never in job payloads or URLs.
 
 Details: [23](../docs/23-observability-and-hardening.md), [10](../docs/10-preview-runtime.md), [07](../docs/07-repository-secrets.md).
+
+## Installation recovery and early access (F5/F6)
+
+No new library or infrastructure is required: `internal/installations` owns the
+bounded App-JWT reconciliation job on River; `internal/webhooks` applies its
+confirmed observations through the existing lifecycle transaction. The shared
+GitHub transport records token-mint suspicions. Prometheus has bounded outcome
+metrics and repair/circuit alerts; warnings/errors reach the existing Sentry
+handler. `internal/earlyaccess` owns workspace approval, audit and native pages.
+
+| URL / setting | Purpose |
+| --- | --- |
+| `/early-access` | Selected workspace status and support link |
+| `/operator/early-access` | Numeric-ID allowlisted operators review and approve requests |
+| `EARLY_ACCESS_ENABLED=true` | Gate new workspaces on server and worker |
+| `INSTALLATION_RECONCILE_MAX_CHANGES=5` | Small mutation budget; all-known circuit remains enforced |
+
+Migrations 0044/0045 add observation times and workspace admission/audit. Existing
+workspaces retain approval. See [35](../docs/35-installation-recovery-and-early-access.md)
+and [development setup](../docs/02-development-setup.md#f5f6-installation-recovery-and-workspace-approval).

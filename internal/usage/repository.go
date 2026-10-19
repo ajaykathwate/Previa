@@ -45,7 +45,12 @@ type entitlement struct {
 // Store uses the workspace entitlement as the lock for all its reservations.
 // Callers admitting work hold their feature's scope locks before this lock.
 // Renewals and recovery acquire only usage locks, never feature scope locks.
+type AdmissionGate interface {
+	ApprovedTx(context.Context, pgx.Tx, int64) (bool, error)
+}
+
 type Store struct {
+	admission                                  AdmissionGate
 	pool                                       *pgxpool.Pool
 	dailySeconds                               int64
 	buildCeiling                               int
@@ -105,7 +110,7 @@ func (s *Store) AdmitBaselineTx(ctx context.Context, tx pgx.Tx, workspace, refre
 }
 
 func (s *Store) admit(ctx context.Context, tx pgx.Tx, workspace, repo, pr, baseline, generation, revision int64, key string, now time.Time) (string, time.Time, error) {
-	e, err := lock(ctx, tx, workspace)
+	e, err := s.lock(ctx, tx, workspace)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -256,7 +261,7 @@ func (s *Store) PublicationTx(ctx context.Context, tx pgx.Tx, pr int64, now time
         JOIN installations i ON i.id=r.installation_id WHERE p.id=$1`, pr).Scan(&workspace); err != nil {
 		return "", time.Time{}, fmt.Errorf("read publication workspace: %w", err)
 	}
-	e, err := lock(ctx, tx, workspace)
+	e, err := s.lock(ctx, tx, workspace)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -274,7 +279,7 @@ func (s *Store) PublicationTx(ctx context.Context, tx pgx.Tx, pr int64, now time
 }
 
 func (s *Store) PublicationBaselineTx(ctx context.Context, tx pgx.Tx, workspace int64, now time.Time) (string, time.Time, error) {
-	e, err := lock(ctx, tx, workspace)
+	e, err := s.lock(ctx, tx, workspace)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -309,4 +314,21 @@ func (s *Store) publicationAllowance(ctx context.Context, tx pgx.Tx, e entitleme
 
 func (s *Store) transaction(ctx context.Context, fn func(pgx.Tx) error) error {
 	return database.InTransaction(ctx, s.pool, fn)
+}
+
+// WithAdmission gates all physical PR/baseline compute without spending allowance.
+func (s *Store) WithAdmission(g AdmissionGate) *Store { s.admission = g; return s }
+func (s *Store) lock(ctx context.Context, tx pgx.Tx, workspace int64) (entitlement, error) {
+	e, err := lock(ctx, tx, workspace)
+	if err != nil {
+		return e, err
+	}
+	if s.admission != nil {
+		allowed, err := s.admission.ApprovedTx(ctx, tx, workspace)
+		if err != nil {
+			return e, err
+		}
+		e.restricted = e.restricted || !allowed
+	}
+	return e, nil
 }

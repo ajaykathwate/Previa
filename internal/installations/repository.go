@@ -21,6 +21,7 @@ type InitialDiscoverer interface {
 	DiscoverInstallationTx(context.Context, pgx.Tx, int64) error
 }
 type Repository struct {
+	admission AdmissionGate
 	db        database
 	discovery InitialDiscoverer
 	reports   ReportRecorder
@@ -79,26 +80,9 @@ func (r *Repository) transaction(ctx context.Context, operation func(pgx.Tx, *db
 }
 func (r *Repository) Link(ctx context.Context, id, userID, revision int64, account string, repos []RepositoryInfo) error {
 	return r.transaction(ctx, func(tx pgx.Tx, q *dbgen.Queries) error {
-		workspaceID := scope.WorkspaceID(ctx)
-		if workspaceID == 0 {
-			var err error
-			workspaceID, err = q.DefaultWorkspace(ctx, userID)
-			if err != nil {
-				return fmt.Errorf("resolve installation workspace: %w", err)
-			}
-		}
-		if _, err := q.LockLinkWorkspace(ctx, workspaceID); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrForbidden
-			}
-			return fmt.Errorf("lock connection workspace: %w", err)
-		}
-		allowed, err := q.AuthorizedLinkWorkspace(ctx, dbgen.AuthorizedLinkWorkspaceParams{ID: workspaceID, UserID: userID})
+		workspaceID, err := r.linkWorkspace(ctx, tx, q, userID)
 		if err != nil {
-			return fmt.Errorf("verify workspace connection authority: %w", err)
-		}
-		if !allowed {
-			return ErrForbidden
+			return err
 		}
 		if err := q.EnsureInstallation(ctx, id); err != nil {
 			return fmt.Errorf("ensure verified installation: %w", err)
@@ -239,4 +223,47 @@ func (r *Repository) discover(ctx context.Context, tx pgx.Tx, id int64) error {
 		return nil
 	}
 	return r.discovery.DiscoverInstallationTx(ctx, tx, id)
+}
+
+func (r *Repository) requireAdmission(ctx context.Context, tx pgx.Tx, workspace int64) error {
+	if r.admission == nil {
+		return nil
+	}
+	allowed, err := r.admission.ApprovedTx(ctx, tx, workspace)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrApprovalRequired
+	}
+	return nil
+}
+
+// linkWorkspace locks and verifies the selected workspace before connecting code.
+func (r *Repository) linkWorkspace(ctx context.Context, tx pgx.Tx, q *dbgen.Queries, userID int64) (int64, error) {
+	workspaceID := scope.WorkspaceID(ctx)
+	if workspaceID == 0 {
+		var err error
+		workspaceID, err = q.DefaultWorkspace(ctx, userID)
+		if err != nil {
+			return 0, fmt.Errorf("resolve installation workspace: %w", err)
+		}
+	}
+	if _, err := q.LockLinkWorkspace(ctx, workspaceID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrForbidden
+		}
+		return 0, fmt.Errorf("lock connection workspace: %w", err)
+	}
+	if err := r.requireAdmission(ctx, tx, workspaceID); err != nil {
+		return 0, err
+	}
+	allowed, err := q.AuthorizedLinkWorkspace(ctx, dbgen.AuthorizedLinkWorkspaceParams{ID: workspaceID, UserID: userID})
+	if err != nil {
+		return 0, fmt.Errorf("verify workspace connection authority: %w", err)
+	}
+	if !allowed {
+		return 0, ErrForbidden
+	}
+	return workspaceID, nil
 }
