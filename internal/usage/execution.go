@@ -133,6 +133,9 @@ func (s *Store) start(ctx context.Context, key string) (time.Time, error) {
 		if a.state != "reserved" {
 			return errors.New("usage attempt was already executed; a physical retry needs a new key")
 		}
+		if err := scopeAvailable(ctx, tx, key); err != nil {
+			return err
+		}
 		if !now.Before(a.deadline) {
 			return &Blocked{Reason: WaitMinutes}
 		}
@@ -147,18 +150,8 @@ func (s *Store) start(ctx context.Context, key string) (time.Time, error) {
 		if running > ceiling {
 			return &Blocked{Reason: WaitBuilds}
 		}
-		var pr int64
-		if err = tx.QueryRow(ctx, `SELECT coalesce(pull_request_id,0) FROM workspace_usage_attempts WHERE attempt_key=$1`, key).Scan(&pr); err != nil {
-			return fmt.Errorf("read reserved preview identity: %w", err)
-		}
-		if pr > 0 {
-			count, _, err := slots(ctx, tx, e.workspace, pr)
-			if err != nil {
-				return err
-			}
-			if count > e.previews {
-				return &Blocked{Reason: WaitPreviews}
-			}
+		if err := checkReservedPreviewSlots(ctx, tx, key, e.workspace, e.previews); err != nil {
+			return err
 		}
 		// Admission-to-execution delay is not execution. Release the admission
 		// reservation and recheck the actual balances immediately before work.
@@ -192,6 +185,9 @@ func (s *Store) renew(ctx context.Context, key string) (time.Time, error) {
 		if a.state != "running" || !now.Before(a.deadline) {
 			return &Blocked{Reason: WaitMinutes}
 		}
+		if err := scopeAvailable(ctx, tx, key); err != nil {
+			return err
+		}
 		if err = settle(ctx, tx, key, now, true); err != nil {
 			return err
 		}
@@ -202,6 +198,21 @@ func (s *Store) renew(ctx context.Context, key string) (time.Time, error) {
 		return err
 	})
 	return deadline, err
+}
+
+func scopeAvailable(ctx context.Context, tx pgx.Tx, key string) error {
+	var available bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workspace_usage_attempts a JOIN repos r ON r.id=a.repo_id
+		JOIN installations i ON i.id=r.installation_id JOIN workspaces w ON w.id=i.workspace_id
+		WHERE a.attempt_key=$1 AND a.workspace_id=w.id AND r.accessible AND i.status='active' AND w.state='active'
+		AND (a.baseline_refresh_id IS NULL OR EXISTS(SELECT 1 FROM baseline_refreshes b WHERE b.id=a.baseline_refresh_id AND b.state IN ('pending','running'))))`, key).Scan(&available)
+	if err != nil {
+		return fmt.Errorf("check execution scope: %w", err)
+	}
+	if !available {
+		return &Blocked{Reason: WaitRestricted}
+	}
+	return nil
 }
 
 func (s *Store) finish(ctx context.Context, key, outcome string) error {
@@ -303,4 +314,22 @@ func (s *Store) Run(ctx context.Context, key string, work func(context.Context) 
 	finishCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer stop()
 	return errors.Join(workErr, s.finish(finishCtx, key, outcome))
+}
+
+func checkReservedPreviewSlots(ctx context.Context, tx pgx.Tx, key string, workspace int64, limit int) error {
+	var pr int64
+	if err := tx.QueryRow(ctx, `SELECT coalesce(pull_request_id,0) FROM workspace_usage_attempts WHERE attempt_key=$1`, key).Scan(&pr); err != nil {
+		return fmt.Errorf("read reserved preview identity: %w", err)
+	}
+	if pr > 0 {
+		count, _, err := slots(ctx, tx, workspace, pr)
+		if err != nil {
+			return err
+		}
+		if count > limit {
+			return &Blocked{Reason: WaitPreviews}
+		}
+	}
+
+	return nil
 }

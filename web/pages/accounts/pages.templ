@@ -1,0 +1,120 @@
+package accounts
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+templ Shell(title string, p Page) {
+	if p.Name!="" {
+		@layouts.App(title, p.Name, p.CSRF, components.NavAccount) {
+			{ children... }
+		}
+	} else {
+		@layouts.Base(title) {
+			{ children... }
+		}
+	}
+}
+
+templ Index(p Page) {
+	@Shell("Account and connections", p) {
+		<div class="team-page customer-page">
+			@components.PageTitle("Account and connections", "Manage local GitHub connections, workspace exits and your personal account.")
+			if p.Error!="" {
+				<p class="field-error" role="alert">{ p.Error }</p>
+			}
+			<p><a href="/protected">Your profile and sessions</a> · <a href="/help">Support</a> · <a href="/policies/privacy">Data and retention</a></p>
+			<section class="workspace-panel field-card">
+				<h2>Workspaces</h2>
+				<p>Leave a workspace from its Members screen. Owners must transfer ownership or delete the workspace.</p>
+				for _,v:=range p.Workspaces {
+					<div class="field-row customer-resource">
+						<span>{ v.Name } · { v.Role }</span><a href={ templ.SafeURL("/workspaces/" + v.ID + "/members") }>Members</a>
+						if v.Role=="owner" {
+							<button type="button" class="field-card-action tone-error" data-open-dialog={ "delete-" + v.ID } commandfor={ "delete-" + v.ID } command="show-modal" aria-haspopup="dialog">Delete workspace</button>
+						}
+					</div>
+					if v.Role=="owner" {
+						@Confirm(p, "delete-"+v.ID, "Delete "+v.Name+"?", "All members lose access immediately. Previa disconnects installations, removes previews and test data, then erases workspace records. Cleanup and the independent journal must succeed before completion.", "/account/workspaces/"+v.ID+"/delete", v.Revision, "DELETE")
+					}
+				}
+				if len(p.Workspaces)==0 {
+					<p>No active workspaces.</p>
+				}
+			</section>
+			<section class="workspace-panel field-card">
+				<h2>GitHub App connections</h2>
+				<p>Disconnect removes the local connection and its previews, secrets, logs, feedback and test data. It does not uninstall the GitHub App. To reconnect, first finish cleanup and explicitly reinstall the App on GitHub.</p>
+				for _,v:=range p.Installations {
+					<div class="field-row customer-resource"><span>{ v.Name } · { v.Workspace }</span><button type="button" class="field-card-action" data-open-dialog={ "disconnect-" + v.ID } commandfor={ "disconnect-" + v.ID } command="show-modal" aria-haspopup="dialog">Disconnect installation</button></div>
+					@Confirm(p, "disconnect-"+v.ID, "Disconnect "+v.Name+"?", "Every repository in this installation loses local access immediately. Cleanup continues even when GitHub is unavailable. Previa makes a bounded attempt to update existing PR comments to Disconnected.", "/account/installations/"+v.ID+"/disconnect", v.Revision, "DISCONNECT")
+				}
+				if len(p.Installations)==0 {
+					<p>No connections you can manage.</p>
+				}
+			</section>
+			<section class="workspace-panel field-card">
+				<h2>Individual repositories</h2>
+				for _,v:=range p.Repositories {
+					<div class="field-row customer-resource"><span><code>{ v.Name }</code> · { v.Workspace }</span><button type="button" class="field-card-action" data-open-dialog={ "disconnect-" + v.ID } commandfor={ "disconnect-" + v.ID } command="show-modal" aria-haspopup="dialog">Disconnect repository</button></div>
+					@Confirm(p, "disconnect-"+v.ID, "Disconnect "+v.Name+"?", "This repository loses local access immediately. Its previews, runtime resources, secrets, logs, feedback and test data are removed. Other repositories stay connected.", "/account/repositories/"+v.ID+"/disconnect", v.Revision, "DISCONNECT")
+				}
+				if len(p.Repositories)==0 {
+					<p>No repositories you can manage.</p>
+				}
+			</section>
+			<section class="workspace-panel field-card">
+				<h2>Deletion and disconnection requests</h2>
+				for _,v:=range p.Operations {
+					<p><a href={ templ.SafeURL("/account/operations/" + v.ID) }>{ v.Kind } · { v.Stage }</a> · { v.Created }</p>
+				}
+				if len(p.Operations)==0 {
+					<p>No requests.</p>
+				}
+			</section>
+			<section class="workspace-panel field-card"><h2>Delete your personal account</h2><p>Transfer or finish deleting all workspaces you own first. Shared records in other workspaces retain pseudonymous attribution. Your access, profile and personal support requests are removed; minimal revocation identifiers remain.</p><button type="button" class="field-card-action tone-error" data-open-dialog="delete-account" commandfor="delete-account" command="show-modal" aria-haspopup="dialog">Delete account</button></section>
+			@Confirm(p, "delete-account", "Delete your account?", "This revokes every session and workspace membership immediately. Your profile is erased after the deletion journal is safely stored. This browser receives a private, seven-day progress receipt.", "/account/delete", "", "DELETE")
+		</div>
+	}
+}
+
+templ Confirm(p Page, id, title, description, action, revision, word string) {
+	@components.FormDialog(id, title, description) {
+		<form method="post" action={ templ.SafeURL(action) } class="customer-form">
+			<input type="hidden" name="csrf_token" value={ p.CSRF }/><input type="hidden" name="revision" value={ revision }/>
+			<label for={ id + "-confirm" }>{ "Type "+word+" to confirm" }</label><input id={ id + "-confirm" } name="confirm" required autocomplete="off" pattern={ word }/>
+			<div class="dialog-actions"><button type="button" class="field-card-action" commandfor={ id } command="close" data-close-dialog>Cancel</button><button type="submit" class="field-card-action tone-error">Confirm</button></div>
+		</form>
+	}
+}
+
+templ ProgressPage(p Page) {
+	@Shell("Request progress", p) {
+		<div class="team-page customer-page">
+			@components.PageTitle("Request progress", "Access is revoked when a request is accepted. Cleanup can continue across restarts.")
+			if p.Progress!=nil {
+				<section class="workspace-panel field-card">
+					<h2>{ p.Progress.Kind } · { p.Progress.Stage }</h2>
+					<p>Reference: <code>{ p.Progress.ID }</code></p>
+					<p>Accepted: { p.Progress.Created }</p>
+					if p.Progress.Stage=="complete" {
+						<p role="status">Complete · { p.Progress.Completed }</p>
+					} else {
+						if p.Progress.Journal {
+							<p>Independent deletion journal acknowledged.</p>
+						} else {
+							<p>Waiting for the independent encrypted deletion journal. The request is not yet complete.</p>
+						}
+						<p>Runtime removal and data cleanup are checked by the worker. If a dependency is unavailable, cleanup stays pending and retries. GitHub comment attempts are bounded.</p>
+						if p.Progress.Error!="" {
+							<p>Current step: <code>{ p.Progress.Error }</code></p>
+						}
+						<a href="" class="field-card-action">Refresh progress</a>
+					}
+				</section>
+			}
+			<p><a href="/account">Account and connections</a> · <a href="/help">Contact support</a></p>
+		</div>
+	}
+}

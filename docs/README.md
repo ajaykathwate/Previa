@@ -36,6 +36,8 @@ rest explain how and why it works.
 | 30 | [Native review and feedback](30-reviews.md) | The review page: testing instructions, findings recorded against deployments, moderation, version conflicts, access, limits and activity records. |
 | 31 | [Ready-to-test sample data](31-test-data.md) | Seeding with `setup`, setup facts on the review page, Reset test data, sealed test access for reviewers, and the two reference journeys with their customer copies. |
 | 32 | [Persistent test data](32-persistent-test-data.md) | The Test data tab, the `seed` key, repository baselines (build, storage, triggers, ordering), data kept between a pull request's builds, starting-data fallbacks, Reset sources, operation and verification. |
+| 33 | [Usage and the free plan](33-usage-and-free-plan.md) | Finite workspace allowances, measured execution, accounting recovery and role-scoped usage. |
+| 34 | [Accounts, support and deletion](34-accounts-support-and-deletion.md) | Session revocation, durable exits, support operators, status, policies and the independent encrypted restore journal. |
 
 Related files outside this folder:
 

@@ -90,10 +90,13 @@ if [[ -n ${PREVIA_COMPOSE_OVERRIDE:-} ]]; then
 	compose+=(-f "$PREVIA_COMPOSE_OVERRIDE")
 fi
 compose+=(--env-file "$ENV_FILE")
+"${compose[@]}" run --rm -T --no-deps journal journal-snapshot
 "${compose[@]}" exec -T postgres pg_dump -U previa -d previa --format=custom --compress=6 --no-owner --no-privileges |
 	age "${recipient_args[@]}" -o "$work/previa-$stamp.dump.age"
 # A dump of a migrated database is never tiny: catch an empty pipe early.
 [[ $(stat -c %s "$work/previa-$stamp.dump.age") -gt 1024 ]] || fail "the database dump is suspiciously small"
+# A verified restore needs a journal exported after this backup's boundary.
+"$(dirname "$(readlink -f "$0")")/deletion-journal.sh"
 
 docker run --rm --network none -v "${PROJECT}_acme:/acme:ro" --entrypoint tar \
 	"$(docker inspect --format '{{.Config.Image}}' "${PREVIA_ROUTER_CONTAINER:-previa-router}")" -C /acme -czf - . |

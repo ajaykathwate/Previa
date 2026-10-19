@@ -1,0 +1,10 @@
+[Unit]
+Description=Previa independent encrypted deletion journal
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/previa/deploy/production
+ExecStart=/opt/previa/deploy/production/deletion-journal.sh
+TimeoutStartSec=90

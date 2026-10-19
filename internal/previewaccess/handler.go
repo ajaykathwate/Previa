@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
@@ -55,6 +56,13 @@ type UserSession interface {
 	Username(context.Context) (string, bool)
 }
 
+// SessionAuthority binds preview grants to the dashboard session that issued
+// them. Only a one-way store-token digest crosses the preview boundary.
+type SessionAuthority interface {
+	PreviewSessionID(context.Context) string
+	PreviewSessionValid(context.Context, string) (bool, error)
+}
+
 // Permissions reads a user's role on a repository as the GitHub App sees it
 // ("read", "write", ... or "none").
 type Permissions interface {
@@ -74,6 +82,7 @@ type Capabilities interface {
 type Handler struct {
 	pool         *pgxpool.Pool
 	users        UserSession
+	sessions     SessionAuthority
 	permissions  Permissions // nil without the GitHub App: only owners get in
 	jobs         Enqueuer
 	capabilities Capabilities
@@ -85,7 +94,8 @@ type Handler struct {
 }
 
 func NewHandler(pool *pgxpool.Pool, users UserSession, permissions Permissions, jobs Enqueuer, sessionSecret, baseDomain, appBaseURL string, logger *slog.Logger) *Handler {
-	return &Handler{pool: pool, users: users, permissions: permissions, jobs: jobs, signer: newSigner(sessionSecret),
+	sessions, _ := users.(SessionAuthority)
+	return &Handler{pool: pool, users: users, sessions: sessions, permissions: permissions, jobs: jobs, signer: newSigner(sessionSecret),
 		baseDomain: baseDomain, appBaseURL: strings.TrimSuffix(appBaseURL, "/"), logger: logger, now: time.Now}
 }
 
@@ -138,7 +148,7 @@ func (h *Handler) check(w http.ResponseWriter, r *http.Request) {
 		}
 		expires := now.Add(cookieLifetime)
 		http.SetCookie(w, &http.Cookie{
-			Name: cookieName, Value: h.signer.sign("cookie", claims{Host: host, User: token.User, Revision: token.Revision, Local: token.Local, Expires: expires.Unix()}),
+			Name: cookieName, Value: h.signer.sign("cookie", claims{Host: host, User: token.User, Epoch: token.Epoch, Session: token.Session, Revision: token.Revision, Local: token.Local, Expires: expires.Unix()}),
 			Path: "/", Expires: expires, MaxAge: int(cookieLifetime.Seconds()), Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		})
 		publicid.Redirect(w, r, token.Path, http.StatusFound)
@@ -198,13 +208,36 @@ func (h *Handler) access(w http.ResponseWriter, r *http.Request) {
 		_ = accesspages.Denied(username).Render(r.Context(), w)
 		return
 	}
-	token := h.signer.sign("token", claims{Host: host, User: user, Revision: preview.AuthorizationRevision, Local: local, Path: path, Expires: h.now().Add(tokenLifetime).Unix()})
+	var epoch int64
+	if err := h.pool.QueryRow(r.Context(), `SELECT session_epoch FROM users WHERE id=$1 AND deleted_at IS NULL`, user).Scan(&epoch); err != nil {
+		h.fail(w, r, fmt.Errorf("read preview session authority: %w", err))
+		return
+	}
+	session := ""
+	if h.sessions != nil {
+		session = h.sessions.PreviewSessionID(r.Context())
+	}
+	token := h.signer.sign("token", claims{Host: host, User: user, Epoch: epoch, Session: session, Revision: preview.AuthorizationRevision, Local: local, Path: path, Expires: h.now().Add(tokenLifetime).Unix()})
 	publicid.Redirect(w, r, "https://"+host+returnPath+"?"+url.Values{"t": {token}}.Encode(), http.StatusSeeOther)
 }
 
 // validGrant checks current local authority for every protected preview request.
 // A removed member cannot fall back to GitHub outsider access.
 func (h *Handler) validGrant(ctx context.Context, c claims) bool {
+	if h.sessions != nil {
+		valid, err := h.sessions.PreviewSessionValid(ctx, c.Session)
+		if err != nil {
+			h.logger.ErrorContext(ctx, "check preview session", "error", err)
+			return false
+		}
+		if !valid {
+			return false
+		}
+	}
+	var epoch int64
+	if err := h.pool.QueryRow(ctx, `SELECT session_epoch FROM users WHERE id=$1 AND deleted_at IS NULL`, c.User).Scan(&epoch); err != nil || epoch != c.Epoch {
+		return false
+	}
 	label, ok := h.previewHost(c.Host)
 	if !ok || c.Revision <= 0 {
 		return false

@@ -1,0 +1,212 @@
+package support
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+templ Shell(title string, p Page) {
+	if p.Name!="" {
+		@layouts.App(title, p.Name, p.CSRF, components.NavSupport) {
+			{ children... }
+		}
+	} else {
+		@layouts.Base(title) {
+			{ children... }
+		}
+	}
+}
+
+templ Links(p Page) {
+	<nav class="repo-tabs" aria-label="Help and policies">
+		<a href="/help">Support</a><a href="/faq">FAQ</a><a href="/status">Status</a><a href="/policies/privacy">Privacy</a><a href="/policies/terms">Terms</a><a href="/policies/acceptable-use">Acceptable use</a>
+		if p.Operator {
+			<a href="/operator/support">Operator console</a>
+		}
+	</nav>
+}
+
+templ Help(p Page) {
+	@Shell("Help and support", p) {
+		<div class="team-page customer-page">
+			@components.PageTitle("Help and support", "Send a request to the operator. Never include passwords, tokens, private source code, or a database dump.")
+			@Links(p)
+			if p.Error!="" {
+				<p class="field-error" role="alert">{ p.Error }</p>
+			}
+			if p.Saved!="" {
+				<p role="status">{ p.Saved }</p>
+			}
+			if p.Email!="" {
+				<p>Contact <a href={ templ.SafeURL("mailto:" + p.Email) }>{ p.Email }</a>. Requests are stored in Previa; submitting does not send an email.</p>
+			} else {
+				<p>The operator has not configured an email address. Signed-in members can still submit requests below.</p>
+			}
+			if p.Name=="" {
+				<p><a href="/auth/github/login?next=%2Fhelp">Sign in with GitHub</a> to submit and track a support request.</p>
+			} else {
+				<section class="workspace-panel field-card">
+					<h2>New support request</h2>
+					<form method="post" action="/help/requests" class="customer-form">
+						<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+						<label for="support-category">Category</label><select id="support-category" name="category" required><option value="build">Build or preview</option><option value="access">Account or access</option><option value="data">Data or deletion</option><option value="abuse">Report abuse</option><option value="other">Other</option></select>
+						<label for="support-message">What happened?</label><textarea id="support-message" name="message" rows="6" required maxlength={ p.MaxBytes } aria-describedby="support-limits"></textarea>
+						<p id="support-limits" class="field-note">Up to { p.MaxBytes } UTF-8 bytes; { p.PerDay } requests per UTC day. Describe the expected result, what happened, and when.</p>
+						<label for="support-repo">Repository ID (optional)</label><input id="support-repo" name="repository" placeholder="Public repository UUID"/>
+						<label for="support-pr">Pull request ID (optional)</label><input id="support-pr" name="pr" placeholder="Public pull request UUID"/>
+						<button type="submit" class="field-card-action">Send request</button>
+					</form>
+				</section>
+				<section class="workspace-panel field-card">
+					<h2>Your requests</h2>
+					if len(p.Requests)==0 {
+						<p>No requests yet.</p>
+					}
+					for _,r:=range p.Requests {
+						<p><a href={ templ.SafeURL("/help/requests/" + r.ID) }><code>{ r.ID }</code></a> · { r.Category } · { r.State } · <time datetime={ r.Created }>{ r.Created }</time></p>
+					}
+				</section>
+			}
+			if p.Detail!=nil {
+				@Detail(p)
+			}
+		</div>
+	}
+}
+
+templ Detail(p Page) {
+	<section class="workspace-panel field-card">
+		<h2>Request <code>{ p.Detail.ID }</code></h2>
+		<p>{ p.Detail.Category } · { p.Detail.State } · { p.Detail.Created }</p>
+		<p class="support-message">{ p.Detail.Message }</p>
+		<p>
+			Diagnostic reference: <code>{ p.Detail.Diagnostic }</code>
+			@components.CopyButton(p.Detail.Diagnostic, "Copy diagnostic reference")
+		</p>
+		if p.Detail.Repository!="" {
+			<p>Repository: <code>{ p.Detail.Repository }</code></p>
+		}
+		if p.Detail.PR!="" {
+			<p>Pull request: <code>{ p.Detail.PR }</code></p>
+		}
+		if p.Console&&p.Detail.State=="open" {
+			<form method="post" action={ templ.SafeURL("/operator/support/" + p.Detail.ID + "/resolve") }><input type="hidden" name="csrf_token" value={ p.CSRF }/><input type="hidden" name="revision" value={ p.Detail.Revision }/><button class="field-card-action" type="submit">Mark resolved</button></form>
+		}
+	</section>
+}
+
+templ Console(p Page) {
+	@Shell("Operator console", p) {
+		<div class="team-page customer-page">
+			@components.PageTitle("Operator console", "Support reads, resolutions, and public incident changes are audited.")
+			@Links(p)
+			if p.Error!="" {
+				<p role="alert" class="field-error">{ p.Error }</p>
+			}
+			<section class="workspace-panel field-card">
+				<h2>Latest support requests</h2>
+				for _,r:=range p.Requests {
+					<p><a href={ templ.SafeURL("/operator/support/" + r.ID) }><code>{ r.ID }</code></a> · { r.Category } · { r.State } · { r.Created }</p>
+				}
+				if len(p.Requests)==0 {
+					<p>No requests.</p>
+				}
+			</section>
+			if p.Detail!=nil {
+				@Detail(p)
+			}
+			<section class="workspace-panel field-card">
+				<h2>Publish an incident</h2>
+				<p>Incident text is public. Include only operational information.</p>
+				@IncidentForm(p, Incident{})
+			</section>
+			<section class="workspace-panel field-card">
+				<h2>Pending account cleanup</h2>
+				if len(p.Cleanup)==0 {
+					<p>No pending lifecycle operations.</p>
+				}
+				for _,c:=range p.Cleanup {
+					<p><code>{ c.ID }</code> · { c.Kind } · { c.Stage } · { c.Reason } · { c.Created }</p>
+					@components.CopyButton(c.ID, "Copy cleanup reference")
+				}
+			</section>
+			for _,i:=range p.Incidents {
+				<section class="workspace-panel field-card"><h2>{ i.Component } · { i.State }</h2>@IncidentForm(p, i)
+</section>
+			}
+		</div>
+	}
+}
+
+templ IncidentForm(p Page, i Incident) {
+	<form method="post" action="/operator/incidents" class="customer-form">
+		<input type="hidden" name="csrf_token" value={ p.CSRF }/><input type="hidden" name="id" value={ i.ID }/><input type="hidden" name="revision" value={ i.Revision }/>
+		<label>Component <select name="component"><option value="builds" selected?={ i.Component=="builds" }>Builds</option><option value="routing" selected?={ i.Component=="routing" }>Routing</option><option value="control_plane" selected?={ i.Component=="control_plane" }>Dashboard</option></select></label>
+		<label>Public update <textarea name="summary" required maxlength="2000" rows="3">{ i.Summary }</textarea></label>
+		<label>State <select name="state"><option value="investigating" selected?={ i.State=="investigating" }>Investigating</option><option value="monitoring" selected?={ i.State=="monitoring" }>Monitoring</option><option value="resolved" selected?={ i.State=="resolved" }>Resolved</option></select></label>
+		<button type="submit" class="field-card-action">Publish update</button>
+	</form>
+}
+
+templ Status(p Page) {
+	@Shell("Service status", p) {
+		<div class="team-page customer-page">
+			@components.PageTitle("Service status", "Current dependency observations and operator-reported incidents.")
+			@Links(p)
+			<section class="workspace-panel field-card">
+				<h2>Current observations</h2>
+				for _,a:=range p.Availability {
+					<div class="field-row">
+						<span class="field-label">{ a.Component }</span>
+						<span>
+							{ a.State }
+							if a.Checked!="" {
+								<span>· checked <time datetime={ a.Checked }>{ a.Checked }</time></span>
+							}
+						</span>
+					</div>
+				}
+				<p class="field-note">Build availability checks Docker and whether builds are paused. Routing checks the router's loaded fallback configuration. Reports older than 90 seconds are unknown. These checks do not measure every preview or public network path.</p>
+			</section>
+			<section class="workspace-panel field-card">
+				<h2>Incidents</h2>
+				if len(p.Incidents)==0 {
+					<p>No incidents reported in the last 30 days. This does not establish uptime.</p>
+				}
+				for _,i:=range p.Incidents {
+					<article><h3>{ i.Component } · { i.State }</h3><p>{ i.Summary }</p><time datetime={ i.Updated }>{ i.Updated }</time></article>
+				}
+			</section>
+		</div>
+	}
+}
+
+templ Policy(p Page, kind string) {
+	@Shell("Policies", p) {
+		<div class="team-page customer-page">
+			@Links(p)
+			<article class="workspace-panel field-card policy-copy">
+				if kind=="privacy" {
+					<h1>Privacy and data retention</h1>
+					<p>{ p.OperatorName } operates this Previa instance. Contact <a href="/help">support</a> about your data.</p>
+					<p>GitHub sign-in supplies your numeric ID, login, profile, avatar and shared verified email. Previa stores your profile, workspace memberships, repository metadata, preview configuration, encrypted repository secrets, build logs, review feedback and support messages. GitHub sign-in tokens are discarded after sign-in. GitHub App credentials provide installation access.</p>
+					<p>The GitHub App reads selected repositories' source, configuration and pull request metadata, and writes preview comments and checks. Select only repositories you intend to preview. Local disconnection removes Previa's connection; uninstall the App separately in GitHub to revoke its provider-side installation access.</p>
+					<p>Workspaces share repository and review information according to membership and repository grants. Configured operators may read support requests; those reads are audited. Public preview URLs may be accessible to anyone unless private access is enabled. Do not put sensitive production data in previews or support requests.</p>
+					<p>Essential session and private-preview cookies provide access; theme preferences use local browser storage. No advertising trackers are added by Previa. GitHub provides authentication, and the host's configured backup and error-reporting services may process operational data. Build and runtime logs may contain output supplied by your code.</p>
+					<p>Deleting your account revokes access and removes your profile and support requests. Transfer or delete owned workspaces first. Shared workspace records remain with pseudonymous attribution. Minimal numeric GitHub IDs and public IDs remain as revocation tombstones, so old events cannot reconnect deleted data. Deleting a workspace removes its repositories, credentials, logs, feedback, baselines and support requests after runtime cleanup.</p>
+					<p>Resolved support requests are removed after { p.RetentionDays } days. Open requests remain until resolved or their account/workspace is deleted. Encrypted backups expire after { p.BackupDays } days. A separate encrypted deletion journal is retained for at least { p.JournalDays } days, longer for unfinished requests, and is replayed before a restore serves traffic. Deletion is pending until cleanup and journal upload are acknowledged; backup copies expire on their retention schedule.</p>
+				} else if kind=="acceptable-use" {
+					<h1>Acceptable use</h1>
+					<p>Use this instance for authorized development and review. Do not run malware, mining, spam, credential harvesting, unlawful content, denial-of-service traffic, or attempts to escape isolation or access another workspace.</p>
+					<p>Use test data you are allowed to process. Do not upload production credentials or sensitive personal data. Respect finite build and preview allowances. The operator may pause builds, restrict access or remove harmful workloads. Report abuse through <a href="/help">support</a>.</p>
+				} else {
+					<h1>Terms of use</h1>
+					<p>This is an early-access development preview service operated by { p.OperatorName }. It provides temporary environments, finite free build allowances and workspace collaboration. It is not a production hosting or backup service; keep your source code and authoritative data elsewhere.</p>
+					<p>You are responsible for your code, uploaded data, secrets, workspace permissions and use of GitHub. Availability and successful builds are not guaranteed. Features, limits and availability may change. The operator may suspend abusive or unsafe workloads. No paid subscription or uptime commitment is offered by this MVP.</p>
+					<p>You can end other sessions, leave a workspace, disconnect repositories, or request deletion through account and workspace settings. Uninstalling the GitHub App is a separate action on GitHub. For help, data requests or a dispute, contact <a href="/help">support</a>. These operational terms do not remove rights available under applicable law.</p>
+					<p>Your workspace's Usage screen shows its current build-minute allowance, concurrent-build limit, preview slots and UTC reset time. Admitted PR and baseline execution, including failures, consumes build time. Waiting, reads, feedback and teardown do not. Exhaustion blocks new compute; existing previews follow their published expiry. No automatic usage charges apply.</p>
+				}
+			</article>
+		</div>
+	}
+}

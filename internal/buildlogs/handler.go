@@ -511,6 +511,9 @@ var errStopStream = errors.New("stop log stream")
 // sync sends whatever the browser is missing: a reset when the attempt changed,
 // new lines in bounded frames, and the status when it changed.
 func (h *Handler) sync(ctx context.Context, sse *realtime.SSE, s *liveState) error {
+	if err := realtime.CheckSession(ctx); err != nil {
+		return err
+	}
 	{
 		target, err := h.logs.Target(ctx, s.user, s.repoID, s.number)
 		if err != nil {
@@ -530,6 +533,9 @@ func (h *Handler) sync(ctx context.Context, sse *realtime.SSE, s *liveState) err
 		}
 	}
 	for hasStream && stream.PrunedAt.IsZero() && ctx.Err() == nil {
+		if err := realtime.CheckSession(ctx); err != nil {
+			return err
+		}
 		if _, err := h.logs.Target(ctx, s.user, s.repoID, s.number); err != nil {
 			return errStopStream
 		}

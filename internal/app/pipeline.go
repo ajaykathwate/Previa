@@ -7,13 +7,16 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/accounts"
 	"github.com/ajaykathwatee/previa/internal/activity"
 	"github.com/ajaykathwatee/previa/internal/appoutput"
+	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/builds"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/housekeeping"
 	"github.com/ajaykathwatee/previa/internal/idle"
+	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/egress"
@@ -25,7 +28,9 @@ import (
 	"github.com/ajaykathwatee/previa/internal/sampledata"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/source"
+	"github.com/ajaykathwatee/previa/internal/workspaces"
 	"github.com/google/go-github/v91/github"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moby/moby/client"
@@ -76,6 +81,7 @@ type pipelineInput struct {
 // pipeline is what one worker process runs: its capabilities, its River
 // registrations and what must happen once before it starts working.
 type pipeline struct {
+	lifecycle    *accounts.Service
 	capabilities workers.Capabilities
 	register     []func(*river.Config)
 	startup      []func(context.Context) error
@@ -93,6 +99,24 @@ type pipeline struct {
 func buildPipeline(ctx context.Context, in pipelineInput) (*pipeline, error) {
 	p := &pipeline{}
 	cfg, log := in.cfg, in.logger
+	supportService := newSupport(in.pool, cfg.CustomerConfig)
+	workspaceLifecycle := workspaces.NewService(workspaces.NewRepository(in.pool), nil, nil, nil)
+	p.lifecycle = accounts.NewService(in.pool).WithAccountFences(workspaceLifecycle).WithAccountErasers(supportService, workspaceLifecycle, auth.NewRepository(in.pool)).WithWorkspaces(workspaceLifecycle, supportService).WithRepositoryErasers(installations.NewRepository(in.pool)).WithInstallations(installations.NewRepository(in.pool))
+	p.register = append(p.register, func(rc *river.Config) { p.lifecycle.Register(rc) })
+	p.background = append(p.background, func(ctx context.Context) {
+		timer := time.NewTicker(time.Hour)
+		defer timer.Stop()
+		for {
+			if err := supportService.Prune(ctx); err != nil && ctx.Err() == nil {
+				log.ErrorContext(ctx, "support retention failed", "error", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+		}
+	})
 	// Log and activity retention need only the database.
 	p.register = append(p.register, func(rc *river.Config) {
 		river.AddWorker(rc.Workers, &buildlogs.PruneWorker{Store: buildlogs.NewStore(in.pool).WithRetention(cfg.BuildLogRetention()), Logger: log})
@@ -144,6 +168,7 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		return err
 	}
 	cfg := in.cfg
+	p.lifecycle = x.accounts
 	if !cfg.SecretsConfigured() {
 		p.unavailable = append(p.unavailable, "SECRETS_ENCRYPTION_KEYS is not set: repositories with secrets cannot start previews, and test-data baselines are not stored (kept data still works)")
 	}
@@ -226,6 +251,28 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 	if err != nil {
 		return err
 	}
+	statusService := newSupport(in.pool, cfg.CustomerConfig)
+	probeID := uuid.NewString()
+	p.background = append(p.background, func(ctx context.Context) {
+		timer := time.NewTicker(30 * time.Second)
+		defer timer.Stop()
+		for {
+			probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			_, dockerErr := docker.Ping(probeCtx, client.PingOptions{})
+			routingErr := router.Available(probeCtx)
+			for component, available := range map[string]bool{"builds": dockerErr == nil && !cfg.BuildsPaused, "routing": routingErr == nil} {
+				if err := statusService.Observe(probeCtx, probeID, component, available); err != nil && ctx.Err() == nil {
+					in.logger.ErrorContext(ctx, "publish availability probe", "error", err)
+				}
+			}
+			cancel()
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+		}
+	})
 	p.background = append(p.background, func(ctx context.Context) {
 		routing.WatchVisits(ctx, router, cfg.MetricsAddress(), x.repo, visits, in.logger)
 	})

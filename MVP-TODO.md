@@ -275,62 +275,63 @@ stores and why.
 
 | Item | Today |
 | --- | --- |
-| End other sessions | Missing: only the current session signs out |
+| End other sessions | Implemented; current browser retained, epochs/streams/private grants revoked |
 | Leave workspace | Exists after handover ([docs/28](docs/28-shared-workspaces.md)) |
-| Disconnect a repository or installation in Previa | Missing: only by removing access on GitHub |
-| Delete workspace | Soft delete only, when the owner is the only active member and no installation is connected |
-| Delete personal account | Missing |
-| Help and support | An FAQ page only |
-| Status page, policy pages | Missing |
+| Disconnect a repository or installation in Previa | Implemented with immediate fences and resumable physical cleanup |
+| Delete workspace | Owner requests ordered deletion, including connected repositories and members |
+| Delete personal account | Implemented after workspace handover/deletion; shared attribution pseudonymized |
+| Help and support | Persisted requests, audited operator console and configurable contact |
+| Status page, policy pages | Actual dependency checks/incidents; public Privacy, Terms and Acceptable use |
 
-- [ ] **End other sessions:** a user-to-session index or authorization epoch,
+- [x] **End other sessions:** a user-to-session index or authorization epoch,
   rechecked on requests and live streams (§9.5, §9.7).
-- [ ] **Leave workspace:** confirm it revokes grants, streams and cookies as §9.5
+- [x] **Leave workspace:** confirm it revokes grants, streams and cookies as §9.5
   requires.
-- [ ] **Disconnect a repository** (§9.5):
+- [x] **Disconnect a repository** (§9.5):
   - it becomes unavailable at once, and cleanup progress is visible;
   - new work is fenced, and intents and baseline refreshes are cancelled;
   - routes, containers and services are removed;
   - secrets, test-data baselines and settings are deleted;
   - a later webhook cannot reconnect it.
-- [ ] **Disconnect an installation:** the same cleanup for each of its
+- [x] **Disconnect an installation:** the same cleanup for each of its
   repositories. Explain that uninstalling the GitHub App is a separate step on
   GitHub.
-- [ ] **Delete workspace:** an ordered, resumable operation with visible
+- [x] **Delete workspace:** an ordered, resumable operation with visible
   progress. It records intent and denies new writes, fences work, and removes
   routes and previews. It revokes grants and sessions, and deletes secrets,
   configuration, baselines and review content. The free plan has no provider
   subscription step (§9.5).
-- [ ] **Delete personal account:**
+- [x] **Delete personal account:**
   - allowed only after the user's owned workspaces are handed over or deleted;
   - erases personal fields and revokes sessions;
   - keeps shared attribution under a pseudonym;
   - never removes other people's team data (§9.5).
-- [ ] **Optional (§10.3):** a final "Disconnected" GitHub comment while App access
+- [x] **Optional (§10.3):** a final "Disconnected" GitHub comment while App access
   still allows it, with finite retries.
-- [ ] **Help and support** (§9.6):
+- [x] **Help and support** (§9.6):
   - a support contact, FAQ links, service availability and a copyable diagnostic
     reference;
   - a persisted support request form;
   - an operator-only page to read and resolve requests;
   - the support operator role comes from configured identities, and operator
     actions are recorded.
-- [ ] **Status page** (§9.6): real build and routing availability with the time it
+- [x] **Status page** (§9.6): real build and routing availability with the time it
   was checked, an operator-only form for incidents, and unknown states shown as
   unknown.
-- [ ] **Policy pages** in plain language (§9.6): stored data, retention, GitHub
+- [x] **Policy pages** in plain language (§9.6): stored data, retention, GitHub
   permissions, what disconnecting and deleting do, and the usage limits. Paid
   cancellation terms are deferred with §9.4.
-- [ ] **Restore-safe deletion** (§9.8): an encrypted, bounded deletion journal sent
+- [x] **Restore-safe deletion** (§9.8): an encrypted, bounded deletion journal sent
   through the backup channel. The restore procedure applies it before serving
   again, which updates [docs/25](docs/25-production-deployment.md) (B5 and B6) and
   [docs/24](docs/24-incident-runbook.md).
-- [ ] **Decision (owner):** the support contact (email address) shown to users.
-- [ ] **Decision (owner):** the GitHub identities of support operators.
+- [x] **Decision (owner):** support contact supplied; configured in ignored local `.env`.
+- [x] **Decision (owner):** leave operator IDs empty for now. Env comments explain
+  numeric GitHub user IDs; empty disables operator access.
 - [ ] **Decision (owner):** approve the privacy and terms text. Claude drafts it
   from the actual behavior; the owner approves or has it reviewed (spec §13).
-- [ ] **Decision (owner):** limits for support requests. Spec §13 recommends 16 KiB
-  per message and keeping resolved requests 90 days.
+- [x] **Decision (owner):** delegated limits: 16 KiB/message, five requests per UTC
+  day per user, resolved retention 90 days; all configurable in env.
 
 **Done when:** spec §9.10's last three criteria hold:
 - leaving or removal revokes access at once;
@@ -341,7 +342,11 @@ stores and why.
 - help, support, status, retention pages and delete controls are real and
   reachable.
 
-The common gate must also pass.
+**Engineering complete (19 October 2026).** Automated Go, lint, browser,
+real-Docker and encrypted restore checks passed, with targeted reruns documented
+in the [F4 report](test-docs/2026-10-19-accounts-support-and-deletion-report.md).
+Owner hands-on acceptance and pre-launch policy review remain separate steps.
+The development database has not been migrated; follow docs/02 before restart.
 
 ### F5 · Detect missed GitHub App uninstalls ([docs/27](docs/27-roadmap.md), Prompt 14)
 

@@ -173,6 +173,18 @@ WantedBy=timers.target
 UNIT
 systemctl daemon-reload
 systemctl enable --now previa-backup.timer >/dev/null
+cat >/etc/systemd/system/previa-deletion-journal.service <<UNIT
+[Unit]
+Description=Previa independent encrypted deletion journal
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=$REPO/deploy/production/deletion-journal.sh
+TimeoutStartSec=90
+UNIT
+install -m 0644 "$REPO/deploy/production/previa-deletion-journal.timer" /etc/systemd/system/previa-deletion-journal.timer
+systemctl daemon-reload
+systemctl enable --now previa-deletion-journal.timer >/dev/null
 
 cat <<NEXT
 

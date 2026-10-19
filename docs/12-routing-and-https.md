@@ -227,7 +227,7 @@ within seconds.
 3. The visitor returns to `https://<host>/__previa/access?t=<token>`. The token is
    signed (HMAC with a key derived from `SESSION_SECRET`), names the host and the
    user, and is valid for one minute. The check turns it into the
-   `__Host-previa-access` cookie (host-only, Secure, HttpOnly, SameSite=Lax, 12 hours)
+   `__Host-previa-access` cookie (host-only, Secure, HttpOnly, SameSite=Lax, at most 12 hours)
    and redirects to the path they first asked for.
 
 Notes:
@@ -235,7 +235,10 @@ Notes:
 - A cookie opens only the preview host it was issued for. Losing repository access
   takes effect when the source-only outsider cookie expires (12 hours at most); local member/grant
   revocation is checked on every request, including token redemption. Workspace
-  authorization revisions also invalidate existing cookies.
+  authorization revisions also invalidate existing cookies. F4 also checks the
+  user authorization epoch and a digest of the issuing dashboard session on every
+  request: logout, idle expiry, End other sessions and account deletion revoke
+  these grants. The raw dashboard session token is never sent to a preview.
 - On a public repository everyone signed in to GitHub can see it, so private
   previews mostly matter for private repositories.
 - Without the GitHub App on the server, only locally authorized workspace members

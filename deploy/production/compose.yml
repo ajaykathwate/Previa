@@ -66,6 +66,23 @@ services:
       postgres: {condition: service_healthy}
     networks: [control]
 
+  # One-shot journal commands must use a dynamic IP: a second instance of the
+  # server service would collide with its fixed forward-auth address.
+  journal:
+    <<: *hardened
+    profiles: [maintenance]
+    image: *server-image
+    restart: "no"
+    command: [journal-export]
+    healthcheck: {disable: true}
+    env_file: [*env-file]
+    environment:
+      APP_ENV: production
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github_app_key
+    secrets: [github_app_key]
+    tmpfs: [/tmp]
+    networks: [control]
+
   server:
     <<: *hardened
     image: *server-image

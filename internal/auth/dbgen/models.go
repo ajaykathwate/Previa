@@ -151,6 +151,36 @@ type BuildLogStream struct {
 	DeletedAt     pgtype.Timestamptz
 }
 
+type DeletionJournal struct {
+	Sequence             int64
+	EventID              pgtype.UUID
+	Action               string
+	Target               pgtype.UUID
+	Workspace            pgtype.UUID
+	GithubInstallationID pgtype.Int8
+	GithubRepoID         pgtype.Int8
+	GithubUserID         pgtype.Int8
+	Successor            pgtype.UUID
+	SuccessorGithubID    pgtype.Int8
+	OperationID          pgtype.UUID
+	CreatedAt            pgtype.Timestamptz
+	AcknowledgedAt       pgtype.Timestamptz
+}
+
+type DeletionJournalMetadatum struct {
+	Singleton  bool
+	Instance   pgtype.UUID
+	SnapshotAt pgtype.Timestamptz
+}
+
+type DisconnectComment struct {
+	PullRequestID int64
+	OperationID   pgtype.UUID
+	Attempts      int32
+	State         string
+	AvailableAt   pgtype.Timestamptz
+}
+
 type EnvSecret struct {
 	ID             int64
 	RepoID         int64
@@ -247,6 +277,12 @@ type FreePlanPolicy struct {
 	CutoverAt                pgtype.Timestamptz
 }
 
+type GithubDisconnection struct {
+	GithubInstallationID int64
+	GithubRepoID         int64
+	CreatedAt            pgtype.Timestamptz
+}
+
 type Installation struct {
 	ID                   int64
 	GithubInstallationID int64
@@ -259,6 +295,7 @@ type Installation struct {
 	CleanupPending       bool
 	WorkspaceID          pgtype.Int8
 	PublicID             pgtype.UUID
+	DisconnectedAt       pgtype.Timestamptz
 }
 
 type InstallationRepositoryEvent struct {
@@ -266,6 +303,32 @@ type InstallationRepositoryEvent struct {
 	GithubRepoID    int64
 	SourceUpdatedAt pgtype.Timestamptz
 	Removed         bool
+}
+
+type LifecycleOperation struct {
+	ID               pgtype.UUID
+	Kind             string
+	TargetID         int64
+	TargetPublicID   pgtype.UUID
+	WorkspaceID      pgtype.Int8
+	ActorID          int64
+	ParentID         pgtype.UUID
+	Stage            string
+	LastError        string
+	AvailableAt      pgtype.Timestamptz
+	JournalAckAt     pgtype.Timestamptz
+	ReceiptHash      []byte
+	ReceiptExpiresAt pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	CompletedAt      pgtype.Timestamptz
+}
+
+type OperatorActivity struct {
+	ID        int64
+	GithubID  int64
+	Action    string
+	Reference pgtype.UUID
+	CreatedAt pgtype.Timestamptz
 }
 
 type PlatformInstance struct {
@@ -466,6 +529,7 @@ type Repo struct {
 	ObservationVersion int64
 	PrivatePreviews    bool
 	PublicID           pgtype.UUID
+	DisconnectedAt     pgtype.Timestamptz
 }
 
 type RepositoryBaseline struct {
@@ -562,6 +626,23 @@ type RouteTable struct {
 	Version   int64
 }
 
+type ServiceAvailability struct {
+	WorkerID  string
+	Component string
+	State     string
+	CheckedAt pgtype.Timestamptz
+}
+
+type ServiceIncident struct {
+	ID        pgtype.UUID
+	Component string
+	Summary   string
+	State     string
+	Revision  int64
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
 type Session struct {
 	Token  string
 	Data   []byte
@@ -572,6 +653,27 @@ type SetupCheckBudget struct {
 	WorkspaceID     int64
 	WindowStartedAt pgtype.Timestamptz
 	Used            int32
+}
+
+type SupportDailyUsage struct {
+	UserID   int64
+	Day      pgtype.Date
+	Requests int32
+}
+
+type SupportRequest struct {
+	ID                   pgtype.UUID
+	WorkspaceID          pgtype.Int8
+	UserID               int64
+	Category             string
+	Message              string
+	DiagnosticReference  pgtype.UUID
+	RepositoryReference  pgtype.UUID
+	PullRequestReference pgtype.UUID
+	State                string
+	Revision             int64
+	CreatedAt            pgtype.Timestamptz
+	ResolvedAt           pgtype.Timestamptz
 }
 
 type User struct {
@@ -595,6 +697,8 @@ type User struct {
 	PublicID         pgtype.UUID
 	AvatarVersion    int64
 	CustomAvatar     bool
+	SessionEpoch     int64
+	DeletedAt        pgtype.Timestamptz
 }
 
 type UserAvatar struct {

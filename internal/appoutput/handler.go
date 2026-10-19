@@ -77,6 +77,9 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 }
 
 func (h *Handler) preview(r *http.Request) (Preview, int64, error) {
+	if err := realtime.CheckSession(r.Context()); err != nil {
+		return Preview{}, 0, err
+	}
 	repoID, err := publicid.Param(r, "repoID", "repository")
 	if err != nil || repoID <= 0 {
 		return Preview{}, 0, ErrUnavailable

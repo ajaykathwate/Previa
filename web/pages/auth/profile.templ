@@ -16,6 +16,7 @@ templ MemberProfile(p Profile) {
 					@components.PageTitle("Your profile", "How you appear to teammates in Previa, and the GitHub account you sign in with.")
 				</div>
 			</header>
+			<p><a href="/account">Account, connections and deletion</a></p>
 			<div class="field-grid">
 				@PreviaProfile(p)
 				@GitHubAccount(p)
@@ -36,6 +37,13 @@ templ MemberProfile(p Profile) {
 			</div>
 		</div>
 		@components.Toasts(p.Toast)
+		@components.ConfirmationDialog("end-other-sessions", "End other sessions?", "Other Previa sessions stop working, including live streams. This browser stays signed in. Private previews may ask you to open them again.") {
+			<form method="post" action="/auth/sessions/revoke" class="dialog-actions">
+				<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+				<button type="button" class="field-card-action" commandfor="end-other-sessions" command="close" data-close-dialog autofocus>Cancel</button>
+				<button type="submit" class="field-card-action">End other sessions</button>
+			</form>
+		}
 	}
 }
 
@@ -147,6 +155,7 @@ templ PreviaProfile(p Profile) {
 						@components.LogoutIcon()
 						Log out
 					</button>
+					<button type="button" class="field-card-action" data-open-dialog="end-other-sessions" commandfor="end-other-sessions" command="show-modal" aria-haspopup="dialog">End other sessions</button>
 				</dd>
 			</div>
 		</dl>

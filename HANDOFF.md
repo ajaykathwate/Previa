@@ -1,99 +1,82 @@
 # Project handoff
-Last updated: 2026-10-18
+Last updated: 2026-10-19
 
 ## Current state
-- Branch `mvp-complete`; F3 is committed locally (`f0fc89b`). The final deployment
-  setup below is **uncommitted** in the working tree. Commit only when the user
-  asks; push to `main`, never `master`. No deployment/push was performed.
-- **MVP-TODO.md is the roadmap.** F0–F3 are implemented and verified. Next
-  implementation: F4 (account exits, support,
-  status and policies), then F5 missed-uninstall detection and F6 early access.
-- README/DESIGN are authoritative; F3 design is DESIGN §26, docs/33. F2 is
-  DESIGN §25, docs/32; F1/Feature 5 is docs/31.
+- Branch mvp-complete; F4 included in this single owner-requested commit.
+  Previous HEAD205ae68; F3 commit f0fc89b. No push/deployment.
+- F0–F4 engineering complete. F5 missed-uninstall polling and F6 early access
+  remain out of scope. Owner manual acceptance and policy review precede launch.
+- User supplied support email in ignored local .env. Operator IDs deliberately
+  empty; comments explain comma-separated numeric GitHub USER IDs, not logins,
+  App IDs or installation IDs. Never commit .env or expose its other contents.
 
-## Final deployment setup (agreed with the owner 2026-10-18; uncommitted)
-- One OVHcloud VPS-2 (EU, €7.21) + Docker Compose; images **built on the server**
-  from a release tag (no GHCR; `release.yml` is manual-only, refuses non-tags);
-  `previa.live` = landing/dashboard, previews on a separate domain still to buy
-  (placeholder `preview.example.net`); Cloudflare DNS + R2; Sentry free for
-  errors/logs, uptime (previa.live, 1 min) and backup cron monitor, email via one
-  alert rule; SSH only over Tailscale (port 22 closed); lazydocker. About €8/month
-  + VAT. No Prometheus/Grafana/Alertmanager in prod (profile kept, optional), no
-  Terraform, no staging VPS (rehearse restore on the prod VPS before launch), gVisor
-  off for early access. Docs: docs/25 (overview, two Mermaid diagrams, cost,
-  capacity, S1–S4, logs/SSH/monthly checks, pre-launch rehearsal), MVP-TODO Part 3.
-- Code: `internal/platform/errortracking` (sentry-go v0.49.0 + slog): `logging.New`
-  fans redacted records to it; error → issue, warn+ → Sentry Logs; `SENTRY_DSN`
-  (env `APP_ENV`); `check-config` validates it; `previa-server sentry-test`.
-  `backup.sh` derives the cron check-in URL from `SENTRY_DSN` (monitor
-  `previa-backup`, 1-day interval); `BACKUP_FAILURE_WEBHOOK` removed. `setup.sh`
-  installs Tailscale + lazydocker 0.25.2 (SHA-256 pinned), keeps SSH on tailscale0
-  once moved. CI `paths-ignore` for docs-only changes.
-- Gaps: wildcard cert unmonitored (docs/25 "Monthly checks"); GitHub CI runs of
-  Oct 11–15 failed. `inside-previa.md` untouched.
+## F4 implementation and decisions
+- Migration0043 / SchemaVersion43: durable lifecycle operations, revocation
+  tombstones, encrypted-journal metadata/events, support/audit/incidents/probes.
+  Rollback refuses after lifecycle/revocation data exists; forward-fix then.
+- internal/accounts coordinates feature-owned fences/cleanup/erasure contracts.
+  Repository/installation disconnect and workspace deletion deny access/new work
+  immediately, accept route tombstones, cancel intents/baselines, then retry
+  physical runtime/source/baseline/cache removal. Parents wait for children.
+  Completion requires physical cleanup AND independent journal upload ACK.
+- Explicit repository/installation revocation IDs survive erased product rows;
+  stale webhook inserts/updates cannot reconnect them. App uninstall is separate.
+- Personal deletion requires transfer/finished deletion of owned workspaces;
+  epoch/deleted_at revoke sessions immediately. Profile/avatar/support erased;
+  shared attribution remains Deleted member. Seven-day hashed progress receipt.
+- Auth checks epoch and original session on requests/live streams. End other
+  sessions retains current browser. Private grants also bind to a one-way SCS
+  session digest, so ordinary logout/idle expiry revoke them. Restore discards
+  old SCS sessions and advances all epochs.
+- internal/support: persisted bounded requests, immutable env operator allowlist,
+  audited reads/resolutions/incidents and safe cleanup references. Defaults:
+  16KiB,5 requests/user/UTC day,resolved retention90d. Independent daily counters
+  survive workspace/message erasure; empty operator IDs deny everyone.
+- Real Docker/router probes30s; stale90s Unknown. Public policies describe actual
+  behavior. Contact/operator name/limits/retention configurable in env.
+- Optional Disconnected comments update only existing marked App-owned comments;
+  normal report lease, <=3 attempts/10min, permission loss stops immediately.
+  GitHub outage cannot prevent local fences/teardown. Configured App ID fallback
+  permits execution-worker startup during provider identity-read failure.
+- Journal default1MiB/90d, backup30d; unfinished/unacknowledged never expire.
+  Host age/rclone publisher every minute via dynamic-IP maintenance journal
+  service; upload then ACK under channel lock. Restore stops server/worker/router,
+  fetches independent latest, checks identity/time/size/version, replays missing
+  events before traffic, clears generated route table and restarts builds paused.
+  Pre-F4 dumps lacking journal identity are refused. Off-host backup required.
+- DESIGN27/docs34, docs02/env/README/spec/production/runbook/user guide and roadmap
+  updated. Test report: test-docs/2026-10-19-accounts-support-and-deletion-report.md.
 
-## F3: workspace usage and finite free limits
-- Owner delegated amounts and confirmed no hosted users: **300 build minutes per
-  UTC calendar month, one concurrent build, two preview slots per workspace**.
-- Migration **0042**, `SchemaVersion` 42 (River still 007): finite free policy and
-  workspace entitlements, periods, physical attempts, execution segments, wait
-  deadlines/reasons. Existing active workspaces start fresh; an insert trigger
-  grants new workspaces. Historical elapsed-time tables stay legacy, never billed
-  or imported. There is no extra initializer, env variable or paid state.
-- `internal/usage`: entitlement lock + existing global admission lock, UUID per
-  physical attempt, <=60s total reservations split at UTC day/month boundaries,
-  renewals/settlement, independent cancellation timer and minute River recovery.
-  An unstarted hold costs zero; a crash uses its final bounded reservation and
-  stays provisional. Period consumption equals segment sums; replay is idempotent.
-- Environments and baseline runner share the ledger. Source/build/startup/setup/
-  seed/fallback execution counts, including failed/superseded attempts. Waits do
-  not count. Start and publication recheck entitlement; limit waits snooze without
-  spending River retries. Same-PR replacement reuses a slot; baselines take none.
-- Serving previews, reads, feedback, account access and teardown bypass compute
-  gates. `BUILDS_PER_ACCOUNT`/`BUILD_MINUTES_PER_ACCOUNT_DAY` add workspace ceilings;
-  zero disables only that extra ceiling. Restart all workers together on changes.
-- `/workspaces/<public UUID>/usage`: Owner/Admin totals; Developer granted-repo
-  technical usage only; Reviewer denied. Real blocked work and next checks,
-  measured/reset/cutover times, pending/provisional accounting, worker-reported
-  expiry/idle/log retention (unknown before report). No cache or purchase control.
-- Presentation: `web/pages/usage`, `web/styles/usage.css`, sidebar Usage. Shared
-  signal theme, exact UTC timestamps, stacked repository values on phones.
-- Feature report: test-docs/2026-10-18-usage-and-free-limits-report.md; user guide
-  rows U1–U10. Owner hands-on acceptance and commit remain separate release steps.
+## Final verification
+- Commit preparation: build, ordinary Go tests, vet and lint PASS (0 issues).
+  Tests reran outside the socket-restricted sandbox. DB/Docker/browser opt-ins
+  were not repeated; full implementation verification is recorded below.
+- Build, gofmt, git diff --check PASS. Vet/golangci-lint PASS0 issues.
+- All Go packages pass across full run plus fresh reruns: environments444.194s
+  with30m aggregate deadline; workspaces112.528s. Initial aggregate timeout and
+  concurrent fixture-import artifact are documented in the report.
+- Browsers PASS: broad55,workspaces14,setup5,review6,accounts5. JS on/off and CSP;
+  new screens captured1440/390 light/dark; representative screenshots reviewed.
+- Real TestData451.872s PASS:11 attempts,2 baselines,243.770071s metered; explicit
+  disconnect/ACK with complete physical, source, baseline and cache removal.
+- Real backend393.14s, ordinary e2e137.74s, reference189.222s PASS. Runtime343.909s,
+  routing261.820s,housekeeping28.756s PASS. Reference reran alone after its global
+  volume-delta assertion saw concurrent smoke volumes.
+- All3 release images f4-local built; encrypted production smoke PASS45 checks,
+  restore52s, including missing-journal refusal and post-backup deletion replay.
+  ShellCheck0.10 PASS. No live GitHub mutation or live host/R2 recovery claimed.
+- Logs /tmp/previa-f4-*.log; all verification jobs finished. Go cache
+  /tmp/previa-go-build; lint cache /tmp/previa-golangci-lint. GOFLAGS=-buildvcs=false
+  avoids slow Git metadata under WSL. Every shell command uses rtk prefix.
 
-## Prior Feature 5B / F1 context
-- Migration 0041 / `internal/sampledata`: Test data settings, encrypted baselines,
-  refresh/freshness/cleanup; source order kept PR data → baseline → empty + seed.
-  Baseline volume is derived, not backed up. Evidence:
-  test-docs/2026-10-17-persistent-test-data-report.md.
-
-## Environments and verification
-- Dev DB `previa-postgres-1` remains Goose 41; not migrated by the agent. The
-  user's running worker predates F2/F3: stop it before `make migrate-up`, then
-  restart the server and worker. Make migration/run targets load .env; direct Go
-  and browser test commands require exported settings.
-- Disposable test container `previa-member-ux-test-postgres`, 127.0.0.1:55439,
-  database previa_ux_test. TEST_DATABASE_URL tests use isolated
-  schemas; leave this existing container intact.
-- Browser `UI_BROWSER_EXECUTABLE=/snap/bin/chromium`; Usage captures with
-  `UI_BROWSER_SCREENSHOTS=1` are in web/tests/browser/artifacts (ignored).
-- F3 verification passed: build; vet/lint 0 issues; all 49 Go test packages on
-  PostgreSQL; final usage race detector (88.952 s); migration up/down/up; lifecycle
-  and compute-independent access. Browser: UI 55/55, workspace 14/14, setup 5/5,
-  review 6/6, Test data 3/3, Usage 4/4. Runtime 11/11, routing 8/8; E2E four/four
-  (945.591 s), including two metered baselines and period/segment reconciliation.
-  All eight final Owner/Developer screenshots reviewed at 1440/390, light/dark.
-- Deployment-setup verification: build; vet/lint 0 issues; `go test ./...` 50/50
-  packages on the test DB; errortracking/logging race ×5; actionlint (ci, release);
-  shellcheck (setup, backup, restore, smoke); backup check-ins with stub tools;
-  lazydocker install/checksum/rerun; `check-config` with bad/good/empty DSN;
-  docs/25 Mermaid diagrams render (mermaid-cli 11.4.2); `make prod-smoke` 40/40
-  incl. backup/restore. Not run: browser/E2E suites (no UI or pipeline change),
-  anything against real Sentry, Tailscale or OVHcloud.
-
-## Access and working invariants
-- Active membership is authoritative; Owner/Admin span repositories; Developer/
-  Reviewer need explicit grants. Presentation must not import backend features.
-- Preserve compact signal UI, modal confirmations, CSRF, honest unbuilt labels.
-- Do not edit technical-docs/inside-previa.md unless asked. No deployment/push.
-- Keep this handoff under 100 lines; replace stale facts instead of appending logs.
+## Next steps / environment
+- Development DB was41 and was deliberately NOT migrated. Stop old Air/server
+  and worker, run make migrate-up (43 + River), then restart both.
+- Production: install/run minute deletion-journal timer with configured encrypted
+  off-host backup channel; otherwise deletion deliberately remains pending.
+- Disposable DB container previa-member-ux-test-postgres:55439,previa_ux_test;
+  leave intact. Isolated test schemas; no developer data erased.
+- Preserve deployment205ae68: one OVH VPS2, host-built images, Cloudflare DNS/R2,
+  Sentry, Tailscale SSH, lazydocker. No live deployment or extra infrastructure.
+- Do not edit technical-docs/inside-previa.md. No theme/library/architecture
+  deviation. CWD lowercase Windows path aliases original uppercase path.

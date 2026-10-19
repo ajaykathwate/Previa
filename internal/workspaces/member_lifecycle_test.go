@@ -170,8 +170,8 @@ func TestWorkspaceDeletionNeedsASoleOwnerWithoutConnections(t *testing.T) {
 	if !strings.Contains(settings, "Delete workspace…") || !strings.Contains(settings, "Invite a teammate") {
 		t.Fatal("sole owner was not offered deletion with the handover alternative")
 	}
-	if shared := owner.request("GET", "/workspaces/"+publicWorkspace(t, f)+"/settings", nil).Body.String(); strings.Contains(shared, "Delete workspace…") {
-		t.Fatal("deletion offered while other members exist")
+	if shared := owner.request("GET", "/workspaces/"+publicWorkspace(t, f)+"/settings", nil).Body.String(); !strings.Contains(shared, "Delete workspace…") || !strings.Contains(shared, "Deleting ends access for all members") {
+		t.Fatal("owner should reach F4 durable deletion even with other members")
 	}
 	deleted := owner.request("POST", "/workspaces/"+id+"/delete", url.Values{"csrf_token": {owner.csrf(t)}, "workspace_revision": {strconv.FormatInt(s.Revision, 10)}, "confirm": {"DELETE"}})
 	if deleted.Code != http.StatusSeeOther || deleted.Header().Get("Location") != "/workspaces?saved=deleted" {

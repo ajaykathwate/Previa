@@ -131,6 +131,9 @@ func (s *Service) CountReceivedInvitations(ctx context.Context, githubID int64) 
 // Connected installations must be uninstalled first, because preview teardown
 // follows installation lifecycle events.
 func (s *Service) Delete(ctx context.Context, user, wid, revision int64, confirm string) error {
+	if s.deletion != nil {
+		return s.deletion.DeleteWorkspace(ctx, user, wid, revision, confirm)
+	}
 	if revision <= 0 {
 		return ErrInput
 	}

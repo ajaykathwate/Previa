@@ -12,4 +12,5 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/auth/github/callback", h.callback)
 	r.With(RequireUser).Get("/auth/logout", h.logoutConfirmation)
 	r.With(RequireUser).Post("/auth/logout", h.logout)
+	r.With(RequireUser).Post("/auth/sessions/revoke", h.endOtherSessions)
 }

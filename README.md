@@ -647,6 +647,7 @@ each one turns on, and what happens without it, is in
 [docs/22-mvp-operations.md](docs/22-mvp-operations.md).
 
 - `DATABASE_URL`
+- `SUPPORT_EMAIL`, `OPERATOR_NAME`, `SUPPORT_OPERATOR_GITHUB_IDS` (immutable numeric user IDs; empty denies operator access), support limits and deletion-journal bounds/retention configure [account exits and support](docs/34-accounts-support-and-deletion.md). `/account`, `/help`, `/status` and `/policies/*` expose real controls and information. The independent encrypted journal must be uploaded before deletion completes and replayed before a restore serves traffic.
 - `APP_ENV` (`development` or `production`), `LOG_LEVEL`, `SENTRY_DSN` (server and worker report warnings and errors to Sentry; the backup checks in with it), `INTERNAL_ADDR` / `WORKER_INTERNAL_ADDR` (internal health and metrics listeners), `TRUSTED_PROXIES`, `BACKUP_STATUS_FILE` (server), `BUILDS_PAUSED` (worker; the execution kill switch); see [docs/23-observability-and-hardening.md](docs/23-observability-and-hardening.md)
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`

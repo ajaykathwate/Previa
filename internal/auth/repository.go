@@ -22,6 +22,7 @@ type User struct {
 	AvatarURL                                                                            string
 	PublicID, FirstName, LastName, GitHubName, Email, ProfileURL, Bio, Company, Location string
 	ProfileRevision, AvatarVersion                                                       int64
+	SessionEpoch                                                                         int64
 	EmailSyncError, CustomAvatar                                                         bool
 	JoinedAt, GitHubCreatedAt, ProfileSyncedAt                                           time.Time
 }
@@ -63,7 +64,7 @@ func (r *Repository) GetUser(ctx context.Context, id int64) (User, error) {
 }
 
 func userFromRow(u dbgen.User) User {
-	return User{ID: u.ID, GitHubID: u.GithubID, Username: u.Username, AvatarURL: u.AvatarUrl, PublicID: uuid.UUID(u.PublicID.Bytes).String(),
+	return User{ID: u.ID, GitHubID: u.GithubID, Username: u.Username, AvatarURL: u.AvatarUrl, PublicID: uuid.UUID(u.PublicID.Bytes).String(), SessionEpoch: u.SessionEpoch,
 		FirstName: u.FirstName, LastName: u.LastName, GitHubName: u.GithubName, Email: u.Email, EmailSyncError: u.EmailSyncError, ProfileURL: u.GithubProfileUrl, Bio: u.GithubBio, Company: u.GithubCompany, Location: u.GithubLocation,
 		ProfileRevision: u.ProfileRevision, AvatarVersion: u.AvatarVersion, CustomAvatar: u.CustomAvatar, JoinedAt: u.CreatedAt.Time, GitHubCreatedAt: u.GithubCreatedAt.Time, ProfileSyncedAt: u.ProfileSyncedAt.Time}
 }

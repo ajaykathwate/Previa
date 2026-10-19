@@ -636,7 +636,7 @@ make prod-smoke PREVIA_VERSION=v0.1.0-rc.1        # about 3 minutes
 ```
 
 **Expected:** a line per check (`ok   dashboard home over HTTPS`, …) ending in
-`smoke test passed: 40 checks` (43 with `SMOKE_OLD_DUMP`, 33 without `age`). Ports used: 127.0.0.1:18080,
+`smoke test passed: 45 checks` (48 with `SMOKE_OLD_DUMP`, 33 without `age`). Ports used: 127.0.0.1:18080,
 18443 and 13000. What it covers and its options are in
 [25](25-production-deployment.md#local-staging-smoke-test).
 The script reads the required schema version and alert count from the checkout;
@@ -1243,7 +1243,7 @@ make egress-image
 make router-up
 ```
 
-**Expected:** PostgreSQL is healthy; Goose reaches 34 and River reaches 007;
+**Expected:** PostgreSQL is healthy; Goose reaches 43 and River reaches 007;
 the application builds, the egress image exists and Traefik starts with the fresh
 route table. These Make targets automatically read `.env`. Start `make dev`
 (or `make run-server`) and `make run-worker` in separate terminals. Sign in,
@@ -1251,3 +1251,85 @@ create a workspace, reconnect the existing GitHub App installation and choose
 repositories. Re-enter any discarded repository secrets/settings and rebuild
 previews. Resetting Docker/PostgreSQL does not remove the App installation or
 existing comments/check runs on GitHub.
+
+## F4 account exits, support and deletion
+
+Read [34](34-accounts-support-and-deletion.md) for lifecycle/restore semantics.
+Stop old Air/server and worker processes before upgrading; do not let old
+workers keep executing against the new account fences:
+
+```sh
+make migrate-up
+make build
+make run-server
+# Separate terminal:
+make run-worker
+```
+
+**Expected:** Goose **0043**, River **007**, build succeeds. New sidebar links
+reach Account & connections and Support & status; Your profile offers End other
+sessions. This task does not migrate your development database automatically.
+Make migration/run/dev commands load trusted `.env` assignments (exported
+overrides win). Direct binaries/Go commands and browser targets require exported
+settings. Quote env values containing spaces, e.g.
+`OPERATOR_NAME="Previa operator"`.
+
+Add these settings from `.env.example` as needed. No Go/template contact edit is
+needed when the support address changes:
+
+| Env key | Default / meaning |
+| --- | --- |
+| `SUPPORT_EMAIL` | Empty; displayed support contact. The owner's local `.env` is configured. |
+| `OPERATOR_NAME` | `Previa operator`; public policy operator name. |
+| `SUPPORT_OPERATOR_GITHUB_IDS` | Empty denies everyone; comma-separated numeric **user** IDs. |
+| `SUPPORT_MESSAGE_MAX_BYTES` | 16384 UTF-8 bytes; 1024–65536 allowed. |
+| `SUPPORT_REQUESTS_PER_DAY` | 5 per user per UTC day; 1–100 allowed. |
+| `SUPPORT_RETENTION_DAYS` | 90 after resolution; open requests stay until resolved/deleted. |
+| `BACKUP_RETENTION_DAYS` | 30; also used by policy text and host backup retention. |
+| `DELETION_JOURNAL_RETENTION_DAYS` | 90; must exceed backup retention, never prunes unfinished entries. |
+| `DELETION_JOURNAL_MAX_BYTES` | 1048576 plaintext bytes; overflow leaves deletion pending. |
+
+Find an operator's numeric user ID on Your profile → GitHub account → GitHub ID,
+or `https://api.github.com/users/YOUR_LOGIN` (`id`). Do not enter the login, App ID
+or installation ID. Restart the server after changing operator IDs/contact; keep
+server/worker retention settings consistent. The owner's operator setting stays
+empty until explicitly configured; workspace ownership does not grant support
+console access. Support submission persists a native request, without sending
+an email.
+
+For production, rerun `deploy/production/setup.sh` to install the minute
+`previa-deletion-journal.timer`, configure the existing
+`BACKUP_AGE_RECIPIENT`/`BACKUP_REMOTE` channel, then:
+
+```sh
+systemctl start previa-deletion-journal.service
+systemctl status previa-deletion-journal.service --no-pager
+systemctl list-timers previa-deletion-journal.timer
+```
+
+**Expected:** encrypted `deletion-journal/latest.json.age` stored independently
+of database dumps; accepted lifecycle requests receive journal acknowledgement.
+An unconfigured/stopped publisher deliberately leaves requests pending. A local
+developer can test this workflow using a disposable production Compose smoke
+stack and an absolute remote directory; do not point it at the development DB.
+Production needs an off-host destination. Restore now requires the independent
+latest journal; old pre-F4 dumps without its instance identity fail closed.
+
+Verification against an explicitly exported disposable PostgreSQL URL:
+
+```sh
+make build
+make lint
+go test ./...
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-accounts-browser
+TEST_E2E=1 go test ./internal/app -run '^TestRealTestDataJourneys$' -count=1 -v -timeout=60m
+```
+
+The browser test uses simulated GitHub authentication and isolated schemas, with
+JavaScript on/off, CSP, dialogs, persistence and session revocation. The Docker
+journey builds real previews/baselines and finishes with repository disconnection,
+journal acknowledgement and physical erasure. Optional
+`UI_BROWSER_SCREENSHOTS=1` writes ignored captures to
+`web/tests/browser/artifacts`. Public status is unknown until an execution worker
+reports actual Docker/router probes. A database-only worker can erase personal
+data and empty workspaces; repository cleanup waits for an execution worker.

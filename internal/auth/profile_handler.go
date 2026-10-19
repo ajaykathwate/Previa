@@ -50,7 +50,7 @@ func (h *Handler) WithAvatarAudience(a AvatarAudience) *Handler {
 	return h
 }
 
-var profileSaved = map[string]string{"name": "Name saved", "photo": "Profile photo updated", "photo-removed": "Profile photo removed"}
+var profileSaved = map[string]string{"name": "Name saved", "photo": "Profile photo updated", "photo-removed": "Profile photo removed", "sessions": "Other sessions ended"}
 
 // ServeProfile is consumed by the dashboard's session route; auth owns account data.
 func (h *Handler) ServeProfile(w http.ResponseWriter, r *http.Request) {

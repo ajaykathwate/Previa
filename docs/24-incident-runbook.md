@@ -227,6 +227,22 @@ bandwidth).
 
 ## Backup failed
 
+For F4 deletion progress stuck at `journal_pending`, inspect
+`systemctl status previa-deletion-journal.service` and
+`journalctl -u previa-deletion-journal -n 50`. Check the age recipient, off-host
+remote permissions, retention ordering and plaintext size bound, then run the
+service again. Do not mark an operation acknowledged by hand or prune unfinished
+events to make the size check pass. `cleanup_pending`/`cleanup_retry` needs the
+execution worker, route operations, runtime inventory, baseline/source storage
+and build-cache removal to succeed. GitHub comment attempts stop after three
+tries/ten minutes; local teardown does not require GitHub access.
+
+During any restore, stop server/worker/router and both timers, retain the
+independent latest journal, and use production B5/B6. Missing/invalid/foreign or
+older-than-snapshot journal data deliberately prevents serving. Never start an
+old binary around this check. [Account exits and recovery](34-accounts-support-and-deletion.md)
+explains replay and minimal revocation identifiers.
+
 **Sentry:** the cron monitor `previa-backup` reports an error, or no check-in
 arrived within a day. **Alerts:** PreviaBackupStale, PreviaBackupNeverRecorded.
 

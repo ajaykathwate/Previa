@@ -2,11 +2,12 @@ package workspaces
 
 import (
 	"errors"
-	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 
 	"github.com/a-h/templ"
 	pages "github.com/ajaykathwatee/previa/web/pages/workspaces"
@@ -342,6 +343,10 @@ func (h *Handler) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	u, id := h.identity(r)
 	if err := h.service.Delete(r.Context(), u, id, parseID(r.PostFormValue("workspace_revision")), r.PostFormValue("confirm")); err != nil {
 		h.fail(w, r, err)
+		return
+	}
+	if h.service.deletion != nil {
+		publicid.Redirect(w, r, "/account", http.StatusSeeOther)
 		return
 	}
 	publicid.Redirect(w, r, "/workspaces?saved=deleted", http.StatusSeeOther)

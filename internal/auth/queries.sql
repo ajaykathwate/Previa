@@ -8,10 +8,14 @@ last_name=CASE WHEN users.profile_revision=1 AND users.first_name='' AND users.l
 email=CASE WHEN EXCLUDED.email_sync_error THEN users.email ELSE EXCLUDED.email END,email_sync_error=EXCLUDED.email_sync_error,
 github_profile_url=EXCLUDED.github_profile_url,github_bio=EXCLUDED.github_bio,github_company=EXCLUDED.github_company,github_location=EXCLUDED.github_location,
 github_created_at=EXCLUDED.github_created_at,profile_synced_at=EXCLUDED.profile_synced_at
+WHERE users.deleted_at IS NULL
 RETURNING *;
 
 -- name: GetUser :one
-SELECT * FROM users WHERE id=$1;
+SELECT * FROM users WHERE id=$1 AND deleted_at IS NULL;
+
+-- name: AdvanceSessionEpoch :one
+UPDATE users SET session_epoch=session_epoch+1 WHERE id=$1 AND deleted_at IS NULL RETURNING session_epoch;
 
 -- name: UpdatePersonalName :execrows
 UPDATE users SET first_name=$2,last_name=$3,profile_revision=profile_revision+1 WHERE id=$1 AND profile_revision=$4;

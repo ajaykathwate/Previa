@@ -12,6 +12,8 @@ import (
 // claims is what a signed value grants: user may open host until Expires.
 // A token also carries the path to return to.
 type claims struct {
+	Session  string `json:"sid,omitempty"`
+	Epoch    int64  `json:"s,omitempty"`
 	Revision int64  `json:"r"`
 	Local    bool   `json:"l,omitempty"`
 	Host     string `json:"h"`

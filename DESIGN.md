@@ -954,6 +954,15 @@ preview/
 │   │   ├── reconcile.go  jobs.go   # expired reservation recovery (River, every minute)
 │   │   └── accounting_test.go     # execution, races, boundaries and recovery tests
 │   │
+│   ├── accounts/                   # FEATURE: durable disconnect/deletion coordination
+│   │   ├── handler.go repository.go # account controls, authorized catalog reads
+│   │   ├── service.go disconnect.go deletion.go # scope locks, fences, child operations
+│   │   └── jobs.go journal.go      # retry/erasure, bounded independent restore journal
+│   │
+│   ├── support/                    # FEATURE: requests, operator audit, status and policies
+│   │   ├── handler.go service.go   # native forms, operator authorization and retention
+│   │   └── status.go               # real dependency observations and public incidents
+│   │
 │   ├── repoconfig/                 # FEATURE: .previewrc.yaml parse + validate
 │   │   ├── config.go               # typed struct + defaults
 │   │   ├── parser.go
@@ -1080,6 +1089,8 @@ preview/
 │   │   ├── onboarding/             # a repository's Setup tab
 │   │   ├── reviews/                # a pull request's review page (instructions, findings)
 │   │   ├── sampledata/             # a repository's Test data tab, baseline refresh logs
+│   │   ├── accounts/               # local connections, exit controls and progress
+│   │   ├── support/                # Help, operator console, status and policy pages
 │   │   ├── builds/                 # Builds page, current-attempt build log page
 │   │   ├── appoutput/              # live app output page
 │   │   ├── idle/                   # "Waking the preview…" page (public)
@@ -1755,3 +1766,84 @@ ceilings; zero never makes the free plan unlimited. Workers are restarted togeth
 when these operator settings change. Host capacity, lifetime and idle rules remain
 unchanged and their last worker report is shown. Unknown crash time is not claimed
 as an exact measurement. Details: [33](docs/33-usage-and-free-plan.md).
+
+## 27. Account exits, support, status and restore-safe deletion
+
+### Requirement
+
+Implement F4/spec §9.5–§9.6/§9.8: revocable sessions, scoped workspace exits,
+explicit local repository/installation disconnection, ordered workspace erasure,
+personal deletion preserving team data, support requests, public status and
+plain policies. Include the optional finite Disconnected GitHub comment. Billing,
+missed-uninstall polling and review assignments remain deferred.
+
+### Complexity and stack
+
+High: immediate access fences and physical cleanup must survive crashes, retries,
+late signed events and restoring an older snapshot. Use existing pgx/PostgreSQL,
+River, chi, templ and shared signal tokens. No application dependency is added.
+The host's existing age/rclone backup channel carries the independent journal.
+
+### Technical implementation
+
+- `internal/accounts` is a lifecycle coordinator with small consumer-defined
+  fence, inventory, cleanup and erasure interfaces. Environments, Test data,
+  installation catalog, housekeeping, workspaces, auth and support own their
+  actual mutations. Composition stays in `internal/app`.
+- Migration 0043 adds account epochs/deletion markers, lifecycle operations,
+  provider identity fences, journal/metadata, final-comment attempts, support,
+  operator audit, incidents and real dependency observations. Owning foreign
+  keys cascade only after verified external cleanup. Downgrade refuses to
+  discard existing revocations.
+- Epochs are rechecked on authenticated requests, live frames/heartbeats and
+  private-preview authorization. Other-session revocation retains/rotates the
+  current browser. Streams also check their original opaque session exists.
+- Disconnect acceptance locks scope and validates role, revision and typed
+  confirmation; records journal/operation; fences admission, PRs, routes and
+  baselines transactionally. The worker retries physical removal separately
+  from compute allowance. Parent operations wait for children. Completion
+  requires verified inventory/file/cache cleanup and remote journal acknowledgement.
+- Baseline ownership sidecars precede file bytes. Cleanup removes unrecorded
+  interrupted dumps, attributable source trees and repository build caches.
+  Missing Docker/storage leaves progress pending rather than claiming erasure.
+- Personal deletion requires no owned active/deleting workspace, revokes
+  membership/session authority immediately, repairs manual requests and then
+  removes profile/avatar/support data. Shared authorship is pseudonymous;
+  numeric GitHub/public IDs remain minimal revocation tombstones. Ownership
+  creation/transfer serializes against deleted identities. A hashed, seven-day
+  HttpOnly receipt provides signed-out progress.
+- Final comments share the normal report lease, update only an App-owned marked
+  comment and stop after three attempts or ten minutes. Local teardown does not
+  require GitHub. Configured numeric App ID permits worker startup during an
+  upstream identity-read outage; unknown bot-login fallback is disabled.
+- `internal/support` owns native requests, immutable-ID operator authorization,
+  audit, incident forms, status observations and retention. Empty configured
+  operator IDs deny everyone, independently of workspace roles. Messages/references
+  are bounded/authorized; rendering escapes messages. Every operator read and
+  mutation is audited without granting access to source/secrets/previews.
+- Workers probe Docker and loaded Traefik fallback configuration every 30 seconds;
+  stale (>90 seconds) and absent observations are unknown. Incident text is
+  operator-published. No uptime percentage is inferred from a heartbeat.
+- `deletion-journal.sh` exports bounded identifier-only JSON, age-encrypts it,
+  uploads through the off-host backup channel, then acknowledges exact events.
+  Timer/restore share a channel lock. Backups mark a boundary and require a newer
+  journal. Restore stops writers/router, verifies the independent latest object,
+  replays missing events with checkpoints, clears the old generated route table,
+  and starts paused. Existing snapshot events do not undo later grants; ownership
+  events preserve a successor before a former owner's deletion.
+
+### Presentation, configuration and decisions
+
+Templates/display types are in `web/pages/accounts` and `web/pages/support`;
+`web/styles/customer.css` uses theme tokens. Shared sidebar/profile/settings links
+reach controls; typed destructive confirmation stays in accessible modals. All
+mutations use CSRF and native forms. Contact, operator display name, numeric
+operator IDs, support limits and journal/backup retention/bounds use env.
+
+Owner delegated defaults: 16 KiB/message, five requests per UTC day, resolved
+support retained 90 days, encrypted journal 90 days and 1 MiB, backups 30 days.
+Unfinished journal entries never expire. User supplied the local support email
+and requested operator IDs remain unset with explanatory comments. Privacy/terms
+describe actual behavior; operator identity and legal review remain pre-launch
+checks. Reconnection uses a fresh explicit GitHub installation after cleanup;
+old credentials/history are not restored. Details: [34](docs/34-accounts-support-and-deletion.md).

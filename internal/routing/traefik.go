@@ -82,6 +82,18 @@ func (t *Traefik) attached(settings *container.NetworkSettings, networkID string
 }
 
 // Router reads one router of the file provider from Traefik's API.
+// Available verifies that Traefik has loaded Previa's real fallback router.
+func (t *Traefik) Available(ctx context.Context) error {
+	o, err := t.Router(ctx, unavailableName)
+	if err != nil {
+		return err
+	}
+	if !o.Present || o.Status != "enabled" || len(o.Errors) > 0 {
+		return fmt.Errorf("previa fallback router is not enabled")
+	}
+	return nil
+}
+
 func (t *Traefik) Router(ctx context.Context, name string) (Observed, error) {
 	result, err := dockerx.Run(ctx, t.docker, t.container, "wget", "-q", "-S", "-T", "3", "-O", "-",
 		"http://"+t.api+"/api/http/routers/"+name+"@file")

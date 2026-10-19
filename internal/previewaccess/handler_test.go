@@ -403,6 +403,8 @@ func TestPrivatePreviewCookieAndTokenStopAfterMemberRemoval(t *testing.T) {
 		}
 	}
 	h := NewHandler(pool, session{names: map[int64]string{2: "reviewer"}}, github{"reviewer": "read"}, nil, "secret", "preview.test", "https://previa.test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	issuingSession := &grantSession{valid: true}
+	h.sessions = issuingSession
 	req := httptest.NewRequest(http.MethodGet, "/previews/access?host=private-host.preview.test&path=/", nil)
 	req = req.WithContext(context.WithValue(ctx, userKey{}, int64(2)))
 	res := httptest.NewRecorder()
@@ -433,6 +435,27 @@ func TestPrivatePreviewCookieAndTokenStopAfterMemberRemoval(t *testing.T) {
 	if got := forward("/", cookies[0].Value); got.Code != 200 {
 		t.Fatal("valid local grant denied", got.Code)
 	}
+	issuingSession.valid = false
+	if got := forward("/", cookies[0].Value); got.Code == 200 {
+		t.Fatal("logout left the issuing session's private-preview cookie authorized")
+	}
+	if got := forward(location.RequestURI(), ""); got.Code != 403 {
+		t.Fatal("logout left the issuing session's token authorized", got.Code)
+	}
+	issuingSession.valid = true
+	if _, err := pool.Exec(ctx, `UPDATE users SET session_epoch=session_epoch+1 WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
+	if got := forward("/", cookies[0].Value); got.Code == 200 {
+		t.Fatal("revoked session epoch retained private-preview cookie access")
+	}
+	if got := forward(location.RequestURI(), ""); got.Code != 403 {
+		t.Fatal("pre-revocation private-preview token replayed", got.Code)
+	}
+	// Restore the fixture epoch to isolate the separate membership-removal check.
+	if _, err := pool.Exec(ctx, `UPDATE users SET session_epoch=session_epoch-1 WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
 	for _, status := range []string{"publishing", "failed"} {
 		if _, err := pool.Exec(ctx, "UPDATE environments SET status=$1 WHERE pull_request_id=1", status); err != nil {
 			t.Fatal(err)
@@ -455,4 +478,11 @@ func TestPrivatePreviewCookieAndTokenStopAfterMemberRemoval(t *testing.T) {
 	if denied.Code != 403 {
 		t.Fatal("removed member fell back to GitHub outsider permission", denied.Code)
 	}
+}
+
+type grantSession struct{ valid bool }
+
+func (*grantSession) PreviewSessionID(context.Context) string { return "safe-session-digest" }
+func (s *grantSession) PreviewSessionValid(_ context.Context, id string) (bool, error) {
+	return s.valid && id == "safe-session-digest", nil
 }

@@ -70,8 +70,8 @@ func TestPostgresLoginPersistenceAndIdentityRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(values) != 2 || values["user_id"] == nil || values["csrf_token"] == nil {
-		t.Fatalf("session should hold only user ID and CSRF token; found keys: %v", values)
+	if len(values) != 3 || values["user_id"] == nil || values["csrf_token"] == nil || values["session_epoch"]==nil {
+		t.Fatalf("session should hold user ID, epoch and CSRF token; found keys: %v", values)
 	}
 	id := values["user_id"].(int64)
 	before, err := users.GetUser(ctx, id)

@@ -197,6 +197,9 @@ func send(stream *SSE, e Event) error {
 }
 
 func (o StreamOptions) authorize(ctx context.Context) error {
+	if err := CheckSession(ctx); err != nil {
+		return err
+	}
 	if o.Authorize != nil {
 		return o.Authorize(ctx)
 	}

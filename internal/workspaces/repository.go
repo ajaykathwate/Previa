@@ -135,6 +135,7 @@ type Permissions interface {
 	RepositoryUserPermission(context.Context, int64, string, string, int64) (string, error)
 }
 type Service struct {
+	deletion    WorkspaceDeleter
 	repo        *Repository
 	directory   Directory
 	permissions Permissions

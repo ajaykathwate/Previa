@@ -3,12 +3,17 @@ package auth
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
-	"github.com/ajaykathwatee/previa/internal/platform/publicid"
-	"github.com/ajaykathwatee/previa/web/components"
+	"fmt"
 	"mime"
 	"net/http"
 	"net/url"
+
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
+	"github.com/ajaykathwatee/previa/internal/platform/realtime"
+	"github.com/ajaykathwatee/previa/web/components"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -54,6 +59,9 @@ func (h *Handler) LoadUser(next http.Handler) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		if id := h.sessions.GetInt64(r.Context(), "user_id"); id != 0 {
 			u, err := h.users.GetUser(r.Context(), id)
+			if err == nil && u.SessionEpoch != h.sessions.GetInt64(r.Context(), "session_epoch") {
+				err = pgx.ErrNoRows
+			}
 			switch {
 			case errors.Is(err, pgx.ErrNoRows):
 				// The account is gone: end the session and continue signed out.
@@ -66,11 +74,51 @@ func (h *Handler) LoadUser(next http.Handler) http.Handler {
 				h.fail(w, r, http.StatusServiceUnavailable, "Your account is unavailable. Please try again.")
 				return
 			default:
+				token := h.sessions.Token(r.Context())
 				r = r.WithContext(components.WithViewer(context.WithValue(r.Context(), userKey, u), components.Viewer{Name: u.DisplayName(), Login: u.Username, Avatar: u.AvatarSrc(), PublicID: u.PublicID}))
+				r = r.WithContext(realtime.WithSessionCheck(r.Context(), func(ctx context.Context) error {
+					if err := h.sessionExists(ctx, token); err != nil {
+						return err
+					}
+					fresh, err := h.users.GetUser(ctx, id)
+					if err != nil {
+						return err
+					}
+					if fresh.SessionEpoch != u.SessionEpoch {
+						return errors.New("session revoked")
+					}
+					return nil
+				}))
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Long-lived responses must also stop on ordinary logout or idle expiry, even
+// when the account-wide epoch has not changed. The token is captured once so a
+// stream never races against mutable request session data.
+func (h *Handler) sessionExists(ctx context.Context, token string) error {
+	if h.sessions.HashTokenInStore {
+		hash := sha256.Sum256([]byte(token))
+		token = base64.RawURLEncoding.EncodeToString(hash[:])
+	}
+	var found bool
+	var err error
+	if store, ok := h.sessions.Store.(interface {
+		FindCtx(context.Context, string) ([]byte, bool, error)
+	}); ok {
+		_, found, err = store.FindCtx(ctx, token)
+	} else {
+		_, found, err = h.sessions.Store.Find(token)
+	}
+	if err != nil {
+		return fmt.Errorf("check live session: %w", err)
+	}
+	if !found {
+		return errors.New("session ended or expired")
+	}
+	return nil
 }
 
 // RequireUser redirects anonymous requests to the login flow.

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/accounts"
 	"github.com/ajaykathwatee/previa/internal/activity"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
@@ -328,6 +329,7 @@ func TestRealTestDataJourneys(t *testing.T) {
 		}
 	}
 	stored, err := os.ReadDir(execution.PreviewBaselineDir)
+	stored = slices.DeleteFunc(stored, func(entry os.DirEntry) bool { return strings.HasSuffix(entry.Name(), ".owner") })
 	if err != nil || len(stored) != 1 {
 		t.Fatalf("one baseline file: %v %v", stored, err)
 	}
@@ -485,9 +487,16 @@ func TestRealTestDataJourneys(t *testing.T) {
 	noBaselineObjects()
 	t.Log("merge: the baseline was refreshed from the new head of main")
 
-	// 10. Teardown leaves no container, image, network or volume.
-	for number, sha := range map[int32]string{e2ePRNumber: dataCommit4, notesForkNumber: dataForkCommit} {
-		pullRequest(number, sha, "closed")
+	// 10. Explicit repository disconnection fences every PR and its retained
+	// baseline without asking GitHub to close anything. Completion also needs
+	// the independent journal and deletion of source/build-cache leftovers.
+	var owner, installationRevision int64
+	if err := pool.QueryRow(ctx, `SELECT i.owner_user_id,i.revision FROM repos r JOIN installations i ON i.id=r.installation_id WHERE r.id=$1`, repoID).Scan(&owner, &installationRevision); err != nil {
+		t.Fatal(err)
+	}
+	deletion, err := p.lifecycle.DisconnectRepository(ctx, owner, repoID, installationRevision, "DISCONNECT")
+	if err != nil {
+		t.Fatal(err)
 	}
 	for _, id := range []int64{shopPR, otherPR, forkPR} {
 		e2eWait(t, ctx, "the teardown to remove everything", 3*time.Minute, func() (string, error) {
@@ -501,9 +510,47 @@ func TestRealTestDataJourneys(t *testing.T) {
 			return "", e2eLeftovers(ctx, docker, instance, id)
 		})
 	}
+	var stage string
+	if err := pool.QueryRow(ctx, `SELECT stage FROM lifecycle_operations WHERE id=$1`, deletion.ID).Scan(&stage); err != nil || stage == "complete" {
+		t.Fatalf("completion before remote acknowledgement: %s %v", stage, err)
+	}
+	rawJournal, err := p.lifecycle.ExportJournal(ctx, 90, 1048576)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := accounts.DecodeJournal(rawJournal, 1048576)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = p.lifecycle.AcknowledgeJournal(ctx, journal); err != nil {
+		t.Fatal(err)
+	}
+	e2eWait(t, ctx, "repository disconnection to erase every owned resource", 4*time.Minute, func() (string, error) {
+		if err := pool.QueryRow(ctx, `SELECT stage FROM lifecycle_operations WHERE id=$1`, deletion.ID).Scan(&stage); err != nil {
+			return "", err
+		}
+		if stage != "complete" {
+			return "", fmt.Errorf("deletion %s", stage)
+		}
+		return "", nil
+	})
+	if n := e2eCount(t, pool, `SELECT count(*) FROM repos WHERE id=$1`, repoID); n != 0 {
+		t.Fatal("repository survived completed disconnection")
+	}
+	if files, err := os.ReadDir(execution.PreviewBaselineDir); err != nil || len(files) != 0 {
+		t.Fatalf("baseline files survived erasure: %v %v", files, err)
+	}
+	if files, err := os.ReadDir(execution.SourceWorkspaceRoot); err != nil || len(files) != 0 {
+		t.Fatalf("source files survived erasure: %v %v", files, err)
+	}
+	for _, id := range []int64{shopPR, otherPR, forkPR} {
+		if err := e2eLeftovers(ctx, docker, instance, id); err != nil {
+			t.Fatal(err)
+		}
+	}
 	noBaselineObjects()
 	if added := slices.DeleteFunc(slices.Collect(maps.Keys(e2eVolumes(t, ctx, docker))), func(v string) bool { return volumesBefore[v] }); len(added) > 0 {
 		t.Fatalf("volumes left behind: %v", added)
 	}
-	t.Log("teardown: no container, image, network or volume remains")
+	t.Log("disconnect: journal acknowledged, records/source/baselines/caches erased; no container, image, network or volume remains")
 }

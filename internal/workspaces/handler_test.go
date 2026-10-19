@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ajaykathwatee/previa/internal/accounts"
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
@@ -88,7 +89,7 @@ func fixtureRouter(t *testing.T, f fixture, origins ...string) http.Handler {
 	}
 	return configuredFixtureRouter(t, f, origin, false)
 }
-func configuredFixtureRouter(t *testing.T, f fixture, origin string, strict bool) http.Handler {
+func configuredFixtureRouter(t *testing.T, f fixture, origin string, strict bool, lifecycle ...bool) http.Handler {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	store := memstore.NewWithCleanupInterval(0)
@@ -103,6 +104,11 @@ func configuredFixtureRouter(t *testing.T, f fixture, origin string, strict bool
 	}
 	router.Use(NewMiddleware(f.service, users, logger).Load)
 	users.Mount(router)
+	if len(lifecycle) > 0 && lifecycle[0] {
+		exits := accounts.NewService(f.pool).WithWorkspaces(f.service)
+		f.service.WithDeletion(exits)
+		accounts.NewHandler(exits, users, logger, sessions.Destroy, false).Mount(router, auth.RequireUser)
+	}
 	NewHandler(f.service, users, logger, origin).Mount(router, auth.RequireUser)
 	pullrequests.NewHandler(pullrequests.NewRepository(f.pool), nil, nil, users, logger, false).WithPreviewDomain("preview.test").Mount(router, auth.RequireUser)
 	buildlogs.NewHandler(buildlogs.NewStore(f.pool), users, logger).Mount(router, auth.RequireUser)

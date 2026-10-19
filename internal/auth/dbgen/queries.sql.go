@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const advanceSessionEpoch = `-- name: AdvanceSessionEpoch :one
+UPDATE users SET session_epoch=session_epoch+1 WHERE id=$1 AND deleted_at IS NULL RETURNING session_epoch
+`
+
+func (q *Queries) AdvanceSessionEpoch(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, advanceSessionEpoch, id)
+	var session_epoch int64
+	err := row.Scan(&session_epoch)
+	return session_epoch, err
+}
+
 const getSession = `-- name: GetSession :one
 SELECT token,data,expiry FROM sessions WHERE token=$1
 `
@@ -24,7 +35,7 @@ func (q *Queries) GetSession(ctx context.Context, token string) (Session, error)
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar FROM users WHERE id=$1
+SELECT id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar, session_epoch, deleted_at FROM users WHERE id=$1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
@@ -51,6 +62,8 @@ func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
 		&i.PublicID,
 		&i.AvatarVersion,
 		&i.CustomAvatar,
+		&i.SessionEpoch,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -134,7 +147,8 @@ last_name=CASE WHEN users.profile_revision=1 AND users.first_name='' AND users.l
 email=CASE WHEN EXCLUDED.email_sync_error THEN users.email ELSE EXCLUDED.email END,email_sync_error=EXCLUDED.email_sync_error,
 github_profile_url=EXCLUDED.github_profile_url,github_bio=EXCLUDED.github_bio,github_company=EXCLUDED.github_company,github_location=EXCLUDED.github_location,
 github_created_at=EXCLUDED.github_created_at,profile_synced_at=EXCLUDED.profile_synced_at
-RETURNING id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar
+WHERE users.deleted_at IS NULL
+RETURNING id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar, session_epoch, deleted_at
 `
 
 type UpsertUserParams struct {
@@ -192,6 +206,8 @@ func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) (User, e
 		&i.PublicID,
 		&i.AvatarVersion,
 		&i.CustomAvatar,
+		&i.SessionEpoch,
+		&i.DeletedAt,
 	)
 	return i, err
 }

@@ -59,6 +59,9 @@ browser-install:
 	npm ci --prefix web/tests/browser
 	npm exec --prefix web/tests/browser -- playwright install chromium
 
+test-accounts-browser: assets generate
+	RUN_ACCOUNTS_BROWSER_TESTS=1 $(GO) test ./internal/accounts -run '^TestAccountsBrowser$$' -count=1 -v -timeout=6m
+
 test-browser: assets generate
 	RUN_BROWSER_TESTS=1 $(GO) test -count=1 -v -timeout 12m ./web/tests/browser
 
@@ -280,5 +283,6 @@ river-ui:
 # Signs a local fixture in memory; secret is never a command argument.
 .PHONY: test-webhook
 .PHONY: test-usage-browser
+.PHONY: test-accounts-browser
 test-webhook:
 	@$(load_run_env) python3 deploy/test-webhook.py

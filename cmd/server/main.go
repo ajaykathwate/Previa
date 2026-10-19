@@ -21,6 +21,7 @@ import (
 //	server check-config  validate the environment and exit (deploy gate)
 //	server healthcheck   exit 0 when the running process is ready (container health check)
 //	server sentry-test   send one test error to Sentry and wait for it (deploy check)
+//	server journal-*     private snapshot/export/ack/replay deployment commands
 func main() {
 	if len(os.Args) > 1 {
 		os.Exit(command(os.Args[1]))
@@ -53,6 +54,14 @@ func run() int {
 
 func command(name string) int {
 	switch name {
+	case "journal-export", "journal-ack", "journal-replay", "journal-snapshot":
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := app.JournalCommand(ctx, name, os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, logging.RedactString(err.Error()))
+			return 1
+		}
+		return 0
 	case "check-config":
 		if _, err := config.LoadServer(); err != nil {
 			fmt.Fprintln(os.Stderr, logging.RedactString(err.Error()))
@@ -82,7 +91,7 @@ func command(name string) int {
 		fmt.Println("sent a test error to Sentry: it appears under Issues as \"Sentry test from previa-server\"")
 		return 0
 	default:
-		fmt.Fprintln(os.Stderr, "usage: server [check-config|healthcheck|sentry-test]")
+		fmt.Fprintln(os.Stderr, "usage: server [check-config|healthcheck|sentry-test|journal-snapshot|journal-export|journal-ack|journal-replay]")
 		return 2
 	}
 }

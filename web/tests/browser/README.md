@@ -166,3 +166,19 @@ log; the Developer's read-only view and the Reviewer sent to Previews; and turni
 Test data off in a modal. Every scenario fails on any CSP violation.
 `UI_BROWSER_SCREENSHOTS=1` writes `test-data-*.png` captures at 1440 and 390 px in
 light and dark, checking that a phone never scrolls sideways.
+
+Account exits, support, status and policies use another PostgreSQL-backed suite:
+
+```sh
+export TEST_DATABASE_URL='postgres://USER:PASSWORD@HOST:PORT/DISPOSABLE_DB'
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-accounts-browser
+```
+
+`internal/accounts/browser_test.go` creates an isolated schema and serves real
+auth, session/CSRF, workspace, account and support handlers with fixture GitHub
+authentication. Five scenarios cover persisted/escaped support messages, operator
+incidents, public status/policies, in-place typed disconnect confirmation, durable
+cleanup progress and ending another browser's session. Mutations also run with
+JavaScript disabled; CSP violations fail the suite. `UI_BROWSER_SCREENSHOTS=1`
+records account, support, operator, policy, progress and modal views at 1440/390
+in both themes. No live GitHub mutations occur.

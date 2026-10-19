@@ -12,6 +12,8 @@ const (
 	NavBuilds            NavItem = "builds"
 	NavTools             NavItem = "tools"
 	NavFAQ               NavItem = "faq"
+	NavSupport           NavItem = "support"
+	NavAccount           NavItem = "account"
 	NavWorkspaces        NavItem = "workspaces"
 	NavMembers           NavItem = "members"
 	NavUsage             NavItem = "usage"

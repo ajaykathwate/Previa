@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net"
 	"net/http"
@@ -12,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
+
+	"github.com/ajaykathwatee/previa/internal/accounts"
 	"github.com/ajaykathwatee/previa/internal/activity"
 	"github.com/ajaykathwatee/previa/internal/appoutput"
 	"github.com/ajaykathwatee/previa/internal/auth"
@@ -37,6 +39,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/sampledata"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/starterkits"
+	"github.com/ajaykathwatee/previa/internal/support"
 	"github.com/ajaykathwatee/previa/internal/usage"
 	"github.com/ajaykathwatee/previa/internal/webhooks"
 	"github.com/ajaykathwatee/previa/internal/workspaces"
@@ -130,6 +133,8 @@ type serverFeatures struct {
 	reviews        *reviews.Handler
 	testData       *sampledata.Handler
 	usage          *usage.Handler
+	accounts       *accounts.Handler
+	support        *support.Handler
 }
 
 func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
@@ -234,6 +239,14 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 		workspaceAccess.app = appClient
 	}
 	workspaceService := workspaces.NewService(workspaces.NewRepository(pool), workspaceAccess, workspaceAccess, coordinator)
+	supportService := newSupport(pool, cfg.CustomerConfig)
+	f.support = support.NewHandler(supportService, f.auth, logger)
+	lifecycle := accounts.NewService(pool).WithPreviews(repositoryLifecycle{
+		previews: environments.NewLifecycle(f.environments, coordinator, nil), data: sampledata.NewLifecycle(testDataStore, nil, nil),
+	})
+	lifecycle.WithAccountFences(workspaceService)
+	workspaceService.WithDeletion(lifecycle)
+	f.accounts = accounts.NewHandler(lifecycle, f.auth, logger, f.sessions.Destroy, strings.HasPrefix(cfg.AppBaseURL, "https://"))
 	f.prs.WithSourceAccess(workspaceService)
 	f.auth.WithAvatarAudience(workspaceService).WithActivity(workspaceService)
 	f.workspaces = workspaces.NewHandler(workspaceService, f.auth, logger, cfg.AppBaseURL)
@@ -362,6 +375,12 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 			r.Use(f.workspaceScope.Load)
 		}
 		f.auth.Mount(r)
+		if f.accounts != nil {
+			f.accounts.Mount(r, auth.RequireUser)
+		}
+		if f.support != nil {
+			f.support.Mount(r, auth.RequireUser)
+		}
 		if f.workspaces != nil {
 			f.workspaces.Mount(r, auth.RequireUser)
 		}

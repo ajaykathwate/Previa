@@ -64,7 +64,7 @@ func TestWorkspaceBrowser(t *testing.T) {
 	})
 	server := httptest.NewUnstartedServer(router)
 	origin := "http://" + server.Listener.Addr().String()
-	router.Mount("/", configuredFixtureRouter(t, f, origin, true))
+	router.Mount("/", configuredFixtureRouter(t, f, origin, true, true))
 	server.Start()
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)

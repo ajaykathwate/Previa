@@ -63,6 +63,19 @@ internal_ports_unpublished() {
 		[[ $bindings == null || $bindings == '{}' ]] || return 1
 	done
 }
+# A failed restore must leave the public router and every writer stopped.
+restore_refuses_missing_journal() {
+	mv "$work/remote/deletion-journal/latest.json.age" "$work/journal.saved.age" || return 1
+	local rejected=false service
+	if ! env "${drill_env[@]}" "$HERE/restore.sh" --identity "$work/age-key.txt" --yes "$dump" >"$work/missing-journal.log" 2>&1; then
+		rejected=true
+	fi
+	mv "$work/journal.saved.age" "$work/remote/deletion-journal/latest.json.age" || return 1
+	$rejected || return 1
+	for service in server worker router; do
+		[[ -z $("${compose[@]}" ps --status running -q "$service") ]] || return 1
+	done
+}
 # Checks that run in a child bash use these helpers too.
 export HOST PROJECT CURL_IMAGE VERSION GO_VERSION
 export -f inside outside
@@ -203,8 +216,10 @@ if command -v age >/dev/null && command -v age-keygen >/dev/null; then
 	recipient=$(age-keygen -y "$work/age-key.txt")
 	drill_env=(PREVIA_ENV_FILE="$work/previa.env" PREVIA_COMPOSE_PROJECT="$PROJECT" PREVIA_COMPOSE_OVERRIDE="$HERE/compose.smoke.yml"
 		PREVIA_CONFIG_DIR="$work/config" PREVIA_BACKUP_STATUS_DIR="$work/backup" PREVIA_ROUTER_CONTAINER=previa-smoke-router
-		BACKUP_AGE_RECIPIENT="$recipient" BACKUP_REMOTE="$work/remote")
+		PREVIA_JOURNAL_LOCK_DIR="$work/backup" BACKUP_AGE_RECIPIENT="$recipient" BACKUP_REMOTE="$work/remote")
 	psql "INSERT INTO users (github_id, username) VALUES (900001, 'before-backup')" >/dev/null
+	psql "INSERT INTO users (github_id, username,first_name) VALUES (900003, 'erase-after-backup','Private')" >/dev/null
+	psql "INSERT INTO sessions(token,data,expiry) VALUES('restore-session-proof',decode('00','hex'),clock_timestamp()+interval '1 day')" >/dev/null
 	backup_started=$(date +%s)
 	check "backup.sh stores encrypted dumps of the database, ACME state and settings" env "${drill_env[@]}" "$HERE/backup.sh"
 	echo "     backup took $(($(date +%s) - backup_started))s"
@@ -216,13 +231,25 @@ if command -v age >/dev/null && command -v age-keygen >/dev/null; then
 		done
 		exit 1'
 	psql "INSERT INTO users (github_id, username) VALUES (900002, 'after-backup')" >/dev/null
+	# The deletion occurs AFTER the dump. Only the independently uploaded journal
+	# can prevent this identity and its profile from reappearing on restore.
+	psql "WITH u AS (
+	 UPDATE users SET deleted_at=clock_timestamp(),session_epoch=session_epoch+1 WHERE github_id=900003 RETURNING id,public_id,github_id
+	), o AS (
+	 INSERT INTO lifecycle_operations(kind,target_id,target_public_id,actor_id) SELECT 'account',id,public_id,id FROM u RETURNING id,target_public_id
+	) INSERT INTO deletion_journal(action,target,github_user_id,operation_id) SELECT 'account',u.public_id,u.github_id,o.id FROM u JOIN o ON o.target_public_id=u.public_id" >/dev/null
+	check "the independent encrypted journal acknowledges the post-backup deletion" env "${drill_env[@]}" "$HERE/deletion-journal.sh"
+	check "no deletion completes without its uploaded journal" test "$(psql "SELECT count(*) FROM lifecycle_operations WHERE kind='account' AND journal_ack_at IS NOT NULL")" = 1
 	dump=$(ls "$work/remote"/previa-2*.dump.age)
+	check "a missing independent journal keeps restore and traffic stopped" restore_refuses_missing_journal
 	restore_started=$(date +%s)
 	check "restore.sh restores, migrates and restarts with builds paused" \
 		env "${drill_env[@]}" "$HERE/restore.sh" --identity "$work/age-key.txt" --yes "$dump"
 	restore_seconds=$(($(date +%s) - restore_started))
 	check "rows from before the backup are back" test "$(psql "SELECT count(*) FROM users WHERE username = 'before-backup'")" = 1
 	check "rows written after the backup are gone (the data-loss window)" test "$(psql "SELECT count(*) FROM users WHERE username = 'after-backup'")" = 0
+	check "post-backup account revocation survives restore before serving" test "$(psql "SELECT count(*) FROM users WHERE github_id=900003 AND deleted_at IS NOT NULL AND session_epoch>0")" = 1
+	check "restore never resurrects previously issued dashboard sessions" test "$(psql "SELECT count(*) FROM sessions WHERE token='restore-session-proof'")" = 0
 	check "the worker came back paused" bash -c "docker run --rm --network ${PROJECT}_control $CURL_IMAGE -fsS http://worker:9091/readyz | grep -q '\"status\":\"ready\"' && docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \$(docker compose -p $PROJECT -f $HERE/compose.yml -f $HERE/compose.smoke.yml --env-file $work/previa.env ps -q worker) | grep -qx BUILDS_PAUSED=true"
 	echo "     restore took ${restore_seconds}s"
 	if [[ -n ${SMOKE_OLD_DUMP:-} ]]; then

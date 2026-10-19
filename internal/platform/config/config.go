@@ -85,6 +85,7 @@ func (c RetentionConfig) checkRetention() error {
 // ServerConfig contains only settings used by the HTTP server.
 type ServerConfig struct {
 	SharedConfig
+	CustomerConfig
 	SecretsConfig
 	EnvironmentConfig
 	OutboundConfig
@@ -114,6 +115,7 @@ type ServerConfig struct {
 // WorkerConfig contains only settings used to execute queued jobs.
 type WorkerConfig struct {
 	SharedConfig
+	CustomerConfig
 	SecretsConfig
 	EnvironmentConfig
 	OutboundConfig
@@ -169,6 +171,9 @@ func LoadWorker() (WorkerConfig, error) {
 	}
 	if err := cfg.SharedConfig.validate(); err != nil {
 		return WorkerConfig{}, fmt.Errorf("validate worker configuration: %w", err)
+	}
+	if err := cfg.checkCustomer(); err != nil {
+		return WorkerConfig{}, err
 	}
 	if err := cfg.EnvironmentConfig.check(); err != nil {
 		return WorkerConfig{}, err
@@ -240,6 +245,9 @@ func checkURLPort(name string, u *url.URL) error {
 }
 
 func (c ServerConfig) validate() error {
+	if err := c.checkCustomer(); err != nil {
+		return err
+	}
 	if err := c.SharedConfig.validate(); err != nil {
 		return err
 	}

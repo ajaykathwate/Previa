@@ -502,7 +502,7 @@ test('removing a member deactivates them, opens their profile and re-invites wit
   assert.deepEqual(errors,[]);assert.deepEqual(invitee.errors,[]);
  }finally{await invitee?.context.close();await context.close()}
 });
-test('a sole owner can delete a workspace after seeing the handover alternative',async()=>{
+test('an owner can request durable workspace deletion after seeing the handover alternative',async()=>{
  const {context,page,errors}=await session();
  try{
   await page.goto(`${origin}/workspaces`);
@@ -525,10 +525,17 @@ test('a sole owner can delete a workspace after seeing the handover alternative'
   assert.ok(await submit.isEnabled());
   await snap(page,'delete-workspace');
   await submit.click();
-  await page.locator('.toast').filter({hasText:'Workspace deleted'}).waitFor();
+  await page.waitForURL(/\/account\/operations\//);
+  assert.match(await page.locator('main').innerText(),/not yet complete/);
   assert.ok(!(await page.locator('main').textContent()).includes('Throwaway team'));
   await page.goto(`${origin}/workspaces/${team}/settings`);
-  assert.equal(await page.getByRole('button',{name:'Delete workspace…'}).count(),0,'shared workspaces cannot be deleted');
+  assert.equal(await page.getByRole('button',{name:'Delete workspace…'}).count(),0,'the former owner, now an admin, cannot delete the shared workspace');
+  const currentOwner=await session('admin');
+  try {
+   await currentOwner.page.goto(`${origin}/workspaces/${team}/settings`);
+   assert.equal(await currentOwner.page.getByRole('button',{name:'Delete workspace…'}).count(),1,'the current owner can delete a shared workspace with connected repositories');
+   assert.deepEqual(currentOwner.errors,[]);
+  } finally {await currentOwner.context.close();}
   assert.deepEqual(errors,[]);
  }finally{await context.close()}
 });

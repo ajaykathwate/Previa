@@ -3,13 +3,18 @@ package app
 import (
 	"context"
 	"fmt"
-	"github.com/ajaykathwatee/previa/internal/activity"
 	"strings"
+	"time"
 
+	"github.com/ajaykathwatee/previa/internal/activity"
+
+	"github.com/ajaykathwatee/previa/internal/accounts"
+	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/builds"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/housekeeping"
+	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
@@ -45,6 +50,7 @@ type execution struct {
 	logs       *buildlogs.Store
 	repo       *environments.Repository
 	usage      *usage.Store
+	accounts   *accounts.Service
 	// testData runs baseline refreshes; nil without baseline storage.
 	testData *sampledata.Jobs
 }
@@ -55,9 +61,18 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 	if err != nil {
 		return nil, err
 	}
-	identity, err := in.github.App(ctx)
+	identityCtx, cancelIdentity := context.WithTimeout(ctx, 10*time.Second)
+	identity, err := in.github.App(identityCtx)
+	cancelIdentity()
 	if err != nil {
-		return nil, fmt.Errorf("read the GitHub App's identity for PR reports: %w", err)
+		if ctx.Err() != nil || cfg.GitHubAppID <= 0 {
+			return nil, fmt.Errorf("read GitHub App identity: %w", err)
+		}
+		// Cleanup must restart during a GitHub outage. The configured immutable
+		// App ID still proves comment ownership; login-based fallback waits.
+		log.WarnContext(ctx, "GitHub App identity unavailable; using configured App ID so local cleanup can start", "error", err)
+		appID := cfg.GitHubAppID
+		identity = &github.App{ID: &appID}
 	}
 	x := &execution{usage: usage.NewStore(pool, cfg.BuildMinutesPerAccountDay, cfg.BuildsPerAccount).WithPreviewPolicy(cfg.PreviewLifetime(), cfg.PreviewIdleSleep, cfg.BuildLogRetention())}
 	if x.gateway, err = newEgressGateway(in); err != nil {
@@ -80,11 +95,11 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 	if x.catalog, err = cfg.ServiceCatalog(); err != nil {
 		return nil, err
 	}
-	workspaces, err := source.NewWorkspaces(cfg.SourceWorkspaceRoot)
+	sources, err := source.NewWorkspaces(cfg.SourceWorkspaceRoot)
 	if err != nil {
 		return nil, err
 	}
-	preparer, err := newPreparer(in, workspaces, x.catalog)
+	preparer, err := newPreparer(in, sources, x.catalog)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +146,7 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 	if x.sweeper, err = environments.NewTeardownSweeper(repo, x.runtime, log, 50); err != nil {
 		return nil, err
 	}
-	if x.keeper, err = newHousekeeper(cfg, pool, log, repo, x.broker, x.sweeper, x.controller, x.runtime, x.sync, builder, workspaces); err != nil {
+	if x.keeper, err = newHousekeeper(cfg, pool, log, repo, x.broker, x.sweeper, x.controller, x.runtime, x.sync, builder, sources); err != nil {
 		return nil, err
 	}
 	if baselines != nil {
@@ -139,6 +154,17 @@ func newExecution(ctx context.Context, in pipelineInput, upstream *pullrequests.
 			return nil, err
 		}
 	}
+	dataLifecycle := sampledata.NewLifecycle(testDataStore, baselines, x.runtime)
+	workspaceLifecycle := workspaces.NewService(workspaces.NewRepository(pool), nil, nil, nil)
+	supportLifecycle := newSupport(pool, cfg.CustomerConfig)
+	api, err := reporting.NewGitHubAPI(in.github, identity.GetID(), identity.GetSlug())
+	if err != nil {
+		return nil, err
+	}
+	x.accounts = accounts.NewService(pool).WithPreviews(repositoryLifecycle{environments.NewLifecycle(repo, x.broker, x.runtime), dataLifecycle}).
+		WithCleaners(dataLifecycle, housekeeping.NewLifecycle(pool, builder, sources)).WithComments(reporting.NewDisconnector(pool, api)).
+		WithRepositoryErasers(installations.NewRepository(pool)).WithInstallations(installations.NewRepository(pool)).
+		WithWorkspaces(workspaceLifecycle, supportLifecycle).WithAccountFences(workspaceLifecycle).WithAccountErasers(supportLifecycle, workspaceLifecycle, auth.NewRepository(pool))
 	return x, nil
 }
 

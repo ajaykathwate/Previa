@@ -89,22 +89,25 @@ func (s *Storage) Create(repoID int64) (*Writer, error) {
 		return nil, fmt.Errorf("name a baseline file: %w", err)
 	}
 	key := hex.EncodeToString(raw)
+	if err := s.recordOwner(key, repoID); err != nil {
+		return nil, err
+	}
 	file, err := os.OpenFile(s.path(key)+tempSuffix, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("create baseline file: %w", err)
+		return nil, fmt.Errorf("create baseline file: %w", errors.Join(err, s.removeOwner(key)))
 	}
 	counted := &limitedWriter{w: file, limit: s.limit, hash: sha256.New()}
 	sealed, version, err := s.keys.EncryptStream(counted, repoID, purpose(key))
 	if err != nil {
 		_ = file.Close()
 		_ = os.Remove(file.Name())
-		return nil, err
+		return nil, errors.Join(err, s.removeOwner(key))
 	}
 	compressed, err := gzip.NewWriterLevel(sealed, gzip.BestSpeed)
 	if err != nil {
 		_ = file.Close()
 		_ = os.Remove(file.Name())
-		return nil, err
+		return nil, errors.Join(err, s.removeOwner(key))
 	}
 	return &Writer{s: s, key: key, file: file, counted: counted, sealed: sealed, gzip: compressed, version: version}, nil
 }
@@ -131,11 +134,7 @@ func (w *Writer) Commit() (Stored, error) {
 		err = syncDir(w.s.dir)
 	}
 	if err != nil {
-		_ = os.Remove(w.file.Name())
-		if errors.Is(err, ErrTooLarge) {
-			return Stored{}, ErrTooLarge
-		}
-		return Stored{}, fmt.Errorf("store baseline file: %w", err)
+		return Stored{}, fmt.Errorf("store baseline file: %w", errors.Join(err, w.s.RemoveTemporary(w.key)))
 	}
 	return Stored{Key: w.key, Checksum: hex.EncodeToString(w.counted.hash.Sum(nil)), Size: w.counted.n, KeyVersion: w.version}, nil
 }
@@ -148,6 +147,7 @@ func (w *Writer) Abort() {
 	w.finished = true
 	_ = w.file.Close()
 	_ = os.Remove(w.file.Name())
+	_ = w.s.removeOwner(w.key)
 }
 
 func syncDir(dir string) error {
@@ -261,7 +261,7 @@ func (s *Storage) Remove(key string) error {
 	if err := os.Remove(s.path(key)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove baseline file: %w", err)
 	}
-	return nil
+	return s.removeOwner(key)
 }
 
 // StoredFile is a file in the baseline directory.
@@ -287,6 +287,16 @@ func (s *Storage) Files() ([]StoredFile, error) {
 			continue
 		}
 		name := entry.Name()
+		if ownerKey, owner := strings.CutSuffix(name, ".owner"); owner && validKey(ownerKey) {
+			// A crash may leave only the durable owner record, before Create
+			// opened the temporary dump. Routine pruning must reclaim it too.
+			if _, err := os.Stat(s.path(ownerKey)); errors.Is(err, os.ErrNotExist) {
+				if _, tempErr := os.Stat(s.path(ownerKey) + tempSuffix); errors.Is(tempErr, os.ErrNotExist) {
+					files = append(files, StoredFile{Key: ownerKey, Temporary: true, Modified: info.ModTime()})
+				}
+			}
+			continue
+		}
 		key, temporary := strings.CutSuffix(name, tempSuffix)
 		if !validKey(key) {
 			continue
@@ -303,6 +313,11 @@ func (s *Storage) RemoveTemporary(key string) error {
 	}
 	if err := os.Remove(s.path(key) + tempSuffix); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove unfinished baseline file: %w", err)
+	}
+	if _, err := os.Stat(s.path(key)); errors.Is(err, os.ErrNotExist) {
+		return s.removeOwner(key)
+	} else if err != nil {
+		return fmt.Errorf("check committed baseline: %w", err)
 	}
 	return nil
 }

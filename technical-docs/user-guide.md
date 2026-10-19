@@ -984,6 +984,36 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | J11 | With a build that failed over 7 days ago, open **Overview**, then **Builds** → **Older failures**; **Dismiss** it, then **Undo** | Overview shows "No new failures · 1 older" in grey, not red; the row is grey with "Over 7 days old"; after Dismiss it is gone from the older count and listed under **Dismissed** with **Undo**; Undo counts it again |
 | J12 | With a build that failed before going live and a live preview, open **Previews**; click a row outside its title; open `/environments` | Only the live preview is listed, with **Open preview**; the failed build is on **Builds**; the click stays on Previews; `/environments` opens Previews |
 
+F4 adds **Account & connections** and **Support & status** to the sidebar. In Your
+profile, **End other sessions** keeps this browser signed in and revokes other
+sessions/streams and previously issued private-preview access. Repository or
+installation disconnection is local; uninstall the App separately in GitHub.
+Owners can delete a workspace with other members and connected repositories.
+Deletion stays pending until runtime/file/cache cleanup and the independent
+encrypted deletion journal both succeed. Personal deletion first requires all
+owned workspaces transferred or fully deleted; other teams retain their work
+with pseudonymous attribution.
+
+### J2. Account exits, support and recovery (F4)
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| A1 | Sign in in two browsers; Your profile → End other sessions; confirm | Current browser stays signed in; the other browser and its streams lose access. |
+| A2 | Leave a workspace after any required ownership transfer | Grants/private cookies/live views stop; other members' previews stay. |
+| A3 | Account & connections → Disconnect repository; cancel, then type DISCONNECT and confirm | Cancel changes nothing; confirmation opens progress, fences new work and removes resources. |
+| A4 | Repeat for an installation | All its repositories are cleaned; the UI explains App uninstall is separate. |
+| A5 | Owner deletes a workspace with connected repos and other members | Members lose access; progress stays pending until ordered cleanup and journal acknowledgement; then Complete. |
+| A6 | Try to delete your account while owning a workspace, then after handover | First refused; second revokes sessions, provides a private seven-day receipt and pseudonymizes shared attribution. |
+| A7 | Stop the worker or journal publisher during cleanup; restart it | Progress stays pending and resumes; no premature Complete. |
+| A8 | Deliver an old signed GitHub event after disconnect | Repository/installation stays disconnected; erased rows are not recreated. |
+| A9 | Help → submit a support request with a repository/PR public ID | Persisted request and copyable diagnostic reference; another member cannot read its body. |
+| A10 | Submit beyond the per-day support limit or over the message size | Clear refusal; deleting a workspace does not reset that person's daily allowance. |
+| A11 | Visit operator console as Owner with operator IDs unset; then configure your numeric user ID | First denied; configured operator can read/resolve requests and publish incidents, with audit records. |
+| A12 | Open Status before any worker probe, then with working/stale probes | Unknown until checked; actual dependency results and checked times; no invented uptime. |
+| A13 | Read Privacy, Terms and Acceptable use signed out | Public plain-language data/permissions/retention/limit/deletion information and configurable contact. |
+| A14 | Rehearse restore with the independent latest encrypted journal, then with it missing | Completed revocations survive an old snapshot; missing journal keeps traffic stopped. |
+| A15 | Repeat account/support flows without JavaScript, at phone width and both themes | Native forms/dialogs work, focus is contained, content stays within the viewport. |
+
 ### K. Operator behaviour you can observe
 
 | # | Steps | Expected |

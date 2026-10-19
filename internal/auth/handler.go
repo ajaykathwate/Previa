@@ -88,6 +88,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.sessions.Put(r.Context(), "user_id", u.ID)
+	h.sessions.Put(r.Context(), "session_epoch", u.SessionEpoch)
 	h.sessions.Put(r.Context(), "csrf_token", randomToken())
 	next := h.sessions.PopString(r.Context(), "after_login")
 	if !LocalPath(next) {

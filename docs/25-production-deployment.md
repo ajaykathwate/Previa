@@ -1994,6 +1994,26 @@ not yet a backup/restore proof.
 
 ### Step B4 — Take a real backup and enable the schedule
 
+F4 also requires `previa-deletion-journal.timer` (installed by `setup.sh`). It
+uploads an age-encrypted, identifier-only `deletion-journal/latest.json.age` through
+the same off-host backup channel every minute, independently of nightly dumps.
+Only a successful upload acknowledges deletion completion. Keep
+`DELETION_JOURNAL_RETENTION_DAYS` (90 by default) longer than
+`BACKUP_RETENTION_DAYS` (30), and do not apply a bucket lifecycle rule that removes
+the latest journal object. The 1 MiB default plaintext bound fails closed rather
+than silently dropping revocations. Check the service before accepting users:
+
+```sh
+systemctl start previa-deletion-journal.service
+systemctl status previa-deletion-journal.service --no-pager
+systemctl enable --now previa-deletion-journal.timer
+rclone lsf previa-backups:YOUR_BUCKET/production/deletion-journal
+```
+
+Expected: `latest.json.age`. Full backups now mark a snapshot boundary and
+require a subsequent journal upload. A directory on the same host remains only
+a local drill destination. See [34](34-accounts-support-and-deletion.md).
+
 With the production PostgreSQL service and router running:
 
 ```sh
@@ -2098,6 +2118,16 @@ actual database and off-host remote.
 
 ### Step B5 — Restore the database on an existing host
 
+**F4 restore boundary:** use a journal-aware release. A pre-F4 backup without the
+journal's instance identity cannot pass this procedure, and old binaries must
+never bypass newer revocations. Stop `previa-deletion-journal.timer` and its
+service with the nightly backup timer during maintenance. Keep its independent
+latest remote object; the copy inside an old database dump is insufficient.
+`restore.sh` locks that publisher channel, stops server/worker/router, retrieves
+and decrypts the latest journal, checks version/instance/time/size and replays it
+after migration, before serving. Missing, foreign, malformed or stale journals
+leave recovery stopped. Do not manually start around that failure.
+
 This is a **destructive database restore**, not an application restart. It
 replaces current rows, jobs and sessions with the selected backup. Confirm the
 intended recovery point and preserve a fresh backup of readable current state
@@ -2140,8 +2170,8 @@ so it does not race recovery.
    Use your configured host router directory if it differs. Leave the dashboard
    route file intact. Route-file writes are deliberately monotonic: the current
    code refuses to replace a newer on-disk route version with an older restored
-   database version. `restore.sh` does not reset this file, so omitting this
-   preparation can leave stale preview routes after a successful DB restore.
+   database version. `restore.sh` now removes this generated file while the
+   router is stopped; saving it here is optional diagnostic evidence.
    Keep the saved file outside the watched directory; Traefik loads every YAML
    file in that directory. The worker can now generate the restored table afresh.
 6. If the current configuration/keyring remains valid for this dump, run the
@@ -2154,10 +2184,11 @@ so it does not race recovery.
      "/root/previa-restore/previa-${PREVIA_BACKUP_STAMP}.dump.age"
    ```
 
-The script decrypts into a private temporary directory, stops server and worker,
+The script decrypts into a private temporary directory, stops server, worker and router,
 ensures PostgreSQL is running, terminates connections to `previa`, drops/recreates
 that database, runs `pg_restore`, applies the selected release's Goose/River
-migrations, and starts worker/server with builds paused. It stops on an error;
+migrations, verifies/replays the independent deletion journal, clears the old
+generated preview route table and starts worker/server with builds paused. It stops on an error;
 inspect the failure before attempting to start everything again.
 
 **It restores only the database dump.** It does not restore `/etc/previa`, ACME
@@ -2198,6 +2229,13 @@ custody, and remove temporary decrypted files/private keys from the host. Retain
 the original encrypted recovery set according to your retention policy.
 
 ### Step B6 — Recover configuration/certificates or replace the whole VPS
+
+Recover the backup-channel credentials and offline age identity too, so B5 can
+fetch the independent latest deletion journal from R2. A host image or old dump
+cannot override later account/membership/workspace/provider revocations. Keep
+public traffic and workers stopped until journal replay succeeds; then let the
+paused worker reconstruct routes from the fenced database. Re-enable both
+backup and deletion-journal timers after verification.
 
 For a lost host, order a new **OVHcloud VPS** with a plain supported OS
 and install the **chosen recovery release** at `/opt/previa` using Steps 0–3.
@@ -2906,7 +2944,8 @@ changed egress proxy to surviving real previews. It still starts the optional
 `observability` profile, so that profile keeps working for a later move, although
 production does not run it; it sends nothing to Sentry (no `SENTRY_DSN`).
 
-`SMOKE_OLD_DUMP` can name an older `pg_dump -Fc` file for the older-schema restore
+`SMOKE_OLD_DUMP` can name an older `pg_dump -Fc` file from the same instance,
+with F4 journal identity (migration 43+), for the older-schema restore
 drill. `SMOKE_KEEP=1` retains the isolated stack for inspection rather than normal
 cleanup. Use disposable data and a separate host; the harness is not a production
 backup or acceptance substitute.
@@ -2916,7 +2955,7 @@ backup or acceptance substitute.
 `deploy/observability/alerts.yml`, and asserts that schema after the initial
 migration, the upgrade and an optional older-backup restore.
 
-**Expected:** `smoke test passed: 40 checks` (43 with `SMOKE_OLD_DUMP`, 33 without
+**Expected:** `smoke test passed: 45 checks` (48 with `SMOKE_OLD_DUMP`, 33 without
 `age`). Run it against the exact candidate images before treating its gate as
 passed; an earlier result recorded in the release report does not cover a newer
 candidate.
