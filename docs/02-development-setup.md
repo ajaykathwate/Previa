@@ -835,6 +835,34 @@ spent attempts, same-version route refresh, and OAuth return to the requested PR
 logs. Tests use disposable schemas. Automatic builds offer **Build now** only
 during the quiet period; queued/running requests show a disabled progress button.
 
+### Focused build stress and fuzz checks
+
+Use an exported `TEST_DATABASE_URL` pointing at a disposable PostgreSQL database
+at Goose 46 / River 007. Direct `go test` commands do **not** load `.env`;
+export test settings first. Existing Make integration targets load `.env` as
+explained above, but an exported test database overrides the fallback.
+
+```sh
+go test -race -shuffle=on -count=5 -run '^TestBurstAdmissions' ./internal/environments
+go test -race -run '^$' -fuzz '^FuzzBuildConfiguration$' -fuzztime=60s -parallel=2 ./internal/repoconfig
+go test -race -run '^$' -fuzz '^FuzzArchivePathContainment$' -fuzztime=60s -parallel=2 ./internal/source
+```
+
+**Expected:** simultaneous builds stay within global, workspace and free-plan
+limits; capacity-blocked work does not reserve allowance or reach the runtime. Arbitrary
+configuration and archive-path inputs produce no panic, unsafe accepted path,
+nondeterministic configuration or operator-limit escape. The archive fuzzer tests
+validation in memory and writes no extracted files. Seed corpora also run during
+ordinary package tests; mutation campaigns require `-fuzz`. Go stores interesting
+inputs in its fuzz cache and failing inputs under the package's `testdata/fuzz`.
+
+For real image building, service readiness, swaps, failure cleanup and complete
+worker journeys, run `make test-builder`, `make test-runtime`, `make test-routing`,
+`make test-housekeeping` and `make test-e2e` **sequentially**. The E2E journeys
+assert Docker resource deltas; overlapping Docker suites would invalidate those
+checks. These commands use disposable schemas and test-owned resources. Keep the
+development server/worker and their database separate from the test fixtures.
+
 ### Browser regression checks (optional)
 
 ```sh

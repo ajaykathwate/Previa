@@ -1,73 +1,64 @@
 # Project handoff
-Last updated: 2026-10-20
+Last updated: 2026-10-21
 
-## Current task / do not restart completed work
-- F7: final MVP addition, Google sign-in + explicit account linking + verified-email
-  Reviewer invitations. Implementation, documentation and automated verification complete.
-- Branch mvp-complete, prior HEAD bb4f970 (F5/F6 committed). F7 committed in one
-  commit at the owner's request; not pushed. No subagents allowed.
-- User wants completion without redoing successful work. Every shell command prefixes
+## Latest task complete — aggressive build-only verification
+- User requested a fresh aggressive test pass of build-related functionality only.
+  Completed with no product defects or data races detected in executed checks.
+- Branch mvp-complete, base75f5681 (F7 committed). Build-testing changes committed
+  in one commit at the owner's request; not pushed. Only4 tests +4 docs changed.
+- Do not repeat completed verification. No subagents allowed. Every command prefixes
   /home/ajaykathwatee/.local/bin/rtk. Do not edit technical-docs/inside-previa.md.
 
-## Implementation / decisions
-- Migration0046 / Schema46: optional unique GitHub ID and Google sub; verified Google
-  email; email Reviewer invitations (XOR recipient, pending uniqueness); GitHub-required
-  technical-role/owner triggers; deletion journal Google subject. Scratch roundtrip
-  passes; rollback refuses after Google/email data exists.
-- Auth method identifies local user; memberships/grants assign roles. Google-only
-  signup creates no Owner workspace; welcome/join flow. GitHub link required before
-  technical roles/new workspace, explicit assignment still required; F6 unchanged.
-- Google code flow: PKCE S256, nonce, signed RS256 ID token (issuer/audience/expiry),
-  provider/session/cookie-bound one-use state, rotated sessions. Tokens not stored.
-  New maintained dependency coreos/go-oidc/v3v3.21.0 (+josev4.1.4); no startup IO.
-- Profile Connect Google/GitHub uses authenticated CSRF POST + provider proof, same
-  current account. No automatic email merge, identity reassignment or automatic role
-  promotion. Separately-created accounts cannot merge in MVP; collision explained.
-- Email invitations are Reviewer-only, verified-email matching, consent, original
-  expiry/grants/revocation. Copy/share links; no invitation email delivery. Existing
-  GitHub invitations preserved. Re-invite Google-only removed members by email.
-- Local private-preview grants work without GitHub; Google-only outsider cannot use
-  GitHub-reader fallback. Technical/source checks remain enforced.
-- Google deletion clears email/profile, retains subject resurrection fence. Journalv2
-  includes sub, accepts v1; membership replay uses stable public user reference.
-- Optional GOOGLE_OAUTH_CLIENT_ID/SECRET pair in both env examples + ignored.env;
-  both blank disables Google, half-config fails. Real client/credentials not created.
-- Preserve approved theme; login/profile/consent provider-neutral. All 7 views captured
-  at1440/390 light/dark and reviewed, additional mobile connection captures.
+## Tests added (application code unchanged)
+- internal/environments/burst_test.go: 16 simultaneous requests across2 workspaces;
+  4 global/workspace limit combinations, both legacy caps and F3 entitlements.
+  Exact runtime admissions/ledger counts; waiting builds never execute/reserve.
+- internal/repoconfig/fuzz_test.go: arbitrary build YAML, varying operator ceilings,
+  deterministic effective settings/hash and bounded CPU/memory/timeout/processes.
+- internal/source/fuzz_test.go: in-memory archive-path/symlink containment fuzzing.
+- internal/source/workspace_failure_test.go: real closed-root file/directory/link
+  failure, safe retry classification, no partial writes and successful recovery.
+  Initial authoring syntax typo corrected before successful runs; no app defect.
 
-## Verification complete (do not rerun)
-- make build, go vet, golangci-lint: PASS, 0 issues. make vuln: 0 affecting app;
-  one module advisory not in imported/called vulnerable package.
-- All52 packages with tests PASS; other57 packages compile/no test files. Original
-  process exit143 resumed only unfinished packages; env-example labels fixed and
-  config rerun passed. Proof/logs /tmp/previa-google-{all,remaining,config-final}.log.
-- Focused auth/accounts/workspaces/previewaccess/config pass: signed token failures,
-  provider confusion/replay/CSRF, identity collisions, roles, invitations, erasure,
-  restore, migration and Google private-preview local grant/outsider/revocation.
-- Existing7 browser suites94/94 PASS: general55, workspace14, setup5, review6,
-  testdata3, usage4, accounts7. /tmp/previa-google-regression-browser.log.
-- Google browser3/3 PASS27.36s: stakeholder finding with JS on/off; explicit existing
-  GitHub->Google link and return; CSRF/role/collision refusals. Final captures reviewed.
-  /tmp/previa-google-browser-final.log. Use /snap/bin/chromium, not raw snap binary.
-- Local doc links valid; git diff --check PASS. Docs36, docs02, README/spec/DESIGN,
-  identity/routing/support docs, tech/schema/userguide M1–M9, test docs updated.
+## Completed verification — do not rerun
+- 19 build/support packages with -race/-shuffle/coverage PASS: 420 parent +239
+  subtest results; opt-in skips separately accounted. Package-local coverage63.6%
+  excludes external-process/cross-package/system/browser execution, not full coverage.
+- Global/workspace and F3 bursts repeated5: 40 bursts /640 submissions PASS.
+- Quota/cancellation/replay stress count10: 60 PASS. Ordering/close/reopen/lost-job/
+  publication recovery count5: 40 PASS. Source-workspace failure count5: 15 cases PASS.
+- Build-specific approval/revocation fences count3: 27 parent +30 subtests PASS.
+  Build reporting/App client: 30 parent +18 subtests PASS; 2live tests skipped.
+  Assembled pipeline/capacity/source checks count3: 15 PASS.
+- Build YAML fuzz60s:21498 executions PASS. Archive path fuzz60s:12833 PASS.
+- Build-only Chromium scenarios19, Setup5, persistent-data3: all27 PASS.
+- Sequential real Docker stages (-race/-shuffle): builder6 +8 subcases PASS271s;
+  runtime11 +5 subcases PASS299s; routing8 PASS225s; housekeeping2 PASS22s;
+  all4 E2E journeys PASS753s command. Total31 parents +13 subcases.
+- E2E confirms physical worker builds, caches, networking/secrets, setup/seed,
+  failed replacement preservation, Automatic newest SHA, GitHub outage recovery,
+  baseline/kept-data/reset/fallback/fork/merge, missed uninstall/disconnect cleanup,
+  stable routing, journal ack and usage reconciliation. Race instruments Go test
+  processes; separately compiled worker/app fixture processes use normal build flags.
+- make build PASS; final go vet/golangci-lint PASS0 after all added tests.
+  Docs links/whitespace valid. Final Docker running inventory only original DB/egress.
+- Evidence: test-docs/2026-10-20-build-stress-report.md. Raw logs/coverage/scripts/
+  final-summary.json in /tmp/previa-build-audit/. All background jobs finished.
+- No live GitHub writes or production acceptance claimed. Unrelated account/profile/
+  support/review-authoring/usage-settings UI suites intentionally excluded.
 
-## Completion / next steps
-- All4 real E2E journeys PASS708.25s. /tmp/previa-google-e2e.log.
-- Affected real private routing PASS11.83s (35.62s package), real Traefik auth,
-  configuration recovery and revocation. /tmp/previa-google-private-routing.log.
-  Runtime/housekeeping internals unchanged; previous F5/F6 baseline retained.
-- Final evidence in test-docs/2026-10-20-google-sign-in-report.md; MVP-TODO marks
-  F0–F7 engineering complete and committed. No required code left.
-- Owner next: register Google Web OAuth client, configure optional env pair and exact
-  APP_BASE_URL/auth/google/callback, migrate intended database to46 and restart
-  server/worker. No live Google consent claimed. Manual rowsM1–M9, policy review,
-  release rehearsal and deployment/live acceptance remain open.
+## State / next steps
+- Testing task finished; no required code work or verification remains for it.
+- docs02 documents focused race/fuzz commands and sequential real Docker suites;
+  test-docs index links the new report. Committed at the owner's request.
+- F0–F7 implementation already complete and committed in prior work. Owner still
+  needs real Google Web OAuth client/env/callback, migration46 on intended DB,
+  manual/policy/release/deployment acceptance. Operator numeric IDs still empty.
 
 ## Environment / boundaries
-- Disposable previa-f56-tests-postgres:55439, DBprevia_ux_test, userprevia,
-  passwordprevia-test, Goose46/River007. Never migrate developer DB or stop user jobs.
+- Disposable DB container previa-f56-tests-postgres at127.0.0.1:55439,
+  DBprevia_ux_test, Goose46/River007. Never migrate developer DB or stop user jobs.
 - GOCACHE=/tmp/previa-go-build GOFLAGS=-buildvcs=false; lintcache
-  /tmp/previa-golangci-lint. DB/socket/browser/Docker checks require_escalated.
-- Existing egress image previa-egress:dev. No deployment/live provider writes.
-  Support email remains env-configurable; operator numeric IDs remain empty.
+  /tmp/previa-golangci-lint. DB/socket/browser/Docker commands require_escalated.
+- UI_BROWSER_EXECUTABLE=/snap/bin/chromium. Egress imageprevia-egress:dev exists.
+  No unrelated Docker pruning or development-process changes performed.

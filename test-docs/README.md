@@ -21,6 +21,11 @@ in the [2026-10-20 Google sign-in report](2026-10-20-google-sign-in-report.md).
 It includes team access/offboarding, migration, browser and worker-pipeline checks;
 the full product regression cycle below remains the earlier baseline.
 
+The focused [20 October build stress report](2026-10-20-build-stress-report.md)
+records the build-only aggressive pass: race/shuffle testing, repeated admission
+and quota races, fuzzing, build UI and real Docker/worker failure journeys. It does
+not claim a new acceptance pass for unrelated features.
+
 These documents are Previa's regression test specification: **242 test cases**
 across 16 modules, from signing in to a preview URL being served, reported and
 torn down. Each case says what is tested, how, what must happen, and which
