@@ -44,6 +44,7 @@ type Transfer struct {
 	Accept             bool
 }
 type Page struct {
+	GitHubConnected bool
 	Workspace
 	ActorID, PageNumber, PageCount, MemberCount, RepositoryCount, InvitationCount int64
 	DeactivatedCount, InstallationCount                                           int64

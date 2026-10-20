@@ -101,6 +101,8 @@ type ServerConfig struct {
 	HTTPAddr                string `envconfig:"HTTP_ADDR" default:"127.0.0.1:8080"`
 	GitHubOAuthClientID     string `envconfig:"GITHUB_OAUTH_CLIENT_ID" required:"true"`
 	GitHubOAuthClientSecret string `envconfig:"GITHUB_OAUTH_CLIENT_SECRET" required:"true"`
+	GoogleOAuthClientID     string `envconfig:"GOOGLE_OAUTH_CLIENT_ID"`
+	GoogleOAuthClientSecret string `envconfig:"GOOGLE_OAUTH_CLIENT_SECRET"`
 	GitHubWebhookSecret     string `envconfig:"GITHUB_WEBHOOK_SECRET"`
 	SessionSecret           string `envconfig:"SESSION_SECRET" required:"true"`
 	GitHubAppID             int64  `envconfig:"GITHUB_APP_ID"`
@@ -315,6 +317,10 @@ func parseAppBaseURL(raw string) (*url.URL, error) {
 // checkGitHubApp validates installation linking, which is all or nothing:
 // any GitHub App setting requires all of them.
 func (c ServerConfig) checkGitHubApp() error {
+	if (strings.TrimSpace(c.GoogleOAuthClientID) == "") != (strings.TrimSpace(c.GoogleOAuthClientSecret) == "") {
+		return errors.New("GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET must be configured together")
+	}
+
 	if c.GitHubAppID == 0 && c.GitHubAppSlug == "" && c.GitHubAppPrivateKeyPath == "" && c.GitHubAppClientID == "" && c.GitHubAppClientSecret == "" {
 		return nil
 	}

@@ -165,6 +165,7 @@ type DeletionJournal struct {
 	OperationID          pgtype.UUID
 	CreatedAt            pgtype.Timestamptz
 	AcknowledgedAt       pgtype.Timestamptz
+	GoogleSubject        pgtype.Text
 }
 
 type DeletionJournalMetadatum struct {
@@ -680,7 +681,7 @@ type SupportRequest struct {
 
 type User struct {
 	ID               int64
-	GithubID         int64
+	GithubID         pgtype.Int8
 	Username         string
 	CreatedAt        pgtype.Timestamptz
 	AvatarUrl        string
@@ -701,6 +702,8 @@ type User struct {
 	CustomAvatar     bool
 	SessionEpoch     int64
 	DeletedAt        pgtype.Timestamptz
+	GoogleSubject    pgtype.Text
+	GoogleEmail      string
 }
 
 type UserAvatar struct {
@@ -776,7 +779,7 @@ type WorkspaceEntitlement struct {
 type WorkspaceInvitation struct {
 	ID          int64
 	WorkspaceID int64
-	GithubID    int64
+	GithubID    pgtype.Int8
 	Login       string
 	Role        string
 	TokenHash   []byte
@@ -786,6 +789,7 @@ type WorkspaceInvitation struct {
 	Revision    int64
 	CreatedAt   pgtype.Timestamptz
 	PublicID    pgtype.UUID
+	Email       string
 }
 
 type WorkspaceInvitationRepository struct {

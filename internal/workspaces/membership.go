@@ -42,6 +42,15 @@ func (s *Service) changeMemberTx(ctx context.Context, tx pgx.Tx, q *dbgen.Querie
 	if !selfLeave && (!actor.Manage() || (actor.Role != "owner" && (member.Role == "admin" || c.Role == "admin"))) {
 		return ErrUnavailable
 	}
+	if !c.Remove && c.Role != "reviewer" {
+		var linked bool
+		if e := tx.QueryRow(ctx, `SELECT github_id IS NOT NULL FROM users WHERE id=$1 AND deleted_at IS NULL`, c.UserID).Scan(&linked); e != nil {
+			return fmt.Errorf("check technical role identity: %w", e)
+		}
+		if !linked {
+			return ErrGitHubRequired
+		}
+	}
 	if c.Role == "admin" {
 		c.Repositories = nil
 	}

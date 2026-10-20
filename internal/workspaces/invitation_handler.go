@@ -24,6 +24,8 @@ func (h *Handler) invitationFailure(w http.ResponseWriter, r *http.Request, err 
 	form := pages.InviteForm{Failed: true, Login: r.PostFormValue("login"), Role: r.PostFormValue("role"), Repositories: repos}
 	status := http.StatusUnprocessableEntity
 	switch {
+	case errors.Is(err, ErrEmailInvitation):
+		form.LoginError = ErrEmailInvitation.Error()
 	case errors.Is(err, ErrInvalidLogin):
 		form.LoginError = ErrInvalidLogin.Error()
 	case errors.Is(err, ErrGitHubAccountNotFound):

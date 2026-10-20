@@ -144,6 +144,9 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	f.sessions = auth.NewSessionManager(store, strings.HasPrefix(strings.ToLower(cfg.AppBaseURL), "https://"), logger)
 	f.publicIDs = publicid.New(pool)
 	f.auth = auth.NewHandler(cfg, f.sessions, auth.NewRepository(pool), auth.NewGitHubOAuth(cfg), logger)
+	if cfg.GoogleOAuthClientID != "" {
+		f.auth.WithGoogle(auth.NewGoogleOAuth(cfg))
+	}
 	kits, err := newStarterKits(f.auth, f.capabilities, logger)
 	if err != nil {
 		return nil, err

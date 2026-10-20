@@ -184,3 +184,17 @@ JavaScript disabled; CSP violations fail the suite. `UI_BROWSER_SCREENSHOTS=1`
 records account, support, operator, policy, progress and modal views at 1440/390
 in both themes, including pending/approved early-access and operator approval
 views. No live GitHub mutations occur.
+
+Google sign-in and email Reviewer consent have their own database-backed suite:
+
+```sh
+export TEST_DATABASE_URL='postgres://USER:PASSWORD@HOST:PORT/DISPOSABLE_DB'
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-google-browser
+```
+
+The provider is simulated only in the fixture; real signed ID-token/TLS tests
+separately cover verification. Three scenarios cover Google-only signup/welcome,
+email consent and actual review findings with JavaScript on/off, explicit linking,
+CSRF/technical-access refusals and returning to an existing GitHub account through
+Google. Screenshot mode captures new/changed screens at1440/390 in both themes.
+No live Google client credentials or provider writes are required by these tests.

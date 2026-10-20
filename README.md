@@ -305,7 +305,7 @@ See the [user guide](technical-docs/user-guide.md) for the current browser workf
   require CSRF protection; destructive confirmation uses a modal.
 
 **Your profile** shows the editable Previa profile (photo, first/last name, email,
-session) beside the read-only GitHub account, with in-place edits confirmed by a
+session) beside connected login methods and the read-only GitHub account when connected, with in-place edits confirmed by a
 small toast. Personal first/last names take precedence over GitHub usernames without
 changing the linked identity; uploaded photos are visible only to teammates. Shared access forms support searchable repository
 lists and keep invitation errors in the form. Previa resource links and form
@@ -707,3 +707,13 @@ path, and operator approval for new workspaces. Existing workspaces are preserve
 `EARLY_ACCESS_ENABLED` defaults true; operators are numeric IDs configured in env.
 Approval gates connections and compute, while cleanup and account exits remain
 available. Migration 45 and matching server/worker configuration are required.
+
+### Google sign-in and reviewer invitations
+
+[Google sign-in](docs/36-google-sign-in-and-reviewer-invitations.md) extends human
+authentication without assigning roles by provider. Reviewers can join by a
+verified-email invitation and review shared previews without GitHub. Existing
+accounts explicitly connect the second method from Your profile; emails never
+automatically merge identities. Technical roles and workspace creation require
+a connected GitHub account, normal authorization and F6 approval. Optional
+`GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`, migration0046/schema46.

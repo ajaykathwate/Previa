@@ -105,7 +105,7 @@ type session struct{ names map[int64]string }
 
 func (s session) UserIDs(ctx context.Context) (int64, int64, bool) {
 	id, ok := ctx.Value(userKey{}).(int64)
-	return id, 0, ok && id > 0
+	return id, id, ok && id > 0
 }
 
 func (s session) Username(ctx context.Context) (string, bool) {
@@ -485,4 +485,55 @@ type grantSession struct{ valid bool }
 func (*grantSession) PreviewSessionID(context.Context) string { return "safe-session-digest" }
 func (s *grantSession) PreviewSessionValid(_ context.Context, id string) (bool, error) {
 	return s.valid && id == "safe-session-digest", nil
+}
+
+// Google-only visitors use local workspace grants; a display name must never
+// be passed off as a GitHub identity for the outsider fallback.
+type googleOnlySession struct{ session }
+
+func (s googleOnlySession) UserIDs(ctx context.Context) (int64, int64, bool) {
+	id, _, ok := s.session.UserIDs(ctx)
+	return id, 0, ok
+}
+func TestGooglePreviewRequiresExplicitLocalGrant(t *testing.T) {
+	pool := isolatedPool(t)
+	ctx := t.Context()
+	for _, query := range []string{
+		`INSERT INTO users(github_id,username) VALUES(1,'owner')`,
+		`INSERT INTO users(google_subject,google_email,username) VALUES('google-reviewer','reviewer@example.test','reviewer')`,
+		`INSERT INTO installations(github_installation_id,owner_user_id) VALUES(99,1)`,
+		`INSERT INTO repos(installation_id,github_repo_id,full_name,private_previews) VALUES(1,100,'owner/app',true)`,
+		`INSERT INTO pull_requests(repo_id,number,head_sha) VALUES(1,1,'sha')`,
+		`INSERT INTO environments(pull_request_id,subdomain,status,expires_at) VALUES(1,'google-private','running',now()+interval '1 day')`,
+	} {
+		if _, err := pool.Exec(ctx, query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewHandler(pool, googleOnlySession{session{names: map[int64]string{2: "reviewer"}}}, github{"reviewer": "read"}, nil, "secret", "preview.test", "https://previa.test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h.sessions = &grantSession{valid: true}
+	request := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/previews/access?host=google-private.preview.test&path=/", nil)
+		r = r.WithContext(context.WithValue(ctx, userKey{}, int64(2)))
+		w := httptest.NewRecorder()
+		h.access(w, r)
+		return w
+	}
+	if w := request(); w.Code != http.StatusForbidden {
+		t.Fatal("uninvited Google identity got outsider access", w.Code)
+	}
+	for _, query := range []string{`INSERT INTO workspace_memberships(workspace_id,user_id,role) VALUES(1,2,'reviewer')`, `INSERT INTO repository_memberships(repo_id,workspace_id,user_id) VALUES(1,1,2)`} {
+		if _, err := pool.Exec(ctx, query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w := request(); w.Code != http.StatusSeeOther {
+		t.Fatal("granted Google reviewer cannot open private preview", w.Code, w.Body.String())
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM repository_memberships WHERE user_id=2`); err != nil {
+		t.Fatal(err)
+	}
+	if w := request(); w.Code != http.StatusForbidden {
+		t.Fatal("revoked Google reviewer retained access", w.Code)
+	}
 }

@@ -531,6 +531,7 @@ html:has(.app-shell), body:has(.app-shell) { height: 100%; overflow: hidden; }
 .standalone-alert { margin-bottom: 22px; border-color: var(--danger-line); background: var(--danger-soft); }
 .standalone-copy { margin: 0 0 22px; color: var(--muted-foreground); line-height: 1.6; }
 .standalone-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.login-help { margin-top: 22px; }
 
 /* Responsive shell */
 @media (max-width: 1180px) {

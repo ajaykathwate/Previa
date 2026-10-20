@@ -223,3 +223,12 @@ access restoration never authorizes a build. New workspaces require operator
 approval before connection, enforced again in the connection transaction.
 Existing workspaces are approved by migration 0045. See [35](35-installation-recovery-and-early-access.md)
 for breaker limits, token-error wake-ups and operator setup.
+
+## Optional Google identity (F7)
+
+Human sign-in is now independent of the GitHub connection. An optional Google
+client enables code+PKCE+nonce and verified signed ID tokens; existing users
+explicitly connect it from Your profile. A Google-only account has no GitHub ID
+or administrative workspace. Reviewer email invitations enable preview/review
+access; technical roles still require GitHub. Matching email never merges two
+accounts. [Configuration and boundaries](36-google-sign-in-and-reviewer-invitations.md).

@@ -1,0 +1,30 @@
+package auth
+
+import (
+ "net/url"
+ "github.com/ajaykathwatee/previa/web/layouts"
+ "github.com/ajaykathwatee/previa/web/components"
+ "github.com/ajaykathwatee/previa/web/components/button"
+)
+
+templ LoginOptions(next string, google bool) {
+ @layouts.Base("Sign in") {
+  <section class="standalone-card panel" aria-labelledby="login-title">
+   <h1 id="login-title">Sign in to Previa</h1>
+   <p class="standalone-copy">Use either login method. Your workspace role determines what you can do.</p>
+   <div class="standalone-actions">
+    @button.Button(button.Props{Href: "/auth/github/login?next="+url.QueryEscape(next)}) {
+     @components.GitHubMark()
+     Continue with GitHub
+    }
+    if google {
+     @button.Button(button.Props{Href: "/auth/google/login?next="+url.QueryEscape(next), Variant: button.VariantOutline}) {
+      Continue with Google
+     }
+    }
+   </div>
+   <p class="standalone-copy login-help">Reviewers do not need GitHub. Connecting GitHub does not grant workspace membership or promote your role.</p>
+   <p class="standalone-copy">Already use Previa? Sign in with your existing method, then connect the other one from Your profile.</p>
+  </section>
+ }
+}

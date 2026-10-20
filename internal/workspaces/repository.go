@@ -17,7 +17,7 @@ var (
 	ErrConflict          = errors.New("workspace changed; reload and try again")
 	ErrInput             = errors.New("invalid workspace input")
 	ErrOwner             = errors.New("transfer ownership before leaving or removing the owner")
-	ErrInvitation        = errors.New("invitation is expired, revoked, or addressed to another GitHub account")
+	ErrInvitation        = errors.New("invitation is expired, revoked, or addressed to another account")
 	ErrSourceUnavailable = errors.New("GitHub source permission could not be verified")
 )
 

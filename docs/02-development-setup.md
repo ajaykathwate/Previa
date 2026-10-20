@@ -1243,7 +1243,7 @@ make egress-image
 make router-up
 ```
 
-**Expected:** PostgreSQL is healthy; Goose reaches 45 and River reaches 007;
+**Expected:** PostgreSQL is healthy; Goose reaches 46 and River reaches 007;
 the application builds, the egress image exists and Traefik starts with the fresh
 route table. These Make targets automatically read `.env`. Start `make dev`
 (or `make run-server`) and `make run-worker` in separate terminals. Sign in,
@@ -1266,7 +1266,7 @@ make run-server
 make run-worker
 ```
 
-**Expected:** Goose **0045**, River **007**, build succeeds. New sidebar links
+**Expected:** Goose **0046**, River **007**, build succeeds. New sidebar links
 reach Account & connections and Support & status; Your profile offers End other
 sessions. This task does not migrate your development database automatically.
 Make migration/run/dev commands load trusted `.env` assignments (exported
@@ -1380,3 +1380,58 @@ uses `UI_BROWSER_SCREENSHOTS=1`. The ordinary real E2E journey now additionally
 drops the uninstall webhook, detects the exact installation 404, verifies real
 route/runtime cleanup, and relinks without rebuilding. See [35](35-installation-recovery-and-early-access.md)
 for circuit-breaker recovery; an all-known revocation deliberately needs review.
+
+## Google sign-in and email reviewer invitations (F7)
+
+Stop old server/worker, run `make migrate-up`, then restart both. Expected Goose
+**46**, River**007**. Migration0046 preserves existing identities/memberships and
+adds optional Google identities/email Reviewer invitations. Do not roll it back
+after those records exist: rollback deliberately refuses; forward-fix instead.
+
+In Google Cloud configure an OAuth consent screen/audience, then create a **Web
+application** OAuth client. Add the exact authorized redirect URI for this
+environment: `${APP_BASE_URL}/auth/google/callback` (for example
+`http://localhost:8080/auth/google/callback` locally). External apps in Google's
+testing mode must include the intended Google test accounts. Use a separate
+production client or register the exact production URI as appropriate.
+
+Set both server settings in ignored `.env` or the production env file:
+
+```dotenv
+GOOGLE_OAUTH_CLIENT_ID=your-client-id
+GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
+```
+
+Never commit real credentials. Both blank disables Google while preserving
+GitHub. A partial pair fails configuration. Restart the server after changes.
+Make/Air run commands load trusted `.env` automatically as described above; direct
+Go/binary invocations need manual exports. Existing GitHub OAuth/App credentials
+are still required for their existing features; workers need no Google settings.
+
+Expected: the home/sign-in page offers Google; a new Google-only account reaches
+Workspaces with a welcome explanation, without an administrative workspace.
+Managers may invite a reviewer email; copy/share its link manually (no mail is
+sent). Matching verified email, acceptance and explicit repository grants allow
+review. Connect the second method from **Your profile** on the existing account;
+matching emails do not merge accounts and already-owned identities cannot move.
+
+Journal exports are now **v2**, including Google deletion fences. Restore accepts
+priorv1 journals but must use an updated v2-aware binary for current exports.
+Use the current application/migrations for restore, not an old release image.
+
+Verification on a disposable database (manual exports for direct Go commands):
+
+```sh
+export TEST_DATABASE_URL='postgres://USER:PASSWORD@HOST:PORT/DISPOSABLE_DB'
+make build
+make lint
+go test -p=2 -timeout=30m ./...
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-google-browser
+```
+
+Optional `UI_BROWSER_SCREENSHOTS=1` captures login, welcome, profile, email
+invitation/consent and reviewer pages at1440/390 in both themes.
+[Feature36](36-google-sign-in-and-reviewer-invitations.md) documents security and
+[manual rows M1–M9](../technical-docs/user-guide.md#manual-test-checklist) cover live
+consent. Automated tests use a signed fake Google over TLS; they do not configure
+or claim to exercise your real Google Cloud client.

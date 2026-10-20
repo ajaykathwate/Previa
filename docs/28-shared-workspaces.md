@@ -312,3 +312,13 @@ account-management panels are omitted. This is not a claim that every
 interaction in the original cross-feature permission matrix is finished.
 Notification integrations remain deferred as agreed. Hosted, live multi-user
 GitHub acceptance has not been exercised by the fixture-backed verification.
+
+## Provider-independent reviewers (F7)
+
+Migration0046 extends invitations to a verified email address for Reviewer access,
+using the same copied link, expiry, consent, grants and revocation transactions.
+No mail is sent. GitHub usernames still support all existing roles. Google-only
+users see a welcome page without an Owner workspace; they may review explicit
+grants. GitHub must be connected before technical role assignment/creation, but
+connecting it never promotes anyone. Re-invites use the Google recipient's email,
+not their display name. See [36](36-google-sign-in-and-reviewer-invitations.md).

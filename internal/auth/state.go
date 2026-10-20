@@ -54,7 +54,7 @@ func (h *Handler) stateCookieName() string {
 }
 
 func (h *Handler) stateCookie(value string, maxAge int) *http.Cookie {
-	path := "/auth/github"
+	path := "/auth"
 	if h.secure {
 		path = "/"
 	}

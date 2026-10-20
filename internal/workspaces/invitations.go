@@ -54,8 +54,14 @@ func tokenHash(token string) ([]byte, error) {
 	h := sha256.Sum256([]byte(token))
 	return h[:], nil
 }
-func (s *Service) Invite(ctx context.Context, c InvitationCommand) (token string, err error) {
+func (s *Service) Invite(ctx context.Context, c InvitationCommand) (string, error) {
 	c.Login = strings.TrimSpace(c.Login)
+	if strings.Contains(c.Login, "@") && !strings.HasPrefix(c.Login, "@") {
+		return s.inviteEmail(ctx, c)
+	}
+	return s.inviteGitHub(ctx, c)
+}
+func (s *Service) inviteGitHub(ctx context.Context, c InvitationCommand) (token string, err error) {
 	if !githubLoginPattern.MatchString(c.Login) || strings.Contains(c.Login, "--") {
 		return "", ErrInvalidLogin
 	}
@@ -93,10 +99,10 @@ func (s *Service) Invite(ctx context.Context, c InvitationCommand) (token string
 		if err := checkPendingInvitation(ctx, q, w.ID, id); err != nil {
 			return err
 		}
-		if err := q.ExpirePendingInvitation(ctx, dbgen.ExpirePendingInvitationParams{WorkspaceID: w.ID, GithubID: id}); err != nil {
+		if err := q.ExpirePendingInvitation(ctx, dbgen.ExpirePendingInvitationParams{WorkspaceID: w.ID, GithubID: pgtype.Int8{Int64: id, Valid: true}}); err != nil {
 			return fmt.Errorf("expire prior invitation: %w", err)
 		}
-		inv, e := q.CreateInvitation(ctx, dbgen.CreateInvitationParams{WorkspaceID: w.ID, GithubID: id, Login: login, Role: c.Role, TokenHash: hash,
+		inv, e := q.CreateInvitation(ctx, dbgen.CreateInvitationParams{WorkspaceID: w.ID, GithubID: pgtype.Int8{Int64: id, Valid: true}, Login: login, Role: c.Role, TokenHash: hash,
 			ExpiresAt: pgtype.Timestamptz{Time: s.now().Add(7 * 24 * time.Hour), Valid: true}, CreatedBy: c.ActorID})
 		if e != nil {
 			var pgerr *pgconn.PgError
@@ -124,6 +130,9 @@ func uniqueIDs(ids []int64) []int64 {
 	return out
 }
 func (s *Service) Invitation(ctx context.Context, githubID int64, token string) (dbgen.ReadInvitationRow, error) {
+	return s.InvitationForUser(ctx, 0, githubID, token)
+}
+func (s *Service) InvitationForUser(ctx context.Context, user, githubID int64, token string) (dbgen.ReadInvitationRow, error) {
 	hash, err := tokenHash(token)
 	if err != nil {
 		return dbgen.ReadInvitationRow{}, err
@@ -135,7 +144,11 @@ func (s *Service) Invitation(ctx context.Context, githubID int64, token string) 
 	if err != nil {
 		return v, fmt.Errorf("read invitation: %w", err)
 	}
-	if v.GithubID != githubID || v.WorkspaceState != "active" || v.State != "pending" || !s.now().Before(v.ExpiresAt.Time) {
+	matches, matchErr := invitationMatches(ctx, dbgen.New(s.repo.pool), v.ID, user, githubID)
+	if matchErr != nil {
+		return v, matchErr
+	}
+	if !matches || v.WorkspaceState != "active" || v.State != "pending" || !s.now().Before(v.ExpiresAt.Time) {
 		return v, ErrInvitation
 	}
 	return v, nil
@@ -152,7 +165,7 @@ func (s *Service) RespondInvitation(ctx context.Context, user, githubID int64, t
 	if err != nil {
 		return 0, fmt.Errorf("read invitation response: %w", err)
 	}
-	if v.GithubID != githubID {
+	if matches, e := invitationMatches(ctx, dbgen.New(s.repo.pool), v.ID, user, githubID); e != nil || !matches {
 		return 0, ErrInvitation
 	}
 	wid = v.WorkspaceID
@@ -161,7 +174,7 @@ func (s *Service) RespondInvitation(ctx context.Context, user, githubID int64, t
 		if e != nil && !errors.Is(e, pgx.ErrNoRows) {
 			return fmt.Errorf("lock invitation: %w", e)
 		}
-		if e != nil || inv.GithubID != githubID || !hmac.Equal(inv.TokenHash, hash) {
+		if e != nil || !hmac.Equal(inv.TokenHash, hash) {
 			return ErrInvitation
 		}
 		return s.respondLocked(ctx, q, inv, user, githubID, accept)
@@ -173,7 +186,7 @@ func (s *Service) RespondInvitation(ctx context.Context, user, githubID int64, t
 // invitation is addressed to a GitHub account, so the signed-in identity
 // replaces the link token; all other acceptance checks are the same.
 func (s *Service) RespondReceivedInvitation(ctx context.Context, user, githubID, id int64, accept bool) (wid int64, err error) {
-	if id <= 0 || githubID <= 0 {
+	if id <= 0 || user <= 0 {
 		return 0, ErrInvitation
 	}
 	v, err := dbgen.New(s.repo.pool).LockInvitation(ctx, id)
@@ -183,7 +196,7 @@ func (s *Service) RespondReceivedInvitation(ctx context.Context, user, githubID,
 	if err != nil {
 		return 0, fmt.Errorf("read received invitation: %w", err)
 	}
-	if v.GithubID != githubID {
+	if matches, e := invitationMatches(ctx, dbgen.New(s.repo.pool), v.ID, user, githubID); e != nil || !matches {
 		return 0, ErrInvitation
 	}
 	wid = v.WorkspaceID
@@ -192,7 +205,7 @@ func (s *Service) RespondReceivedInvitation(ctx context.Context, user, githubID,
 		if e != nil && !errors.Is(e, pgx.ErrNoRows) {
 			return fmt.Errorf("lock invitation: %w", e)
 		}
-		if e != nil || inv.GithubID != githubID {
+		if e != nil {
 			return ErrInvitation
 		}
 		return s.respondLocked(ctx, q, inv, user, githubID, accept)
@@ -203,8 +216,13 @@ func (s *Service) RespondReceivedInvitation(ctx context.Context, user, githubID,
 // respondLocked applies the recipient's answer to a locked invitation.
 func (s *Service) respondLocked(ctx context.Context, q *dbgen.Queries, inv dbgen.WorkspaceInvitation, user, githubID int64, accept bool) error {
 	wid := inv.WorkspaceID
-	if err := checkInvitationIdentity(ctx, q, user, githubID); err != nil {
+	if user <= 0 {
+		return ErrInvitation
+	}
+	if matches, err := invitationMatches(ctx, q, inv.ID, user, githubID); err != nil {
 		return err
+	} else if !matches {
+		return ErrInvitation
 	}
 	if inv.State == "accepted" && accept {
 		return acceptedInvitationMembership(ctx, q, wid, user)
@@ -277,7 +295,10 @@ func (s *Service) ChangeInvitation(ctx context.Context, user, wid, revision, inv
 }
 
 func (s *Service) InvitationScope(ctx context.Context, githubID int64, token string) ([]pages.Repository, error) {
-	v, err := s.Invitation(ctx, githubID, token)
+	return s.InvitationScopeForUser(ctx, 0, githubID, token)
+}
+func (s *Service) InvitationScopeForUser(ctx context.Context, user, githubID int64, token string) ([]pages.Repository, error) {
+	v, err := s.InvitationForUser(ctx, user, githubID, token)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +314,7 @@ func (s *Service) InvitationScope(ctx context.Context, githubID int64, token str
 }
 
 func checkInvitable(ctx context.Context, q *dbgen.Queries, wid, githubID int64) error {
-	user, err := q.UserByGitHubID(ctx, githubID)
+	user, err := q.UserByGitHubID(ctx, pgtype.Int8{Int64: githubID, Valid: githubID > 0})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -324,23 +345,14 @@ func saveInvitationGrants(ctx context.Context, q *dbgen.Queries, wid, inv int64,
 	}
 	return nil
 }
-func checkInvitationIdentity(ctx context.Context, q *dbgen.Queries, user, githubID int64) error {
-	actual, err := q.UserByGitHubID(ctx, githubID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrInvitation
-	}
-	if err != nil {
-		return fmt.Errorf("read invitation recipient: %w", err)
-	}
-	if actual != user {
-		return ErrInvitation
-	}
-	return nil
-}
 func (s *Service) acceptInvitation(ctx context.Context, q *dbgen.Queries, inv dbgen.WorkspaceInvitation, user int64) error {
 	// Another pending invitation cannot demote an already active member.
-	if err := checkInvitable(ctx, q, inv.WorkspaceID, inv.GithubID); err != nil {
-		return err
+	member, e := q.LockMembership(ctx, dbgen.LockMembershipParams{WorkspaceID: inv.WorkspaceID, UserID: user})
+	if e != nil && !errors.Is(e, pgx.ErrNoRows) {
+		return fmt.Errorf("check invited member: %w", e)
+	}
+	if e == nil && member.State == "active" {
+		return ErrAlreadyMember
 	}
 	if err := q.PutMembership(ctx, dbgen.PutMembershipParams{WorkspaceID: inv.WorkspaceID, UserID: user, Role: inv.Role}); err != nil {
 		return fmt.Errorf("accept workspace membership: %w", err)
@@ -359,7 +371,7 @@ func (s *Service) acceptInvitation(ctx context.Context, q *dbgen.Queries, inv db
 }
 
 func checkPendingInvitation(ctx context.Context, q *dbgen.Queries, workspaceID, githubID int64) error {
-	pending, err := q.HasPendingInvitation(ctx, dbgen.HasPendingInvitationParams{WorkspaceID: workspaceID, GithubID: githubID})
+	pending, err := q.HasPendingInvitation(ctx, dbgen.HasPendingInvitationParams{WorkspaceID: workspaceID, GithubID: pgtype.Int8{Int64: githubID, Valid: githubID > 0}})
 	if err != nil {
 		return fmt.Errorf("check pending invitation: %w", err)
 	}
@@ -367,4 +379,12 @@ func checkPendingInvitation(ctx context.Context, q *dbgen.Queries, workspaceID, 
 		return ErrPendingInvitation
 	}
 	return nil
+}
+
+func invitationMatches(ctx context.Context, q *dbgen.Queries, inv, user, github int64) (bool, error) {
+	ok, err := q.InvitationMatches(ctx, dbgen.InvitationMatchesParams{InvitationID: inv, UserID: user, GithubID: github})
+	if err != nil {
+		return false, fmt.Errorf("verify invitation recipient: %w", err)
+	}
+	return ok, nil
 }

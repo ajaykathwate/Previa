@@ -12,10 +12,12 @@ templ Directory(username string, p Page) {
 				<div class="team-heading-copy">
 					@components.PageTitle("Choose your workspace", "Each workspace is one team, with its own people, repositories and settings.")
 				</div>
+				if p.GitHubConnected {
 				<button class="primary-action" type="button" commandfor="create-workspace" command="show-modal" data-open-dialog="create-workspace" aria-haspopup="dialog">
 					@components.PlusIcon()
 					Create workspace
 				</button>
+ }
 			</header>
 			if len(p.Received) > 0 {
 				@ReceivedInvitations(p)
@@ -25,8 +27,12 @@ templ Directory(username string, p Page) {
 					<span class="team-empty-icon">
 						@components.TeamIcon()
 					</span>
-					<h2>A shared home for your team</h2>
+					if !p.GitHubConnected {
+ <h2>Welcome to Previa</h2><p>Open a review invitation from your team, or ask an administrator to invite your verified email. You can review shared previews and leave findings without GitHub.</p><p><a href="/protected">Your profile and login methods</a></p>
+ } else {
+ <h2>A shared home for your team</h2>
 					<p>Create a workspace to connect repositories and invite teammates, or open an invitation from your administrator.</p><button class="primary-action" type="button" commandfor="create-workspace" command="show-modal" data-open-dialog="create-workspace" aria-haspopup="dialog">Create your first workspace</button>
+ }
 				</section>
 			}
 			<div class="team-workspace-grid">
@@ -159,7 +165,7 @@ templ Index(username string, p Page) {
 							</span>
 							Invitation ready
 						</h2>
-						<p>They'll also find it in Previa under Invitations when signed in with that GitHub account. This link is shown once · expires in 7 days.</p>
+						<p>They'll also find it in Previa under Invitations when signed in with the addressed account or verified email. This link is shown once · expires in 7 days.</p>
 					</div>
 					<div class="team-copy-row">
 						<label class="sr-only" for="invitation-link">Invitation link</label><input id="invitation-link" type="text" readonly value={ p.InvitationURL }/>

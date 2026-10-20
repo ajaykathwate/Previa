@@ -43,7 +43,7 @@ templ Help(p Page) {
 				<p>The operator has not configured an email address. Signed-in members can still submit requests below.</p>
 			}
 			if p.Name=="" {
-				<p><a href="/auth/github/login?next=%2Fhelp">Sign in with GitHub</a> to submit and track a support request.</p>
+				<p><a href="/auth/login?next=%2Fhelp">Sign in</a> to submit and track a support request.</p>
 			} else {
 				<section class="workspace-panel field-card">
 					<h2>New support request</h2>
@@ -189,11 +189,11 @@ templ Policy(p Page, kind string) {
 				if kind=="privacy" {
 					<h1>Privacy and data retention</h1>
 					<p>{ p.OperatorName } operates this Previa instance. Contact <a href="/help">support</a> about your data.</p>
-					<p>GitHub sign-in supplies your numeric ID, login, profile, avatar and shared verified email. Previa stores your profile, workspace memberships, repository metadata, preview configuration, encrypted repository secrets, build logs, review feedback and support messages. GitHub sign-in tokens are discarded after sign-in. GitHub App credentials provide installation access.</p>
+					<p>GitHub sign-in supplies your numeric ID, login, profile, avatar and shared verified email. When enabled, Google sign-in supplies a stable account identifier, name and verified email. Previa stores your profile, workspace memberships, repository metadata, preview configuration, encrypted repository secrets, build logs, review feedback and support messages. Provider sign-in tokens are discarded after verification. Login methods are connected only through an explicit signed-in action; matching email addresses do not merge accounts. GitHub App credentials provide installation access.</p>
 					<p>The GitHub App reads selected repositories' source, configuration and pull request metadata, and writes preview comments and checks. Select only repositories you intend to preview. Local disconnection removes Previa's connection; uninstall the App separately in GitHub to revoke its provider-side installation access.</p>
 					<p>Workspaces share repository and review information according to membership and repository grants. Configured operators may read support requests; those reads are audited. Public preview URLs may be accessible to anyone unless private access is enabled. Do not put sensitive production data in previews or support requests.</p>
-					<p>Essential session and private-preview cookies provide access; theme preferences use local browser storage. No advertising trackers are added by Previa. GitHub provides authentication, and the host's configured backup and error-reporting services may process operational data. Build and runtime logs may contain output supplied by your code.</p>
-					<p>Deleting your account revokes access and removes your profile and support requests. Transfer or delete owned workspaces first. Shared workspace records remain with pseudonymous attribution. Minimal numeric GitHub IDs and public IDs remain as revocation tombstones, so old events cannot reconnect deleted data. Deleting a workspace removes its repositories, credentials, logs, feedback, baselines and support requests after runtime cleanup.</p>
+					<p>Essential session and private-preview cookies provide access; theme preferences use local browser storage. No advertising trackers are added by Previa. Your chosen provider (GitHub or Google) provides authentication, and the host's configured backup and error-reporting services may process operational data. Build and runtime logs may contain output supplied by your code.</p>
+					<p>Deleting your account revokes access and removes your profile and support requests. Transfer or delete owned workspaces first. Shared workspace records remain with pseudonymous attribution. Minimal immutable provider identifiers (GitHub IDs or Google subjects) and public IDs remain as revocation tombstones, so old events cannot reconnect deleted data. Deleting a workspace removes its repositories, credentials, logs, feedback, baselines and support requests after runtime cleanup.</p>
 					<p>Resolved support requests are removed after { p.RetentionDays } days. Open requests remain until resolved or their account/workspace is deleted. Encrypted backups expire after { p.BackupDays } days. A separate encrypted deletion journal is retained for at least { p.JournalDays } days, longer for unfinished requests, and is replayed before a restore serves traffic. Deletion is pending until cleanup and journal upload are acknowledged; backup copies expire on their retention schedule.</p>
 				} else if kind=="acceptable-use" {
 					<h1>Acceptable use</h1>

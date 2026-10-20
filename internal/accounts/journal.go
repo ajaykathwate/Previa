@@ -31,6 +31,7 @@ type JournalEvent struct {
 	User            *int64    `json:"user,omitempty"`
 	Successor       *string   `json:"successor,omitempty"`
 	SuccessorGitHub *int64    `json:"successor_github,omitempty"`
+	GoogleSubject   *string   `json:"google_subject,omitempty"`
 	Created         time.Time `json:"created_at"`
 }
 
@@ -44,11 +45,11 @@ func (s *Service) ExportJournal(ctx context.Context, days, maxBytes int) ([]byte
 		return nil, fmt.Errorf("prune acknowledged deletion journal: %w", err)
 	}
 	var j Journal
-	j.Version = 1
+	j.Version = 2
 	if err = s.pool.QueryRow(ctx, `SELECT instance::text,clock_timestamp() FROM deletion_journal_metadata WHERE singleton`).Scan(&j.Instance, &j.Generated); err != nil {
 		return nil, fmt.Errorf("read journal identity: %w", err)
 	}
-	rows, err := s.pool.Query(ctx, `SELECT event_id::text,action,target::text,workspace::text,github_installation_id,github_repo_id,github_user_id,successor::text,successor_github_id,created_at FROM deletion_journal ORDER BY sequence LIMIT $1`, maxBytes/100+1)
+	rows, err := s.pool.Query(ctx, `SELECT event_id::text,action,target::text,workspace::text,github_installation_id,github_repo_id,github_user_id,successor::text,successor_github_id,google_subject,created_at FROM deletion_journal ORDER BY sequence LIMIT $1`, maxBytes/100+1)
 	if err != nil {
 		return nil, fmt.Errorf("export deletion journal: %w", err)
 	}
@@ -78,7 +79,7 @@ func DecodeJournal(raw []byte, maxBytes int) (Journal, error) {
 	if err := dec.Decode(new(any)); err != io.EOF {
 		return j, errors.New("deletion journal has trailing content")
 	}
-	if j.Version != 1 || j.Generated.IsZero() || j.Generated.After(time.Now().Add(5*time.Minute)) {
+	if (j.Version != 1 && j.Version != 2) || j.Generated.IsZero() || j.Generated.After(time.Now().Add(5*time.Minute)) {
 		return j, errors.New("unsupported deletion journal or invalid export time")
 	}
 	if _, err := uuid.Parse(j.Instance); err != nil {
@@ -149,7 +150,7 @@ func (s *Service) ReplayJournal(ctx context.Context, j Journal) error {
 			if err := s.replayEvent(ctx, e); err != nil {
 				return fmt.Errorf("replay %s revocation: %w", e.Action, err)
 			}
-			_, err := s.pool.Exec(ctx, `INSERT INTO deletion_journal(event_id,action,target,workspace,github_installation_id,github_repo_id,github_user_id,successor,successor_github_id,created_at,acknowledged_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,clock_timestamp()) ON CONFLICT(event_id) DO NOTHING`, e.ID, e.Action, e.Target, e.Workspace, e.Installation, e.Repository, e.User, e.Successor, e.SuccessorGitHub, e.Created)
+			_, err := s.pool.Exec(ctx, `INSERT INTO deletion_journal(event_id,action,target,workspace,github_installation_id,github_repo_id,github_user_id,successor,successor_github_id,google_subject,created_at,acknowledged_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,clock_timestamp()) ON CONFLICT(event_id) DO NOTHING`, e.ID, e.Action, e.Target, e.Workspace, e.Installation, e.Repository, e.User, e.Successor, e.SuccessorGitHub, e.GoogleSubject, e.Created)
 			if err != nil {
 				return fmt.Errorf("checkpoint journal replay: %w", err)
 			}
@@ -184,8 +185,8 @@ func (s *Service) replayEvent(ctx context.Context, e JournalEvent) error {
 			if _, err := tx.Exec(ctx, `SELECT set_config('previa.journal_replay','on',true)`); err != nil {
 				return fmt.Errorf("set membership replay guard: %w", err)
 			}
-			for _, q := range []string{`DELETE FROM repository_memberships WHERE user_id=(SELECT id FROM users WHERE github_id=$1) AND workspace_id=(SELECT id FROM workspaces WHERE public_id=$2)`, `UPDATE workspace_memberships SET state='removed',removed_at=clock_timestamp(),revision=revision+1 WHERE user_id=(SELECT id FROM users WHERE github_id=$1) AND workspace_id=(SELECT id FROM workspaces WHERE public_id=$2) AND state='active'`, `UPDATE workspace_preferences SET workspace_id=NULL WHERE user_id=(SELECT id FROM users WHERE github_id=$1) AND workspace_id=(SELECT id FROM workspaces WHERE public_id=$2)`} {
-				if _, err := tx.Exec(ctx, q, e.User, e.Workspace); err != nil {
+			for _, q := range []string{`DELETE FROM repository_memberships WHERE user_id=(SELECT id FROM users WHERE public_id=$1) AND workspace_id=(SELECT id FROM workspaces WHERE public_id=$2)`, `UPDATE workspace_memberships SET state='removed',removed_at=clock_timestamp(),revision=revision+1 WHERE user_id=(SELECT id FROM users WHERE public_id=$1) AND workspace_id=(SELECT id FROM workspaces WHERE public_id=$2) AND state='active'`, `UPDATE workspace_preferences SET workspace_id=NULL WHERE user_id=(SELECT id FROM users WHERE public_id=$1) AND workspace_id=(SELECT id FROM workspaces WHERE public_id=$2)`} {
+				if _, err := tx.Exec(ctx, q, e.Target, e.Workspace); err != nil {
 					return fmt.Errorf("restore membership revocation: %w", err)
 				}
 			}
@@ -194,9 +195,9 @@ func (s *Service) replayEvent(ctx context.Context, e JournalEvent) error {
 	case "account":
 		var actor int64
 		var deleted *time.Time
-		err := s.pool.QueryRow(ctx, `SELECT id,deleted_at FROM users WHERE github_id=$1`, e.User).Scan(&actor, &deleted)
+		err := s.pool.QueryRow(ctx, `SELECT id,deleted_at FROM users WHERE public_id=$1 OR ($2::bigint IS NOT NULL AND github_id=$2) OR ($3::text IS NOT NULL AND google_subject=$3)`, e.Target, e.User, e.GoogleSubject).Scan(&actor, &deleted)
 		if errors.Is(err, pgx.ErrNoRows) { // Retain an identity-only tombstone if the account postdates this snapshot.
-			_, err = s.pool.Exec(ctx, `INSERT INTO users(public_id,github_id,username,deleted_at,session_epoch) VALUES($1,$2,'Deleted member',clock_timestamp(),1)`, e.Target, e.User)
+			_, err = s.pool.Exec(ctx, `INSERT INTO users(public_id,github_id,google_subject,username,deleted_at,session_epoch) VALUES($1,$2,$3,'Deleted member',clock_timestamp(),1)`, e.Target, e.User, e.GoogleSubject)
 			if err != nil {
 				return fmt.Errorf("restore absent account tombstone: %w", err)
 			}
@@ -329,11 +330,11 @@ func validateJournalEvent(e JournalEvent, generated time.Time) error {
 	case "installation":
 		valid = e.Installation != nil && e.Workspace != nil
 	case "account":
-		valid = e.User != nil
+		valid = e.User != nil || (e.GoogleSubject != nil && len(*e.GoogleSubject) > 0 && len(*e.GoogleSubject) <= 255)
 	case "workspace":
 		valid = e.Workspace != nil && *e.Workspace == e.Target
 	case "membership":
-		valid = e.User != nil && e.Workspace != nil
+		valid = e.Workspace != nil
 	case "ownership":
 		valid = e.Successor != nil && e.SuccessorGitHub != nil
 	}

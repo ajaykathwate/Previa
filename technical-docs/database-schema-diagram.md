@@ -446,3 +446,36 @@ erDiagram
         timestamptz reconcile_requested_at
     }
 ```
+
+## F7 provider-independent identity supplement
+
+```mermaid
+erDiagram
+ users ||--o{ workspace_memberships : joins
+ workspaces ||--o{ workspace_memberships : contains
+ workspaces ||--o{ workspace_invitations : invites
+ users {
+  bigint id PK
+  uuid public_id UK
+  bigint github_id UK "nullable provider identity"
+  text google_subject UK "nullable immutable subject"
+  text google_email "verified, erased on deletion"
+ }
+ workspace_invitations {
+  bigint id PK
+  bigint workspace_id FK
+  bigint github_id "numeric ID XOR email"
+  text email "Reviewer only"
+  text role
+  bytea token_hash
+ }
+ workspace_memberships {
+  bigint workspace_id PK,FK
+  bigint user_id PK,FK
+  text role "technical roles require connected GitHub"
+ }
+```
+
+The login provider does not determine membership or role. Existing invitation
+repository-grant tables remain unchanged. Journalv2 carries Google deletion
+subjects alongside the existing public references.

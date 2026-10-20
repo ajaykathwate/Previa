@@ -84,8 +84,9 @@ func (s *Service) StartAccountDeletion(ctx context.Context, actor int64, confirm
 	hash := sha256.Sum256([]byte(receipt))
 	err := s.transaction(ctx, func(tx pgx.Tx) error {
 		var public string
-		var github int64
-		if err := tx.QueryRow(ctx, `SELECT public_id::text,github_id FROM users WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, actor).Scan(&public, &github); err != nil {
+		var github *int64
+		var google *string
+		if err := tx.QueryRow(ctx, `SELECT public_id::text,github_id,google_subject FROM users WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, actor).Scan(&public, &github, &google); err != nil {
 			return unavailableOrError("lock deleting account", err)
 		}
 		var owns bool
@@ -103,14 +104,14 @@ func (s *Service) StartAccountDeletion(ctx context.Context, actor int64, confirm
 		if _, err = tx.Exec(ctx, `UPDATE lifecycle_operations SET receipt_hash=$2,receipt_expires_at=clock_timestamp()+interval '7 days' WHERE id=$1`, o.ID, hash[:]); err != nil {
 			return fmt.Errorf("save account deletion receipt: %w", err)
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO deletion_journal(action,target,github_user_id,operation_id) VALUES('account',$1,$2,$3)`, public, github, o.ID); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO deletion_journal(action,target,github_user_id,google_subject,operation_id) VALUES('account',$1,$2,$3,$4)`, public, github, google, o.ID); err != nil {
 			return fmt.Errorf("journal account deletion: %w", err)
 		}
 		for _, query := range []string{
 			`UPDATE users SET deleted_at=clock_timestamp(),session_epoch=session_epoch+1 WHERE id=$1`,
 			`DELETE FROM repository_memberships WHERE user_id=$1`,
 			`UPDATE workspace_memberships SET state='removed',removed_at=clock_timestamp(),revision=revision+1 WHERE user_id=$1 AND state='active'`,
-			`UPDATE workspace_invitations SET state='revoked' WHERE github_id=(SELECT github_id FROM users WHERE id=$1) AND state='pending'`,
+			`UPDATE workspace_invitations SET state='revoked' WHERE (github_id=(SELECT github_id FROM users WHERE id=$1) OR (email<>'' AND email IN(SELECT google_email FROM users WHERE id=$1 UNION SELECT lower(email) FROM users WHERE id=$1 AND NOT email_sync_error))) AND state='pending'`,
 			`DELETE FROM workspace_preferences WHERE user_id=$1`,
 		} {
 			if _, err = tx.Exec(ctx, query, actor); err != nil {

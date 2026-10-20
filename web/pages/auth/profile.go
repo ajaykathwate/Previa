@@ -10,6 +10,8 @@ import (
 // Profile separates the member's Previa identity (editable name and photo,
 // session) from the read-only GitHub account it is linked to.
 type Profile struct {
+	GoogleEmail                                                                string
+	GoogleConnected, GoogleEnabled                                             bool
 	Name, Login, Avatar, PublicID, FirstName, LastName, FirstHint, LastHint    string
 	GitHubName, Email, ProfileURL, Bio, Company, Location                      string
 	Joined, GitHubJoined, Synced, Expires, CSRF, NameError, AvatarError, Toast string

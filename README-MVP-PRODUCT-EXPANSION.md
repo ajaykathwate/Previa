@@ -5,7 +5,7 @@
 **Audience:** small development teams using hosted Previa.  
 **Scope:** the product improvements agreed with the owner for the MVP release: Features 1, 2, 3, 5, 5B and the free-plan part of 6. Previa is a preview platform first; review workflow depth (Feature 4), paid subscriptions and separate notification integrations are deferred.
 
-This document explains the complete product behavior to implement, the changes to the existing application, and how completion will be demonstrated. Feature 1's workspace creation, membership, access, invitations, handover and shared quota identity now have application code and verification described in [Shared team workspaces](docs/28-shared-workspaces.md). Native feedback is implemented as described in [Native review and feedback](docs/30-reviews.md); visible account usage and durable workspace deletion/disconnection are implemented in [Usage and free limits](docs/33-usage-and-free-limits.md) and [Accounts, support and deletion](docs/34-accounts-support-and-deletion.md), and review assignments and decisions are deferred with Feature 4. Ready-to-test sample data is implemented as described in [Ready-to-test sample data](docs/31-test-data.md). Deferred features remain planned.
+This document explains the complete product behavior to implement, the changes to the existing application, and how completion will be demonstrated. Feature 1's workspace creation, membership, access, invitations, handover and shared quota identity now have application code and verification described in [Shared team workspaces](docs/28-shared-workspaces.md). Native feedback is implemented as described in [Native review and feedback](docs/30-reviews.md); visible account usage and durable workspace deletion/disconnection are implemented in [Usage and free limits](docs/33-usage-and-free-plan.md) and [Accounts, support and deletion](docs/34-accounts-support-and-deletion.md), and review assignments and decisions are deferred with Feature 4. Ready-to-test sample data is implemented as described in [Ready-to-test sample data](docs/31-test-data.md). Deferred features remain planned.
 
 All of these capabilities belong to the existing Previa application. Previa owns team access, review instructions, feedback, review decisions, activity, usage, and account settings. GitHub continues to provide identity, source, PR lifecycle, and a living status comment/check; it receives summaries and links back to Previa. Reviewers must not have to finish the Previa review workflow in GitHub, Slack, or another application.
 
@@ -63,7 +63,7 @@ The owner has authorized this document as the plan for a broader hosted team pro
 
 | Existing boundary | Required change | What remains bounded |
 | --- | --- | --- |
-| Installation owner is the dashboard/account scope; team management is excluded in README §2.5 | Workspace membership and repository permissions become the customer authorization scope. | GitHub-only human identity; explicit grants; no enterprise identity system. |
+| Installation owner is the dashboard/account scope; team management is excluded in README §2.5 | Workspace membership and repository permissions become the customer authorization scope. | GitHub or optional Google human identity; explicit grants; no enterprise identity system. |
 | GitHub comments/checks are the review-facing channel in README §2.4 | Previa becomes the canonical application for preview review; GitHub displays summaries and links. | No bidirectional synchronization of all human GitHub discussions. |
 | One current build/environment per PR; no build archive in README §4.5 | Add bounded activity records and immutable references to reviewed deployments. | No historical containers, past-build browsing, or retained copies of every log. |
 | Self-hosted control plane with operator/account limits | Hosted workspaces need visible entitlements, usage, billing state, and account lifecycle. | Existing server/worker architecture and host resource ceilings remain. |
@@ -82,7 +82,7 @@ Decided by the owner on 16 October 2026: Previa is marketed and built as a **pre
 | 3 | Feature 3: native review and feedback, with step B (publications, activity) | Done ([30](docs/30-reviews.md)) |
 | 4 | Feature 5: ready-to-test sample data, with two reference journeys | Done ([31](docs/31-test-data.md)) |
 | 5 | Feature 5B: persistent test data (repository baseline, kept PR data) | Done ([32](docs/32-persistent-test-data.md)); the owner's hands-on pass is part of release acceptance |
-| 6 | Feature 6, free plan: usage and limits, disconnect and deletion, support and status, policy pages | Implemented ([33](docs/33-usage-and-free-limits.md), [34](docs/34-accounts-support-and-deletion.md)); owner acceptance and policy review remain before release |
+| 6 | Feature 6, free plan: usage and limits, disconnect and deletion, support and status, policy pages | Implemented ([33](docs/33-usage-and-free-plan.md), [34](docs/34-accounts-support-and-deletion.md)); owner acceptance and policy review remain before release |
 | 7 | Deploy early access ([production deployment](docs/25-production-deployment.md)) and measure ([§12.3](#123-product-measurements)) | After Feature 6 |
 
 **Deferred until feedback asks for them:** Feature 4 (review requests, assignments, decisions, review queue, activity timeline view), GitHub projection of review status and counts (step E; the comment links the review only), paid subscriptions (step J), the third reference journey (an app with a background process), and separate notification integrations. Preview-centric growth (branch previews, multiple code bases or services per preview, a main-versus-PR compare view; see [NEXT-FEATURES.md](NEXT-FEATURES.md)) ranks ahead of review workflow depth.
@@ -115,7 +115,7 @@ Use these capabilities. In particular, sample-data support does not need a new d
 
 ### 3.1 Access and ownership
 
-- A human identity is a Previa user identified by immutable GitHub numeric ID. A GitHub username is display information and may change.
+- A human identity is a local Previa user with a stable public ID and explicit GitHub and/or Google login connections. Immutable numeric GitHub IDs and Google subjects identify providers; email/display names never merge accounts. Roles come from workspace memberships.
 - A workspace owns connected installations, repositories, plan entitlements, and new usage. The connecting human remains recorded as provenance, not the continuing access authority.
 - Repository IDs and PR IDs determine their owning workspace on the server. A selected workspace cookie, URL parameter, hidden form field, or client-supplied role cannot grant access.
 - An active workspace membership plus an explicit repository grant is required for developer/reviewer access. Owner/Admin have workspace-wide administration, subject to installation availability and action-specific checks.
@@ -180,7 +180,7 @@ Example: Ajay creates “Acme Engineering,” connects `acme/api`, and invites M
 ### 4.3 Complete user-facing behavior
 
 1. **Creation and selection:** create a workspace with a name and stable ID. If a user belongs to multiple workspaces, the switcher lists only active memberships. An invitation takes precedence as the initial destination after sign-in; a new user is not forced through an unrelated personal-workspace wizard.
-2. **Invitations:** an administrator selects a GitHub account, role, and repository grants. Resolve/store the immutable GitHub ID. Show a one-use, expiring invitation link to copy manually; no email integration is needed. The recipient signs in, sees the invitation scope, and explicitly accepts or declines. Administrators can revoke or regenerate pending invitations.
+2. **Invitations:** an administrator selects a GitHub account for any role, or a verified email for Reviewer access, with explicit repository grants. Resolve/store the immutable GitHub ID. Show a one-use, expiring invitation link to copy manually; no email integration is needed. The recipient signs in, sees the invitation scope, and explicitly accepts or declines. Administrators can revoke or regenerate pending invitations.
 3. **Members:** show active members and pending invitations, roles, and repository access. Role/grant changes take effect immediately. Prevent administrators from assigning Owner through an ordinary role-edit form.
 4. **Connections:** an Owner/Admin connects an installation through the existing verified GitHub flow, selecting the workspace before leaving Previa. Bind that choice to the one-use OAuth/App-link state. An already-connected installation cannot be silently claimed by another workspace.
 5. **Repository grants:** Developer and Reviewer access is explicit per repository. A bulk selection can help administrators, but a new repository is not silently exposed to all existing reviewers.
@@ -1084,3 +1084,18 @@ The external references describe market patterns and integration contracts. They
 
 Primary project references: [README](README.md), [DESIGN](DESIGN.md), [development setup](docs/02-development-setup.md), [backend previews](docs/11-backend-previews.md), [GitHub reporting](docs/14-pr-feedback.md), [housekeeping/capacity](docs/15-housekeeping-and-capacity.md), [build policy](docs/16-build-policy-and-intents.md), [scheduling](docs/17-build-scheduling.md), [ordering](docs/19-generation-ordering.md), [realtime](docs/20-realtime-updates.md), and [UI architecture](docs/21-ui-architecture.md).
 
+
+## Final MVP addition: Google sign-in and reviewer email invitations (F7)
+
+Owner-approved20 October2026. Either provider authenticates the same explicitly
+linked account. A Google-only user can accept Reviewer invitations, open granted
+private previews and leave findings/comments without GitHub. No automatic Owner
+workspace or technical role is created for them. Developer/Admin/Owner actions
+require a connected GitHub account, appropriate membership and normal App/source
+authorization. GitHub login can still be a Reviewer; Google login can operate
+existing technical roles after GitHub is connected. Linking never promotes roles.
+
+Email invitations use verified provider email, copied links and explicit consent;
+no email delivery is introduced. Identity collisions and account merges are refused.
+F6 workspace approval remains independent. Privacy, erasure and restore cover both
+providers. [Design and configuration](docs/36-google-sign-in-and-reviewer-invitations.md).

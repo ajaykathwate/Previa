@@ -302,16 +302,16 @@ SELECT v.id,v.role,v.expires_at,v.created_at,w.id AS workspace_id,w.name AS work
  coalesce((SELECT array_agg(r.full_name ORDER BY lower(r.full_name)) FROM workspace_invitation_repositories g JOIN repos r ON r.id=g.repo_id
   WHERE g.invitation_id=v.id),'{}')::text[] AS repositories
 FROM workspace_invitations v JOIN workspaces w ON w.id=v.workspace_id AND w.state='active' JOIN users u ON u.id=v.created_by
-WHERE v.github_id=sqlc.arg(github_id)::bigint AND v.state='pending' AND v.expires_at>clock_timestamp()
+WHERE workspace_invitation_matches(v.id,sqlc.arg(user_id)::bigint,sqlc.arg(github_id)::bigint) AND v.state='pending' AND v.expires_at>clock_timestamp()
 AND NOT EXISTS(SELECT 1 FROM workspace_memberships m JOIN users me ON me.id=m.user_id
- WHERE m.workspace_id=w.id AND me.github_id=v.github_id AND m.state='active')
+ WHERE m.workspace_id=w.id AND (me.id=sqlc.arg(user_id)::bigint OR me.github_id=v.github_id) AND m.state='active')
 ORDER BY v.created_at DESC,v.id DESC LIMIT 20;
 
 -- name: CountReceivedInvitations :one
 SELECT count(*) FROM workspace_invitations v JOIN workspaces w ON w.id=v.workspace_id AND w.state='active'
-WHERE v.github_id=sqlc.arg(github_id)::bigint AND v.state='pending' AND v.expires_at>clock_timestamp()
+WHERE workspace_invitation_matches(v.id,sqlc.arg(user_id)::bigint,sqlc.arg(github_id)::bigint) AND v.state='pending' AND v.expires_at>clock_timestamp()
 AND NOT EXISTS(SELECT 1 FROM workspace_memberships m JOIN users me ON me.id=m.user_id
- WHERE m.workspace_id=w.id AND me.github_id=v.github_id AND m.state='active');
+ WHERE m.workspace_id=w.id AND (me.id=sqlc.arg(user_id)::bigint OR me.github_id=v.github_id) AND m.state='active');
 
 -- name: DeleteWorkspace :execrows
 UPDATE workspaces SET state='deleted',deleted_at=clock_timestamp(),revision=revision+1 WHERE id=$1 AND state='active';
@@ -321,3 +321,16 @@ UPDATE workspace_invitations SET state='revoked',revision=revision+1 WHERE works
 
 -- name: ClearWorkspacePreferences :exec
 UPDATE workspace_preferences SET workspace_id=NULL WHERE workspace_id=$1;
+
+-- name: InvitationMatches :one
+SELECT workspace_invitation_matches(sqlc.arg(invitation_id)::bigint,sqlc.arg(user_id)::bigint,sqlc.arg(github_id)::bigint)::boolean;
+
+-- name: CreateEmailInvitation :one
+INSERT INTO workspace_invitations(workspace_id,email,login,role,token_hash,expires_at,created_by)
+VALUES($1,$2,$2,'reviewer',$3,$4,$5) RETURNING id;
+
+-- name: ExpireEmailInvitation :exec
+UPDATE workspace_invitations SET state='expired',revision=revision+1 WHERE workspace_id=$1 AND email=$2 AND state='pending' AND expires_at<=now();
+
+-- name: InvitationRecipientForUser :one
+SELECT CASE WHEN github_id IS NULL THEN google_email ELSE username END::text AS recipient FROM users WHERE id=$1 AND deleted_at IS NULL;

@@ -353,3 +353,11 @@ removal uses the existing transactional webhook revocation and cleanup path.
 Outages, wrong credentials, incomplete listings and circuits never authorize
 revocation. Polling never restores access or starts builds; verified same-workspace
 reinstall can recover missed deletion. See [35](35-installation-recovery-and-early-access.md).
+
+## Google reviewers (F7)
+
+When configured, private-preview authentication offers both login methods and
+returns to the requested host/path. Google reviewers use existing local workspace
+membership and repository grants, including session-bound cookie and removal
+checks. A Google-only outsider never receives the GitHub-reader fallback based on
+a display name or a URL. [36](36-google-sign-in-and-reviewer-invitations.md).

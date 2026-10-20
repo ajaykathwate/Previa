@@ -279,3 +279,16 @@ handler. `internal/earlyaccess` owns workspace approval, audit and native pages.
 Migrations 0044/0045 add observation times and workspace admission/audit. Existing
 workspaces retain approval. See [35](../docs/35-installation-recovery-and-early-access.md)
 and [development setup](../docs/02-development-setup.md#f5f6-installation-recovery-and-workspace-approval).
+
+## Optional Google login and reviewer invitations (F7)
+
+`internal/auth` adds Google's authorization-code+PKCE+nonce flow and
+`github.com/coreos/go-oidc/v3` (v3.21.0; go-jose/v4 v4.1.4) for signed ID-token
+verification. The existing OAuth2 and SCS/CSRF stack remains. No Google tokens
+persist; no Google browser SDK or mail service is introduced. Roles remain local.
+
+Server env: GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET (both blank
+disables Google). `/auth/login` offers methods; `/auth/google/login` and callback
+handle sign-in; CSRF-protected `/auth/google/link` and `/auth/github/link` connect
+methods from Your profile. Google-only users need a verified-email Reviewer
+invitation, never an automatic Owner workspace. [36](../docs/36-google-sign-in-and-reviewer-invitations.md).

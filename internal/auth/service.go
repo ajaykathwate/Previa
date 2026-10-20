@@ -16,6 +16,7 @@ import (
 
 // Identity holds the GitHub profile refreshed during sign-in; OAuth tokens are never persisted.
 type Identity struct {
+	GoogleSubject                                   string
 	ID                                              int64
 	Username                                        string
 	AvatarURL                                       string

@@ -13,13 +13,60 @@ templ MemberProfile(p Profile) {
 		<div class="team-page profile-page">
 			<header class="team-heading">
 				<div class="team-heading-copy">
-					@components.PageTitle("Your profile", "How you appear to teammates in Previa, and the GitHub account you sign in with.")
+					@components.PageTitle("Your profile", "How you appear to teammates in Previa, and your connected login methods.")
 				</div>
 			</header>
 			<p><a href="/account">Account, connections and deletion</a></p>
 			<div class="field-grid">
 				@PreviaProfile(p)
-				@GitHubAccount(p)
+                if p.GitHubID > 0 {
+                    @GitHubAccount(p)
+                } else {
+                    <section class="workspace-panel field-card" aria-labelledby="github-connect-heading">
+                        <header class="field-card-head">
+                            <h2 id="github-connect-heading">@components.GitHubMark() GitHub is not connected</h2>
+                        </header>
+                        <dl class="field-list">
+                            <div class="field-row">
+                                <dt class="field-label">Sign-in method</dt>
+                                <dd class="field-value">
+                                    <form method="post" action="/auth/github/link">
+                                        <input type="hidden" name="csrf_token" value={ p.CSRF }/>
+                                        <button class="field-card-action" type="submit">Connect GitHub</button>
+                                    </form>
+                                </dd>
+                            </div>
+                        </dl>
+                        <p class="field-card-foot">You can review shared previews without GitHub. Connect it before requesting Developer/Admin access or creating a workspace. Your role will not change automatically.</p>
+                    </section>
+                }
+                if p.GoogleEnabled || p.GoogleConnected {
+                    <section class="workspace-panel field-card" aria-labelledby="google-account-heading">
+                        <header class="field-card-head">
+                            <h2 id="google-account-heading">@components.LockIcon() Google sign-in</h2>
+                        </header>
+                        <dl class="field-list">
+                            if p.GoogleConnected {
+                                @Fact("Connected email", p.GoogleEmail, false)
+                            } else {
+                                <div class="field-row">
+                                    <dt class="field-label">Sign-in method</dt>
+                                    <dd class="field-value">
+                                        <form method="post" action="/auth/google/link">
+                                            <input type="hidden" name="csrf_token" value={ p.CSRF }/>
+                                            <button class="field-card-action" type="submit">Connect Google</button>
+                                        </form>
+                                    </dd>
+                                </div>
+                            }
+                        </dl>
+                        if p.GoogleConnected {
+                            <p class="field-card-foot">Use your connected methods to sign in to this same account. Your workspace roles stay the same.</p>
+                        } else {
+                            <p class="field-card-foot">Connect Google to sign in to this same account with either method.</p>
+                        }
+                    </section>
+                }
 				<section class="workspace-panel field-card field-card-span" aria-labelledby="activity-heading">
 					<header class="field-card-head">
 						<h2 id="activity-heading">
@@ -75,7 +122,7 @@ templ PreviaProfile(p Profile) {
 						<label for="avatar-file" class="text-action">Change photo</label>
 						<form method="post" action="/protected/profile/avatar/remove" data-avatar-remove hidden?={ !p.CustomAvatar }>
 							<input type="hidden" name="csrf_token" value={ p.CSRF }/>
-							<button type="submit" class="text-action">Use GitHub picture</button>
+							<button type="submit" class="text-action">Use default picture</button>
 						</form>
 						<span id="avatar-help" class="field-meta">PNG or JPEG</span>
 					</div>
@@ -98,7 +145,13 @@ templ PreviaProfile(p Profile) {
 				<label class="field-label" for="last-name">Last name</label>
 				@components.InlineText("last-name", "last_name", p.LastName, placeholder(p.LastHint, "Add last name"), "last name", templ.Attributes{"maxlength": "80", "autocomplete": "family-name", "aria-describedby": "name-help name-error"})
 			</div>
-			<p id="name-help" class="field-note">Leave both blank to appear as @{ p.Login }.</p>
+			<p id="name-help" class="field-note">
+				if p.GitHubID > 0 {
+					Leave both blank to appear as @{ p.Login }.
+				} else {
+					Leave both blank to use your sign-in name.
+				}
+			</p>
 			if p.NameError != "" {
 				<p id="name-error" class="field-error" role="alert" data-inline-error>{ p.NameError }</p>
 			} else {
@@ -111,12 +164,14 @@ templ PreviaProfile(p Profile) {
 				<dd class="field-value">
 					if p.Email != "" {
 						<span>{ p.Email }</span>
+					} else if p.GoogleEmail != "" {
+						<span>{ p.GoogleEmail }</span>
 					} else {
-						<span class="text-muted">Not shared by GitHub</span>
+						<span class="text-muted">No verified email available</span>
 					}
-					<span class="field-meta" title="Your verified primary GitHub email. Only you can see it.">
+					<span class="field-meta" title="Your verified sign-in email. Only you can see it.">
 						@components.LockIcon()
-						From GitHub · only you
+						Verified sign-in email · only you
 					</span>
 					if p.EmailSyncError {
 						<small class="field-value-note tone-warn">GitHub couldn't refresh your email at the last sign-in, so this is the last saved address.</small>

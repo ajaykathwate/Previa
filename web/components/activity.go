@@ -1,6 +1,9 @@
 package components
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // ActivityItem is one recorded action in a member's recent activity. Kinds:
 // build (Detail is build, retry or rebuild), created, joined, invited (Login
@@ -46,3 +49,10 @@ func activityBuildVerb(detail string) string {
 }
 
 func itoa(n int32) string { return strconv.Itoa(int(n)) }
+
+func activityRecipient(login string) string {
+	if strings.ContainsRune(login, '@') {
+		return login
+	}
+	return "@" + login
+}

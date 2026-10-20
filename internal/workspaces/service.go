@@ -19,6 +19,8 @@ func validName(name string) bool {
 }
 func validRole(role string) bool { return role == "admin" || role == "developer" || role == "reviewer" }
 
+var ErrGitHubRequired = errors.New("connect GitHub from Your profile before creating a workspace or receiving Developer/Admin access")
+
 func (s *Service) Create(ctx context.Context, user int64, name string) (id int64, err error) {
 	name = strings.TrimSpace(name)
 	if user <= 0 || !validName(name) {
@@ -26,6 +28,13 @@ func (s *Service) Create(ctx context.Context, user int64, name string) (id int64
 	}
 	err = database.InTransaction(ctx, s.repo.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
+		var linked bool
+		if e := tx.QueryRow(ctx, `SELECT github_id IS NOT NULL FROM users WHERE id=$1 AND deleted_at IS NULL`, user).Scan(&linked); e != nil {
+			return fmt.Errorf("read workspace creator identity: %w", e)
+		}
+		if !linked {
+			return ErrGitHubRequired
+		}
 		var e error
 		id, e = q.CreateWorkspace(ctx, dbgen.CreateWorkspaceParams{Name: name, OwnerUserID: user})
 		if e != nil {
@@ -51,10 +60,13 @@ func (s *Service) Authorize(ctx context.Context, user, repo int64, ability strin
 	if !source {
 		return v, nil
 	}
+	if !v.GithubID.Valid {
+		return v, ErrUnavailable
+	}
 	if s.permissions == nil {
 		return v, ErrSourceUnavailable
 	}
-	role, err := s.permissions.RepositoryUserPermission(ctx, v.GithubInstallationID, v.FullName, v.Username, v.GithubID)
+	role, err := s.permissions.RepositoryUserPermission(ctx, v.GithubInstallationID, v.FullName, v.Username, v.GithubID.Int64)
 	if err != nil {
 		return v, fmt.Errorf("verify source permission: %w", errors.Join(ErrSourceUnavailable, err))
 	}

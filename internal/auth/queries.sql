@@ -37,3 +37,19 @@ SELECT a.data,u.avatar_version FROM user_avatars a JOIN users u ON u.id=a.user_i
 -- name: GetSession :one
 -- Session CRUD is owned by SCS pgxstore. This query verifies persisted sessions.
 SELECT token,data,expiry FROM sessions WHERE token=$1;
+
+-- name: UpsertGoogleUser :one
+INSERT INTO users(google_subject,google_email,username,first_name,email,profile_synced_at)
+VALUES($1,$2,$3,$4,$2,clock_timestamp())
+ON CONFLICT(google_subject) DO UPDATE SET google_email=EXCLUDED.google_email,
+ email=CASE WHEN users.github_id IS NULL THEN EXCLUDED.email ELSE users.email END,
+ profile_synced_at=CASE WHEN users.github_id IS NULL THEN clock_timestamp() ELSE users.profile_synced_at END WHERE users.deleted_at IS NULL RETURNING *;
+
+-- name: LinkGoogleUser :one
+UPDATE users SET google_subject=$2,google_email=$3 WHERE id=$1 AND deleted_at IS NULL
+AND (google_subject IS NULL OR google_subject=$2) RETURNING *;
+
+-- name: LinkGitHubUser :one
+UPDATE users SET github_id=$2,username=$3,avatar_url=$4,github_name=$5,email=$6,email_sync_error=$7,
+ github_profile_url=$8,profile_synced_at=clock_timestamp()
+WHERE id=$1 AND deleted_at IS NULL AND (github_id IS NULL OR github_id=$2) RETURNING *;

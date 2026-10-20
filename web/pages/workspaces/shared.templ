@@ -67,7 +67,7 @@ templ AcceptInvitation(username string, p Page) {
 				<p class="team-inline">
 					Join as
 					@components.WorkspaceRole(p.Role)
-					using your signed-in GitHub account.
+					using your signed-in account.
 				</p>
 				if p.Role == "admin" {
 					<p>Administrators can access every repository in this workspace and manage members and repository settings.</p>

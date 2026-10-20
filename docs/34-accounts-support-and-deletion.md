@@ -170,3 +170,12 @@ that runtime objects, baseline/source files and build caches are gone. Productio
 smoke testing exercises the actual encrypted backup/restore scripts. Commands
 and current evidence are in [development setup](02-development-setup.md#f4-account-exits-support-and-deletion)
 and the F4 report under `test-docs`.
+
+## Google identity erasure and journalv2 (F7)
+
+Google subjects are immutable optional account identifiers. Erasure removes their
+verified email/profile but retains subject tombstones. Journalv2 includes the
+Google subject for account deletion and uses public user IDs for membership
+replay, protecting accounts created after a backup too. Current readers acceptv1;
+old readers rejectv2. Restore must use the updated application/schema46. No tokens
+or emails enter the journal. [36](36-google-sign-in-and-reviewer-invitations.md).

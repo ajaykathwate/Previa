@@ -38,7 +38,7 @@ func (s *Service) EraseAccountTx(ctx context.Context, tx pgx.Tx, user int64) err
 		`DELETE FROM repository_memberships WHERE user_id=$1`,
 		`DELETE FROM workspace_memberships WHERE user_id=$1`,
 		`DELETE FROM workspace_preferences WHERE user_id=$1`,
-		`DELETE FROM workspace_invitations WHERE github_id=(SELECT github_id FROM users WHERE id=$1)`,
+		`DELETE FROM workspace_invitations WHERE github_id=(SELECT github_id FROM users WHERE id=$1) OR (email<>'' AND email IN(SELECT google_email FROM users WHERE id=$1 UNION SELECT lower(email) FROM users WHERE id=$1 AND NOT email_sync_error))`,
 	} {
 		if _, err := tx.Exec(ctx, query, user); err != nil {
 			return fmt.Errorf("erase personal workspace access: %w", err)

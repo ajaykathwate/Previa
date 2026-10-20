@@ -186,13 +186,18 @@ func (q *Queries) CountDeactivatedMembers(ctx context.Context, arg CountDeactiva
 
 const countReceivedInvitations = `-- name: CountReceivedInvitations :one
 SELECT count(*) FROM workspace_invitations v JOIN workspaces w ON w.id=v.workspace_id AND w.state='active'
-WHERE v.github_id=$1::bigint AND v.state='pending' AND v.expires_at>clock_timestamp()
+WHERE workspace_invitation_matches(v.id,$1::bigint,$2::bigint) AND v.state='pending' AND v.expires_at>clock_timestamp()
 AND NOT EXISTS(SELECT 1 FROM workspace_memberships m JOIN users me ON me.id=m.user_id
- WHERE m.workspace_id=w.id AND me.github_id=v.github_id AND m.state='active')
+ WHERE m.workspace_id=w.id AND (me.id=$1::bigint OR me.github_id=v.github_id) AND m.state='active')
 `
 
-func (q *Queries) CountReceivedInvitations(ctx context.Context, githubID int64) (int64, error) {
-	row := q.db.QueryRow(ctx, countReceivedInvitations, githubID)
+type CountReceivedInvitationsParams struct {
+	UserID   int64
+	GithubID int64
+}
+
+func (q *Queries) CountReceivedInvitations(ctx context.Context, arg CountReceivedInvitationsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countReceivedInvitations, arg.UserID, arg.GithubID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -231,6 +236,32 @@ func (q *Queries) CountWorkspaceMembers(ctx context.Context, arg CountWorkspaceM
 	return count, err
 }
 
+const createEmailInvitation = `-- name: CreateEmailInvitation :one
+INSERT INTO workspace_invitations(workspace_id,email,login,role,token_hash,expires_at,created_by)
+VALUES($1,$2,$2,'reviewer',$3,$4,$5) RETURNING id
+`
+
+type CreateEmailInvitationParams struct {
+	WorkspaceID int64
+	Email       string
+	TokenHash   []byte
+	ExpiresAt   pgtype.Timestamptz
+	CreatedBy   int64
+}
+
+func (q *Queries) CreateEmailInvitation(ctx context.Context, arg CreateEmailInvitationParams) (int64, error) {
+	row := q.db.QueryRow(ctx, createEmailInvitation,
+		arg.WorkspaceID,
+		arg.Email,
+		arg.TokenHash,
+		arg.ExpiresAt,
+		arg.CreatedBy,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const createInvitation = `-- name: CreateInvitation :one
 INSERT INTO workspace_invitations(workspace_id,github_id,login,role,token_hash,expires_at,created_by)
 VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id
@@ -238,7 +269,7 @@ VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id
 
 type CreateInvitationParams struct {
 	WorkspaceID int64
-	GithubID    int64
+	GithubID    pgtype.Int8
 	Login       string
 	Role        string
 	TokenHash   []byte
@@ -418,6 +449,20 @@ func (q *Queries) DeleteWorkspaceTransfer(ctx context.Context, workspaceID int64
 	return err
 }
 
+const expireEmailInvitation = `-- name: ExpireEmailInvitation :exec
+UPDATE workspace_invitations SET state='expired',revision=revision+1 WHERE workspace_id=$1 AND email=$2 AND state='pending' AND expires_at<=now()
+`
+
+type ExpireEmailInvitationParams struct {
+	WorkspaceID int64
+	Email       string
+}
+
+func (q *Queries) ExpireEmailInvitation(ctx context.Context, arg ExpireEmailInvitationParams) error {
+	_, err := q.db.Exec(ctx, expireEmailInvitation, arg.WorkspaceID, arg.Email)
+	return err
+}
+
 const expirePendingInvitation = `-- name: ExpirePendingInvitation :exec
 UPDATE workspace_invitations SET state='revoked',revision=revision+1
 WHERE workspace_id=$1 AND github_id=$2 AND state='pending' AND expires_at<=clock_timestamp()
@@ -425,7 +470,7 @@ WHERE workspace_id=$1 AND github_id=$2 AND state='pending' AND expires_at<=clock
 
 type ExpirePendingInvitationParams struct {
 	WorkspaceID int64
-	GithubID    int64
+	GithubID    pgtype.Int8
 }
 
 func (q *Queries) ExpirePendingInvitation(ctx context.Context, arg ExpirePendingInvitationParams) error {
@@ -439,7 +484,7 @@ SELECT EXISTS(SELECT 1 FROM workspace_invitations WHERE workspace_id=$1 AND gith
 
 type HasPendingInvitationParams struct {
 	WorkspaceID int64
-	GithubID    int64
+	GithubID    pgtype.Int8
 }
 
 func (q *Queries) HasPendingInvitation(ctx context.Context, arg HasPendingInvitationParams) (bool, error) {
@@ -465,6 +510,34 @@ func (q *Queries) InvitationCreatorAuthorized(ctx context.Context, arg Invitatio
 	var column_1 bool
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const invitationMatches = `-- name: InvitationMatches :one
+SELECT workspace_invitation_matches($1::bigint,$2::bigint,$3::bigint)::boolean
+`
+
+type InvitationMatchesParams struct {
+	InvitationID int64
+	UserID       int64
+	GithubID     int64
+}
+
+func (q *Queries) InvitationMatches(ctx context.Context, arg InvitationMatchesParams) (bool, error) {
+	row := q.db.QueryRow(ctx, invitationMatches, arg.InvitationID, arg.UserID, arg.GithubID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const invitationRecipientForUser = `-- name: InvitationRecipientForUser :one
+SELECT CASE WHEN github_id IS NULL THEN google_email ELSE username END::text AS recipient FROM users WHERE id=$1 AND deleted_at IS NULL
+`
+
+func (q *Queries) InvitationRecipientForUser(ctx context.Context, id int64) (string, error) {
+	row := q.db.QueryRow(ctx, invitationRecipientForUser, id)
+	var recipient string
+	err := row.Scan(&recipient)
+	return recipient, err
 }
 
 const invitationRepositories = `-- name: InvitationRepositories :many
@@ -577,7 +650,7 @@ func (q *Queries) ListWorkspaces(ctx context.Context, userID int64) ([]ListWorks
 }
 
 const lockInvitation = `-- name: LockInvitation :one
-SELECT id, workspace_id, github_id, login, role, token_hash, expires_at, state, created_by, revision, created_at, public_id FROM workspace_invitations WHERE id=$1 FOR UPDATE
+SELECT id, workspace_id, github_id, login, role, token_hash, expires_at, state, created_by, revision, created_at, public_id, email FROM workspace_invitations WHERE id=$1 FOR UPDATE
 `
 
 func (q *Queries) LockInvitation(ctx context.Context, id int64) (WorkspaceInvitation, error) {
@@ -596,6 +669,7 @@ func (q *Queries) LockInvitation(ctx context.Context, id int64) (WorkspaceInvita
 		&i.Revision,
 		&i.CreatedAt,
 		&i.PublicID,
+		&i.Email,
 	)
 	return i, err
 }
@@ -814,13 +888,13 @@ func (q *Queries) PutRepositoryGrant(ctx context.Context, arg PutRepositoryGrant
 }
 
 const readInvitation = `-- name: ReadInvitation :one
-SELECT v.id, v.workspace_id, v.github_id, v.login, v.role, v.token_hash, v.expires_at, v.state, v.created_by, v.revision, v.created_at, v.public_id,w.name,w.state AS workspace_state FROM workspace_invitations v JOIN workspaces w ON w.id=v.workspace_id WHERE token_hash=$1
+SELECT v.id, v.workspace_id, v.github_id, v.login, v.role, v.token_hash, v.expires_at, v.state, v.created_by, v.revision, v.created_at, v.public_id, v.email,w.name,w.state AS workspace_state FROM workspace_invitations v JOIN workspaces w ON w.id=v.workspace_id WHERE token_hash=$1
 `
 
 type ReadInvitationRow struct {
 	ID             int64
 	WorkspaceID    int64
-	GithubID       int64
+	GithubID       pgtype.Int8
 	Login          string
 	Role           string
 	TokenHash      []byte
@@ -830,6 +904,7 @@ type ReadInvitationRow struct {
 	Revision       int64
 	CreatedAt      pgtype.Timestamptz
 	PublicID       pgtype.UUID
+	Email          string
 	Name           string
 	WorkspaceState string
 }
@@ -850,6 +925,7 @@ func (q *Queries) ReadInvitation(ctx context.Context, tokenHash []byte) (ReadInv
 		&i.Revision,
 		&i.CreatedAt,
 		&i.PublicID,
+		&i.Email,
 		&i.Name,
 		&i.WorkspaceState,
 	)
@@ -879,7 +955,7 @@ type ReadRepositoryAccessRow struct {
 	Role                 pgtype.Text
 	MembershipState      pgtype.Text
 	Username             string
-	GithubID             int64
+	GithubID             pgtype.Int8
 	AuthorizationStamp   string
 	Allowed              bool
 }
@@ -977,11 +1053,16 @@ SELECT v.id,v.role,v.expires_at,v.created_at,w.id AS workspace_id,w.name AS work
  coalesce((SELECT array_agg(r.full_name ORDER BY lower(r.full_name)) FROM workspace_invitation_repositories g JOIN repos r ON r.id=g.repo_id
   WHERE g.invitation_id=v.id),'{}')::text[] AS repositories
 FROM workspace_invitations v JOIN workspaces w ON w.id=v.workspace_id AND w.state='active' JOIN users u ON u.id=v.created_by
-WHERE v.github_id=$1::bigint AND v.state='pending' AND v.expires_at>clock_timestamp()
+WHERE workspace_invitation_matches(v.id,$1::bigint,$2::bigint) AND v.state='pending' AND v.expires_at>clock_timestamp()
 AND NOT EXISTS(SELECT 1 FROM workspace_memberships m JOIN users me ON me.id=m.user_id
- WHERE m.workspace_id=w.id AND me.github_id=v.github_id AND m.state='active')
+ WHERE m.workspace_id=w.id AND (me.id=$1::bigint OR me.github_id=v.github_id) AND m.state='active')
 ORDER BY v.created_at DESC,v.id DESC LIMIT 20
 `
+
+type ReceivedInvitationsParams struct {
+	UserID   int64
+	GithubID int64
+}
 
 type ReceivedInvitationsRow struct {
 	ID            int64
@@ -995,8 +1076,8 @@ type ReceivedInvitationsRow struct {
 }
 
 // Pending invitations addressed to a signed-in person's GitHub account.
-func (q *Queries) ReceivedInvitations(ctx context.Context, githubID int64) ([]ReceivedInvitationsRow, error) {
-	rows, err := q.db.Query(ctx, receivedInvitations, githubID)
+func (q *Queries) ReceivedInvitations(ctx context.Context, arg ReceivedInvitationsParams) ([]ReceivedInvitationsRow, error) {
+	rows, err := q.db.Query(ctx, receivedInvitations, arg.UserID, arg.GithubID)
 	if err != nil {
 		return nil, err
 	}
@@ -1201,7 +1282,7 @@ const userByGitHubID = `-- name: UserByGitHubID :one
 SELECT id FROM users WHERE github_id=$1
 `
 
-func (q *Queries) UserByGitHubID(ctx context.Context, githubID int64) (int64, error) {
+func (q *Queries) UserByGitHubID(ctx context.Context, githubID pgtype.Int8) (int64, error) {
 	row := q.db.QueryRow(ctx, userByGitHubID, githubID)
 	var id int64
 	err := row.Scan(&id)
@@ -1299,7 +1380,7 @@ type WorkspaceInvitationsParams struct {
 
 type WorkspaceInvitationsRow struct {
 	ID        int64
-	GithubID  int64
+	GithubID  pgtype.Int8
 	Login     string
 	Role      string
 	ExpiresAt pgtype.Timestamptz

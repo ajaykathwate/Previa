@@ -72,10 +72,10 @@ Medium. The tables are simple, but correctness under duplicate and out-of-order 
 
 ---
 
-## 2. GitHub OAuth login
+## 2. Human authentication (GitHub and optional Google)
 
 ### Requirement
-Let a repo owner sign in to the dashboard with their GitHub identity. No separate password system. This feature establishes identity only; it grants no repo permissions.
+Let a person sign in with GitHub or optional Google, without a password system. Authentication establishes a local identity only; memberships/grants determine roles. Section30 extends the original GitHub flow with Google, explicit linking and verified-email reviewer invitations.
 
 ### Complexity
 Medium. The standard flow is well understood, but the security details (state parameter, redirect validation, token handling) are easy to get subtly wrong.
@@ -376,7 +376,7 @@ High. This is the security-critical feature.
 - **gVisor** raises the isolation bar substantially and is a low-cost upgrade path if kernel-level escape risk matters.
 - **Backend previews (Prompt 13):** a candidate may bring managed PostgreSQL/Redis/MySQL (its own, per build revision, with generated credentials, on a per-PR internal services network with no egress or route, data on a size-capped tmpfs), a one-off setup container and up to three processes from the same image. Readiness runs services (protocol check), setup, processes, then the app; every container carries the candidate's key and is counted, inventoried and removed with the app's artifact through the existing cleanup contract. Owner-approved outbound connections reach external databases through the egress proxy, which identifies the repository by the preview's network; forks get none. See [11-backend-previews.md](docs/11-backend-previews.md).
 - **Current implementation:** `internal/runtime` implements `environments.Runtime`: it rechecks that the request is still current and accessible, builds through `internal/builds`, rechecks again, decides secrets (`secrets.Provider`; none for forks or unknown heads), and starts a candidate on the PR's own internal network `previa-pr-<id>`, shared only with the egress proxy and, once published, the router. Candidates run as UID 65532 when the image would run as root, with a read-only root and a bounded `/tmp` tmpfs (server-wide operator opt-outs only), no capabilities, `no-new-privileges`, IPv6 disabled, clamped tier CPU/memory, a PID limit, half CPU weight, a raised OOM score, capped logs and on-failure restarts (3, then a crash loop). Outbound traffic goes only through `previa-egress` (public addresses, ports 80/443). Readiness is probed from inside the egress container (HTTP 200-399 on `health_check_path`, else TCP), within `PREVIEW_STARTUP_TIMEOUT`. Admission keeps previews within 60% of Docker memory, 75% of CPUs and 10 per repository. Inventory and removal verify ownership labels, including the PR (`RemoveResource`, used by cleanup operations: graceful stop, then force; images never forced; idle networks); `Endpoint` re-checks a candidate right before it is routed. gVisor is optional via `PREVIEW_OCI_RUNTIME`. Docker keeps at most 2 × 5 MB of output per container. See [10-preview-runtime.md](docs/10-preview-runtime.md).
-- **After publication (an addition):** the worker follows Docker's `die` events and copies a live preview's last output into its build log when its app or a process stops (once per event, workers sharing a host included); reads the router's per-preview request counters every minute for "Last opened" (counts only, never request details); and, with `PREVIEW_IDLE_SLEEP`, stops an idle preview's app and processes while the router sends visitors to a public wake page, which starts it again (services keep running, so their data survives). Previews never sleep while visit counts cannot be read. Output read after startup is redacted from the container's `io.previa.redact-env` label (names of secret variables, never values). Per-account caps (`PREVIEW_MAX_PER_ACCOUNT`) join the per-repository one. Private previews (owner setting) put the router's forward authentication in front of a repository's previews: visitors sign in with GitHub and must be able to see the repository ([12-routing-and-https.md](docs/12-routing-and-https.md#private-previews)).
+- **After publication (an addition):** the worker follows Docker's `die` events and copies a live preview's last output into its build log when its app or a process stops (once per event, workers sharing a host included); reads the router's per-preview request counters every minute for "Last opened" (counts only, never request details); and, with `PREVIEW_IDLE_SLEEP`, stops an idle preview's app and processes while the router sends visitors to a public wake page, which starts it again (services keep running, so their data survives). Previews never sleep while visit counts cannot be read. Output read after startup is redacted from the container's `io.previa.redact-env` label (names of secret variables, never values). Per-account caps (`PREVIEW_MAX_PER_ACCOUNT`) join the per-repository one. Private previews (owner setting) put the router's forward authentication in front of a repository's previews: visitors sign in with GitHub or configured Google and need an active local repository grant; the existing GitHub-reader outsider fallback still requires a connected GitHub account ([12-routing-and-https.md](docs/12-routing-and-https.md#private-previews)).
 
 ---
 
@@ -907,7 +907,7 @@ preview/
 │   │   ├── migrate.go              # embedded Goose and River migrations (cmd/migrate)
 │   │   └── testdata/               # E2E fixtures: backend/ and reference/ (docs/31 journeys)
 │   │
-│   ├── auth/                       # FEATURE: GitHub OAuth login + sessions
+│   ├── auth/                       # FEATURE: GitHub/Google sign-in, linking + sessions
 │   │   ├── handler.go              # login, callback, logout (the "controller")
 │   │   ├── profile_handler.go      # own profile page, in-place name saves, photo upload/serve
 │   │   ├── avatar.go               # profile photo validation, crop/scale and storage
@@ -1884,3 +1884,33 @@ never gated. Operators use the configured immutable GitHub-ID allowlist. The nat
 approval form checks revision and audits atomically; retries are idempotent and
 approval never dispatches a build. Pending workspaces can still manage members,
 use support and request deletion. Disabled gate mode is explicit env configuration.
+
+## 30. Google sign-in and provider-independent reviewers (F7)
+
+**Requirement:** the owner-approved final MVP feature lets stakeholders use Google
+without requiring a GitHub account. Login methods never assign workspace roles.
+
+**Implementation:** extend existing auth/workspaces feature packages, not a new
+identity service. Migration0046 makes GitHub ID nullable and adds a unique Google
+subject plus verified Google email. Explicit CSRF-protected linking preserves the
+local account; identity collisions are refused, never merged by matching email.
+Google uses OAuth2 code+PKCE+nonce and `coreos/go-oidc/v3` signature/issuer/audience/
+expiry verification. Tokens are discarded. Credentials are optional env settings.
+
+Managers may invite a verified email as Reviewer, using the same copied-link,
+consent, revision, expiry, repository-grant and revocation model as GitHub invites.
+No email delivery infrastructure is added. New Google-only users see a welcome
+page without an Owner workspace. Technical role/owner creation requires GitHub
+at service and database boundaries. Connecting it never promotes a member.
+Private-preview access uses local grants and refuses Google-only outsider fallback.
+
+**Recovery:** journalv2 carries immutable Google subject, accepts oldv1, and replays
+membership removal by public user ID. Erasure clears profile/email but retains
+provider tombstones. Migration rollback refuses after new identity/access data.
+
+**Edge cases/verification:** provider mix-up, replay, nonce/PKCE, forged or expired
+ID token, wrong issuer/audience, unverified email, duplicate identity, forwarded
+invitation, absent GitHub, source/preview separation, offboarding, post-backup
+account creation/deletion, JS on/off and existing GitHub regression tests. See
+[36](docs/36-google-sign-in-and-reviewer-invitations.md). This explicitly replaces
+the old GitHub-only identity/invitation assumption; no visual-theme change.

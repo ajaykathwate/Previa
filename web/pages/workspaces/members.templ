@@ -76,7 +76,7 @@ templ Members(p Page) {
 		}
 		<footer class="team-panel-footer">
 			if p.InvitationView {
-				<p>Only the addressed GitHub account can accept, from the link or inside Previa. Invitations expire after seven days.</p>
+				<p>Only the addressed account or verified email can accept, from the link or inside Previa. Invitations expire after seven days.</p>
 			} else if p.DeactivatedView {
 				<p>Deactivated people have no access. Re-inviting offers their previous role and repositories; they rejoin after accepting.</p>
 			} else {
@@ -132,7 +132,7 @@ templ AccessDialog(p Page, m Member) {
 }
 
 templ InviteDialog(p Page) {
-	@components.FormDialog("invite-member", "Invite a teammate", "Choose their GitHub account and access. You will get a link to share; no email is sent.") {
+	@components.FormDialog("invite-member", "Invite a teammate", "Choose their GitHub account or reviewer email and access. You will get a link to share; no email is sent.") {
 		@InvitationForm(p)
 	}
 }
@@ -143,9 +143,9 @@ templ InvitationForm(p Page) {
 		if p.Tab=="setup" {
 			<input type="hidden" name="return" value="setup"/>
 		}
-		<label for="invite-login">GitHub username</label>
-		<input id="invite-login" name="login" value={ p.Invite.Login } required maxlength="39" autocomplete="off" placeholder="octocat" aria-describedby="invite-login-help invite-login-error" aria-invalid={ currentError(p.Invite.LoginError != "") } autofocus/>
-		<p id="invite-login-help" class="team-field-hint">Use the username only. Previa checks the account and existing workspace membership.</p>
+		<label for="invite-login">GitHub username or reviewer email</label>
+		<input id="invite-login" name="login" value={ p.Invite.Login } required maxlength="254" autocomplete="off" placeholder="octocat or reviewer@example.com" aria-describedby="invite-login-help invite-login-error" aria-invalid={ currentError(p.Invite.LoginError != "") } autofocus/>
+		<p id="invite-login-help" class="team-field-hint">Use a GitHub username for any role, or an email for Reviewer access. The recipient must sign in with that verified email.</p>
 		if p.Invite.LoginError!="" {
 			<p id="invite-login-error" class="team-field-error" role="alert">{ p.Invite.LoginError }</p>
 		} else {
@@ -191,7 +191,7 @@ templ Invitations(p Page) {
 					No pending invitations
 				}
 			</h2>
-			<p>Invite teammates by GitHub username and share their invitation link.</p>
+			<p>Invite teammates by GitHub username or reviewer email and share their invitation link.</p>
 			if p.Search!="" {
 				<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members?view=invitations") }>Clear search</a>
 			} else {

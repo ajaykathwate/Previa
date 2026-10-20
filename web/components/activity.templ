@@ -56,7 +56,7 @@ templ activityText(v ActivityItem, showWorkspace bool) {
 			@activityWorkspace(v, showWorkspace)
 			{ " as " + RoleName(v.Detail) }
 		case "invited":
-			Invited <strong>{ "@" + v.Login }</strong>
+			Invited <strong>{ activityRecipient(v.Login) }</strong>
 			if showWorkspace {
 				{ " to " }
 				<strong>{ v.Workspace }</strong>

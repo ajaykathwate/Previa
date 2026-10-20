@@ -35,7 +35,7 @@ func (q *Queries) GetSession(ctx context.Context, token string) (Session, error)
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar, session_epoch, deleted_at FROM users WHERE id=$1 AND deleted_at IS NULL
+SELECT id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar, session_epoch, deleted_at, google_subject, google_email FROM users WHERE id=$1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
@@ -64,6 +64,109 @@ func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
 		&i.CustomAvatar,
 		&i.SessionEpoch,
 		&i.DeletedAt,
+		&i.GoogleSubject,
+		&i.GoogleEmail,
+	)
+	return i, err
+}
+
+const linkGitHubUser = `-- name: LinkGitHubUser :one
+UPDATE users SET github_id=$2,username=$3,avatar_url=$4,github_name=$5,email=$6,email_sync_error=$7,
+ github_profile_url=$8,profile_synced_at=clock_timestamp()
+WHERE id=$1 AND deleted_at IS NULL AND (github_id IS NULL OR github_id=$2) RETURNING id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar, session_epoch, deleted_at, google_subject, google_email
+`
+
+type LinkGitHubUserParams struct {
+	ID               int64
+	GithubID         pgtype.Int8
+	Username         string
+	AvatarUrl        string
+	GithubName       string
+	Email            string
+	EmailSyncError   bool
+	GithubProfileUrl string
+}
+
+func (q *Queries) LinkGitHubUser(ctx context.Context, arg LinkGitHubUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, linkGitHubUser,
+		arg.ID,
+		arg.GithubID,
+		arg.Username,
+		arg.AvatarUrl,
+		arg.GithubName,
+		arg.Email,
+		arg.EmailSyncError,
+		arg.GithubProfileUrl,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.GithubID,
+		&i.Username,
+		&i.CreatedAt,
+		&i.AvatarUrl,
+		&i.FirstName,
+		&i.LastName,
+		&i.ProfileRevision,
+		&i.GithubName,
+		&i.Email,
+		&i.EmailSyncError,
+		&i.GithubProfileUrl,
+		&i.GithubBio,
+		&i.GithubCompany,
+		&i.GithubLocation,
+		&i.GithubCreatedAt,
+		&i.ProfileSyncedAt,
+		&i.PublicID,
+		&i.AvatarVersion,
+		&i.CustomAvatar,
+		&i.SessionEpoch,
+		&i.DeletedAt,
+		&i.GoogleSubject,
+		&i.GoogleEmail,
+	)
+	return i, err
+}
+
+const linkGoogleUser = `-- name: LinkGoogleUser :one
+UPDATE users SET google_subject=$2,google_email=$3 WHERE id=$1 AND deleted_at IS NULL
+AND (google_subject IS NULL OR google_subject=$2) RETURNING id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar, session_epoch, deleted_at, google_subject, google_email
+`
+
+type LinkGoogleUserParams struct {
+	ID            int64
+	GoogleSubject pgtype.Text
+	GoogleEmail   string
+}
+
+func (q *Queries) LinkGoogleUser(ctx context.Context, arg LinkGoogleUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, linkGoogleUser, arg.ID, arg.GoogleSubject, arg.GoogleEmail)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.GithubID,
+		&i.Username,
+		&i.CreatedAt,
+		&i.AvatarUrl,
+		&i.FirstName,
+		&i.LastName,
+		&i.ProfileRevision,
+		&i.GithubName,
+		&i.Email,
+		&i.EmailSyncError,
+		&i.GithubProfileUrl,
+		&i.GithubBio,
+		&i.GithubCompany,
+		&i.GithubLocation,
+		&i.GithubCreatedAt,
+		&i.ProfileSyncedAt,
+		&i.PublicID,
+		&i.AvatarVersion,
+		&i.CustomAvatar,
+		&i.SessionEpoch,
+		&i.DeletedAt,
+		&i.GoogleSubject,
+		&i.GoogleEmail,
 	)
 	return i, err
 }
@@ -138,6 +241,58 @@ func (q *Queries) UpdatePersonalName(ctx context.Context, arg UpdatePersonalName
 	return result.RowsAffected(), nil
 }
 
+const upsertGoogleUser = `-- name: UpsertGoogleUser :one
+INSERT INTO users(google_subject,google_email,username,first_name,email,profile_synced_at)
+VALUES($1,$2,$3,$4,$2,clock_timestamp())
+ON CONFLICT(google_subject) DO UPDATE SET google_email=EXCLUDED.google_email,
+ email=CASE WHEN users.github_id IS NULL THEN EXCLUDED.email ELSE users.email END,
+ profile_synced_at=CASE WHEN users.github_id IS NULL THEN clock_timestamp() ELSE users.profile_synced_at END WHERE users.deleted_at IS NULL RETURNING id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar, session_epoch, deleted_at, google_subject, google_email
+`
+
+type UpsertGoogleUserParams struct {
+	GoogleSubject pgtype.Text
+	GoogleEmail   string
+	Username      string
+	FirstName     string
+}
+
+func (q *Queries) UpsertGoogleUser(ctx context.Context, arg UpsertGoogleUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, upsertGoogleUser,
+		arg.GoogleSubject,
+		arg.GoogleEmail,
+		arg.Username,
+		arg.FirstName,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.GithubID,
+		&i.Username,
+		&i.CreatedAt,
+		&i.AvatarUrl,
+		&i.FirstName,
+		&i.LastName,
+		&i.ProfileRevision,
+		&i.GithubName,
+		&i.Email,
+		&i.EmailSyncError,
+		&i.GithubProfileUrl,
+		&i.GithubBio,
+		&i.GithubCompany,
+		&i.GithubLocation,
+		&i.GithubCreatedAt,
+		&i.ProfileSyncedAt,
+		&i.PublicID,
+		&i.AvatarVersion,
+		&i.CustomAvatar,
+		&i.SessionEpoch,
+		&i.DeletedAt,
+		&i.GoogleSubject,
+		&i.GoogleEmail,
+	)
+	return i, err
+}
+
 const upsertUser = `-- name: UpsertUser :one
 INSERT INTO users(github_id,username,avatar_url,first_name,last_name,github_name,email,email_sync_error,github_profile_url,github_bio,github_company,github_location,github_created_at,profile_synced_at)
 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now())
@@ -148,11 +303,11 @@ email=CASE WHEN EXCLUDED.email_sync_error THEN users.email ELSE EXCLUDED.email E
 github_profile_url=EXCLUDED.github_profile_url,github_bio=EXCLUDED.github_bio,github_company=EXCLUDED.github_company,github_location=EXCLUDED.github_location,
 github_created_at=EXCLUDED.github_created_at,profile_synced_at=EXCLUDED.profile_synced_at
 WHERE users.deleted_at IS NULL
-RETURNING id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar, session_epoch, deleted_at
+RETURNING id, github_id, username, created_at, avatar_url, first_name, last_name, profile_revision, github_name, email, email_sync_error, github_profile_url, github_bio, github_company, github_location, github_created_at, profile_synced_at, public_id, avatar_version, custom_avatar, session_epoch, deleted_at, google_subject, google_email
 `
 
 type UpsertUserParams struct {
-	GithubID         int64
+	GithubID         pgtype.Int8
 	Username         string
 	AvatarUrl        string
 	FirstName        string
@@ -208,6 +363,8 @@ func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) (User, e
 		&i.CustomAvatar,
 		&i.SessionEpoch,
 		&i.DeletedAt,
+		&i.GoogleSubject,
+		&i.GoogleEmail,
 	)
 	return i, err
 }

@@ -321,3 +321,22 @@ Local teardown needs no GitHub access and continues while builds are paused.
 For early-access approval, set `SUPPORT_OPERATOR_GITHUB_IDS` to numeric user IDs,
 restart the server, then use `/operator/early-access`. Never grant a customer
 Owner/Admin operator authority implicitly. Approval is audited and starts no build.
+
+## Google sign-in and account-link failures
+
+Verify both Google env credentials are present on the server and the Cloud Web
+OAuth client's authorized redirect exactly matches APP_BASE_URL/auth/google/callback.
+For a client in testing, verify the intended account is in its allowed test
+audience. Never paste tokens or client secrets into support/logs. Invalid issuer,
+audience, signature, expiry, nonce or unverified email is refused; retry from the
+sign-in page after correcting provider setup. GitHub login remains available.
+
+An identity-already-connected response is not resolved by matching email or
+reassigning database IDs. Sign in to the original Previa account and use its
+profile to connect an unused second provider. The MVP does not merge two existing
+accounts. For Reviewer invitations verify the exact currently verified email,
+expiry/revocation, creator authority and selected repository scope.
+
+Restore current exports with journalv2-aware binaries and schema46. Older v1
+journals remain accepted, but old binaries must not replay v2. Apply the journal
+before serving traffic as usual. See [36](36-google-sign-in-and-reviewer-invitations.md).

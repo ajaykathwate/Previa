@@ -40,18 +40,19 @@ If this file and those documents disagree, they win and this file is corrected.
 | Feature 5B: persistent test data (F2) | Done, committed; defaults decided; walked through; the owner's hands-on pass is in Part 2 | [docs/32](docs/32-persistent-test-data.md), [report](test-docs/2026-10-17-persistent-test-data-report.md) |
 | F3: finite free allowances | Engineering complete, committed (`f0fc89b`) | [docs/33](docs/33-usage-and-free-plan.md) |
 | F4: account exits, support and deletion | Engineering complete, committed (`9ca5c64`) | [docs/34](docs/34-accounts-support-and-deletion.md) |
-| F5: missed installation deliveries | Engineering complete, tested; not committed | [docs/35](docs/35-installation-recovery-and-early-access.md) |
-| F6: operator approval per workspace | Implemented, owner decision recorded; not committed | [docs/35](docs/35-installation-recovery-and-early-access.md) |
-| Current work | F5/F6 are local changes on `mvp-complete`; no commit, push or deployment in this task | [F5/F6 report](test-docs/2026-10-19-installation-recovery-and-early-access-report.md) |
+| F5: missed installation deliveries | Engineering complete, committed (`bb4f970`) | [docs/35](docs/35-installation-recovery-and-early-access.md) |
+| F6: operator approval per workspace | Engineering complete, committed (`bb4f970`) | [docs/35](docs/35-installation-recovery-and-early-access.md) |
+| F7: Google sign-in and email Reviewer invitations | Engineering complete, tested and committed | [docs/36](docs/36-google-sign-in-and-reviewer-invitations.md) |
+| Current work | Final owner-requested MVP addition F7 committed on `mvp-complete`; no push or deployment | [F7 report](test-docs/2026-10-20-google-sign-in-report.md) |
 | Out of this release | Feature 4, GitHub review-status projection (step E), paid subscriptions (§9.4, step J), the third reference journey, notification integrations | spec §1.2 |
 
-**Feature implementation status:** all in-scope F0–F6 engineering work is complete.
+**Feature implementation status:** all in-scope F0–F7 engineering work is complete and tested.
 This does **not** mark the whole file complete: owner hands-on/policy acceptance,
 commit/push, release-candidate rehearsal and deployment/live checks remain open.
 
 Original implementation order: F0 → F1 → **F2 Feature 5B** → **F3 and F4
 Feature 6 (free plan)** → F5 missed-uninstall detection → F6 the early-access
-decision → Part 2 → Part 3.
+decision → **F7 Google login and email Reviewer invitations** (owner addition, 20 October) → Part 2 → Part 3.
 
 ---
 
@@ -413,13 +414,42 @@ explains that abuse reports about previews go to the host.
 **Implementation:** [docs/35](docs/35-installation-recovery-and-early-access.md).
 Owner manual acceptance, requested commit and deployment remain separate gates.
 
+### F7 · Google sign-in and email Reviewer invitations
+
+**Decision (owner, 20 October 2026):** add Google alongside GitHub as the final
+MVP feature. Login method identifies a person; workspace membership assigns roles.
+
+- [x] Optional Google OpenID Connect login with signed token validation, nonce,
+  PKCE and provider-bound one-use state. Existing GitHub-only settings still work.
+- [x] Google-only signup gets a welcome/join flow without an Owner workspace.
+  Reviewers can join, review and comment without a GitHub account.
+- [x] Explicit CSRF-protected account linking preserves local identity and roles;
+  provider collisions are refused and matching emails never merge accounts.
+- [x] Verified-email Reviewer invitations retain consent, expiry, repository grants
+  and revocation. Copy/share the link; no invitation email is sent.
+- [x] GitHub remains a prerequisite for technical roles and workspace creation;
+  linking alone grants no membership or promotion. F6 approval still applies.
+- [x] Private-preview authorization, account erasure and journal v2 restore cover
+  Google identities; v1 journals remain readable. Migration 46 roundtrip tested.
+- [x] Setup, env examples, design, feature guide and manual rows M1–M9 updated.
+- [x] Final automated regression and screenshot review recorded in the
+  [F7 report](test-docs/2026-10-20-google-sign-in-report.md).
+- [ ] **Owner:** configure a Google Web OAuth client, apply migration 46 and run
+  the live consent/manual rows before release. No real Google credentials created.
+
+**Implementation:** [docs/36](docs/36-google-sign-in-and-reviewer-invitations.md).
+No account-merging workflow or automated email delivery is in this addition.
+
 ### The common gate (every feature)
 
-Latest automated evidence: [F5/F6 report](test-docs/2026-10-19-installation-recovery-and-early-access-report.md).
-Build, vet/lint0, Go51 packages, all94 browser scenarios, migrations44/45,
-all4 E2E journeys, runtime/routing/housekeeping and observability pass. Screenshots
-of all3 new states were reviewed at both widths/themes. Review browser needed a
-fresh rerun; the report retains the initial timeout rather than concealing it.
+Latest automated evidence: [F7 report](test-docs/2026-10-20-google-sign-in-report.md).
+Build, vet/lint0, all52 Go packages with tests, 94 existing +3 new browser
+scenarios, migration46 roundtrip/refusal, all4 real E2E journeys and affected
+private routing pass. Seven changed views reviewed at1440/390 in light/dark.
+The report retains the corrected config-example failure and interrupted test run.
+Runtime/housekeeping/observability internals were unchanged; their prior
+[F5/F6 evidence](test-docs/2026-10-19-installation-recovery-and-early-access-report.md)
+remains the baseline. Owner acceptance and deployment below remain open.
 
 - [x] **Claude:** `make build`; `make lint` with 0 issues; `go test ./...` against
   PostgreSQL. A new migration is applied, rolled back and re-applied in a scratch
@@ -439,7 +469,7 @@ fresh rerun; the report retains the initial timeout rather than concealing it.
   - a test report in `test-docs/`;
   - HANDOFF.md and this file.
 - [ ] **Owner:** the manual test, using the new checklist rows.
-- [ ] **Owner:** asks for the commit; Claude commits on `mvp-complete`.
+- [x] **Owner:** requested one commit; changes committed on `mvp-complete`.
 
 ---
 

@@ -23,6 +23,7 @@ type contextKey uint8
 const (
 	userKey contextKey = iota
 	csrfKey
+	googleLoginKey
 )
 
 // CurrentUser returns the authenticated identity, if one was loaded for the request.
@@ -75,7 +76,7 @@ func (h *Handler) LoadUser(next http.Handler) http.Handler {
 				return
 			default:
 				token := h.sessions.Token(r.Context())
-				r = r.WithContext(components.WithViewer(context.WithValue(r.Context(), userKey, u), components.Viewer{Name: u.DisplayName(), Login: u.Username, Avatar: u.AvatarSrc(), PublicID: u.PublicID}))
+				r = r.WithContext(components.WithViewer(components.WithGitHubConnected(context.WithValue(r.Context(), userKey, u), u.GitHubID > 0), components.Viewer{Name: u.DisplayName(), Login: u.Username, Avatar: u.AvatarSrc(), PublicID: u.PublicID}))
 				r = r.WithContext(realtime.WithSessionCheck(r.Context(), func(ctx context.Context) error {
 					if err := h.sessionExists(ctx, token); err != nil {
 						return err
@@ -91,7 +92,7 @@ func (h *Handler) LoadUser(next http.Handler) http.Handler {
 				}))
 			}
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(components.WithGoogleLogin(context.WithValue(r.Context(), googleLoginKey, h.google != nil), h.google != nil)))
 	})
 }
 
@@ -141,7 +142,10 @@ func RequireUser(next http.Handler) http.Handler {
 // loginDestination preserves safe navigation, never a mutation. HTMX's
 // current document is preferable to returning to a fragment endpoint.
 func loginDestination(r *http.Request) string {
-	const login = "/auth/github/login"
+	login := "/auth/github/login"
+	if enabled, _ := r.Context().Value(googleLoginKey).(bool); enabled {
+		login = "/auth/login"
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return login
 	}

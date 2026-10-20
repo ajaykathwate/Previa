@@ -1051,3 +1051,36 @@ GitHub automated evidence.
 | L7 | Simulate GitHub outage/401/partial listing or all-known revocation | Access remains unchanged; warning/error and operator runbook apply |
 | L8 | Reinstall the deleted App into the same authorized workspace | History/Manual mode preserved; no build starts; another workspace cannot take history |
 | L9 | Redeliver the original loss after reconciliation; restore access | Teardown is not duplicated; restoration never starts a build |
+
+## Google sign-in and reviewing without GitHub
+
+If enabled by the operator, choose **Continue with Google** on the public/sign-in
+page. A new account without GitHub sees a welcome page explaining how to join a
+workspace. Ask your team to invite your verified email as Reviewer; they copy
+the invitation link to you manually. Previa does not send invitation emails.
+
+Open the link, sign in with its addressed account/verified email, inspect the
+workspace/repository access, then accept. You can open shared previews (including
+private ones), follow testing instructions and leave findings/comments without
+GitHub. Signing in or possessing a URL does not grant access on its own.
+
+Already use Previa? Sign in with your original method and connect the second one
+from **Your profile** first. Matching email addresses do not merge accounts, and
+identities already owned by separate accounts cannot be moved. Google can sign
+you into your existing Developer/Admin account after GitHub is connected; GitHub
+can sign you into a Reviewer account. Connecting GitHub never promotes your role.
+A manager must assign technical access, and new workspaces still await approval.
+
+### M. Google identity and email Reviewer invitations (F7)
+
+| ID | Action | Expected |
+| --- | --- | --- |
+| M1 | Configure a real Google Web client, exact callback URI and both env values; restart server | Google appears alongside GitHub; an incomplete credential pair fails configuration |
+| M2 | Sign up with Google without an invitation | Welcome/Workspaces, no Owner workspace; profile shows GitHub not connected |
+| M3 | Invite a verified email as Reviewer and select one repository | Link to copy, no mail sent; email cannot receive a technical role |
+| M4 | Forward link to another verified mailbox, or use an expired/revoked link | Refused; correct recipient can explicitly accept or decline |
+| M5 | Accept as Google-only Reviewer, open granted public/private preview and leave a finding/comment | Works without GitHub; source, logs, build and admin operations remain unavailable |
+| M6 | Remove their repository grant or membership | Preview/review and existing private grants stop; re-invite targets their email |
+| M7 | Existing GitHub user connects Google from profile, signs out and returns using Google | Same local account/memberships/roles/history; no automatic promotion |
+| M8 | Google user connects an unused GitHub identity, then requests Developer access | Account preserved; still Reviewer until manager explicitly changes role; current source permission remains required |
+| M9 | Repeat with scripts off, phone width and dark/light; delete a disposable Google account and rehearse restore | Native forms work; no overflow/CSP errors; profile/email erased, provider tombstone and v2 journal prevent resurrection |

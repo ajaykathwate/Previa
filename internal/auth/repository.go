@@ -18,6 +18,7 @@ import (
 type User struct {
 	ID                                                                                   int64
 	GitHubID                                                                             int64
+	GoogleSubject, GoogleEmail                                                           string
 	Username                                                                             string
 	AvatarURL                                                                            string
 	PublicID, FirstName, LastName, GitHubName, Email, ProfileURL, Bio, Company, Location string
@@ -45,7 +46,7 @@ func (r *Repository) UpsertUser(ctx context.Context, identity Identity) (User, e
 		first, last = "", ""
 	}
 	u, err := r.queries.UpsertUser(ctx, dbgen.UpsertUserParams{
-		GithubID: identity.ID, Username: identity.Username, AvatarUrl: identity.AvatarURL, FirstName: first, LastName: last, GithubName: identity.Name,
+		GithubID: pgtype.Int8{Int64: identity.ID, Valid: identity.ID > 0}, Username: identity.Username, AvatarUrl: identity.AvatarURL, FirstName: first, LastName: last, GithubName: identity.Name,
 		Email: identity.Email, EmailSyncError: identity.EmailSyncError, GithubProfileUrl: identity.ProfileURL, GithubBio: identity.Bio, GithubCompany: identity.Company, GithubLocation: identity.Location,
 		GithubCreatedAt: pgtype.Timestamptz{Time: identity.GitHubCreatedAt, Valid: !identity.GitHubCreatedAt.IsZero()},
 	})
@@ -64,7 +65,7 @@ func (r *Repository) GetUser(ctx context.Context, id int64) (User, error) {
 }
 
 func userFromRow(u dbgen.User) User {
-	return User{ID: u.ID, GitHubID: u.GithubID, Username: u.Username, AvatarURL: u.AvatarUrl, PublicID: uuid.UUID(u.PublicID.Bytes).String(), SessionEpoch: u.SessionEpoch,
+	return User{ID: u.ID, GitHubID: u.GithubID.Int64, GoogleSubject: u.GoogleSubject.String, GoogleEmail: u.GoogleEmail, Username: u.Username, AvatarURL: u.AvatarUrl, PublicID: uuid.UUID(u.PublicID.Bytes).String(), SessionEpoch: u.SessionEpoch,
 		FirstName: u.FirstName, LastName: u.LastName, GitHubName: u.GithubName, Email: u.Email, EmailSyncError: u.EmailSyncError, ProfileURL: u.GithubProfileUrl, Bio: u.GithubBio, Company: u.GithubCompany, Location: u.GithubLocation,
 		ProfileRevision: u.ProfileRevision, AvatarVersion: u.AvatarVersion, CustomAvatar: u.CustomAvatar, JoinedAt: u.CreatedAt.Time, GitHubCreatedAt: u.GithubCreatedAt.Time, ProfileSyncedAt: u.ProfileSyncedAt.Time}
 }

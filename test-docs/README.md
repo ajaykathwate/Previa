@@ -15,7 +15,9 @@ and F3 (workspace usage and finite free allowances) in the
 and F4 (account exits, support/status and restore-safe deletion) in the
 [2026-10-19 account lifecycle report](2026-10-19-accounts-support-and-deletion-report.md),
 and F5/F6 (missed installation recovery and workspace approval) in the
-[2026-10-19 installation recovery and approval report](2026-10-19-installation-recovery-and-early-access-report.md).
+[2026-10-19 installation recovery and approval report](2026-10-19-installation-recovery-and-early-access-report.md),
+and F7 (Google sign-in, explicit identity linking and email Reviewer invitations)
+in the [2026-10-20 Google sign-in report](2026-10-20-google-sign-in-report.md).
 It includes team access/offboarding, migration, browser and worker-pipeline checks;
 the full product regression cycle below remains the earlier baseline.
 
@@ -89,7 +91,7 @@ Each module document has the same shape:
 The commands below are the whole regression. Set up the machine with
 [02 · Development setup](../docs/02-development-setup.md) first. Database tests use
 `TEST_DATABASE_URL`, which should point at a disposable database migrated with
-`make migrate-up` (Goose 45). The tests create isolated schemas; they do not erase
+`make migrate-up` (Goose 46). The tests create isolated schemas; they do not erase
 the development database. Direct Go commands require exported test settings;
 Make's integration targets load `.env` as documented in development setup.
 

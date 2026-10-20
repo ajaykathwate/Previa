@@ -54,10 +54,13 @@ templ WorkspaceSwitcher() {
 							<span class="team-count">{ strconv.FormatInt(w.Invitations, 10) }</span>
 						</a>
 					}
-					<button type="button" commandfor="create-workspace" command="show-modal" data-open-dialog="create-workspace" aria-haspopup="dialog">
+					if GitHubConnected(ctx) {
+<button type="button" commandfor="create-workspace" command="show-modal" data-open-dialog="create-workspace" aria-haspopup="dialog">
 						@PlusIcon()
 						<span>Create workspace</span>
 					</button>
+}
+
 					<a href="/workspaces">
 						@OverviewIcon()
 						<span>All workspaces</span>

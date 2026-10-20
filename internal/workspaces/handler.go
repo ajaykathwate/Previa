@@ -61,6 +61,8 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrUnavailable):
 		http.NotFound(w, r)
 		return
+	case errors.Is(err, ErrGitHubRequired):
+		status, message = http.StatusForbidden, ErrGitHubRequired.Error()
 	case errors.Is(err, ErrInput):
 		status, message = http.StatusBadRequest, "Check the workspace name, GitHub account, role, and selected repositories."
 	case errors.Is(err, ErrLogo):
@@ -70,7 +72,7 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrOwner):
 		status, message = http.StatusConflict, "Transfer ownership to an existing administrator before leaving or removing the owner."
 	case errors.Is(err, ErrInvitation):
-		status, message = http.StatusForbidden, "This invitation is expired, revoked, already answered, or addressed to another GitHub account. Ask an administrator for a new link."
+		status, message = http.StatusForbidden, "This invitation is expired, revoked, already answered, or addressed to another account. Ask an administrator for a new link."
 	case errors.Is(err, ErrSourceUnavailable):
 		message = "GitHub could not verify that account or source permission. Please try again."
 	case errors.Is(err, ErrDeleteMembers), errors.Is(err, ErrDeleteInstallation), errors.Is(err, ErrDeleteConfirmation):
@@ -96,12 +98,12 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	p := pages.Page{ActorID: u, CSRF: h.users.CSRFToken(r.Context())}
+	_, github, _ := h.users.UserIDs(r.Context())
+	p := pages.Page{GitHubConnected: github > 0, ActorID: u, CSRF: h.users.CSRFToken(r.Context())}
 	for _, v := range items {
 		p.Workspaces = append(p.Workspaces, displayWorkspace(v))
 	}
-	_, githubID, _ := h.users.UserIDs(r.Context())
-	if p.Received, err = h.service.ReceivedInvitations(r.Context(), githubID); err != nil {
+	if p.Received, err = h.service.ReceivedForUser(r.Context(), u); err != nil {
 		h.fail(w, r, err)
 		return
 	}
@@ -264,13 +266,13 @@ func (h *Handler) ownership(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) invitation(w http.ResponseWriter, r *http.Request) {
 	u, githubID, _ := h.users.UserIDs(r.Context())
 	token := chi.URLParam(r, "token")
-	v, err := h.service.Invitation(r.Context(), githubID, token)
+	v, err := h.service.InvitationForUser(r.Context(), u, githubID, token)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
 	p := pages.Page{Workspace: pages.Workspace{ID: v.WorkspaceID, Name: v.Name, Role: v.Role}, ActorID: u, CSRF: h.users.CSRFToken(r.Context()), InvitationURL: "/workspace-invitations/" + token}
-	repos, err := h.service.InvitationScope(r.Context(), githubID, token)
+	repos, err := h.service.InvitationScopeForUser(r.Context(), u, githubID, token)
 	if err != nil {
 		h.fail(w, r, err)
 		return

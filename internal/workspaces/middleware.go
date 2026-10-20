@@ -32,7 +32,7 @@ func NewMiddleware(s *Service, u UserSession, l *slog.Logger) *Middleware {
 
 func (m *Middleware) Load(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, githubID, ok := m.users.UserIDs(r.Context())
+		user, _, ok := m.users.UserIDs(r.Context())
 		if !ok {
 			next.ServeHTTP(w, r)
 			return
@@ -51,7 +51,7 @@ func (m *Middleware) Load(next http.Handler) http.Handler {
 			publicid.Redirect(w, r, "/workspaces", http.StatusSeeOther)
 			return
 		}
-		invitations, err := m.service.CountReceivedInvitations(r.Context(), githubID)
+		invitations, err := m.service.CountReceivedForUser(r.Context(), user)
 		if err != nil {
 			m.fail(w, r, err)
 			return

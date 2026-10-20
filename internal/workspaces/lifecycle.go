@@ -95,15 +95,25 @@ func (s *Service) ReinviteForm(ctx context.Context, viewer, wid, subject int64) 
 	if role == "owner" || (role == "admin" && w.Role != "owner") {
 		role = "developer"
 	}
-	return pages.InviteForm{Login: v.Username, Role: role, Repositories: v.RemovedRepositoryIds, Failed: true, Reinvite: true}, nil
+	recipient, e := dbgen.New(s.repo.pool).InvitationRecipientForUser(ctx, subject)
+	if e != nil {
+		return pages.InviteForm{}, accessError(e)
+	}
+	return pages.InviteForm{Login: recipient, Role: role, Repositories: v.RemovedRepositoryIds, Failed: true, Reinvite: true}, nil
 }
 
 // ReceivedInvitations lists pending invitations addressed to a GitHub account.
 func (s *Service) ReceivedInvitations(ctx context.Context, githubID int64) ([]pages.ReceivedInvitation, error) {
-	if githubID <= 0 {
+	return s.receivedInvitations(ctx, 0, githubID)
+}
+func (s *Service) ReceivedForUser(ctx context.Context, user int64) ([]pages.ReceivedInvitation, error) {
+	return s.receivedInvitations(ctx, user, 0)
+}
+func (s *Service) receivedInvitations(ctx context.Context, user, githubID int64) ([]pages.ReceivedInvitation, error) {
+	if githubID <= 0 && user <= 0 {
 		return nil, nil
 	}
-	rows, err := dbgen.New(s.repo.pool).ReceivedInvitations(ctx, githubID)
+	rows, err := dbgen.New(s.repo.pool).ReceivedInvitations(ctx, dbgen.ReceivedInvitationsParams{GithubID: githubID, UserID: user})
 	if err != nil {
 		return nil, fmt.Errorf("list received invitations: %w", err)
 	}
@@ -116,10 +126,16 @@ func (s *Service) ReceivedInvitations(ctx context.Context, githubID int64) ([]pa
 
 // CountReceivedInvitations feeds the workspace switcher's invitation badge.
 func (s *Service) CountReceivedInvitations(ctx context.Context, githubID int64) (int64, error) {
-	if githubID <= 0 {
+	return s.countReceived(ctx, 0, githubID)
+}
+func (s *Service) CountReceivedForUser(ctx context.Context, user int64) (int64, error) {
+	return s.countReceived(ctx, user, 0)
+}
+func (s *Service) countReceived(ctx context.Context, user, githubID int64) (int64, error) {
+	if githubID <= 0 && user <= 0 {
 		return 0, nil
 	}
-	n, err := dbgen.New(s.repo.pool).CountReceivedInvitations(ctx, githubID)
+	n, err := dbgen.New(s.repo.pool).CountReceivedInvitations(ctx, dbgen.CountReceivedInvitationsParams{GithubID: githubID, UserID: user})
 	if err != nil {
 		return 0, fmt.Errorf("count received invitations: %w", err)
 	}

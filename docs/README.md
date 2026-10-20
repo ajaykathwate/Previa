@@ -41,6 +41,8 @@ rest explain how and why it works.
 
 | 35 | [Installation recovery and early access](35-installation-recovery-and-early-access.md) | Missed lifecycle delivery recovery, circuit breakers, operator workspace approval and verification. |
 
+| 36 | [Google sign-in and reviewer invitations](36-google-sign-in-and-reviewer-invitations.md) | Provider-independent roles, explicit login linking, verified-email Reviewer invitations, private previews and restore. |
+
 Related files outside this folder:
 
 - [README.md](../README.md): product requirements, user flow and technology choices.

@@ -345,7 +345,7 @@ test('profile edits names and photo in place and keeps GitHub details in their o
   assert.equal((await admin.context.request.get(origin+src)).status(),200);
   outsider=await session('outsider');
   assert.equal((await outsider.context.request.get(origin+src)).status(),404);
-  await page.getByRole('button',{name:'Use GitHub picture',exact:true}).click();
+  await page.getByRole('button',{name:'Use default picture',exact:true}).click();
   await page.locator('.toast').filter({hasText:'Profile photo removed'}).waitFor();
   assert.equal(await picture.getAttribute('src'),'/static/brand/favicon.svg');
   assert.equal((await admin.context.request.get(origin+src)).status(),404);

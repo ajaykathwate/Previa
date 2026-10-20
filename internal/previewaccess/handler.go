@@ -169,7 +169,11 @@ func (h *Handler) check(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) access(w http.ResponseWriter, r *http.Request) {
 	user, _, signedIn := h.users.UserIDs(r.Context())
 	if !signedIn {
-		publicid.Redirect(w, r, "/auth/github/login?"+url.Values{"next": {r.URL.RequestURI()}}.Encode(), http.StatusSeeOther)
+		login := "/auth/github/login"
+		if options, ok := h.users.(interface{ SignInPath() string }); ok {
+			login = options.SignInPath()
+		}
+		publicid.Redirect(w, r, login+"?"+url.Values{"next": {r.URL.RequestURI()}}.Encode(), http.StatusSeeOther)
 		return
 	}
 	host := strings.ToLower(r.URL.Query().Get("host"))
@@ -270,7 +274,7 @@ func (h *Handler) allowed(ctx context.Context, user int64, label string, p dbgen
 		login, ok = provider.GitHubUsername(ctx)
 	}
 	_, githubID, signedIn := h.users.UserIDs(ctx)
-	if !ok || !signedIn || login == "" {
+	if !ok || !signedIn || githubID <= 0 || login == "" {
 		return false, false, nil
 	}
 	permission, err := h.permissions.RepositoryUserPermission(ctx, p.GithubInstallationID, p.FullName, login, githubID)

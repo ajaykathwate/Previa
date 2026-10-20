@@ -286,3 +286,7 @@ river-ui:
 .PHONY: test-accounts-browser
 test-webhook:
 	@$(load_run_env) python3 deploy/test-webhook.py
+
+.PHONY: test-google-browser
+test-google-browser: assets generate
+	RUN_GOOGLE_BROWSER_TESTS=1 $(GO) test ./internal/accounts -run '^TestGoogleReviewerBrowser$$' -count=1 -v -timeout=8m

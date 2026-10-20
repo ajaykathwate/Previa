@@ -68,6 +68,7 @@ func (h *Handler) renderProfile(w http.ResponseWriter, r *http.Request, status i
 		http.NotFound(w, r)
 		return
 	}
+	p.GoogleEmail, p.GoogleConnected, p.GoogleEnabled = u.GoogleEmail, u.GoogleSubject != "", h.google != nil
 	p.Name, p.Login, p.GitHubID, p.Avatar, p.CustomAvatar = u.DisplayName(), u.Username, u.GitHubID, u.AvatarSrc(), u.CustomAvatar
 	p.PublicID, p.FirstName, p.LastName, p.GitHubName, p.Email, p.EmailSyncError = u.PublicID, u.FirstName, u.LastName, u.GitHubName, u.Email, u.EmailSyncError
 	p.ProfileURL, p.Bio, p.Company, p.Location = u.ProfileURL, u.Bio, u.Company, u.Location

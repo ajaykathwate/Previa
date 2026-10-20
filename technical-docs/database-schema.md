@@ -1033,3 +1033,19 @@ default for new rows. `workspace_approvals` contains one row per approved reques
 `operator_github_id`, and `approved_at`. The workspace revision changes atomically
 with approval. Grandfathered rows need no invented operator audit. An index on
 active pending workspaces supports the operator queue. See [the diagram](database-schema-diagram.md#f5f6-admission-and-reconciliation-supplement).
+
+## F7 identity and invitation supplement (migration0046)
+
+The local `users.id`/public_id remain stable. `users.github_id` becomes nullable
+with its existing unique identity constraint; `google_subject` is optional/unique
+and `google_email` stores the currently verified Google email for invitation
+matching. Names/email are not account keys and never merge users. Provider IDs
+survive deletion as tombstones; Google email is erased.
+
+`workspace_invitations` targets either a numeric GitHub ID or a normalized email,
+never both. Email targets are constrained to Reviewer, have a partial unique
+pending index and retain the existing token digest/expiry/grants. Database triggers
+require GitHub for active technical memberships and ownership. `deletion_journal`
+adds an optional Google subject; exported envelopev2 accepts oldv1 input in the
+new reader. Rollback refuses if Google/email-invitation records exist.
+[Diagram](database-schema-diagram.md#f7-provider-independent-identity-supplement).

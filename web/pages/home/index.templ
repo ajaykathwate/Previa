@@ -435,5 +435,8 @@ templ cta(loggedIn bool) {
 			Get started with GitHub
 			@components.Arrow()
 		}
+ if components.GoogleLoginEnabled(ctx) {
+ <a class="secondary-action" href="/auth/google/login">Continue with Google</a>
+ }
 	}
 }
