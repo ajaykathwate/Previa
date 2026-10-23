@@ -52,7 +52,7 @@ user's point of view is in the
 
 Dependencies point one way: feature handler → page package → layouts/components.
 Use import aliases (`authpages`, `dashboardpages`, `prpages`) where names collide.
-Ownership of routes: `internal/dashboard` (home, overview, session, tools, FAQ, Open Source Tests),
+Ownership of routes: `internal/dashboard` (home, overview, session, tools, FAQ, Open Source Tested),
 `internal/installations` (`/repositories`), `internal/pullrequests` (repository and
 PR pages, Builds, Previews, the event stream), `internal/onboarding` (a
 repository's Setup tab and the Open preview action), `internal/reviews` (a pull
@@ -296,22 +296,20 @@ controls), **Why Previa** (reviewing before and with Previa, and who it helps), 
 does for a pull request, never how it is built or hosted; Previa is presented as a
 hosted service, free during early access.
 
-## Open Source Tests
+## Open Source Tested
 
-`/open-source-tests` (public; `web/pages/opensource`, linked from the site navigation,
-the footer and a home page section) presents the well-known open-source apps Previa
-is tested against: 19 repositories, ten of them the **core ten** that between them
-exercise nearly every capability. Each app is Go data (`Repos`, `Capabilities`) so the
-index, the coverage rows, the counts and the anchors (`#repo-<id>`) cannot drift. A
-card shows the stack, size, configuration effort, architecture and what the app
-proves; **How we test it** (a native `<details>`) holds the `.previewrc.yaml` used
+`/open-source-tests` (public; `web/pages/opensource`, named **Open Source Tested** in the
+site navigation, the footer and a home page section) presents the ten well-known
+open-source projects Previa is tested with; between them they exercise every
+capability listed. Each project is Go data (`Repos`, `Capabilities`) so the index,
+the coverage rows, the counts and the anchors (`#repo-<id>`) cannot drift. A card
+shows the stack, size, configuration effort, architecture and what the project
+covers; **Test it yourself** (a native `<details>`) holds the `.previewrc.yaml` used
 (with a copy button), the secrets set, any changes made to the project, the steps,
 **What must hold** and **Known limits**. Coverage is one row per capability in two
-balanced columns.
+balanced columns. The page shows no per-project test status (owner decision,
+2026-10-23); `TestPageRendersEveryProjectOnceWithoutStatuses` guards that.
 
-- **Keeping it true:** an app shows **In testing** until `Status.Verified` is set to the
-  date every expected result held on a live preview; the hero's verified count appears
-  only once at least one app is verified. Never mark an app verified without running it.
 - `internal/dashboard` tests serve the page signed in and out and parse every published
   `.previewrc.yaml` with `repoconfig.ParseFor` and the default service catalog, so the
   page can't show a configuration Previa would reject.

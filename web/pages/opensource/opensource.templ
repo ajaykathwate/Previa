@@ -8,19 +8,17 @@ import (
 	"github.com/ajaykathwatee/previa/web/layouts"
 )
 
-// Page is the public Open Source Tests page: the open-source apps Previa is
-// tested against, what each one proves and exactly how it is tested. Nothing
-// is called verified unless its Repo.Status says so.
+// Page is the public Open Source Tested page: the ten open-source projects
+// Previa is tested with, what each one covers and exactly how it runs.
 templ Page(loggedIn bool) {
-	@layouts.Document("Open Source Tests") {
+	@layouts.Document("Open Source Tested") {
 		@components.Navbar(loggedIn)
 		<main id="content" tabindex="-1" class="marketing lab">
 			@intro()
 			@method()
 			@index()
 			@coverage()
-			@repoSection("core", "The core ten", "Ten apps that cover ", "the whole journey.", coreLead(), Core())
-			@repoSection("more", "Beyond the core", "More languages, ", "harder edges.", "Rust, Elixir, .NET, Nuxt, a Docker Compose project and more, including the builds that push hardest against preview limits.", More())
+			@repoSection("projects", "The projects", "Ten projects, ", "the whole journey.", projectsLead(), Repos())
 			@closing(loggedIn)
 		</main>
 		@components.SiteFooter()
@@ -31,25 +29,20 @@ templ intro() {
 	<header class="lab-hero" aria-labelledby="lab-title">
 		<div class="hero-backdrop" aria-hidden="true"><span class="hero-grid"></span><span class="hero-glow"></span></div>
 		<div class="site-container">
-			<span class="eyebrow reveal">Open Source Tests</span>
+			<span class="eyebrow reveal">Open Source Tested</span>
 			<h1 id="lab-title" class="lab-title reveal delay-1">Real apps, <em>not toy demos.</em></h1>
-			<p class="lab-lead reveal delay-2">A preview platform is only as good as the projects it can run. So we test Previa against well-known open-source apps: static sites, full-stack products, and APIs with databases, queues and workers, in TypeScript, Go, Python, Ruby, Java, PHP and more. Each one below shows its stack, what it proves and exactly how we test it.</p>
+			<p class="lab-lead reveal delay-2">A preview platform is only as good as the projects it can run. Previa is tested with ten well-known open-source projects: static sites, full-stack products, and APIs with databases, queues and workers, in TypeScript, Go, Python, Ruby, Java and PHP. Each one below shows its stack, what it covers and exactly how it runs on Previa.</p>
 			<dl class="lab-stats reveal delay-3">
-				<div><dt>{ strconv.Itoa(len(Repos())) }</dt><dd>open-source apps</dd></div>
+				<div><dt>{ strconv.Itoa(len(Repos())) }</dt><dd>open-source projects</dd></div>
 				<div><dt>{ strconv.Itoa(len(Capabilities())) }</dt><dd>capabilities exercised</dd></div>
 				<div><dt>3</dt><dd>managed services: PostgreSQL, MySQL and Redis</dd></div>
-				if VerifiedCount() > 0 {
-					<div><dt>{ strconv.Itoa(VerifiedCount()) }</dt><dd>verified end to end on a live preview</dd></div>
-				} else {
-					<div><dt>{ strconv.Itoa(len(Core())) }</dt><dd>core apps covering the whole journey</dd></div>
-				}
+				<div><dt>6</dt><dd>languages, from TypeScript to PHP</dd></div>
 			</dl>
 			<nav class="lab-jump reveal delay-3" aria-label="On this page">
 				<a href="#method">How we test</a>
-				<a href="#all">Every app</a>
+				<a href="#all">Every project</a>
 				<a href="#coverage">Coverage</a>
-				<a href="#core">The core ten</a>
-				<a href="#more">Beyond the core</a>
+				<a href="#projects">The projects</a>
 			</nav>
 		</div>
 	</header>
@@ -62,7 +55,7 @@ templ method() {
 			<div class="lab-before-intro">
 				<span class="eyebrow">How we test</span>
 				<h2 id="method-title">The same routine, <em>every app.</em></h2>
-				<p>Each app runs as a customer's would: its own code and Dockerfile, a real pull request and the same checks. Any change a project needs is listed with it, and an app is marked verified only when every expected result holds.</p>
+				<p>Each project runs as a customer's would: its own code and Dockerfile, a real pull request and the same checks. Any change a project needs is listed with it.</p>
 			</div>
 			<ol class="lab-routine">
 				<li><strong>The project's own code.</strong> A copy of the upstream repository, changed only where its test says so.</li>
@@ -70,7 +63,7 @@ templ method() {
 				<li><strong>Its own Dockerfile, or a Starter kit.</strong> Projects without one get the files Previa's Starter kits write.</li>
 				<li><strong>Real services.</strong> Managed PostgreSQL, MySQL or Redis, setup commands, workers and secrets, as the app needs them.</li>
 				<li><strong>Checks that matter.</strong> Health, the app's own features, and the lifecycle: rebuilds, failures, forks, cleanup.</li>
-				<li><strong>Verified, or not yet.</strong> Each result is dated. Known limits are published beside it, not hidden.</li>
+				<li><strong>Limits in the open.</strong> Anything a project needs to know is published beside it, not hidden.</li>
 			</ol>
 		</div>
 	</section>
@@ -79,20 +72,19 @@ templ method() {
 templ index() {
 	<section id="all" class="site-container lab-section" aria-labelledby="all-title">
 		<div class="lab-heading" data-scroll-reveal>
-			<span class="eyebrow">Every app</span>
+			<span class="eyebrow">Every project</span>
 			<h2 id="all-title">From a static editor <em>to a commerce API.</em></h2>
-			<p>Stack, size and configuration effort at a glance. Select an app to see what it proves and how we test it.</p>
+			<p>Stack, size and configuration effort at a glance. Select a project to see what it covers and how to test it yourself.</p>
 		</div>
 		<div class="lab-table-wrap" role="region" aria-labelledby="all-title" tabindex="0" data-scroll-reveal>
 			<table class="lab-table">
 				<thead>
 					<tr>
-						<th scope="col">App</th>
+						<th scope="col">Project</th>
 						<th scope="col" class="lab-col-wide">Type</th>
 						<th scope="col" class="lab-col-wide">Stack</th>
 						<th scope="col" class="lab-col-wide">Size</th>
 						<th scope="col">Config</th>
-						<th scope="col">Status</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -100,17 +92,11 @@ templ index() {
 						<tr>
 							<th scope="row">
 								<a href={ components.PublicURL(ctx, templ.URL("#repo-"+r.ID)) }><span class="lab-owner">{ r.Owner() }/</span>{ r.Title() }</a>
-								if r.Core {
-									<span class="lab-core">Core</span>
-								}
 							</th>
 							<td class="lab-col-wide">{ r.Kind }</td>
 							<td class="lab-col-wide lab-mono">{ r.StackLine() }</td>
 							<td class="lab-col-wide">{ r.Size }</td>
 							<td>{ r.Level }</td>
-							<td>
-								@StatusBadge(r.Status)
-							</td>
 						</tr>
 					}
 				</tbody>
@@ -125,7 +111,7 @@ templ coverage() {
 		<div class="lab-heading" data-scroll-reveal>
 			<span class="eyebrow">Coverage</span>
 			<h2 id="coverage-title">Every capability, <em>on real code.</em></h2>
-			<p>Each part of Previa below is exercised by at least one real app. Highlighted apps are in the core ten.</p>
+			<p>Each part of Previa below is exercised by at least one of the ten projects.</p>
 		</div>
 		<div class="lab-coverage" data-scroll-reveal>
 			for i, group := range CapabilityGroups() {
@@ -137,7 +123,7 @@ templ coverage() {
 								<span class="lab-cap">{ c.Name }</span>
 								<span class="lab-cap-repos">
 									for _, r := range Covering(c.ID) {
-										<a href={ components.PublicURL(ctx, templ.URL("#repo-"+r.ID)) } class={ "lab-mini", templ.KV("is-core", r.Core) } title={ r.Name }>{ r.Label() }</a>
+										<a href={ components.PublicURL(ctx, templ.URL("#repo-"+r.ID)) } class="lab-mini is-core" title={ r.Name }>{ r.Label() }</a>
 									}
 								</span>
 							</li>
@@ -164,16 +150,13 @@ templ repoSection(id, eyebrow, title, accent, lead string, repos []Repo) {
 	</section>
 }
 
-// card is one app: what it is and proves, then how we test it behind a
-// native disclosure.
+// card is one project: what it is and covers, then how to test it yourself
+// behind a native disclosure.
 templ card(r Repo) {
 	<article id={ "repo-" + r.ID } class="lab-repo" aria-labelledby={ "repo-" + r.ID + "-title" } data-scroll-reveal>
 		<div class="lab-repo-head">
 			<div class="lab-repo-name">
 				<p class="lab-repo-meta">
-					if r.Core {
-						<span class="lab-core">Core</span>
-					}
 					<span>{ r.Kind }</span>
 					<span aria-hidden="true">·</span>
 					<span>{ r.Size }</span>
@@ -188,7 +171,6 @@ templ card(r Repo) {
 					</a>
 				</h3>
 			</div>
-			@StatusBadge(r.Status)
 		</div>
 		<p class="lab-repo-why">{ r.Why }</p>
 		<ul class="lab-stack" aria-label="Tech stack">
@@ -209,13 +191,10 @@ templ card(r Repo) {
 				</dd>
 			</div>
 		</dl>
-		if r.Status.Note != "" {
-			<p class="lab-repo-note">{ r.Status.Note }</p>
-		}
 		<details class="lab-plan">
 			<summary>
 				@components.ChevronDownIcon()
-				<span>How we test it</span>
+				<span>Test it yourself</span>
 				<small>{ planSummary(r) }</small>
 			</summary>
 			<div class="lab-plan-body">
@@ -315,14 +294,4 @@ templ closing(loggedIn bool) {
 			}
 		</div>
 	</section>
-}
-
-// StatusBadge says whether an app has passed every check on a live preview.
-// Nothing is marked verified until Status.Verified is set.
-templ StatusBadge(s Status) {
-	if s.Verified != "" {
-		<span class="badge tone-ok"><span class="badge-dot" aria-hidden="true"></span>Verified { s.Verified }</span>
-	} else {
-		<span class="badge badge-quiet tone-info"><span class="badge-dot" aria-hidden="true"></span>In testing</span>
-	}
 }

@@ -33,7 +33,7 @@ func (h *handler) home(w http.ResponseWriter, r *http.Request) {
 	templ.Handler(homepages.Index(loggedIn)).ServeHTTP(w, r)
 }
 
-// openSourceTests shows the public Open Source Tests to everyone, signed in or not.
+// openSourceTests shows the public Open Source Tested page to everyone, signed in or not.
 func (h *handler) openSourceTests(w http.ResponseWriter, r *http.Request) {
 	_, loggedIn := h.users.Username(r.Context())
 	templ.Handler(opensourcepages.Page(loggedIn)).ServeHTTP(w, r)

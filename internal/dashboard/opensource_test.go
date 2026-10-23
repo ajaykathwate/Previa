@@ -12,7 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func TestOpenSourceTestsArePublicAndLinkedFromHome(t *testing.T) {
+func TestOpenSourceTestedIsPublicAndLinkedFromHome(t *testing.T) {
 	pass := func(next http.Handler) http.Handler { return next }
 	for name, users := range map[string]UserSession{"signed out": anonymousSession{}, "signed in": signedIn{}} {
 		r := chi.NewRouter()
@@ -22,7 +22,7 @@ func TestOpenSourceTestsArePublicAndLinkedFromHome(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s /open-source-tests: %d", name, w.Code)
 		}
-		for _, want := range []string{"<title>Open Source Tests | Previa</title>", `id="repo-mermaid-live-editor"`, `id="coverage"`, "In testing", `href="/open-source-tests"`} {
+		for _, want := range []string{"<title>Open Source Tested | Previa</title>", `id="repo-mermaid-live-editor"`, `id="coverage"`, ">Open Source Tested</a>", `href="/open-source-tests"`} {
 			if !strings.Contains(w.Body.String(), want) {
 				t.Errorf("%s /open-source-tests lacks %q", name, want)
 			}
@@ -40,7 +40,7 @@ func TestOpenSourceTestsArePublicAndLinkedFromHome(t *testing.T) {
 	}
 }
 
-// Every configuration the Open Source Tests publish is accepted by Previa's own
+// Every configuration Open Source Tested publishes is accepted by Previa's own
 // parser with the default service catalog, so the page never shows a
 // configuration Previa would reject.
 func TestOpenSourceTestConfigsPassPreviasRules(t *testing.T) {

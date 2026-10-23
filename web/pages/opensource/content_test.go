@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 var (
@@ -52,23 +51,19 @@ func TestEveryAppHasACompleteTest(t *testing.T) {
 				t.Errorf("%s: unbalanced code marks in %q", r.ID, text)
 			}
 		}
-		if v := r.Status.Verified; v != "" {
-			if _, err := time.Parse(time.DateOnly, v); err != nil {
-				t.Errorf("%s: Verified must be a YYYY-MM-DD date, got %q", r.ID, v)
-			}
-		}
 	}
 	for id := range caps {
 		if len(Covering(id)) == 0 {
 			t.Errorf("no repository exercises %q", id)
 		}
 	}
-	if len(Core()) != 10 {
-		t.Errorf("the core set has %d repositories, want 10", len(Core()))
+	if len(Repos()) != 10 {
+		t.Errorf("%d projects, want exactly ten", len(Repos()))
 	}
 }
 
-func TestPageRendersEveryRepositoryOnceAndClaimsNothingUnverified(t *testing.T) {
+// The page lists each project once and never shows a test status.
+func TestPageRendersEveryProjectOnceWithoutStatuses(t *testing.T) {
 	var page strings.Builder
 	if err := Page(false).Render(context.Background(), &page); err != nil {
 		t.Fatal(err)
@@ -82,9 +77,13 @@ func TestPageRendersEveryRepositoryOnceAndClaimsNothingUnverified(t *testing.T) 
 			t.Errorf("%s is missing from the index", r.ID)
 		}
 	}
-	unverified := len(Repos()) - VerifiedCount()
-	if n := strings.Count(html, "In testing"); n != 2*unverified {
-		t.Errorf("%d unverified badges, want %d (index and card)", n, 2*unverified)
+	if n := strings.Count(html, "<span>Test it yourself</span>"); n != len(Repos()) {
+		t.Errorf("Test it yourself appears %d times, want one per project (%d)", n, len(Repos()))
+	}
+	for _, status := range []string{"In testing", "Verified", "Not yet", "Core", ">Status<"} {
+		if strings.Contains(html, status) {
+			t.Errorf("page shows a test status: %q", status)
+		}
 	}
 	for _, unsafe := range []string{"<script>alert", "&lt;code&gt;"} {
 		if strings.Contains(html, unsafe) {
