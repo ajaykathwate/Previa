@@ -2,9 +2,7 @@
 Last updated: 2026-10-23
 
 ## Latest task — owner requests after the regression (committed)
-- Branch mvp-complete: regression (7c5ce97..d216e7d), landing page (4404700), then
-  Open Source Tested and account switching/operator check/stable browser tests.
-  Nothing pushed. Commit only when the owner asks; push to main only.
+- Branch mvp-complete, PR #2 into master. Commit only when the owner asks.
 - Open Source Tested (nav/footer/home/page title; URL /open-source-tests kept): ten
   projects (mermaid-live-editor, umami, miniflux, fastapi template, bakerydemo,
   saleor, sure, spring-petclinic, bookstack, docmost); no per-project status or Core
@@ -20,9 +18,8 @@ Last updated: 2026-10-23
 - Flaky browser tests: root cause was the live stream's first refetch swapping the
   panel; htmx wires new fields after its 20 ms settle, so a fill in that window
   was lost. ui.test.cjs liveIdle() now waits before typing on live pages.
-- Google sign-in needs the owner's Google OAuth Web client (docs/02 F7 section);
-  local .env has no GOOGLE_OAUTH_* yet, so sign-in is GitHub-only there.
-- Committed (2026-10-23): .previewrc.yaml so Previa previews itself (dashboard
+- Google sign-in: the owner created a Google OAuth client locally (docs/02 F7).
+- .previewrc.yaml so Previa previews itself (dashboard
   on managed PostgreSQL 17, setup previa-migrate up; secrets SESSION_SECRET and a
   previews GitHub OAuth App; APP_BASE_URL added after the first build; docs/02
   "Preview Previa on Previa"); Dockerfile stage order now ends with server (release
@@ -33,7 +30,10 @@ Last updated: 2026-10-23
   (go-jose is a direct import; CI runs go mod tidy + git diff), and the running-build
   browser scenario read the tracker across a live-refresh swap (now one snapshot).
   Local replay of the checks job: generate, build, lint, vuln, race suite 54 pkgs,
-  observability; browser 55/55.
+  observability; browser 55/55. The Docker job's prod smoke then failed in the backup
+  drill: deletion-journal.sh was 100644 in Git (added from /mnt/c), so backup.sh and
+  the systemd journal unit could not run it in production either. Now 100755, guarded
+  by TestDeployScriptsAreExecutableInGit; full smoke incl. drill run from a Linux clone.
 - Every command may be prefixed /home/ajaykathwatee/.local/bin/rtk. No subagents.
   Do not edit technical-docs/inside-previa.md.
 

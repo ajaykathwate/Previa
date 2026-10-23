@@ -155,6 +155,11 @@ go mod download
 go mod download -modfile=tools/go.mod
 ```
 
+A checkout under `/mnt/c` (WSL) has `core.fileMode=false`, so Git records no
+executable bit for a new script. Mark scripts the server runs directly when you add
+them, for example `git update-index --chmod=+x deploy/production/new-script.sh`;
+`TestDeployScriptsAreExecutableInGit` (in `internal/app`) fails until you do.
+
 `.env` is Git-ignored and grouped by process. Never commit it, print it or share it.
 Every line of `.env.example` is uncommented and has a one-line label above it:
 `[Required]` (the process does not start without it), `[Required for <step>]`
