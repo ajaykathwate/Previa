@@ -41,6 +41,27 @@ func CanManage(ctx context.Context) bool {
 	}
 	return w.ID > 0 && (w.Role == "owner" || w.Role == "admin")
 }
+
+// HasWorkspace reports whether the viewer works in a workspace, so
+// workspace pages such as Previews have something to show.
+func HasWorkspace(ctx context.Context) bool {
+	w, present := ctx.Value(workspaceKey{}).(WorkspaceShell)
+	return !present || w.ID > 0
+}
+
+// LandingURL is where the signed-in viewer's work starts: the Overview,
+// Previews for a Reviewer, or the workspace chooser without a workspace.
+func LandingURL(ctx context.Context) string {
+	w, present := ctx.Value(workspaceKey{}).(WorkspaceShell)
+	switch {
+	case present && w.ID == 0:
+		return "/workspaces"
+	case present && w.Role == "reviewer":
+		return "/previews"
+	}
+	return "/dashboard"
+}
+
 func WorkspaceInitial(name string) string {
 	for _, r := range name {
 		return string(r)

@@ -40,8 +40,14 @@ type Page struct {
 	Total, Number, Pages, Start, End, Installations int64
 	Search, Access                                  string
 	Enabled, Connected                              bool
-	Query                                           string
+	// AwaitingApproval: the workspace may not connect code until an operator
+	// approves it (early access).
+	AwaitingApproval bool
+	Query            string
 }
+
+// CanConnect reports whether the connection button is offered (to managers).
+func (p Page) CanConnect() bool { return p.Enabled && !p.AwaitingApproval }
 
 // Navigation is local and whitelisted; the PR number selects a dedicated path.
 func WorkspaceURL(repoID int64, query url.Values) string {

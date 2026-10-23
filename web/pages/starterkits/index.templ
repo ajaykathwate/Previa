@@ -89,11 +89,13 @@ templ stackSection(p Page) {
 templ servicesSection(p Page) {
 	<fieldset class="kit-section">
 		<legend class="kit-section-title">Services</legend>
-		<div class="kit-rows">
-			@service("postgres", "PostgreSQL", "Sets DATABASE_URL", p.Form.Postgres, components.DatabaseIcon(), p.ProblemFor("postgres"))
-			@service("redis", "Redis", "Sets REDIS_URL", p.Form.Redis, components.ServerIcon(), p.ProblemFor("redis"))
-			@service("mysql", "MySQL", "Sets MYSQL_URL", p.Form.MySQL, components.DatabaseIcon(), p.ProblemFor("mysql"))
-		</div>
+		if len(p.Form.Postgres.Versions)+len(p.Form.Redis.Versions)+len(p.Form.MySQL.Versions) > 0 {
+			<div class="kit-rows">
+				@service("postgres", "PostgreSQL", "Sets DATABASE_URL", p.Form.Postgres, components.DatabaseIcon(), p.ProblemFor("postgres"))
+				@service("redis", "Redis", "Sets REDIS_URL", p.Form.Redis, components.ServerIcon(), p.ProblemFor("redis"))
+				@service("mysql", "MySQL", "Sets MYSQL_URL", p.Form.MySQL, components.DatabaseIcon(), p.ProblemFor("mysql"))
+			</div>
+		}
 		<p class="kit-hint">
 			@components.InfoIcon()
 			Each preview gets its own, empty. { p.Offer }
@@ -101,7 +103,9 @@ templ servicesSection(p Page) {
 	</fieldset>
 }
 
+// service offers one managed service; one this server cannot run is not shown.
 templ service(id, name, hint string, s Service, icon templ.Component, problem string) {
+	if len(s.Versions) > 0 {
 	<div class={ "kit-row", templ.KV("is-on", s.On) }>
 		<label class="kit-row-main" for={ "kit-" + id }>
 			<span class="kit-row-icon" aria-hidden="true">
@@ -119,11 +123,12 @@ templ service(id, name, hint string, s Service, icon templ.Component, problem st
 				}
 			</div>
 		}
-		<input class="kit-switch" type="checkbox" role="switch" id={ "kit-" + id } name={ id } value="on" checked?={ s.On } disabled?={ len(s.Versions) == 0 }/>
+		<input class="kit-switch" type="checkbox" role="switch" id={ "kit-" + id } name={ id } value="on" checked?={ s.On }/>
 		if problem != "" {
 			<p class="kit-field-problem">{ problem }</p>
 		}
 	</div>
+	}
 }
 
 templ extrasSection(p Page) {
@@ -374,10 +379,12 @@ templ guide(p Page) {
 				<li>Commit them on a branch and open a pull request.</li>
 				<li>On the pull request's page, choose <strong>Build latest commit</strong>, or let Automatic builds start it.</li>
 			</ol>
-			<a class="text-link kit-repos-link" href="/repositories">
-				Open your repositories
-				@components.Arrow()
-			</a>
+			if components.CanOperate(ctx) {
+				<a class="text-link kit-repos-link" href="/repositories">
+					Open your repositories
+					@components.Arrow()
+				</a>
+			}
 		</section>
 		if len(p.Notes) > 0 {
 			<section class="kit-card kit-notes" aria-labelledby="kit-notes-title">

@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -25,7 +26,18 @@ func TestRepositoryPageEscapesDataAndPreservesFilters(t *testing.T) {
 	if err := Index("owner", "csrf", data).Render(context.Background(), &output); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output.String(), "/installations/start") || !strings.Contains(output.String(), "Not configured") {
-		t.Fatal("unconfigured installation action enabled")
+	// Not configured: no connection form and no dead button, only the reason.
+	if strings.Contains(output.String(), "/installations/start") || !strings.Contains(output.String(), "not configured on this server") ||
+		regexp.MustCompile(`<button[^>]*\sdisabled(\s|=|>)`).MatchString(output.String()) {
+		t.Fatal("unconfigured installation action offered")
+	}
+	output.Reset()
+	data.Enabled, data.AwaitingApproval = true, true
+	if err := Index("owner", "csrf", data).Render(context.Background(), &output); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "/installations/start") || !strings.Contains(output.String(), "early access is approved") ||
+		!strings.Contains(output.String(), `href="/early-access"`) {
+		t.Fatal("a pending workspace must explain why it cannot connect yet, not offer the button")
 	}
 }

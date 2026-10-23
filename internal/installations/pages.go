@@ -3,6 +3,7 @@ package installations
 import (
 	"errors"
 	"github.com/ajaykathwatee/previa/internal/platform/publicid"
+	"github.com/ajaykathwatee/previa/internal/platform/scope"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -64,6 +65,15 @@ func (h *Handler) repositories(w http.ResponseWriter, r *http.Request) {
 	if partial && r.Header.Get("HX-Target") == "repository-results" {
 		publicid.Handler(r, repositorypages.Results(page), page).ServeHTTP(w, r)
 		return
+	}
+	if h.approval != nil && page.Enabled {
+		allowed, err := h.approval.Allowed(r.Context(), scope.WorkspaceID(r.Context()))
+		if err != nil {
+			h.logger.ErrorContext(r.Context(), "read workspace approval", "error", err)
+			h.fail(w, r, http.StatusServiceUnavailable, "Repository connections are temporarily unavailable. Please try again.")
+			return
+		}
+		page.AwaitingApproval = !allowed
 	}
 	page.Connected = h.sessions.PopString(r.Context(), "installation_notice") == "linked"
 	username, _ := h.users.Username(r.Context())

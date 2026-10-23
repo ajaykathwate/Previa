@@ -290,7 +290,7 @@ readable without JavaScript, with Copy and Download). On PR details, log links
 open the latest 300 events below the main card, with a link to the full page.
 Log viewers include copyable inline dates and Previa/application source filters
 (both shown by default), plus literal text search. When no worker that can build
-is running, the build action is shown disabled with the reason and the fix (for
+is running, no build action is offered: the page states the reason and the fix (for
 example a worker without a preview domain), and the endpoints refuse with 503
 instead of recording work.
 See the [user guide](technical-docs/user-guide.md) for the current browser workflow.

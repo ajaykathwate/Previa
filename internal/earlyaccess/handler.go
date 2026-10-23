@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"github.com/ajaykathwatee/previa/internal/platform/scope"
 	pages "github.com/ajaykathwatee/previa/web/pages/earlyaccess"
@@ -130,7 +131,9 @@ func (h *Handler) Guard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.Method == http.MethodGet {
+		// Pages and plain forms (such as Install GitHub) go to the status page,
+		// which explains what is pending; in-page requests show this text.
+		if r.Method == http.MethodGet || (r.Header.Get("HX-Request") != "true" && !httpx.WantsJSON(r)) {
 			http.Redirect(w, r, "/early-access", http.StatusSeeOther)
 			return
 		}

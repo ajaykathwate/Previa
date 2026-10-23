@@ -29,7 +29,7 @@ templ Protected(username string, csrfToken string) {
 				<div><dt>GitHub session</dt><dd>Unaffected when you log out of Previa</dd></div>
 			</dl>
 			<div class="session-actions">
-				@button.Button(button.Props{Href: "/dashboard", Variant: button.VariantOutline}) {
+				@button.Button(button.Props{Href: components.LandingURL(ctx), Variant: button.VariantOutline}) {
 					@components.ArrowLeft()
 					Back to dashboard
 				}

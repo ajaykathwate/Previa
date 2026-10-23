@@ -38,7 +38,8 @@ findings); Reviewers from **Review** on Previews, from the review link, or from 
 pull request link (which redirects them here). One compact page, no tabs:
 
 - **Header:** title, repository and number, state, author, branch, live-update
-  indicator, **Copy review link** and **View on GitHub**.
+  indicator, **Copy review link** and, for people who work with the code (not
+  Reviewers, who often cannot open the repository on GitHub), **View on GitHub**.
 - **How to test** (main column): summary, numbered steps, expected result and
   optional start and docs pages, which open inside the preview. People who can
   build edit them in place; others read them.
@@ -116,7 +117,9 @@ against. Previa does not claim to know which bytes another browser tab showed.
 
 The workspace guard lets Reviewers use only the review page and its forms, the
 repository's change stream and Open preview on repository paths; logs, output,
-builds, secrets and settings stay closed, and forged requests get 404. Every query
+builds, secrets, settings, Starter kits, Developer tools and Early access stay
+closed (pages redirect to Previews, forged requests get 404). Their sidebar offers
+only Previews, Members and help. Every query
 checks `workspace_repository_access` again (preview for feedback, operate for
 instructions and moderation). A write locks the pull request (key share), then the
 writer's active membership (share), then the pull request's counters: removing a

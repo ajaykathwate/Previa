@@ -21,7 +21,9 @@ templ CommandPalette() {
 						@CommandItem("cmd-tools", "/developer-tools", "", "Developer tools", "Queue diagnostics", "ping river worker queue", TerminalIcon())
 					}
 				}
-				@CommandItem("cmd-previews", "/previews", "", "Previews", "Live previews and their links", "environments deployments live links expiry", EnvironmentIcon())
+				if HasWorkspace(ctx) {
+					@CommandItem("cmd-previews", "/previews", "", "Previews", "Live previews and their links", "environments deployments live links expiry", EnvironmentIcon())
+				}
 				if Workspace(ctx).ID>0 {
 					@CommandItem("cmd-members", WorkspaceURL(Workspace(ctx).ID, "members"), "", "Members", "Workspace members and invitations", "people team invite roles access", TeamIcon())
 					if CanManage(ctx) {

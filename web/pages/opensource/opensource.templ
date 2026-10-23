@@ -302,7 +302,7 @@ templ closing(loggedIn bool) {
 			<h2 id="lab-closing-title">Your stack <em>is next.</em></h2>
 			<p>Connect a repository and see your own pull requests running. Previa is free while it's in early access.</p>
 			if loggedIn {
-				@button.Button(button.Props{Href: "/dashboard", Class: "hero-cta", Size: button.SizeLg}) {
+				@button.Button(button.Props{Href: components.LandingURL(ctx), Class: "hero-cta", Size: button.SizeLg}) {
 					Open your dashboard
 					@components.Arrow()
 				}

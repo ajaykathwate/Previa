@@ -105,7 +105,7 @@ GITHUB_APP_CLIENT_ID=your-github-app-client-id
 GITHUB_APP_CLIENT_SECRET=your-github-app-client-secret
 ```
 
-The server requires all five or none (none = linking visibly disabled). It rejects
+The server requires all five or none (none = linking not offered; the Repositories page says it is not configured). It rejects
 unreadable keys and key files readable by group/other. Workers need only App ID
 and key path. Keys, secrets and tokens never reach templates, records or logs.
 

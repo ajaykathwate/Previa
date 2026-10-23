@@ -34,7 +34,7 @@ templ Navbar(loggedIn bool) {
 			<div class="site-nav-actions">
 				@ThemeToggle()
 				if loggedIn {
-					@button.Button(button.Props{Href: "/dashboard", Class: "nav-cta"}) {
+					@button.Button(button.Props{Href: LandingURL(ctx), Class: "nav-cta"}) {
 						Open dashboard
 						@Arrow()
 					}

@@ -66,7 +66,11 @@ for(const js of [true,false]){
    if(js){await page.reload();await shots(page,'early-access-pending');}
    const publicID=await page.locator('main code').first().innerText();
    const csrf=await page.locator('input[name=csrf_token]').first().getAttribute('value');
-   assert.equal((await context.request.post(`${origin}/installations/start`,{form:{csrf_token:csrf},maxRedirects:0})).status(),403);
+   // A form posted anyway returns to the status page; an in-page request gets the reason.
+   const posted=await context.request.post(`${origin}/installations/start`,{form:{csrf_token:csrf},maxRedirects:0});
+   assert.equal(posted.status(),303);assert.equal(posted.headers().location,'/early-access');
+   const inPage=await context.request.post(`${origin}/installations/start`,{form:{csrf_token:csrf},headers:{'HX-Request':'true'},maxRedirects:0});
+   assert.equal(inPage.status(),403);assert.match(await inPage.text(),/early-access approval/);
    await page.goto(`${origin}/help`);assert.equal(await page.getByRole('button',{name:'Send request',exact:true}).count(),1);
    const nonoperator=await browser.newContext({javaScriptEnabled:js});
    try{

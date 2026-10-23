@@ -68,8 +68,13 @@ it does not alter stored approvals. Re-enabling it again gates pending workspace
 The sidebar's **Early access** page (`/early-access`) shows the selected workspace's
 actual status and a copyable reference. Creation leads a pending workspace to this
 page. Its request is already recorded; no extra application form is required.
-Members, settings, support, logout, disconnect/deletion and cleanup remain usable.
-Connecting code and running PR or baseline builds require approval. HTTP feedback
+Reviewers neither see it nor open it (they go to Previews): approval changes nothing
+they can do. Members, settings, support, logout, disconnect/deletion and cleanup
+remain usable. Connecting code and running PR or baseline builds require approval.
+While pending, Repositories offers no **Install on GitHub** button; it says connecting
+opens once early access is approved and links to the status page, and a pull
+request's build actions give way to the same reason. A form posted anyway (an old
+tab) returns to the status page; an in-page request gets the short reason as text. HTTP feedback
 is backed by checks inside the connection transaction, worker admission, execution,
 lease renewal and publication. Approval itself starts no build.
 

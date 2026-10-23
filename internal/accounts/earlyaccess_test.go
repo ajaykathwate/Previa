@@ -3,6 +3,10 @@ package accounts
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -133,5 +137,60 @@ func TestAdmissionMigrationPreservesExistingWorkspaces(t *testing.T) {
 	}
 	if err = gate.Approve(t.Context(), 101, f.text(t, `SELECT public_id::text FROM workspaces WHERE id=$1`, newID), 1); !errors.Is(err, earlyaccess.ErrUnavailable) {
 		t.Fatal("empty operators granted approval")
+	}
+}
+
+type pendingOwner struct{ id int64 }
+
+func (o pendingOwner) UserIDs(context.Context) (int64, int64, bool) { return o.id, 101, true }
+func (pendingOwner) Username(context.Context) (string, bool)        { return "owner", true }
+func (pendingOwner) CSRFToken(context.Context) string               { return "csrf" }
+
+// A pending workspace's Owner who uses Install GitHub or Build as a plain form
+// lands on the early-access status page, not on a bare text response; an
+// in-page request gets the short reason it shows inline. Nothing reaches the
+// connection or the build until the workspace is approved.
+func TestPendingWorkspaceRefusalsExplainThemselves(t *testing.T) {
+	f := newFixture(t)
+	h := earlyaccess.NewHandler(earlyaccess.NewService(f.pool, true, nil), pendingOwner{f.owner}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	reached := false
+	guarded := h.Guard(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+	send := func(method, path string, header map[string]string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, nil)
+		r = r.WithContext(scope.With(r.Context(), f.workspace, "owner"))
+		for k, v := range header {
+			r.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		guarded.ServeHTTP(w, r)
+		return w
+	}
+	for _, c := range []struct {
+		name, method, path string
+		header             map[string]string
+		status             int
+	}{
+		{"Install GitHub form", http.MethodPost, "/installations/start", nil, http.StatusSeeOther},
+		{"Build form", http.MethodPost, "/repositories/x/pull-requests/1/build", nil, http.StatusSeeOther},
+		{"setup page", http.MethodGet, "/workspaces/x/setup", nil, http.StatusSeeOther},
+		{"in-page build", http.MethodPost, "/repositories/x/pull-requests/1/build", map[string]string{"HX-Request": "true"}, http.StatusForbidden},
+		{"in-place save", http.MethodPost, "/installations/start", map[string]string{"Accept": "application/json"}, http.StatusForbidden},
+	} {
+		w := send(c.method, c.path, c.header)
+		switch {
+		case w.Code != c.status:
+			t.Errorf("%s: %d, want %d", c.name, w.Code, c.status)
+		case c.status == http.StatusSeeOther && w.Header().Get("Location") != "/early-access":
+			t.Errorf("%s went to %q, not the status page", c.name, w.Header().Get("Location"))
+		case c.status == http.StatusForbidden && !strings.Contains(w.Body.String(), "early-access approval"):
+			t.Errorf("%s: unexplained refusal %q", c.name, w.Body)
+		}
+	}
+	if reached {
+		t.Fatal("a pending workspace reached a connection or build")
+	}
+	f.exec(t, `UPDATE workspaces SET early_access_state='approved' WHERE id=$1`, f.workspace)
+	if send(http.MethodPost, "/installations/start", nil); !reached {
+		t.Fatal("an approved workspace cannot connect")
 	}
 }

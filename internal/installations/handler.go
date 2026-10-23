@@ -41,6 +41,18 @@ type Handler struct {
 	slug      string
 	logger    *slog.Logger
 	navigator repositoryNavigator
+	approval  Approval
+}
+
+// Approval says whether a workspace may connect code yet (early access).
+type Approval interface {
+	Allowed(ctx context.Context, workspace int64) (bool, error)
+}
+
+// WithApproval shows connecting as waiting while the workspace is pending.
+func (h *Handler) WithApproval(a Approval) *Handler {
+	h.approval = a
+	return h
 }
 
 func (h *Handler) WithNavigator(navigator repositoryNavigator) *Handler {

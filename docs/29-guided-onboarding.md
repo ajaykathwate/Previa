@@ -35,7 +35,7 @@ coming back resumes from saved state, signed out or after a restart.
 | --- | --- | --- |
 | **Connect the repository** | The server has the GitHub App, the installation is active and the repository accessible | Managers: a link to unavailable repositories to restore access. Developers: which Owners/Admins to ask. |
 | **Check the configuration** | A completed check of the head commit passed against the services on offer now, or the head commit already built | **Check setup** (a CSRF-protected request to a worker), its progress, problems with the key and line and the fix, a failed attempt with the last completed result kept for reference |
-| **Review what the app needs** | A build of the head commit was requested | **Build preview**, or the reason it cannot start (merge conflicts, no build capacity), shown disabled beside it |
+| **Review what the app needs** | A build of the head commit was requested | **Build preview**, or, instead of it, the reason it cannot start (merge conflicts, no build capacity) |
 | **Publish a preview** | The head commit is live | Queued, building (with the build log), publishing, or the failure in the pull request page's words with **Retry build** |
 | **Open it from Previa** | Someone opened that deployment through Previa's **Open preview** action | **Open preview**; then *Opened by you/name*, and What's next |
 
@@ -48,8 +48,7 @@ for Developers names the people who manage secrets instead of offering an editor
 they cannot use. Forks are told they get no secrets or outbound connections.
 
 When the preview has been opened, **What's next** links to the pull request and,
-for managers, to Members to invite a Reviewer. **Request review** is shown disabled
-and labelled: review requests in Previa are not available yet (Feature 3).
+for managers, to Members to invite a Reviewer.
 
 ## Setup checks
 
@@ -159,7 +158,7 @@ repository's live pages, and a live refresh waits while a menu on the page is op
 | Missing secrets | Managers see stored names and a link to add some; Developers see whom to ask. Previa never claims to know which secrets an app reads. |
 | GitHub rate limit or outage | The attempt shows its reason and time; the last completed result is shown as such, never as current success; **Try again** retries. |
 | Check passes, build fails | The publish step shows the real diagnosis title and **Retry build**; the PR page has the details. |
-| No build capacity | Build is shown disabled with the reason (hosted: *Build capacity is temporarily unavailable*). |
+| No build capacity | Build is not offered; the step states the reason (hosted: *Build capacity is temporarily unavailable*). |
 | Access revoked or repository disconnected | The connection step turns into a problem; a check finishing meanwhile records nothing. |
 | A check nobody picks up | After two minutes it says the check did not finish and offers **Check again**. |
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -101,12 +102,13 @@ func TestTheTestDataTab(t *testing.T) {
 		t.Fatalf("a Reviewer gets no tab: %d", status)
 	}
 	status, _, body := c.as(f.dev).do("GET", "/test-data", nil)
-	if status != http.StatusOK || !strings.Contains(body, "Test data is off") || !strings.Contains(body, "Owners and Admins change these") ||
-		strings.Contains(body, `id="turn-on-test-data"`) || strings.Contains(body, `id="refresh-baseline"`) {
+	// A Developer reads each setting's value: no switches, forms or disabled controls.
+	if status != http.StatusOK || !strings.Contains(body, "Test data is off") || strings.Contains(body, `role="switch"`) || regexp.MustCompile(`<(button|input|select|textarea|fieldset)\\b[^>]*\\sdisabled(\\s|=|/?>)`).MatchString(body) ||
+		strings.Contains(body, `/test-data/settings`) || strings.Contains(body, `id="turn-on-test-data"`) || strings.Contains(body, `id="refresh-baseline"`) {
 		t.Fatalf("a Developer reads the tab without its controls: %d\n%s", status, body)
 	}
 	status, _, body = c.as(f.owner).do("GET", "/test-data", nil)
-	if status != http.StatusOK || !strings.Contains(body, `id="turn-on-test-data"`) || strings.Contains(body, "Owners and Admins change these") {
+	if status != http.StatusOK || !strings.Contains(body, `id="turn-on-test-data"`) || !strings.Contains(body, `role="switch"`) {
 		t.Fatalf("the Owner turns Test data on in a modal: %d", status)
 	}
 	on := url.Values{"csrf_token": {"x"}, "revision": {"0"}, "enabled": {"on"}, "keep_data": {"on"}, "use_baseline": {"on"}, "auto_refresh": {"on"}, "baseline_branch": {""}}

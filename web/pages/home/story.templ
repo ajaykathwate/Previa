@@ -81,7 +81,7 @@ templ story(loggedIn bool) {
 								<p>That's the whole journey, from pull request to preview and back. Want to see it on your own repository?</p>
 								<p class="story-cta">
 									if loggedIn {
-										@button.Button(button.Props{Href: "/dashboard", Size: button.SizeSm}) {
+										@button.Button(button.Props{Href: components.LandingURL(ctx), Size: button.SizeSm}) {
 											Open your dashboard
 											@components.Arrow()
 										}

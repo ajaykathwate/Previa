@@ -52,7 +52,7 @@ test('signed-out PR build logs return to the same logs after GitHub login', asyn
   assert.equal(new URL(page.url()).pathname, path);
 });
 
-test('automatic build disables its action live and refreshes after a confirmation closes', async () => {
+test('automatic build shows its progress live as status, not a dead button, and refreshes after a confirmation closes', async () => {
   const change = state => context.request.post(`${origin}/__fixture/build-state`, {form: {state}});
   await change('pending');
   try {
@@ -61,19 +61,19 @@ test('automatic build disables its action live and refreshes after a confirmatio
     assert(await page.getByRole('button', {name: 'Build now', exact: true}).isEnabled());
     await page.waitForFunction(() => document.documentElement.dataset.liveState === 'live');
     await change('queued');
-    const queued = page.getByRole('button', {name: 'Build queued', exact: true});
+    const queued = page.locator('.build-in-progress', {hasText: 'Build queued'});
     await queued.waitFor();
-    assert(await queued.isDisabled());
+    assert.equal(await page.getByRole('button', {name: 'Build queued'}).count(), 0, 'progress is a status, not a button');
     await change('running');
-    const running = page.getByRole('button', {name: 'Building preview', exact: true});
+    const running = page.locator('.build-in-progress', {hasText: 'Building preview'});
     await running.waitFor();
-    assert(await running.isDisabled());
+    assert.equal(await page.getByRole('button', {name: 'Building preview'}).count(), 0);
     await page.getByRole('button', {name: 'Cancel build', exact: true}).click();
     await page.waitForFunction(() => document.querySelector('#teardown-preview').matches(':modal'));
     await change('succeeded');
     // The live signal is deferred while this dialog is open.
     await page.waitForTimeout(200);
-    assert(await running.isDisabled());
+    assert(await running.isVisible());
     await page.keyboard.press('Escape');
     await page.getByRole('button', {name: 'Rebuild preview', exact: true}).waitFor();
   } finally { await change(''); }
@@ -569,27 +569,27 @@ test('owners approve outbound destinations and remove them only after confirming
   await page.locator('dialog[id^="remove-destination-"]').getByRole('button', {name: 'Remove destination', exact: true}).click();
   await page.waitForFunction(() => /Removed db\.example\.com:5432/.test(document.querySelector('main')?.innerText || ''));
   assert.equal(await page.locator('.outbound-table').count(), 0);
-  // A repository without GitHub access says why and cannot add.
+  // A repository without GitHub access says why and offers no add form.
   await page.goto(`${origin}/repositories/2/outbound`);
   assert.match(await page.locator('main').innerText(), /GitHub access to this repository was removed/);
-  assert.equal(await page.getByRole('button', {name: 'Approve', exact: true}).isDisabled(), true);
+  assert.equal(await page.getByRole('button', {name: 'Approve', exact: true}).count(), 0);
+  assert.equal(await page.locator('form.outbound-form').count(), 0);
 });
 
 test('unavailable repository PRs offer no actions and say why', async () => {
   await login();
   await page.goto(`${origin}/repositories/2/pull-requests/1`);
   assert.match(await page.locator('[data-build-unavailable]').innerText(), /GitHub access to this repository is unavailable[\s\S]*choose repositories on GitHub/);
-  assert(await page.getByRole('button', {name: 'Build latest commit', exact: true}).isDisabled(), 'the action is shown, disabled');
+  assert.equal(await page.getByRole('button', {name: 'Build latest commit', exact: true}).count(), 0, 'no dead Build button');
   assert.equal(await page.getByRole('button', {name: /Retry|Rebuild|Tear down|Cancel build/}).count(), 0);
   assert.equal(await page.locator('form[action$="/build"]').count(), 0, 'nothing can be submitted');
 });
 
-test('a blocked build stays visible, disabled, with the reason and the fix', async () => {
+test('a blocked build offers no dead button: it says the reason and the fix', async () => {
   await login();
   await page.goto(`${origin}/repositories/1/pull-requests/9`);
-  const blocked = page.getByRole('button', {name: 'Build latest commit', exact: true});
-  assert(await blocked.isDisabled());
-  assert.equal(await blocked.getAttribute('aria-describedby'), 'build-unavailable');
+  assert.equal(await page.getByRole('button', {name: 'Build latest commit', exact: true}).count(), 0);
+  assert.equal(await page.locator('main button[disabled]').count(), 0);
   assert.match(await page.locator('#build-unavailable').innerText(), /no preview domain[\s\S]*PREVIEW_BASE_DOMAIN/);
   assert.equal(await page.locator('form[action$="/build"]').count(), 0, 'nothing can be submitted');
   assert.match(await page.locator('[data-pr-status] h2').innerText(), /No preview yet/);
@@ -876,12 +876,12 @@ test('Automatic confirms before enabling saves in place and live updates respect
  assert.equal(await page.locator('#build-policy').evaluate(e=>e.open),false);
  await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).click();
  await page.locator('.sync-state').filter({hasText:'Syncing'}).waitFor();await readyPanel('1');
- assert(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).isDisabled());
+ assert.equal(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).count(),0,'a running sync is a status, not a dead button');
  await mode.click();await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
  await page.waitForTimeout(3500);assert(await page.locator('#build-policy').evaluate(e=>e.matches(':modal')));assert.match(await page.locator('.pr-summary').innerText(),/Syncing/);
  const requestsBeforeEscape=policyRequests;await page.keyboard.press('Escape');assert.equal(policyRequests,requestsBeforeEscape);
  await page.waitForFunction(()=>!document.querySelector('.pr-summary').textContent.includes('Syncing'));
- assert(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).isEnabled());
+ await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).waitFor();
  assert.equal(await mode.getAttribute('aria-checked'),'false');
  assert.equal(await page.locator('#pull-request-search').inputValue(),'preview 25');assert.equal(await page.locator('.pr-table tbody tr').count(),1);
  assert(await page.evaluate(()=>document===window.originalDocument));
@@ -893,8 +893,8 @@ test('Automatic confirms before enabling saves in place and live updates respect
 test('unavailable repositories and empty PR states remain clear and cannot request mutations',async()=>{
  await login();await page.goto(`${origin}/repositories/2?access=all&pr_state=closed`);
  assert.match(await page.locator('.pr-summary').innerText(),/Repository unavailable/);
- assert(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).isDisabled());
- assert(await page.getByRole('switch',{name:'Automatic builds',exact:true}).isDisabled());
+ assert.equal(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).count(),0);
+ assert.equal(await page.getByRole('switch',{name:'Automatic builds',exact:true}).count(),0);
  assert.equal(await page.locator('.pr-table').count(),0);assert.match(await page.locator('#pull-request-results').innerText(),/No pull requests/);
  assert.equal(await page.locator('#repository-filters').count(),0);
 });
@@ -924,6 +924,8 @@ test('dedicated repository and PR pages preserve filters through breadcrumbs and
  assert.equal(await page.locator('[data-trail-parent]').innerText(),'Repositories','the header trail is the previous page and this one');
  const synced=page.locator('.pr-summary time');
  assert.equal(await synced.getAttribute('title'),'4 Oct 2026, 10:00 UTC');
+ // A live refresh can swap the summary in just before ui.js makes it relative again.
+ await page.waitForFunction(()=>{const t=document.querySelector('.pr-summary time');return t && t.textContent.trim()!==t.title;});
  assert.notEqual(await synced.innerText(),'4 Oct 2026, 10:00 UTC','shown relative, with the exact time as its title');
  await page.locator('#pull-request-search').fill('preview 25');await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
  await page.locator('.pr-table tbody .pr-cell-text a').click();await page.waitForURL(url=>url.pathname==='/repositories/25/pull-requests/25');
@@ -1007,7 +1009,7 @@ test('sync and automatic controls appear only on the PR list and breadcrumbs use
 test('private previews explain missing auth and preserve the owner public toggle',async()=>{
  await login();await page.goto(`${origin}/repositories/101`);
  const privacy=page.getByRole('switch',{name:'Private previews'});
- assert.equal(await privacy.isDisabled(),true);
+ assert.equal(await privacy.count(),0,'not offered until private previews can work');
  assert.match(await page.locator('#private-preview-setup').textContent(),/PREVIEW_ACCESS_URL/);
  assert.equal(await page.locator('#preview-access').count(),0);
  await page.goto(`${origin}/repositories/103`);
@@ -1590,6 +1592,8 @@ test('starter kits write both files for the chosen stack as editable tabs, and e
  await page.waitForFunction(()=>/1 to fix/.test(document.querySelector('.kit-check').innerText));
  assert.match(await page.locator('.kit-problems').innerText(),/Port: Use a port/);
  assert.match(await file('previewrc').inputValue(),/^port: 8000/m);
+ // Wait until the page itself has refreshed for 70000 (the file check can answer first).
+ await page.waitForURL(url=>url.searchParams.get('port')==='70000');await kitIdle(page);
  await page.locator('#kit-port').fill('8001');
  await page.waitForFunction(()=>/^port: 8001/m.test(document.querySelector('#kit-code-previewrc').value));
  // Editing marks the tab, is checked by the server as you type, and survives a change of choices.

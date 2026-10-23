@@ -18,7 +18,9 @@ templ SidebarNav(active NavItem) {
 				@WorkspaceLink("/repositories", "Repositories", RepositoryIcon(), NavRepositories, active)
 				@WorkspaceLink("/builds", "Builds", BuildIcon(), NavBuilds, active)
 			}
-			@WorkspaceLink("/previews", "Previews", EnvironmentIcon(), NavPreviews, active)
+			if HasWorkspace(ctx) {
+				@WorkspaceLink("/previews", "Previews", EnvironmentIcon(), NavPreviews, active)
+			}
 			if CanOperate(ctx) {
 				@WorkspaceLink("/starter-kits", "Starter kits", KitIcon(), NavStarterKits, active)
 			}
@@ -47,7 +49,9 @@ templ SidebarUtility(active NavItem) {
 		@WorkspaceLink("/faq", "Help & FAQ", QuestionIcon(), NavFAQ, active)
 		@WorkspaceLink("/help", "Support & status", QuestionIcon(), NavSupport, active)
 		@WorkspaceLink("/account", "Account & connections", UserIcon(), NavAccount, active)
-		@WorkspaceLink("/early-access", "Early access", UserIcon(), NavEarlyAccess, active)
+		if CanOperate(ctx) {
+			@WorkspaceLink("/early-access", "Early access", UserIcon(), NavEarlyAccess, active)
+		}
 	</nav>
 }
 

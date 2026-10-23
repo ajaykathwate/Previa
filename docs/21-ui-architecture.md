@@ -13,12 +13,21 @@ user's point of view is in the
 - **Works without JavaScript.** Links, GET forms, POST forms and native `<dialog>`
   confirmations all function with scripting off.
 - **Honest UI.** Only real saved state is shown: no invented metrics, activity,
-  health or URLs. A control that would apply but cannot work now (no worker that
-  can build, no GitHub access, conflicts, builds paused) is shown **disabled**, with
-  a notice beside it that says why and what fixes it, so owners can find the action
-  and learn how to enable it. A control that does not apply (building a closed PR)
-  is absent. The public home page describes only what works today, at the level
+  health or URLs. The public home page describes only what works today, at the level
   a user needs: no roadmap, no internal stack or hosting details.
+- **Only what a person can use.** Pages never offer a control, form or link the
+  person cannot use, and never show one disabled. What a role can never do is
+  absent: navigation, buttons and links included (a Reviewer sees Previews,
+  Members and help; a Developer without GitHub access to a repository is not
+  offered its builds, sync, teardown or logs). What cannot happen *now* (no worker
+  that can build, builds paused, conflicts, early-access approval pending, a limit
+  reached) is stated as a short status with the reason and the fix, linking only to
+  something the person can open. The one exception is feedback while a request is
+  on its way: a busy button reads **Starting…** until the response. Links that
+  lead people somewhere ("Open your dashboard") go where their work starts:
+  Overview, Previews for a Reviewer, or the workspace chooser without a workspace.
+  `TestPagesOfferOnlyWhatPeopleCanUse` (`internal/app`) crawls every page as eight
+  kinds of person and fails on any disabled control, refused form or bouncing link.
 - **Strict Content-Security-Policy.** Every page is served with a per-request nonce
   policy: the theme boot script carries the nonce (and passes it to the style it
   creates), `ui.js` gives it to the speculation rules it injects, and HTMX is
@@ -185,9 +194,11 @@ Build/Retry/Rebuild, Tear down or **Cancel build** when nothing is deployed, and
 **Build logs**, which reads **Follow the build log** while a build runs, and **App
 output** while the preview runs). Build
 buttons show a spinner and **Starting…** and are disabled while their request is
-on its way. When building is blocked, the build action is shown disabled
-(`aria-describedby` points at the notice) and the notice names the reason and the
-fix, for example a worker without `PREVIEW_BASE_DOMAIN`.
+on its way. When building is blocked, no build action is shown: the notice names
+the reason and the fix, for example a worker without `PREVIEW_BASE_DOMAIN`, and a
+running build reads as a status (*Building…*), not a button. **Sync Pull Requests**
+appears only when a sync would run; while one runs, the header's *Syncing* status
+says so. The Automatic and private-preview switches appear only when they can change.
 
 - **Step tracker** (`pages.Tracker`, `progress.go`): Queued → Get code → Build image →
   Start preview → Publish → Live, shown while a request is queued, running or
@@ -258,7 +269,8 @@ comes from `dashboardpages.Summary`; nothing is simulated.
   table: pull request, commit (or the served commit), status and when (or expiry);
   failed requests name the failure in plain words (in red only while it needs
   attention; older and dismissed ones are grey, with why). Each row is a `<details>`
-  that expands to how it was requested, eligible, started and finished times and
+  that expands to how it was requested, when an Automatic build starts (a live
+  countdown, `components.Countdown`, `role="timer"`), started and finished times and
   duration, why it waits or failed with the first next step, links to the pull
   request and its build logs, and **Dismiss this failure** or **Undo dismiss**. Preview rows add publication, expiry and a lifetime
   bar, with **Open** and **Copy** beside the row. Below 760px the columns fold under
@@ -347,8 +359,8 @@ picker: a `details[data-menu]` of ordinary links (number, title, branch), so
 choosing works without JavaScript and the menu closes before navigating. Each step
 row has a state mark (number, check, spinner, warning), a title with its time, one
 sentence, findings as tinted rows (key in code, line number, detail), and its
-actions: one solid primary, the rest outlined, a disabled action with its reason
-beside it. **Check setup** and **Build preview** are plain CSRF-protected forms
+actions: one solid primary, the rest outlined; a blocked step shows its reason
+instead of an action. **Check setup** and **Build preview** are plain CSRF-protected forms
 (`data-busy-form`); Build posts to the PR's Build action with `return=setup`, so
 every outcome, refusals included, comes back to the checklist with a toast or a
 notice. **Open preview** links open a new tab through the recording `/open` route.
@@ -374,8 +386,8 @@ The aside has two cards:
 - **How test data works.**
 
 Turning Test data on or off, Refresh baseline and Delete open confirmation modals
-over the page; only their submit navigates. Non-managers see the same switches
-disabled with *Owners and Admins change these*. Live updates replace
+over the page; only their submit navigates. Non-managers read each setting's value
+(*On*, *Off*, the branch) as text, without switches. Live updates replace
 `#test-data-detail` when a refresh starts, waits or finishes, or the settings
 change. A refresh's log page reuses the build log viewer (filters, search,
 download) without a live tail. See [32](32-persistent-test-data.md).

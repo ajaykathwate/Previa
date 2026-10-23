@@ -247,18 +247,13 @@ templ stepMark(state string, n int) {
 	</span>
 }
 
-// stepForm is the check or build form a step offers, or its disabled button
-// with the reason beside it.
+// stepForm is the check or build form a step offers. A blocked step offers
+// no control; its reason says what has to happen first.
 templ stepForm(p Page, s Step) {
 	switch s.Form {
 		case "check":
 			if p.Check != nil && p.Selected != nil {
-				if s.Blocked != "" || !p.Discover {
-					@button.Button(button.Props{Disabled: true, Variant: variant(p.Check.Primary), Attributes: templ.Attributes{"aria-describedby": "setup-" + s.ID + "-blocked"}}) {
-						@components.ChecklistIcon()
-						{ p.Check.Label }
-					}
-				} else {
+				if s.Blocked == "" && p.Discover {
 					<form method="post" action={ components.PublicURL(ctx, p.CheckURL()) } data-busy-form>
 						<input type="hidden" name="csrf_token" value={ p.CSRF }/>
 						<input type="hidden" name="expected_sha" value={ p.Selected.SHA }/>
@@ -272,12 +267,7 @@ templ stepForm(p Page, s Step) {
 			}
 		case "build":
 			if p.Build != nil && p.Selected != nil {
-				if s.Blocked != "" {
-					@button.Button(button.Props{Disabled: true, Attributes: templ.Attributes{"aria-describedby": "setup-" + s.ID + "-blocked"}}) {
-						@components.BuildIcon()
-						{ p.Build.Label }
-					}
-				} else {
+				if s.Blocked == "" {
 					<form method="post" action={ components.PublicURL(ctx, p.BuildURL()) } data-busy-form>
 						<input type="hidden" name="csrf_token" value={ p.CSRF }/>
 						<input type="hidden" name="return" value="setup"/>

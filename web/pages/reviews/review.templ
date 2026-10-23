@@ -127,7 +127,7 @@ templ hero(p Page) {
 					<span data-copy-status>Copy review link</span>
 				</button>
 			}
-			if p.GitHubURL != "" {
+			if p.GitHubURL != "" && components.CanOperate(ctx) {
 				<a class="hero-link github-link" href={ templ.SafeURL(p.GitHubURL) } target="_blank" rel="noopener noreferrer">
 					@components.GitHubMark()
 					View on GitHub
@@ -559,8 +559,12 @@ templ testAccessForm(p Page, editing bool) {
 		@field("test-access-account", "Account", "An email or username; shown to everyone with access", fieldError(d, drafting, "account")) {
 			<input id="test-access-account" name="account" value={ account } maxlength="300" placeholder="reviewer@preview.test" autocomplete="off" spellcheck="false" data-draft-key="account" aria-invalid={ invalid(fieldError(d, drafting, "account") != "") }/>
 		}
-		@field("test-access-secret", "Password or token", secretHint(t), fieldError(d, drafting, "secret")) {
-			<input id="test-access-secret" name="secret" type="password" maxlength="512" autocomplete="new-password" disabled?={ !t.Sealing } aria-invalid={ invalid(fieldError(d, drafting, "secret") != "") }/>
+		if t.Sealing {
+			@field("test-access-secret", "Password or token", secretHint(t), fieldError(d, drafting, "secret")) {
+				<input id="test-access-secret" name="secret" type="password" maxlength="512" autocomplete="new-password" aria-invalid={ invalid(fieldError(d, drafting, "secret") != "") }/>
+			}
+		} else {
+			<p class="review-field-hint">This server cannot store passwords because secret encryption is not set up, so only the account is saved.</p>
 		}
 		if t.HasSecret {
 			<label class="review-check"><input type="checkbox" name="remove_secret" value="true"/> Remove the stored password</label>
@@ -577,10 +581,7 @@ templ testAccessForm(p Page, editing bool) {
 }
 
 func secretHint(t TestAccess) string {
-	switch {
-	case !t.Sealing:
-		return "This server cannot store passwords: secret encryption is not set up"
-	case t.HasSecret:
+	if t.HasSecret {
 		return "Stored and hidden; leave empty to keep it"
 	}
 	return "Stored encrypted; members reveal it on request"

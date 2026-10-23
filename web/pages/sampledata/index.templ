@@ -1,6 +1,7 @@
 package sampledata
 
 import (
+	"cmp"
 	"strconv"
 
 	"github.com/ajaykathwatee/previa/web/components"
@@ -207,9 +208,6 @@ templ settingsCard(p Page) {
 				@components.WrenchIcon()
 				Settings
 			</h2>
-			if !p.Manager {
-				<span class="field-card-note">Owners and Admins change these</span>
-			}
 		</header>
 		<div class="field-list">
 			<div class="field-row">
@@ -220,6 +218,14 @@ templ settingsCard(p Page) {
 			</div>
 			@switchRow(p, "keep_data", "Keep data between builds", p.Settings.KeepData, "A pull request's next build copies its serving preview's databases.")
 			@switchRow(p, "use_baseline", "Use a baseline", p.Settings.UseBaseline, "First builds restore the repository baseline.")
+			if !p.Manager {
+				<div class="field-row">
+					<span class="field-label">Baseline branch</span>
+					<div class="field-value">
+						<span>{ cmp.Or(p.Settings.Branch, p.Settings.BranchPlaceholder()) }</span>
+					</div>
+				</div>
+			} else {
 			<form method="post" action={ components.PublicURL(ctx, URL(p.RepoID)+"/settings") } class="test-data-branch" data-inline-form data-live-pause>
 				<div class="field-row">
 					@hiddenSettings(p, "baseline_branch")
@@ -228,6 +234,7 @@ templ settingsCard(p Page) {
 				</div>
 				<p class="field-error" id="test-data-branch-error" data-inline-error role="alert" hidden?={ p.Error.Name != "baseline_branch" }>{ p.Error.Message }</p>
 			</form>
+			}
 			@switchRow(p, "auto_refresh", "Refresh automatically", p.Settings.AutoRefresh, "After merges into the branch and when its head moves.")
 		</div>
 		<p class="field-card-foot">
@@ -237,15 +244,36 @@ templ settingsCard(p Page) {
 }
 
 templ enabledSwitch(p Page) {
-	if p.Settings.Enabled {
-		<button type="button" role="switch" aria-checked="true" aria-labelledby="test-data-enabled-label" class="automatic-switch test-data-switch" disabled?={ !p.Manager } data-open-dialog="turn-off-test-data" commandfor="turn-off-test-data" command="show-modal" aria-haspopup="dialog"><span>On</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
+	if !p.Manager || !p.Settings.Enabled && !p.Available {
+		@settingValue(p.Settings.Enabled)
+	} else if p.Settings.Enabled {
+		<button type="button" role="switch" aria-checked="true" aria-labelledby="test-data-enabled-label" class="automatic-switch test-data-switch" data-open-dialog="turn-off-test-data" commandfor="turn-off-test-data" command="show-modal" aria-haspopup="dialog"><span>On</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
 	} else {
-		<button type="button" role="switch" aria-checked="false" aria-labelledby="test-data-enabled-label" class="automatic-switch test-data-switch" disabled?={ !p.Manager || !p.Available } data-open-dialog="turn-on-test-data" commandfor="turn-on-test-data" command="show-modal" aria-haspopup="dialog"><span>Off</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
+		<button type="button" role="switch" aria-checked="false" aria-labelledby="test-data-enabled-label" class="automatic-switch test-data-switch" data-open-dialog="turn-on-test-data" commandfor="turn-on-test-data" command="show-modal" aria-haspopup="dialog"><span>Off</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
 	}
 }
 
-// switchRow saves one setting flipped, keeping the others.
+// settingValue states a setting a person cannot change.
+templ settingValue(on bool) {
+	if on {
+		<span>On</span>
+	} else {
+		<span>Off</span>
+	}
+}
+
+// switchRow saves one setting flipped, keeping the others. People who cannot
+// change it, or settings that cannot change now, read its value instead.
 templ switchRow(p Page, name, label string, on bool, help string) {
+	if !p.Manager || !p.Available && !p.Settings.Enabled {
+		<div class="field-row field-row-top">
+			<span class="field-label">{ label }</span>
+			<div class="field-value">
+				@settingValue(on)
+				<span class="field-value-help">{ help }</span>
+			</div>
+		</div>
+	} else {
 	<form method="post" action={ components.PublicURL(ctx, URL(p.RepoID)+"/settings") } class="field-row field-row-top">
 		@hiddenSettings(p, name)
 		if !on {
@@ -253,7 +281,7 @@ templ switchRow(p Page, name, label string, on bool, help string) {
 		}
 		<span class="field-label" id={ "test-data-" + name + "-label" }>{ label }</span>
 		<div class="field-value">
-			<button type="submit" role="switch" aria-checked={ strconv.FormatBool(on) } aria-labelledby={ "test-data-" + name + "-label" } aria-describedby={ "test-data-" + name + "-help" } class="automatic-switch test-data-switch" disabled?={ !p.Manager || !p.Available && !p.Settings.Enabled }>
+			<button type="submit" role="switch" aria-checked={ strconv.FormatBool(on) } aria-labelledby={ "test-data-" + name + "-label" } aria-describedby={ "test-data-" + name + "-help" } class="automatic-switch test-data-switch">
 				if on {
 					<span>On</span>
 				} else {
@@ -264,6 +292,7 @@ templ switchRow(p Page, name, label string, on bool, help string) {
 			<span class="field-value-help" id={ "test-data-" + name + "-help" }>{ help }</span>
 		</div>
 	</form>
+	}
 }
 
 // hiddenSettings carries every current setting except the one a form edits.

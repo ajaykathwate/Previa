@@ -136,10 +136,13 @@ test('a developer reads the tab without its settings; a reviewer is sent away', 
   const dev = await session('dev');
   try {
     await dev.page.goto(`${origin}${tabPath}`);
-    await dev.page.locator('.field-card-note', {hasText: 'Owners and Admins change these'}).waitFor();
+    const settings = dev.page.locator('.test-data-settings');
+    await settings.waitFor();
+    assert.match(await settings.innerText(), /Refresh automatically\s+(On|Off)/, 'a Developer reads each setting as a value');
+    assert.equal(await settings.locator('[role="switch"], form').count(), 0, 'no switches or forms for a Developer');
+    assert.equal(await dev.page.locator('main [disabled]').count(), 0, 'no disabled controls');
     assert.equal(await dev.page.locator('#turn-off-test-data').count(), 0, 'no Turn off for a Developer');
     assert.equal(await dev.page.locator('#delete-baseline').count(), 0, 'no Delete for a Developer');
-    assert.equal(await dev.page.locator('button[aria-labelledby="test-data-auto_refresh-label"]').isDisabled(), true);
     assert.equal(await dev.page.locator('button[data-open-dialog="refresh-baseline"]').count(), 1, 'a Developer may refresh');
     await shots(dev.page, 'developer');
     assert.deepEqual(dev.errors, []);

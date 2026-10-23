@@ -425,7 +425,7 @@ templ availableArea(name string, items []string) {
 
 templ cta(loggedIn bool) {
 	if loggedIn {
-		@button.Button(button.Props{Href: "/dashboard", Class: "hero-cta", Size: button.SizeLg}) {
+		@button.Button(button.Props{Href: components.LandingURL(ctx), Class: "hero-cta", Size: button.SizeLg}) {
 			Open your dashboard
 			@components.Arrow()
 		}

@@ -121,7 +121,7 @@ func needsWorkspace(path string) bool {
 	return path == "/dashboard" || strings.HasPrefix(path, "/repositories") || path == "/builds" || path == "/previews" || path == "/installations/start"
 }
 func (m *Middleware) guard(w http.ResponseWriter, r *http.Request, user int64, selected Workspace) bool {
-	if selected.Role == "reviewer" && (needsWorkspace(r.URL.Path) || r.URL.Path == "/starter-kits" || r.URL.Path == "/developer-tools") && !reviewerPath(r) {
+	if selected.Role == "reviewer" && (needsWorkspace(r.URL.Path) || r.URL.Path == "/starter-kits" || r.URL.Path == "/developer-tools" || r.URL.Path == "/early-access") && !reviewerPath(r) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.NotFound(w, r)
 			return false
