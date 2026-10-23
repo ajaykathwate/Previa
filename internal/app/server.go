@@ -49,6 +49,7 @@ import (
 	"github.com/alexedwards/scs/pgxstore"
 	"github.com/alexedwards/scs/v2"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/go-github/v91/github"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -139,7 +140,28 @@ type serverFeatures struct {
 	earlyAccess    *earlyaccess.Handler
 }
 
+// serverGitHubApp is the GitHub App surface the server uses: *githubapp.Client
+// in production, a fake GitHub in tests that drive the assembled server.
+type serverGitHubApp interface {
+	GitHubApp
+	Installation(context.Context, int64) (*github.Installation, error)
+	Invalidate(int64)
+	WithInstallationSignals(func(context.Context, int64) error)
+}
+
 func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
+	var app serverGitHubApp
+	if cfg.GitHubAppID != 0 {
+		client, err := githubapp.New(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("initialize GitHub App: %w", err)
+		}
+		app = client
+	}
+	return newServerFeaturesWithApp(cfg, pool, store, hub, logger, app)
+}
+
+func newServerFeaturesWithApp(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger, appClient serverGitHubApp) (*serverFeatures, error) {
 	f := &serverFeatures{capabilities: workers.NewReader(pool)}
 	f.sessions = auth.NewSessionManager(store, strings.HasPrefix(strings.ToLower(cfg.AppBaseURL), "https://"), logger)
 	f.publicIDs = publicid.New(pool)
@@ -163,12 +185,8 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	}
 	f.environments = environments.NewRepository(pool, operations)
 	coordinator := environments.NewRequestBroker(pool, producer).WithResets(resetActivity{recorder: activity.NewRecorder()})
-	var appClient *githubapp.Client
 	var upstream pullrequests.Source
-	if cfg.GitHubAppID != 0 {
-		if appClient, err = githubapp.New(cfg); err != nil {
-			return nil, fmt.Errorf("initialize GitHub App: %w", err)
-		}
+	if appClient != nil {
 		upstream = pullrequests.NewGitHubSource(appClient)
 		// With the App, workers can report: record report work for PR changes.
 		f.environments.WithReports()
@@ -218,7 +236,7 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 			PreviewBaseDomain: cfg.PreviewBaseDomain,
 		})
 	}
-	f.installations.WithNavigator(f.prs)
+	f.installations.WithNavigator(f.prs).WithApproval(admission)
 	secretsService, err := newSecretsService(cfg, pool)
 	if err != nil {
 		return nil, err
@@ -261,9 +279,9 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 		previews: environments.NewLifecycle(f.environments, coordinator, nil), data: sampledata.NewLifecycle(testDataStore, nil, nil),
 	})
 	lifecycle.WithAccountFences(workspaceService)
-	workspaceService.WithDeletion(lifecycle)
+	workspaceService.WithDeletion(workspaceDeletion{lifecycle: lifecycle})
 	f.accounts = accounts.NewHandler(lifecycle, f.auth, logger, f.sessions.Destroy, strings.HasPrefix(cfg.AppBaseURL, "https://"))
-	f.prs.WithSourceAccess(workspaceService)
+	f.prs.WithSourceAccess(workspaceService).WithAdmission(admission)
 	f.auth.WithAvatarAudience(workspaceService).WithActivity(workspaceService)
 	f.workspaces = workspaces.NewHandler(workspaceService, f.auth, logger, cfg.AppBaseURL)
 	f.workspaceScope = workspaces.NewMiddleware(workspaceService, f.auth, logger)
