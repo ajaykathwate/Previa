@@ -30,6 +30,17 @@ var _ environments.UpstreamVerifier = (*SyncService)(nil)
 // here is never lost. Verification never authorizes work; it only carries
 // existing event-authorized Automatic intent across a recorded status change.
 func (s *SyncService) VerifyUpstream(ctx context.Context, pullRequestID int64) (environments.UpstreamSnapshot, error) {
+	return s.verify(ctx, pullRequestID, Discovered)
+}
+
+// ConfirmUpstream is VerifyUpstream for housekeeping's periodic re-read of
+// tracked pull requests: a new commit it finds on an open PR counts as a push,
+// so in Automatic mode a lost webhook delays the build instead of losing it.
+func (s *SyncService) ConfirmUpstream(ctx context.Context, pullRequestID int64) (environments.UpstreamSnapshot, error) {
+	return s.verify(ctx, pullRequestID, Confirmed)
+}
+
+func (s *SyncService) verify(ctx context.Context, pullRequestID int64, origin Origin) (environments.UpstreamSnapshot, error) {
 	if pullRequestID <= 0 {
 		return environments.UpstreamSnapshot{}, environments.ErrUpstreamInaccessible
 	}
@@ -58,7 +69,7 @@ func (s *SyncService) VerifyUpstream(ctx context.Context, pullRequestID int64) (
 	var snapshot environments.UpstreamSnapshot
 	var outcome error
 	err = database.InTransaction(ctx, s.pool, func(tx pgx.Tx) error {
-		rec, err := s.recordUpstreamTx(ctx, tx, before, captured, upstream)
+		rec, err := s.recordUpstreamTx(ctx, tx, before, captured, upstream, origin)
 		if err != nil {
 			return err
 		}
@@ -112,7 +123,7 @@ type recorded struct {
 // recordUpstreamTx records GitHub's view of the PR unless the installation,
 // repository or PR changed since it was captured. A recorded change fences
 // in-flight discovery and carries existing Automatic authorization over.
-func (s *SyncService) recordUpstreamTx(ctx context.Context, tx pgx.Tx, before scope, captured dbgen.PullRequest, upstream Upstream) (recorded, error) {
+func (s *SyncService) recordUpstreamTx(ctx context.Context, tx pgx.Tx, before scope, captured dbgen.PullRequest, upstream Upstream, origin Origin) (recorded, error) {
 	after, err := lockScope(ctx, tx, captured.RepoID, 0)
 	if err != nil {
 		return recorded{}, err
@@ -133,7 +144,7 @@ func (s *SyncService) recordUpstreamTx(ctx context.Context, tx pgx.Tx, before sc
 	if err != nil {
 		return recorded{}, fmt.Errorf("check existing automatic authorization: %w", err)
 	}
-	if _, err := ObserveTx(ctx, tx, captured.RepoID, upstream.Observation, false, s.observer); err != nil {
+	if _, err := ObserveTx(ctx, tx, captured.RepoID, upstream.Observation, origin, s.observer); err != nil {
 		return recorded{}, err
 	}
 	saved, err := q.LockPR(ctx, key)

@@ -257,3 +257,104 @@ func TestRefreshedObservationsRecordReportsOnlyWhenTheyChangeThePR(t *testing.T)
 		t.Fatalf("reported %v, want [%d]", observer.reported, id)
 	}
 }
+
+// listingFake lists one page of open PRs, as GitHub would for a sync.
+type listingFake struct{ observations []pr.Observation }
+
+func (l *listingFake) Page(context.Context, int64, int64, int32) ([]pr.Observation, int32, error) {
+	return l.observations, 0, nil
+}
+
+// A missed push: a newer commit on a tracked open PR, found by housekeeping's
+// confirmation or Sync Pull Requests, is scheduled in Automatic mode after the
+// quiet period, as the lost webhook would have done. The check before a manual
+// build, connection discovery and Manual mode never start work, and switching
+// to Automatic builds nothing by itself.
+func TestConfirmedNewCommitIsScheduledLikeAPush(t *testing.T) {
+	automatic := func(t *testing.T, f *fixture) {
+		t.Helper()
+		policy, err := installations.NewBuildPolicyService(installations.NewRepository(f.pool))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := policy.Set(t.Context(), f.userID, f.repoID, installations.AutomaticBuilds); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending := func(t *testing.T, f *fixture) (sha string, wait time.Duration, n int) {
+		t.Helper()
+		n = f.count(t, "SELECT count(*) FROM build_intents WHERE source='automatic' AND state='pending'")
+		if n == 1 {
+			if err := f.pool.QueryRow(t.Context(), "SELECT head_sha, available_at - now() FROM build_intents").Scan(&sha, &wait); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return sha, wait, n
+	}
+	newer := upstreamPR("sha-b", "open", yes(), "clean", verifyBase.Add(time.Minute))
+	confirm := &upstreamFake{inspect: func(context.Context, int64, int64, int32) (pr.Upstream, error) { return newer, nil }}
+
+	t.Run("housekeeping confirms a new commit in Automatic", func(t *testing.T) {
+		f := setup(t)
+		id := seedPR(t, f, `"mergeable":true,"mergeable_state":"clean",`)
+		automatic(t, f)
+		if _, _, n := pending(t, f); n != 0 {
+			t.Fatal("switching to Automatic must not build existing PRs")
+		}
+		service := pr.NewSyncService(f.pool, f.producer, confirm, environments.NewBroker(f.pool, f.producer))
+		if _, err := service.ConfirmUpstream(t.Context(), id); err != nil {
+			t.Fatal(err)
+		}
+		sha, wait, n := pending(t, f)
+		if n != 1 || sha != "sha-b" || wait < 4*time.Minute || wait > environments.QuietPeriod {
+			t.Fatalf("a confirmed new commit must wait out the quiet period: %d %s %s", n, sha, wait)
+		}
+	})
+	t.Run("the check before a manual build starts nothing", func(t *testing.T) {
+		f := setup(t)
+		id := seedPR(t, f, `"mergeable":true,"mergeable_state":"clean",`)
+		automatic(t, f)
+		service := pr.NewSyncService(f.pool, f.producer, confirm, environments.NewBroker(f.pool, f.producer))
+		if _, err := service.VerifyUpstream(t.Context(), id); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, n := pending(t, f); n != 0 {
+			t.Fatal("verification before a manual request must not schedule Automatic work")
+		}
+	})
+	t.Run("Manual mode schedules nothing", func(t *testing.T) {
+		f := setup(t)
+		id := seedPR(t, f, `"mergeable":true,"mergeable_state":"clean",`)
+		service := pr.NewSyncService(f.pool, f.producer, confirm, environments.NewBroker(f.pool, f.producer))
+		if _, err := service.ConfirmUpstream(t.Context(), id); err != nil {
+			t.Fatal(err)
+		}
+		if f.count(t, "SELECT count(*) FROM build_intents") != 0 {
+			t.Fatal("Manual mode builds only on request")
+		}
+	})
+	for _, c := range []struct {
+		name    string
+		confirm bool
+		want    int
+	}{{"Sync Pull Requests schedules the new commit", true, 1}, {"connection discovery only records it", false, 0}} {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			seedPR(t, f, `"mergeable":true,"mergeable_state":"clean",`)
+			automatic(t, f)
+			service := pr.NewSyncService(f.pool, f.producer, &listingFake{observations: []pr.Observation{newer.Observation}}, environments.NewBroker(f.pool, f.producer))
+			if err := service.Request(t.Context(), f.userID, f.repoID); err != nil {
+				t.Fatal(err)
+			}
+			if err := service.RunPage(t.Context(), pr.SyncArgs{RepoID: f.repoID, Revision: 1, Page: 1, Confirm: c.confirm}); err != nil {
+				t.Fatal(err)
+			}
+			if sha, _, n := pending(t, f); n != c.want || (n == 1 && sha != "sha-b") {
+				t.Fatalf("pending automatic intents %d (%s), want %d", n, sha, c.want)
+			}
+			if got := f.count(t, "SELECT count(*) FROM pull_requests WHERE head_sha='sha-b'"); got != 1 {
+				t.Fatal("the new commit must be recorded either way")
+			}
+		})
+	}
+}

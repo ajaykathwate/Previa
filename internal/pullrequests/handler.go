@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/environments"
@@ -45,6 +46,7 @@ type SourceAccess interface {
 
 type Handler struct {
 	sourceAccess  SourceAccess
+	admission     Admission
 	previewDomain string
 	repo          *Repository
 	sync          Refresher
@@ -57,6 +59,15 @@ type Handler struct {
 	logs          LogTail
 	commits       CommitSource
 	now           func() time.Time // when failures stop needing attention is measured from
+	// sourceAnswers remembers GitHub's answer to "may this person read the
+	// code" briefly, so live re-renders do not ask GitHub every time.
+	sourceMu      sync.Mutex
+	sourceAnswers map[[2]int64]sourceAnswer
+}
+
+type sourceAnswer struct {
+	denied bool
+	until  time.Time
 }
 
 func NewHandler(repo *Repository, sync Refresher, policy Policy, users UserSession, logger *slog.Logger, enabled bool) *Handler {
@@ -312,7 +323,7 @@ func (h *Handler) activity(w http.ResponseWriter, r *http.Request) {
 	page.DismissedRepo, page.DismissedNumber = publicid.Dismissed(r, r.URL.Query().Get("dismissed"), dismissedNotice)
 	page.Joined = previews && r.URL.Query().Get("saved") == "joined"
 	for _, row := range data.Rows {
-		page.Rows = append(page.Rows, h.activityRow(row, previews, since))
+		page.Rows = append(page.Rows, h.lock(r.Context(), h.activityRow(row, previews, since)))
 	}
 	if page.Number != f.Page {
 		publicid.Redirect(w, r, page.PageURL(page.Number), http.StatusSeeOther)
@@ -360,14 +371,14 @@ func (h *Handler) Highlights(ctx context.Context, userID int64, limit int) (buil
 		return nil, nil, err
 	}
 	for _, row := range recent.Rows[:min(limit, len(recent.Rows))] {
-		builds = append(builds, h.activityRow(row, false, since))
+		builds = append(builds, h.lock(ctx, h.activityRow(row, false, since)))
 	}
 	live, err := h.repo.Activity(ctx, userID, ActivityQuery{Page: 1, Previews: true, Since: since})
 	if err != nil {
 		return nil, nil, err
 	}
 	for _, row := range live.Rows {
-		if out := h.activityRow(row, true, since); out.Deployed != "" && out.State != "tearing_down" && len(previews) < limit {
+		if out := h.lock(ctx, h.activityRow(row, true, since)); out.Deployed != "" && out.State != "tearing_down" && len(previews) < limit {
 			previews = append(previews, out)
 		}
 	}
@@ -376,6 +387,15 @@ func (h *Handler) Highlights(ctx context.Context, userID int64, limit int) (buil
 
 // activityRow maps one Builds or Previews row to display data. A failed
 // request is highlighted only while it needs attention (see failureAttention).
+// lock hides a row's logs, failure dismissal and teardown from someone
+// GitHub no longer lets read the repository's code.
+func (h *Handler) lock(ctx context.Context, row pages.ActivityRow) pages.ActivityRow {
+	if h.sourceDenied(ctx, row.RepoID) {
+		row.Locked, row.Teardown = true, false
+	}
+	return row
+}
+
 func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool, since time.Time) pages.ActivityRow {
 	available := row.Accessible && row.InstallationStatus == "active"
 	out := pages.ActivityRow{RepoID: row.RepoID, Number: row.Number, Name: row.FullName, Title: row.Title, Latest: row.HeadSha,
@@ -423,7 +443,48 @@ func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool, since tim
 }
 
 func (h *Handler) WithSourceAccess(access SourceAccess) *Handler { h.sourceAccess = access; return h }
-func (h *Handler) WithPreviewDomain(domain string) *Handler      { h.previewDomain = domain; return h }
+
+// Admission says whether a workspace may build yet (early-access approval).
+type Admission interface {
+	Allowed(ctx context.Context, workspace int64) (bool, error)
+}
+
+// WithAdmission shows builds as waiting while the workspace is pending.
+func (h *Handler) WithAdmission(a Admission) *Handler       { h.admission = a; return h }
+func (h *Handler) WithPreviewDomain(domain string) *Handler { h.previewDomain = domain; return h }
+
+// sourceDenied reports whether GitHub definitively denies this person read
+// access to the repository's code. Building, tearing down, syncing and logs
+// need it, so they are not offered. When GitHub cannot answer they stay
+// offered: the server asks again, fresh, when one is used.
+func (h *Handler) sourceDenied(ctx context.Context, repo int64) bool {
+	if h.sourceAccess == nil {
+		return false
+	}
+	user, _, ok := h.users.UserIDs(ctx)
+	if !ok {
+		return true
+	}
+	key, now := [2]int64{user, repo}, h.now()
+	h.sourceMu.Lock()
+	answer, known := h.sourceAnswers[key]
+	h.sourceMu.Unlock()
+	if known && now.Before(answer.until) {
+		return answer.denied
+	}
+	allowed, err := h.sourceAccess.CanReadSource(ctx, user, repo)
+	if err != nil {
+		return false
+	}
+	h.sourceMu.Lock()
+	defer h.sourceMu.Unlock()
+	if h.sourceAnswers == nil || len(h.sourceAnswers) > 4096 {
+		h.sourceAnswers = map[[2]int64]sourceAnswer{}
+	}
+	h.sourceAnswers[key] = sourceAnswer{denied: !allowed, until: now.Add(30 * time.Second)}
+	return !allowed
+}
+
 func (h *Handler) canReadLogTail(ctx context.Context, repo int64) bool {
 	if h.sourceAccess == nil {
 		return true

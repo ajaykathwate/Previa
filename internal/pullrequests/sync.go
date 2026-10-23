@@ -33,6 +33,9 @@ type SyncArgs struct {
 	RepoID   int64 `json:"repo_id"`
 	Revision int64 `json:"revision"`
 	Page     int32 `json:"page"`
+	// Confirm: someone asked to sync (Sync Pull Requests), so a new commit on
+	// a tracked PR counts as a push. Connection discovery leaves it unset.
+	Confirm bool `json:"confirm,omitempty"`
 }
 
 func (SyncArgs) Kind() string { return "pr_discovery" }
@@ -82,7 +85,7 @@ func (s *SyncService) Request(ctx context.Context, userID, repoID int64) error {
 		if err != nil {
 			return err
 		}
-		_, err = s.jobs.InsertTx(ctx, tx, SyncArgs{repoID, row.Revision, 1}, nil)
+		_, err = s.jobs.InsertTx(ctx, tx, SyncArgs{RepoID: repoID, Revision: row.Revision, Page: 1, Confirm: true}, nil)
 		return err
 	})
 }
@@ -158,7 +161,11 @@ func (s *SyncService) recordPageTx(ctx context.Context, tx pgx.Tx, args SyncArgs
 		if o.State != environments.StateOpen {
 			continue
 		}
-		if _, err := ObserveTx(ctx, tx, args.RepoID, o, false, s.observer); err != nil {
+		origin := Discovered
+		if args.Confirm {
+			origin = Confirmed
+		}
+		if _, err := ObserveTx(ctx, tx, args.RepoID, o, origin, s.observer); err != nil {
 			return err
 		}
 		stored++
@@ -174,7 +181,7 @@ func (s *SyncService) recordPageTx(ctx context.Context, tx pgx.Tx, args SyncArgs
 		return err
 	}
 	if next > 0 {
-		_, err = s.jobs.InsertTx(ctx, tx, SyncArgs{args.RepoID, args.Revision, next}, nil)
+		_, err = s.jobs.InsertTx(ctx, tx, SyncArgs{RepoID: args.RepoID, Revision: args.Revision, Page: next, Confirm: args.Confirm}, nil)
 	}
 	return err
 }

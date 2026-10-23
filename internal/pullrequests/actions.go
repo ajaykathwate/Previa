@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/environments"
+	workspacescope "github.com/ajaykathwatee/previa/internal/platform/scope"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
@@ -177,7 +178,7 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 		return pages.PR{}, err
 	}
 	pr.Actions = actions
-	pr.Headline = headline(pr, row)
+	pr.Headline = headline(pr, row, h.now())
 	return pr, nil
 }
 
@@ -242,7 +243,7 @@ func (h *Handler) describeFailure(ctx context.Context, pr *pages.PR, row dbgen.O
 }
 
 // headline sums the PR's preview up in one line, most pressing first.
-func headline(pr pages.PR, row dbgen.OwnedPRRow) pages.Headline {
+func headline(pr pages.PR, row dbgen.OwnedPRRow, now time.Time) pages.Headline {
 	current := row.RequestCurrent
 	switch {
 	case !row.Available.Bool:
@@ -272,9 +273,21 @@ func headline(pr pages.PR, row dbgen.OwnedPRRow) pages.Headline {
 	case current && row.BuildState == "queued":
 		return pages.Headline{Tone: "tone-info", Title: "Queued to build " + pages.Short(row.RequestedSha),
 			Detail: "It starts as soon as a worker has a free build slot."}
+	case current && row.BuildState == "pending" && row.RequestSource == "automatic" && row.AvailableAt.Valid && row.AvailableAt.Time.After(now):
+		// The quiet period: a countdown, and what resets or skips it.
+		title := "Commit " + pages.Short(row.RequestedSha) + " builds in"
+		detail := "Automatic builds wait until no new commit has arrived for five minutes, so a burst of pushes builds once; another push restarts the wait."
+		if pr.DeployedSHA != "" && pr.DeployedSHA != row.RequestedSha {
+			title = "New commit " + pages.Short(row.RequestedSha) + " builds in"
+			detail += " The preview keeps serving " + pages.Short(pr.DeployedSHA) + " meanwhile."
+		}
+		if pr.Actions.BuildNow {
+			detail += " Build now starts it at once."
+		}
+		return pages.Headline{Tone: "tone-info", Title: title, Detail: detail, Until: row.AvailableAt.Time.UTC().Format(time.RFC3339)}
 	case current && row.BuildState == "pending":
-		return pages.Headline{Tone: "tone-info", Title: "Waiting to build " + pages.Short(row.RequestedSha),
-			Detail: "Automatic builds start after five minutes without new commits. Build now starts it at once."}
+		return pages.Headline{Tone: "tone-info", Title: "Starting the build of " + pages.Short(row.RequestedSha),
+			Detail: "It starts as soon as a worker picks it up."}
 	case current && row.BuildState == "failed":
 		return pages.Headline{Tone: "tone-danger", Title: "Build failed", Detail: pr.Failure}
 	case row.EnvironmentStatus == "failed" && row.FailureCode == "preview_missing":
@@ -334,7 +347,8 @@ func removedNote(row dbgen.OwnedPRRow) string {
 func (h *Handler) actionsFor(ctx context.Context, row dbgen.OwnedPRRow, noWorker bool) (pages.Actions, error) {
 	a := pages.Actions{ExpectedRevision: row.RequestRevision.Int64, RequestKey: requestKey()}
 	unfinished := row.RequestCurrent && (row.BuildState == "pending" || row.BuildState == "queued" || row.BuildState == "running")
-	if row.State == environments.StateOpen && row.Available.Bool && !row.TeardownRequested && h.actions != nil {
+	denied := h.sourceDenied(ctx, row.RepoID)
+	if row.State == environments.StateOpen && row.Available.Bool && !row.TeardownRequested && h.actions != nil && !denied {
 		// Teardown needs no worker to be recorded; the removal runs when one does.
 		deployed := previewDeployed(row.DeployedSha, row.EnvironmentStatus)
 		a.Teardown = deployed || unfinished
@@ -349,6 +363,10 @@ func (h *Handler) actionsFor(ctx context.Context, row dbgen.OwnedPRRow, noWorker
 	case row.State != "open":
 		a.Unavailable = "Closed and merged pull requests are not built."
 		return a, nil
+	case denied:
+		a.Unavailable = "GitHub no longer gives you access to this repository's code."
+		a.Hint = "Building, tearing down and reading build logs need it. Once a repository administrator on GitHub restores your access, reload this page."
+		return a, nil
 	}
 	if err := environments.BuildBlockReason(row.BuildStatus, row.NeedsRefresh); err != nil {
 		a.Unavailable, a.Hint, a.Blocked = blockSentence(err), blockHint(err), label
@@ -362,6 +380,17 @@ func (h *Handler) actionsFor(ctx context.Context, row dbgen.OwnedPRRow, noWorker
 			}
 		}
 		return a, nil
+	}
+	if h.admission != nil {
+		allowed, err := h.admission.Allowed(ctx, workspacescope.WorkspaceID(ctx))
+		if err != nil {
+			return a, err
+		}
+		if !allowed {
+			a.Unavailable, a.Hint, a.Blocked = "This workspace is waiting for early-access approval.",
+				"An operator approves each new workspace before its first build; Early access shows its status. Approval starts no build by itself.", label
+			return a, nil
+		}
 	}
 	available, why, err := h.executionAvailable(ctx)
 	if err != nil {

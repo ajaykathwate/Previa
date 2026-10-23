@@ -172,10 +172,10 @@ func TestBuildIsUnavailableWithoutAWorkerThatCanBuild(t *testing.T) {
 	if values != nil {
 		t.Fatal("a build control was offered with no worker able to build")
 	}
-	// The action stays visible but disabled, with the reason and the fix.
-	disabled := regexp.MustCompile(`(?s)<button[^>]*disabled[^>]*aria-describedby="build-unavailable"[^>]*>.*?Build latest commit`)
-	if !disabled.MatchString(body) || !strings.Contains(body, "it has no preview domain") || !strings.Contains(body, "PREVIEW_BASE_DOMAIN") {
-		t.Fatal("the blocked build was not shown disabled with its reason and fix")
+	// No dead control: the page says why it cannot build and what fixes it.
+	if strings.Contains(body, "Build latest commit</") || regexp.MustCompile(`<(button|input|select|textarea|fieldset)\\b[^>]*\\sdisabled(\\s|=|/?>)`).MatchString(body) ||
+		!strings.Contains(body, "it has no preview domain") || !strings.Contains(body, "PREVIEW_BASE_DOMAIN") {
+		t.Fatal("a blocked build must be explained, without a disabled Build button")
 	}
 	h.caps.discovery = false
 	if _, body := h.form(t); !strings.Contains(body, "No worker that can build previews is running") {
@@ -494,9 +494,9 @@ func TestRepositoryPageSaysWhenSyncsWaitStallOrNeverResolve(t *testing.T) {
 		return w.Body.String()
 	}
 	syncButton := regexp.MustCompile(`(?s)<button[^>]*class="[^"]*sync-button[^"]*"[^>]*>`)
-	disabled := func(button string) bool { return regexp.MustCompile(`\sdisabled(\s|>|=)`).MatchString(button) }
 	h.exec(t, "INSERT INTO pr_syncs(repo_id,state) VALUES(1,'queued') ON CONFLICT (repo_id) DO UPDATE SET state='queued', requested_at=clock_timestamp()")
-	if body := list(); !strings.Contains(body, "is-syncing") || !strings.Contains(body, "data-refresh-at=") || !disabled(syncButton.FindString(body)) {
+	// While it runs, Sync is not offered (no dead control); the status says so.
+	if body := list(); !strings.Contains(body, "is-syncing") || !strings.Contains(body, "data-refresh-at=") || syncButton.MatchString(body) {
 		t.Fatal("a fresh sync spins, refreshes when it would stall, and is not requested twice")
 	}
 	// No worker: no spinner, an explanation and how to start one.
@@ -507,7 +507,7 @@ func TestRepositoryPageSaysWhenSyncsWaitStallOrNeverResolve(t *testing.T) {
 	h.caps.discovery = true
 	// Older than SyncStaleAfter: stalled, and Sync works again.
 	h.exec(t, "UPDATE pr_syncs SET requested_at = now() - interval '6 minutes'")
-	if body := list(); !strings.Contains(body, "Sync stalled") || !strings.Contains(body, "data-sync-stalled") || disabled(syncButton.FindString(body)) {
+	if body := list(); !strings.Contains(body, "Sync stalled") || !strings.Contains(body, "data-sync-stalled") || !syncButton.MatchString(body) {
 		t.Fatal("a stalled sync must say so and let the owner sync again")
 	}
 	// A mergeability check that gave up reads Unknown, with Sync as the way on.
@@ -638,5 +638,44 @@ func TestSetupTabActionsReturnToTheChecklist(t *testing.T) {
 	w = h.request(t, "POST", "/repositories/1/refresh", url.Values{"csrf_token": {values.Get("csrf_token")}, "return": {"setup"}}.Encode())
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/setup?saved=sync" {
 		t.Fatalf("sync from setup: %d %s", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// In Automatic mode a pushed commit waits five quiet minutes. The PR page, its
+// row in the list and Builds count down to the deadline and say that another
+// push restarts the wait; another push moves the deadline later.
+func TestAutomaticBuildCountsDownAndRestartsOnNewCommits(t *testing.T) {
+	h := newActionsHarness(t)
+	h.exec(t, "UPDATE repos SET build_mode='automatic'")
+	push := func(sha string, at time.Time) {
+		t.Helper()
+		body := fmt.Sprintf(`{"action":"synchronize","installation":{"id":99},"repository":{"id":100},"pull_request":{"number":7,"title":"Improve preview","state":"open","mergeable":true,"mergeable_state":"clean","updated_at":%q,"user":{"login":"contributor"},"html_url":"https://github.com/owner/repo/pull/7","head":{"sha":%q,"ref":"feature","repo":{"id":100}}}}`, at.Format(time.RFC3339), sha)
+		if code := send(h.hook, fmt.Sprintf("push-%s-%d", sha, time.Now().UnixNano()), "pull_request", body); code != http.StatusNoContent {
+			t.Fatalf("push %s: %d", sha, code)
+		}
+	}
+	countdown := regexp.MustCompile(`<time datetime="([^"]+)" title="[^"]*" role="timer" data-countdown>(\d+:\d\d)</time>`)
+	push("sha-b", verifyBase.Add(time.Minute))
+	_, body := h.form(t)
+	first := countdown.FindStringSubmatch(body)
+	if first == nil || !strings.Contains(body, "Commit sha-b builds in") || !strings.Contains(body, "another push restarts the wait") ||
+		!strings.Contains(body, "Build now") || !strings.Contains(body, "unless another commit arrives") {
+		t.Fatalf("the PR page must count down to the Automatic build:\n%s", body)
+	}
+	if left := first[2]; left != "5:00" && !strings.HasPrefix(left, "4:") {
+		t.Fatalf("five quiet minutes, counting down: %s", left)
+	}
+	if list := h.request(t, "GET", "/repositories/1", "").Body.String(); !strings.Contains(list, "Builds in") || !countdown.MatchString(list) {
+		t.Fatal("the PR list must count down too")
+	}
+	if builds := h.request(t, "GET", "/builds", "").Body.String(); !strings.Contains(builds, "Starts in") || !countdown.MatchString(builds) {
+		t.Fatal("Builds must count down too")
+	}
+	time.Sleep(1100 * time.Millisecond) // deadlines are shown to the second
+	push("sha-c", verifyBase.Add(2*time.Minute))
+	_, body = h.form(t)
+	second := countdown.FindStringSubmatch(body)
+	if second == nil || second[1] <= first[1] || !strings.Contains(body, "Commit sha-c builds in") {
+		t.Fatalf("another push must restart the wait: %v then %v", first, second)
 	}
 }

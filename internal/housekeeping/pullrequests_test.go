@@ -19,7 +19,7 @@ type recordingVerifier struct {
 	answers map[int64]error
 }
 
-func (v *recordingVerifier) VerifyUpstream(_ context.Context, id int64) (environments.UpstreamSnapshot, error) {
+func (v *recordingVerifier) ConfirmUpstream(_ context.Context, id int64) (environments.UpstreamSnapshot, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.calls = append(v.calls, id)

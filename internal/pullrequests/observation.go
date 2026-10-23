@@ -112,18 +112,37 @@ func scopeError(err error) error {
 	return fmt.Errorf("read repository scope: %w", err)
 }
 
+// Origin is where an observation came from, and so what it may start.
+type Origin int
+
+const (
+	// Discovered: connection discovery, the check before a manual build, or a
+	// mergeability answer. It records the PR and never starts work, so
+	// connecting a repository never builds its open pull requests.
+	Discovered Origin = iota
+	// Confirmed: a re-read of pull requests already tracked (housekeeping or
+	// Sync Pull Requests). A new commit on a tracked open PR counts as a push,
+	// so a lost webhook delays an Automatic build instead of losing it.
+	Confirmed
+	// Pushed: GitHub's own event.
+	Pushed
+)
+
 // ObserveTx expects installation/repository locks in that order. Source time is
 // distinct from local generation. Snapshot callers have additionally fenced the
 // entire API read against repository observation and installation revisions.
-// Only webhook observations reach observer.ObserveTx (and so can authorize
-// work); other observations that change the PR only record a report.
-func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webhook bool, observer Observer) (bool, error) {
+// Pushes, and confirmed new commits on tracked open PRs, reach
+// observer.ObserveTx, which schedules Automatic work (never for forks, never in
+// Manual); other observations that change the PR only record a report.
+func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, origin Origin, observer Observer) (bool, error) {
 	q := dbgen.New(tx)
 	old, err := q.LockPR(ctx, dbgen.LockPRParams{RepoID: repoID, Number: o.Number})
 	exists := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("lock observed PR: %w", err)
 	}
+	webhook := origin == Pushed
+	newCommit := origin == Confirmed && exists && old.State == environments.StateOpen && o.State == environments.StateOpen && old.HeadSha != o.SHA
 	switch judgeObservation(old, exists, o, webhook) {
 	case ignoreObservation:
 		return false, nil
@@ -140,7 +159,7 @@ func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webh
 	if err != nil {
 		return false, fmt.Errorf("save PR observation: %w", err)
 	}
-	if webhook {
+	if webhook || newCommit {
 		if _, err := observer.ObserveTx(ctx, tx, environments.NewRequest(id, generation, o.SHA, o.State)); err != nil {
 			return false, err
 		}
@@ -237,7 +256,7 @@ func ProcessWebhookTx(ctx context.Context, tx pgx.Tx, githubRepoID, installation
 	if err := q.BumpObservation(ctx, repoID); err != nil {
 		return err
 	}
-	applied, err := ObserveTx(ctx, tx, repoID, o, true, observer)
+	applied, err := ObserveTx(ctx, tx, repoID, o, Pushed, observer)
 	if err == nil && applied && o.State == "open" && o.BuildStatus == "checking" {
 		for _, refresher := range refreshers {
 			if refresher == nil {

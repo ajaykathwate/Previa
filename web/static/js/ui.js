@@ -896,6 +896,25 @@
     document.addEventListener('htmx:afterSettle', render);
   }
 
+  // Countdowns (time[data-countdown]) tick down to their datetime ("4:32",
+  // "1:04:32"), the same text the server renders, and stop at 0:00 until a
+  // live update replaces them.
+  function initCountdowns() {
+    const render = () => document.querySelectorAll('time[data-countdown]').forEach((element) => {
+      const until = Date.parse(element.dateTime);
+      if (Number.isNaN(until)) return;
+      const left = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+      const hours = Math.floor(left / 3600);
+      const minutes = Math.floor(left / 60) % 60;
+      const seconds = String(left % 60).padStart(2, '0');
+      const text = hours ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}` : `${minutes}:${seconds}`;
+      if (element.textContent !== text) element.textContent = text;
+    });
+    render();
+    setInterval(render, 1000);
+    document.addEventListener('htmx:afterSettle', render);
+  }
+
   // Preserve native full timestamps; otherwise use the received UTC timestamp.
   const logTimestampPrefix = /^\[?\d{4}[-/]\d{2}[-/]\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\]?/;
   function logTimestamp(line) {
@@ -2124,6 +2143,7 @@
   initPRLogs();
   initBuildProgress();
   initElapsed();
+  initCountdowns();
   initRelativeTimes();
   initCopyButtons();
   initSecretEditor();

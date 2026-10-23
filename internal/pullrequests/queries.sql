@@ -66,7 +66,8 @@ AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p
 SELECT p.*,coalesce(b.state,'Not requested') AS build_state,
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
  coalesce(e.status,'Not deployed') AS environment_status, coalesce(e.head_sha,'') AS deployed_sha,
- coalesce(e.subdomain,'')::text AS hostname
+ coalesce(e.subdomain,'')::text AS hostname,
+ b.available_at AS build_available_at, coalesce(b.source,'')::text AS request_source
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id

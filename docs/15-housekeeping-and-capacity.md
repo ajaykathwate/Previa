@@ -122,10 +122,15 @@ policy, deadline, generation, mergeability).
 ## Confirming PRs with GitHub
 
 Each pass reads the least recently confirmed live PRs through
-`VerifyUpstream` ([06](06-source-and-configuration.md)): one installation-token GET
+`ConfirmUpstream` ([06](06-source-and-configuration.md)): one installation-token GET
 per PR, recorded under the usual installation → repository → PR fences, so a
-concurrent webhook wins. It never authorizes work and discovery stays open-only:
-a PR missing from a listing is never taken as closed. Outcomes are stable
+concurrent webhook wins. A **new commit** it finds on an open PR counts as the
+push whose webhook was lost: in Automatic mode it is scheduled after the usual
+five quiet minutes, with the usual rules (never a fork, access, approval and
+capacity checks); in Manual mode it is only recorded. Nothing else it finds
+authorizes work, and discovery stays open-only: a PR missing from a listing is
+never taken as closed. Because only live PRs are confirmed, a PR whose very first
+push was missed is caught by **Sync Pull Requests** instead. Outcomes are stable
 categories in `pr_reconciliations` (`current`, `changed`, `closed`, `blocked`,
 `inaccessible`, `unavailable`, `error`). A rate limit stops the pass and leaves
 that PR first in line. PRs of suspended installations or inaccessible

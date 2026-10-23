@@ -93,6 +93,7 @@ templ Panel(p Page, csrf string) {
 					@PolicyForm(p, csrf, true)
 				}
 				@PreviewAccessDialog(p, csrf)
+				if p.Available {
 				<noscript>
 					<section class="workspace-panel pr-policy-fallback">
 						<h3>Automatic builds</h3>
@@ -100,6 +101,7 @@ templ Panel(p Page, csrf string) {
 						@PolicyForm(p, csrf, false)
 					</section>
 				</noscript>
+				}
 			}
 		}
 	</div>
@@ -151,16 +153,20 @@ templ repositoryHero(p Page, csrf string) {
 			</div>
 		</div>
 		<div class="pr-header-actions page-hero-actions">
-			<form method="post" action={ components.PublicURL(ctx, RepoURL(p.RepoID)+"/refresh") } hx-post={ components.PublicURL(ctx, RepoURL(p.RepoID)+"/refresh") } hx-target="#repository-detail" hx-sync="#repository-detail:replace">
-				<input type="hidden" name="csrf_token" value={ csrf }/><input type="hidden" name="workspace_query" value={ components.PublicQuery(ctx, p.RepoID, p.Query()) }/>
-				@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline, Class: "sync-button", Disabled: p.SyncDisabled()}) {
-					@components.SyncIcon()
-					Sync Pull Requests
-				}
-			</form>
-			if components.CanManage(ctx) {
+			if p.CanSync() {
+				<form method="post" action={ components.PublicURL(ctx, RepoURL(p.RepoID)+"/refresh") } hx-post={ components.PublicURL(ctx, RepoURL(p.RepoID)+"/refresh") } hx-target="#repository-detail" hx-sync="#repository-detail:replace" hx-disabled-elt="find button">
+					<input type="hidden" name="csrf_token" value={ csrf }/><input type="hidden" name="workspace_query" value={ components.PublicQuery(ctx, p.RepoID, p.Query()) }/>
+					@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantOutline, Class: "sync-button"}) {
+						@components.SyncIcon()
+						Sync Pull Requests
+					}
+				</form>
+			}
+			if components.CanManage(ctx) && p.Available {
 				@AutomaticSwitch(p, csrf)
-				<button type="button" role="switch" aria-checked={ strconv.FormatBool(p.PrivatePreviews) } class="automatic-switch" disabled?={ !p.Available || (!p.PrivatePreviews && !p.PrivatePreviewsReady) } data-open-dialog="preview-access" commandfor="preview-access" command="show-modal" aria-haspopup="dialog" aria-describedby={ privateSetupDescription(p) } title={ privateTitle(p.PrivatePreviews) }><span>Private previews</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
+			}
+			if components.CanManage(ctx) && p.Available && (p.PrivatePreviews || p.PrivatePreviewsReady) {
+				<button type="button" role="switch" aria-checked={ strconv.FormatBool(p.PrivatePreviews) } class="automatic-switch" data-open-dialog="preview-access" commandfor="preview-access" command="show-modal" aria-haspopup="dialog" aria-describedby={ privateSetupDescription(p) } title={ privateTitle(p.PrivatePreviews) }><span>Private previews</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
 			}
 		</div>
 	</header>
@@ -209,7 +215,7 @@ templ previewAccessForm(p Page, csrf, label string) {
 		@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "preview-access", "command": "close", "data-close-dialog": true}}) {
 			Cancel
 		}
-		@button.Button(button.Props{Type: button.TypeSubmit, Disabled: !p.PrivatePreviews && !p.PrivatePreviewsReady}) {
+		@button.Button(button.Props{Type: button.TypeSubmit}) {
 			{ label }
 		}
 	</form>
@@ -280,10 +286,10 @@ templ AutomaticSwitch(p Page, csrf string) {
 	if p.Mode=="automatic" {
 		<form method="post" action={ components.PublicURL(ctx, RepoURL(p.RepoID)+"/policy") } hx-post={ components.PublicURL(ctx, RepoURL(p.RepoID)+"/policy") } hx-target="#repository-detail" hx-sync="#repository-detail:replace" hx-disabled-elt="find button">
 			<input type="hidden" name="csrf_token" value={ csrf }/><input type="hidden" name="workspace_query" value={ components.PublicQuery(ctx, p.RepoID, p.Query()) }/><input type="hidden" name="mode" value="manual"/>
-			<button type="submit" role="switch" aria-checked="true" class="automatic-switch" disabled?={ !p.Available } title="Automatic builds are on. Turn them off to build only on request."><span>Automatic builds</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
+			<button type="submit" role="switch" aria-checked="true" class="automatic-switch" title="Automatic builds are on. Turn them off to build only on request."><span>Automatic builds</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
 		</form>
 	} else {
-		<button type="button" role="switch" aria-checked="false" class="automatic-switch" disabled?={ !p.Available } data-open-dialog="build-policy" commandfor="build-policy" command="show-modal" aria-haspopup="dialog" title="Automatic builds are off: nothing builds until you ask."><span>Automatic builds</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
+		<button type="button" role="switch" aria-checked="false" class="automatic-switch" data-open-dialog="build-policy" commandfor="build-policy" command="show-modal" aria-haspopup="dialog" title="Automatic builds are off: nothing builds until you ask."><span>Automatic builds</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
 	}
 }
 
@@ -303,7 +309,7 @@ templ PolicyForm(p Page, csrf string, modal bool) {
 				Cancel
 			}
 		}
-		@button.Button(button.Props{Type: button.TypeSubmit, Disabled: !p.Available}) {
+		@button.Button(button.Props{Type: button.TypeSubmit}) {
 			{ p.PolicyAction(modal) }
 		}
 	</form>
@@ -316,12 +322,15 @@ templ Results(p Page) {
 				<span class="empty-source-icon" aria-hidden="true">
 					@components.PullRequestIcon()
 				</span>
-				if p.LastRefresh=="" && p.Search=="" && p.Total==0 && p.Available && p.DiscoveryEnabled {
+				if p.LastRefresh=="" && p.Search=="" && p.Total==0 && p.Syncing() {
+					<h3>Looking for pull requests</h3>
+					<p>Previa is fetching this repository's open pull requests from GitHub. They appear here when the sync finishes.</p>
+				} else if p.LastRefresh=="" && p.Search=="" && p.Total==0 && p.CanSync() {
 					<h3>No pull requests found yet</h3>
 					<p>Previa has not looked for this repository's open pull requests yet. Sync once; after that, GitHub keeps the list current.</p>
-					<form method="post" action={ components.PublicURL(ctx, RepoURL(p.RepoID)+"/refresh") } hx-post={ components.PublicURL(ctx, RepoURL(p.RepoID)+"/refresh") } hx-target="#repository-detail" hx-sync="#repository-detail:replace">
+					<form method="post" action={ components.PublicURL(ctx, RepoURL(p.RepoID)+"/refresh") } hx-post={ components.PublicURL(ctx, RepoURL(p.RepoID)+"/refresh") } hx-target="#repository-detail" hx-sync="#repository-detail:replace" hx-disabled-elt="find button">
 						<input type="hidden" name="csrf_token" value={ p.CSRF }/><input type="hidden" name="workspace_query" value={ components.PublicQuery(ctx, p.RepoID, p.Query()) }/>
-						@button.Button(button.Props{Type: button.TypeSubmit, Disabled: p.SyncState == "queued" || p.SyncState == "syncing"}) {
+						@button.Button(button.Props{Type: button.TypeSubmit}) {
 							@components.SyncIcon()
 							Sync Pull Requests
 						}
@@ -461,7 +470,13 @@ templ PRDetail(p Page, pr PR, csrf string) {
 								<h2 id="pr-status-title">{ diagnosis.Title }</h2>
 								<p>{ diagnosis.Summary }</p>
 							} else {
-								<h2 id="pr-status-title">{ pr.Headline.Title }</h2>
+								<h2 id="pr-status-title">
+									{ pr.Headline.Title }
+									if pr.Headline.Until != "" {
+										{ " " }
+										@components.Countdown(pr.Headline.Until, TimeLabel(pr.Headline.Until))
+									}
+								</h2>
 								if pr.Headline.Detail!="" {
 									<p>{ pr.Headline.Detail }</p>
 								}
@@ -475,7 +490,7 @@ templ PRDetail(p Page, pr PR, csrf string) {
 						}
 					</div>
 					if tracked {
-						if progress.Active {
+						if progress.Active && !p.SourceLocked {
 							@Tracker(progress, LogsURL(p.RepoID, pr.Number)+"/events")
 						} else {
 							@Tracker(progress, "")
@@ -534,30 +549,24 @@ templ PRDetail(p Page, pr PR, csrf string) {
 								}
 							</form>
 						} else if pr.Actions.InProgress != "" {
-							@button.Button(button.Props{Disabled: true, Variant: secondaryWhen(pr.Live())}) {
-								@components.BuildIcon()
-								{ pr.Actions.InProgress }
-							}
-						} else if pr.Actions.Blocked!="" {
-							@button.Button(button.Props{Disabled: true, Variant: secondaryWhen(pr.Live()), Attributes: templ.Attributes{"aria-describedby": "build-unavailable"}}) {
-								@components.BuildIcon()
-								{ pr.Actions.Blocked }
-							}
+							<span class="sync-state tone-info build-in-progress" role="status">{ pr.Actions.InProgress }</span>
 						}
 						if pr.Actions.Teardown {
 							@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"data-open-dialog": "teardown-preview", "commandfor": "teardown-preview", "command": "show-modal", "aria-haspopup": "dialog"}}) {
 								{ pr.Actions.TeardownLabel() }
 							}
 						}
-						<a class="text-link logs-link" data-open-pr-logs href={ components.PublicURL(ctx, LogsURL(p.RepoID, pr.Number)) }>
-							@components.LogsIcon()
-							if progress.Active {
-								Follow the build log
-							} else {
-								Build logs
-							}
-						</a>
-						if pr.Running() {
+						if !p.SourceLocked {
+							<a class="text-link logs-link" data-open-pr-logs href={ components.PublicURL(ctx, LogsURL(p.RepoID, pr.Number)) }>
+								@components.LogsIcon()
+								if progress.Active {
+									Follow the build log
+								} else {
+									Build logs
+								}
+							</a>
+						}
+						if pr.Running() && !p.SourceLocked {
 							<a class="text-link logs-link" href={ components.PublicURL(ctx, OutputURL(p.RepoID, pr.Number)) }>
 								@components.ServerIcon()
 								App output
@@ -586,12 +595,14 @@ templ PRDetail(p Page, pr PR, csrf string) {
 					}
 				</section>
 				@prDescription(pr)
-				<details class="pr-recent-logs" data-pr-logs data-pr-logs-url={ components.PublicURL(ctx, LogsURL(p.RepoID, pr.Number)+"/recent") }>
-					<summary>Recent build logs <span>Latest 300 events</span></summary>
-					<div id="pr-recent-log-content">
-						<p class="log-empty"><a class="text-link" href={ components.PublicURL(ctx, LogsURL(p.RepoID, pr.Number)) }>View full build logs</a></p>
-					</div>
-				</details>
+				if !p.SourceLocked {
+					<details class="pr-recent-logs" data-pr-logs data-pr-logs-url={ components.PublicURL(ctx, LogsURL(p.RepoID, pr.Number)+"/recent") }>
+						<summary>Recent build logs <span>Latest 300 events</span></summary>
+						<div id="pr-recent-log-content">
+							<p class="log-empty"><a class="text-link" href={ components.PublicURL(ctx, LogsURL(p.RepoID, pr.Number)) }>View full build logs</a></p>
+						</div>
+					</details>
+				}
 			</div>
 			<aside class="workspace-panel pr-details" aria-labelledby="pr-details-title">
 				<h2 id="pr-details-title" class="pr-details-title">Details</h2>
@@ -659,10 +670,11 @@ templ PRDetail(p Page, pr PR, csrf string) {
 							}
 							if pr.Waiting!="" {
 								<p class="lifecycle-note">{ pr.WaitingNote }</p>
-							} else if pr.Deadline!="" && pr.Build=="pending" {
+							} else if pr.CountingDown() {
 								<p class="lifecycle-note">
-									Eligible { " " }
-									@components.Time(pr.Deadline, TimeLabel(pr.Deadline))
+									Starts in { " " }
+									@components.Countdown(pr.Deadline, TimeLabel(pr.Deadline))
+									{ " unless another commit arrives" }
 								</p>
 							}
 							if pr.Failure!="" {
@@ -766,6 +778,11 @@ templ previewCell(repoID int64, pr PR) {
 		switch  {
 			case pr.Build == "failed":
 				<small class="tone-danger-text">Latest build failed</small>
+			case pr.CountingDown():
+				<small>
+					New commit builds in { " " }
+					@components.Countdown(pr.Deadline, TimeLabel(pr.Deadline))
+				</small>
 			case pr.Build == "running" || pr.Build == "queued" || pr.Build == "pending":
 				<small>Newer build { Label(pr.Build) }</small>
 			case pr.OlderPreview:
@@ -794,11 +811,14 @@ templ previewCell(repoID int64, pr PR) {
 						@components.InfoIcon()
 				}
 			</span>
-			switch pr.Build {
-				case "failed":
+			switch {
+				case pr.Build == "failed":
 					Build failed
-				case "running":
+				case pr.Build == "running":
 					Building
+				case pr.CountingDown():
+					Builds in { " " }
+					@components.Countdown(pr.Deadline, TimeLabel(pr.Deadline))
 				default:
 					{ Label(pr.Build) }
 			}
@@ -939,7 +959,7 @@ templ diagnosisCard(p Page, pr PR, d Diagnosis) {
 						}
 					</ol>
 				</div>
-			} else {
+			} else if !p.SourceLocked {
 				<a class="text-link diagnosis-log-link" data-open-pr-logs href={ components.PublicURL(ctx, LogsURL(p.RepoID, pr.Number)) }>
 					Show recent logs
 					@components.Arrow()
@@ -1189,9 +1209,9 @@ templ ActivityIndex(username, csrf string, p Activity) {
 												</td>
 												<td class="pr-cell-when" data-label="When">
 													switch  {
-														case row.State=="pending" && row.Waiting=="" && row.Deadline!="":
-															Eligible { " " }
-															@components.Time(row.Deadline, TimeLabel(row.Deadline))
+														case row.State=="pending" && row.Waiting=="" && row.CountingDown():
+															Starts in { " " }
+															@components.Countdown(row.Deadline, TimeLabel(row.Deadline))
 														case row.State=="running" && row.StartedAt!="":
 															Started { " " }
 															@components.Time(row.StartedAt, TimeLabel(row.StartedAt))
@@ -1210,11 +1230,13 @@ templ ActivityIndex(username, csrf string, p Activity) {
 												</td>
 											}
 											<td class="pr-cell-logs" data-label="Actions">
-												<a class="text-link" href={ components.PublicURL(ctx, LogsURL(row.RepoID, row.Number)) } aria-label={ "Build logs for " + row.Name + " #" + strconv.Itoa(int(row.Number)) }>
-													@components.LogsIcon()
-													Logs
-												</a>
-												if !p.Previews && (row.CanDismiss() || row.Dismissed()) {
+												if !row.Locked {
+													<a class="text-link" href={ components.PublicURL(ctx, LogsURL(row.RepoID, row.Number)) } aria-label={ "Build logs for " + row.Name + " #" + strconv.Itoa(int(row.Number)) }>
+														@components.LogsIcon()
+														Logs
+													</a>
+												}
+												if !p.Previews && !row.Locked && (row.CanDismiss() || row.Dismissed()) {
 													@failureAction(csrf, p, row)
 												}
 												if row.Teardown {

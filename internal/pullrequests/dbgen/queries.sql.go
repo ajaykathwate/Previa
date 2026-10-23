@@ -461,7 +461,8 @@ const listPRs = `-- name: ListPRs :many
 SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason, p.mergeability_unresolved_at, p.public_id, p.description, p.description_updated_at, p.head_commit_sha, p.head_commit_message, p.head_commit_author, p.head_commit_at, p.head_commit_checked_at,coalesce(b.state,'Not requested') AS build_state,
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
  coalesce(e.status,'Not deployed') AS environment_status, coalesce(e.head_sha,'') AS deployed_sha,
- coalesce(e.subdomain,'')::text AS hostname
+ coalesce(e.subdomain,'')::text AS hostname,
+ b.available_at AS build_available_at, coalesce(b.source,'')::text AS request_source
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id
@@ -515,6 +516,8 @@ type ListPRsRow struct {
 	EnvironmentStatus           string
 	DeployedSha                 string
 	Hostname                    string
+	BuildAvailableAt            pgtype.Timestamptz
+	RequestSource               string
 }
 
 // One page of a repository's PRs with their current request and preview, so
@@ -572,6 +575,8 @@ func (q *Queries) ListPRs(ctx context.Context, arg ListPRsParams) ([]ListPRsRow,
 			&i.EnvironmentStatus,
 			&i.DeployedSha,
 			&i.Hostname,
+			&i.BuildAvailableAt,
+			&i.RequestSource,
 		); err != nil {
 			return nil, err
 		}

@@ -37,7 +37,7 @@ func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Val
 		return pages.Page{}, panelError(err)
 	}
 	page := pages.Page{RepoID: repoID, Name: data.Repo.FullName, Mode: data.Repo.BuildMode, PrivatePreviews: data.Repo.PrivatePreviews,
-		Available: data.Repo.Accessible && data.Repo.Status == "active", DiscoveryEnabled: h.enabled,
+		Available: data.Repo.Accessible && data.Repo.Status == "active", DiscoveryEnabled: h.enabled, SourceLocked: h.sourceDenied(ctx, repoID),
 		SyncState: data.Sync.State, SyncMessage: data.Sync.Message, LastRefresh: timestamp(data.Sync.LastSuccessAt),
 		Fetched: data.Sync.Fetched, Number: data.Page, Pages: data.Pages, Total: data.Total,
 		Search: f.Search, State: f.State, WorkspaceQuery: params.Encode(), CSRF: h.users.CSRFToken(ctx)}
@@ -105,7 +105,10 @@ func (h *Handler) listPR(row dbgen.ListPRsRow, noWorker bool) pages.PR {
 		Branch: row.HeadBranch, SHA: row.HeadSha, State: DisplayStatus(row.State, row.BuildStatus), Build: row.BuildState,
 		Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh, RequestCurrent: row.RequestCurrent,
 		DeployedSHA: row.DeployedSha, Environment: row.EnvironmentStatus, NoWorker: noWorker,
-		URL: row.HtmlUrl, UpdatedAt: timestamp(row.SourceUpdatedAt)}
+		URL: row.HtmlUrl, UpdatedAt: timestamp(row.SourceUpdatedAt), RequestSource: row.RequestSource}
+	if row.RequestCurrent && row.BuildState == "pending" {
+		pr.Deadline = timestamp(row.BuildAvailableAt)
+	}
 	if url := h.previewURL(row.Hostname); url != "" && previewDeployed(row.DeployedSha, row.EnvironmentStatus) {
 		pr.PreviewURL, pr.OlderPreview = url, row.DeployedSha != row.HeadSha
 	}

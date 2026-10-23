@@ -106,7 +106,11 @@ func (pr PR) OutboundLabel() string {
 }
 
 // Headline answers "what is happening with this PR's preview?" in one line.
-type Headline struct{ Tone, Title, Detail string }
+type Headline struct {
+	Tone, Title, Detail string
+	// Until, when set, follows the title as a live countdown (RFC 3339).
+	Until string
+}
 
 // Actions are what the owner may do on a PR now, with the form values that
 // make each request idempotent and revision-checked.
@@ -239,6 +243,9 @@ type Page struct {
 	Name, Mode, SyncState, SyncMessage, LastRefresh string
 	Fetched                                         int32
 	Available, DiscoveryEnabled                     bool
+	// SourceLocked: GitHub no longer lets this person read the code, so
+	// sync, builds, teardown and logs are not offered.
+	SourceLocked bool
 	// PrivatePreviews: only GitHub users who can see the repository may
 	// open its previews.
 	PrivatePreviews           bool
@@ -267,9 +274,10 @@ type Page struct {
 // Syncing reports whether a sync is requested and not finished.
 func (p Page) Syncing() bool { return p.SyncState == "queued" || p.SyncState == "syncing" }
 
-// SyncDisabled reports whether Sync Pull Requests would do nothing now.
-func (p Page) SyncDisabled() bool {
-	return !p.Available || !p.DiscoveryEnabled || p.Syncing() && !p.SyncStale
+// CanSync reports whether Sync Pull Requests is offered: it would run now and
+// GitHub lets this person read the code.
+func (p Page) CanSync() bool {
+	return p.Available && p.DiscoveryEnabled && !p.SourceLocked && (!p.Syncing() || p.SyncStale)
 }
 
 func RepoURL(id int64) string { return fmt.Sprintf("/repositories/%d", id) }
@@ -403,6 +411,9 @@ type ActivityRow struct {
 	// highlighted), "older" or "dismissed" (quiet, with AttentionNote saying
 	// why), or "" for anything else.
 	Attention, AttentionNote string
+	// Locked: GitHub no longer lets this person read the code; its logs and
+	// actions are not offered.
+	Locked bool
 }
 
 // PreviewStatus is a Previews row's status, in what reviewers care about: a
@@ -562,6 +573,18 @@ func TimeLabel(value string) string {
 }
 
 func (p Page) Selected() PR { return *p.SelectedPR }
+
+// CountingDown reports whether an Automatic build waits for its quiet period
+// to end at Deadline, still ahead.
+func (pr PR) CountingDown() bool {
+	return pr.Build == "pending" && pr.RequestSource == "automatic" && components.Upcoming(pr.Deadline, time.Now())
+}
+
+// CountingDown reports whether the row's Automatic build waits for its quiet
+// period to end at Deadline, still ahead.
+func (r ActivityRow) CountingDown() bool {
+	return r.State == "pending" && r.RequestSource == "automatic" && components.Upcoming(r.Deadline, time.Now())
+}
 
 func (p Page) Owner() string { owner, _, _ := strings.Cut(p.Name, "/"); return owner }
 func (p Page) RepositoryName() string {
