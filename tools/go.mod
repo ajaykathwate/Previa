@@ -1,6 +1,6 @@
 module github.com/ajaykathwatee/previa/tools
 
-go 1.26.9
+go 1.26.10
 
 tool (
 	github.com/a-h/templ/cmd/templ

@@ -1,9 +1,9 @@
 module github.com/ajaykathwatee/previa
 
-go 1.26.9
+go 1.26.10
 
 require (
-	github.com/Oudwins/tailwind-merge-go v0.2.0
+	github.com/Oudwins/tailwind-merge-go v0.2.3
 	github.com/a-h/templ v0.3.1020
 	github.com/alexedwards/scs/pgxstore v0.0.0-20251002162104-209de6e426de
 	github.com/alexedwards/scs/v2 v2.9.0

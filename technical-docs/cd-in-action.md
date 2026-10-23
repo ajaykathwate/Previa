@@ -140,7 +140,7 @@ Read-only repository contents access is the workflow default. Publication jobs
 explicitly request their write permissions below.
 
 `GOTOOLCHAIN=local` uses the job's installed Go toolchain. `setup-go` reads the
-required version from `go.mod`, currently **1.26.9**. It is unrelated to the
+required version from `go.mod`, currently **1.26.10**. It is unrelated to the
 application's version tag such as `v0.2.0`.
 
 There is no workflow `concurrency` block. Multiple tags can request separate
@@ -563,7 +563,7 @@ production commands do not enforce automatic attestation verification.
 ### 7.1 Pinned image arguments
 
 The Dockerfile declares `GO_IMAGE` and `RUNTIME_IMAGE` with digest-pinned
-defaults: Go 1.26.9 on Debian Bookworm for compilation, and nonroot distroless
+defaults: Go 1.26.10 on Debian Bookworm for compilation, and nonroot distroless
 static Debian 12 for server/worker runtime. A digest identifies image content;
 the descriptive version tag alone is not the same pin.
 
