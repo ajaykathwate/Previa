@@ -55,6 +55,13 @@ type fakeGitHub struct {
 	// defaultBranch its GitHub default branch, for test-data baselines.
 	heads         map[string]string
 	defaultBranch string
+	// collaborators are further people's repository permissions, by login.
+	collaborators map[string]fakeCollaborator
+}
+
+type fakeCollaborator struct {
+	ID         int64
+	Permission string
 }
 
 type fakeRun struct {
@@ -269,6 +276,17 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == repoPath+"/collaborators/owner/permission":
 		write(200, map[string]any{"permission": "admin", "user": map[string]any{"id": 1, "login": "owner"}})
+	case strings.HasPrefix(path, "/repos/"+e2eOwner+"/") && strings.Contains(path, "/collaborators/") && strings.HasSuffix(path, "/permission"):
+		_, login, _ := strings.Cut(strings.TrimSuffix(path, "/permission"), "/collaborators/")
+		c, ok := f.collaborators[login]
+		if login == "owner" {
+			c, ok = fakeCollaborator{ID: 1, Permission: "admin"}, true
+		}
+		if !ok {
+			write(http.StatusNotFound, map[string]any{"message": "Not Found"})
+			return
+		}
+		write(200, map[string]any{"permission": c.Permission, "user": map[string]any{"id": c.ID, "login": login}})
 	case strings.HasPrefix(path, repoPath+"/pulls/") && f.forks[atoi(strings.TrimPrefix(path, repoPath+"/pulls/"))] != "":
 		number := atoi(strings.TrimPrefix(path, repoPath+"/pulls/"))
 		write(200, map[string]any{"number": number, "state": "open", "title": "From a fork", "html_url": "https://github.com/octo/app/pull/" + strconv.Itoa(number),

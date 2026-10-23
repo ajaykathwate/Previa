@@ -145,7 +145,7 @@ test-routing: egress-image
 # test data (docs/32), on a throwaway schema.
 test-e2e: egress-image
 	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
-	TEST_E2E=1 $(GO) test -count=1 -v -timeout 120m -run '^TestReal(EndToEnd|BackendEndToEnd|ReferenceJourneys|TestDataJourneys)$$' ./internal/app
+	TEST_E2E=1 $(GO) test -count=1 -v -timeout 120m -run '^TestReal(EndToEnd|BackendEndToEnd|ReferenceJourneys|TestDataJourneys|RoleJourney)$$' ./internal/app
 
 # Only the reference journeys of docs/31-test-data.md: seeded data, Reset test
 # data, a failing seed, a test login from a repository secret and a fork.

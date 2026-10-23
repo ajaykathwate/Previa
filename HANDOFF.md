@@ -1,64 +1,70 @@
 # Project handoff
-Last updated: 2026-10-21
+Last updated: 2026-10-22
 
-## Latest task complete — aggressive build-only verification
-- User requested a fresh aggressive test pass of build-related functionality only.
-  Completed with no product defects or data races detected in executed checks.
-- Branch mvp-complete, base75f5681 (F7 committed). Build-testing changes committed
-  in one commit at the owner's request; not pushed. Only4 tests +4 docs changed.
-- Do not repeat completed verification. No subagents allowed. Every command prefixes
-  /home/ajaykathwatee/.local/bin/rtk. Do not edit technical-docs/inside-previa.md.
+## Latest task — full regression (roles, access, build → preview), uncommitted
+- Owner asked for a full step-by-step regression with weight on build → preview and
+  roles/access; chose simulated + live GitHub, "fix defects with a test", "add tests
+  for gaps". Branch mvp-complete, base 0195b73. Nothing committed or pushed: commit
+  only when the owner asks (suggested: one commit per topic in the report).
+- Report: test-docs/2026-10-22-full-regression-report.md (indexed in test-docs/README).
+- Every command may be prefixed /home/ajaykathwatee/.local/bin/rtk. No subagents.
+  Do not edit technical-docs/inside-previa.md.
 
-## Tests added (application code unchanged)
-- internal/environments/burst_test.go: 16 simultaneous requests across2 workspaces;
-  4 global/workspace limit combinations, both legacy caps and F3 entitlements.
-  Exact runtime admissions/ledger counts; waiting builds never execute/reserve.
-- internal/repoconfig/fuzz_test.go: arbitrary build YAML, varying operator ceilings,
-  deterministic effective settings/hash and bounded CPU/memory/timeout/processes.
-- internal/source/fuzz_test.go: in-memory archive-path/symlink containment fuzzing.
-- internal/source/workspace_failure_test.go: real closed-root file/directory/link
-  failure, safe retry classification, no partial writes and successful recovery.
-  Initial authoring syntax typo corrected before successful runs; no app defect.
+## Defects fixed (each with a test)
+- D-01 Go 1.26.10 (GO-2026-6809, reachable crypto/x509): go.mod, tools/go.mod,
+  Dockerfile GO_IMAGE digest (index digest fe3da92a…), docs/02, docs/23, tech docs.
+- D-02 production data race: tailwind-merge-go v0.2.0 shared LRU → v0.2.3;
+  web/components/utils/utils_test.go. Real class sets verified identical.
+- D-03 /workspaces/{id}/delete 503 → internal/app/accounts.go workspaceDeletion.
+- D-04 pending workspace Install GitHub bare 403 → earlyaccess Guard redirects forms
+  to /early-access; Repositories shows status, no button.
+- D-05 Reviewers no longer see/open Early access (sidebar + workspaces middleware).
+- D-06 missed pushes: pullrequests.Origin (Discovered/Confirmed/Pushed);
+  housekeeping uses ConfirmUpstream; SyncArgs.Confirm for Sync button. A new commit
+  on a tracked open PR schedules Automatic work (never forks; Manual records only;
+  connection discovery and pre-build VerifyUpstream never start work).
 
-## Completed verification — do not rerun
-- 19 build/support packages with -race/-shuffle/coverage PASS: 420 parent +239
-  subtest results; opt-in skips separately accounted. Package-local coverage63.6%
-  excludes external-process/cross-package/system/browser execution, not full coverage.
-- Global/workspace and F3 bursts repeated5: 40 bursts /640 submissions PASS.
-- Quota/cancellation/replay stress count10: 60 PASS. Ordering/close/reopen/lost-job/
-  publication recovery count5: 40 PASS. Source-workspace failure count5: 15 cases PASS.
-- Build-specific approval/revocation fences count3: 27 parent +30 subtests PASS.
-  Build reporting/App client: 30 parent +18 subtests PASS; 2live tests skipped.
-  Assembled pipeline/capacity/source checks count3: 15 PASS.
-- Build YAML fuzz60s:21498 executions PASS. Archive path fuzz60s:12833 PASS.
-- Build-only Chromium scenarios19, Setup5, persistent-data3: all27 PASS.
-- Sequential real Docker stages (-race/-shuffle): builder6 +8 subcases PASS271s;
-  runtime11 +5 subcases PASS299s; routing8 PASS225s; housekeeping2 PASS22s;
-  all4 E2E journeys PASS753s command. Total31 parents +13 subcases.
-- E2E confirms physical worker builds, caches, networking/secrets, setup/seed,
-  failed replacement preservation, Automatic newest SHA, GitHub outage recovery,
-  baseline/kept-data/reset/fallback/fork/merge, missed uninstall/disconnect cleanup,
-  stable routing, journal ack and usage reconciliation. Race instruments Go test
-  processes; separately compiled worker/app fixture processes use normal build flags.
-- make build PASS; final go vet/golangci-lint PASS0 after all added tests.
-  Docs links/whitespace valid. Final Docker running inventory only original DB/egress.
-- Evidence: test-docs/2026-10-20-build-stress-report.md. Raw logs/coverage/scripts/
-  final-summary.json in /tmp/previa-build-audit/. All background jobs finished.
-- No live GitHub writes or production acceptance claimed. Unrelated account/profile/
-  support/review-authoring/usage-settings UI suites intentionally excluded.
+## Owner-requested product changes (docs updated)
+- "Only what a person can use" (docs/21): no disabled controls; role-based hiding;
+  temporary blocks as status text. Exceptions kept: busy "Starting…" buttons and
+  type-DELETE confirm dialogs. Reviewers do not see View on GitHub (docs/30).
+- Automatic countdown (docs/16): components.Countdown + ui.js initCountdowns;
+  ListPRs now selects build_available_at/request_source (sqlc regenerated).
 
-## State / next steps
-- Testing task finished; no required code work or verification remains for it.
-- docs02 documents focused race/fuzz commands and sequential real Docker suites;
-  test-docs index links the new report. Committed at the owner's request.
-- F0–F7 implementation already complete and committed in prior work. Owner still
-  needs real Google Web OAuth client/env/callback, migration46 on intended DB,
-  manual/policy/release/deployment acceptance. Operator numeric IDs still empty.
+## New tests
+- internal/app/access_matrix_test.go: TestEveryRouteRespectsEveryRole (accessMatrix,
+  accessFingerprints, accessNavigation), TestPagesOfferOnlyWhatPeopleCanUse, dump
+  helpers (ACCESS_MATRIX_DUMP, USABILITY_DUMP). A new route must be classified.
+- internal/app/e2e_roles_test.go: TestRealRoleJourney (in make test-e2e regex).
+- server.go seam newServerFeaturesWithApp; e2e fake GitHub has per-login permissions.
+
+## Verification (this cycle)
+- go test -race -shuffle -p=3 ./...: 53 pkgs, 701 top + 1181 sub, 0 races.
+  Use -p≤3: higher parallelism exhausts Postgres locks (SQLSTATE 53200).
+- Real Docker: builder 6+8, runtime 11+5, routing 8, housekeeping 2, e2e 5 journeys
+  (incl. role journey) all PASS.
+- Browser: 7 suites PASS; main suite 54/55 per full run, failure always one of the
+  timing-sensitive repository-page scenarios (slow search / never-answers); pass
+  alone; A/B shows it predates the countdown. Follow-up: harden those two tests.
+- release-images (Go 1.26.10 pin) + prod-smoke 33/33 PASS (no age installed).
+- make lint 0 issues; make vuln 0 reachable.
+- Live GitHub (ajaykathwate/previa-live-test, DB previa_live in the test container):
+  sign-in, early-access approval, install, build, trusted HTTPS preview, PR report,
+  Reviewer invite (2nd account ajaykathwatee), missed-push recovery → Deployment 2.
+  Not done live: resolve on Deployment 2, UI teardown, PR close (covered by role
+  journey). Live preview resources removed; router restored (dev routes v33, stopped).
+
+## Owner actions pending
+- Untick Active on the GitHub App webhook (URL points at a dead trycloudflare tunnel;
+  the API cannot toggle Active). Close PR #1 of previa-live-test when convenient.
+- Still from earlier: real Google OAuth client/env, migration 46 on intended DB,
+  SUPPORT_OPERATOR_GITHUB_IDS for production, release/deployment acceptance.
 
 ## Environment / boundaries
-- Disposable DB container previa-f56-tests-postgres at127.0.0.1:55439,
-  DBprevia_ux_test, Goose46/River007. Never migrate developer DB or stop user jobs.
-- GOCACHE=/tmp/previa-go-build GOFLAGS=-buildvcs=false; lintcache
-  /tmp/previa-golangci-lint. DB/socket/browser/Docker commands require_escalated.
-- UI_BROWSER_EXECUTABLE=/snap/bin/chromium. Egress imageprevia-egress:dev exists.
-  No unrelated Docker pruning or development-process changes performed.
+- Disposable DB previa-f56-tests-postgres 127.0.0.1:55439: previa_ux_test (tests),
+  previa_live (live run evidence). Never migrate the developer DB (previa-postgres-1).
+- GOCACHE=/tmp/previa-go-build GOFLAGS=-buildvcs=false; UI_BROWSER_EXECUTABLE=
+  /snap/bin/chromium. /tmp is wiped on reboot; recreate env exports as needed.
+- After an interrupted real suite, remove only its labelled fixtures (docs/02).
+- Pre-existing: internal/installations/service.go not gofmt-formatted at base;
+  an old git stash "unfinished work by claude code" exists — leave both alone.

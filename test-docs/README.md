@@ -21,6 +21,12 @@ in the [2026-10-20 Google sign-in report](2026-10-20-google-sign-in-report.md).
 It includes team access/offboarding, migration, browser and worker-pipeline checks;
 the full product regression cycle below remains the earlier baseline.
 
+The [22 October full regression report](2026-10-22-full-regression-report.md) is
+the latest cycle across the whole application: a route × role access matrix, a
+crawl proving pages offer only what each person can use, a real-Docker role
+journey, a live GitHub pass, six fixed defects, and the owner's changes (only
+usable controls, Automatic countdowns, recovery of pushes whose webhook was lost).
+
 The focused [20 October build stress report](2026-10-20-build-stress-report.md)
 records the build-only aggressive pass: race/shuffle testing, repeated admission
 and quota races, fuzzing, build UI and real Docker/worker failure journeys. It does

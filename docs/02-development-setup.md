@@ -107,7 +107,7 @@ See [33](33-usage-and-free-plan.md) for accounting and recovery details.
 
 ## 1. Prerequisites
 
-- Go **1.26.9 or newer** (required by `go.mod` and `tools/go.mod`; 1.26.9 fixes standard-library vulnerabilities `make vuln` reports in earlier releases). With the default `GOTOOLCHAIN=auto`, an older local Go downloads 1.26.9 by itself.
+- Go **1.26.10 or newer** (required by `go.mod` and `tools/go.mod`; 1.26.10 fixes standard-library vulnerabilities `make vuln` reports in earlier releases, most recently GO-2026-6809 in `crypto/x509`). With the default `GOTOOLCHAIN=auto`, an older local Go downloads 1.26.10 by itself.
 - Git, GNU Make, curl, a SHA-256 tool (`sha256sum` or `shasum`) and OpenSSL.
 - Docker Engine with the Compose plugin, or Docker Desktop running Linux containers.
 - Internet access for the first dependency, tool and image downloads.
@@ -219,7 +219,7 @@ production only. The rules that most often stop a first run:
 
 - Sign-in needs real OAuth values; placeholders start the server but cannot log in.
 - The five server App settings are all-or-nothing. Omit them all to run with
-  repository linking visibly disabled. A partial set fails validation.
+  repository linking not offered (the Repositories page says it is not configured). A partial set fails validation.
 - Without the two worker App settings, the worker processes only `ping`.
 - An unset webhook secret makes `/webhooks/github` return 503.
 - The two `SECRETS_*` values go together, on the server and the worker alike (the
@@ -578,7 +578,11 @@ make test-test-data       # only the persistent test data journeys, about 4 minu
 ```
 
 `make test-e2e` runs `TestRealEndToEnd`, `TestRealBackendEndToEnd`,
-`TestRealReferenceJourneys` and `TestRealTestDataJourneys`; `make test-reference`
+`TestRealReferenceJourneys`, `TestRealTestDataJourneys` and `TestRealRoleJourney`
+(the core flow through the server's own routes, person by person: a signed webhook
+opens the PR, refused roles cannot build, the granted Developer builds, the
+Reviewer opens the preview and records and resolves a finding across two
+deployments, the Owner tears it down); `make test-reference`
 runs only the reference journeys ([31](31-test-data.md#reference-journeys)) and
 `make test-test-data` only the persistent test data journeys
 ([32](32-persistent-test-data.md#how-it-is-verified)): a baseline built from the
@@ -608,7 +612,12 @@ is gone; deployment 2 of the same commit serves the seed again`, `failed seed:
 setup_failed; deployment 2 keeps serving its seeded data`, `notes at …: the revealed
 test access signs in to 3 seeded notes`, `fork: no secrets, no test login, and the
 preview says so` and `teardown: no container, image, network or volume of any
-preview remains`. The basic preview also serves 50
+preview remains`. `TestRealRoleJourney` passes in under a minute and logs its ten
+steps, from `1. A signed-out visitor is sent to GitHub sign-in; signed in, the Owner
+sees the connected repository` to `10. GitHub closes the PR: its review stays
+readable and nobody can build it`, then `usage: 2 physical attempts`. To run only it:
+`TEST_E2E=1 go test -count=1 -v -run '^TestRealRoleJourney$' ./internal/app` with
+`.env` loaded and a disposable `TEST_DATABASE_URL` exported. The basic preview also serves 50
 consecutive HTTPS requests before the failed-rebuild check. Set `TEST_E2E_LOG=1`
 for worker logs and Traefik debug diagnostics; a failing test captures the router's
 last 80 log lines before removing it. Anything the run could not remove fails the
@@ -742,7 +751,7 @@ its sign-in check. Run the server on all interfaces and point the worker at it:
 `PREVIEW_ACCESS_URL=http://host.docker.internal:8080/previews/auth` in `.env`, then
 `make migrate-up`, `make router-up`, and restart both server and worker. Set the URL
 on all routing workers; production sets it in the Compose file. The **Private
-previews** switch stays disabled, with a setup explanation, until all live routing
+previews** switch is not offered, and a setup explanation shows instead, until all live routing
 workers advertise it (workers expire after 90 seconds). The server checks the same
 capability on POST, so submitting an old form cannot enable an unconfigured feature.
 
@@ -833,7 +842,7 @@ go test ./internal/appoutput ./internal/previewaccess ./internal/auth ./internal
 follower replacement, privacy rollback/configuration guards, River snoozes without
 spent attempts, same-version route refresh, and OAuth return to the requested PR
 logs. Tests use disposable schemas. Automatic builds offer **Build now** only
-during the quiet period; queued/running requests show a disabled progress button.
+during the quiet period; queued/running requests show their progress as a status.
 
 ### Focused build stress and fuzz checks
 
@@ -862,6 +871,41 @@ worker journeys, run `make test-builder`, `make test-runtime`, `make test-routin
 assert Docker resource deltas; overlapping Docker suites would invalidate those
 checks. These commands use disposable schemas and test-owned resources. Keep the
 development server/worker and their database separate from the test fixtures.
+
+If the machine or Docker restarts while a real suite runs, its fixtures stay
+behind (containers labelled `io.previa.instance=<test instance>`, `previa-rt-*`
+routing fixtures, their networks and `previa/<instance>-pr-*` images). Remove only
+those: detach `previa-egress` from a fixture network
+(`docker network disconnect -f <network> previa-egress`) before removing it.
+
+### Role and access matrix
+
+`TestEveryRouteRespectsEveryRole` (`internal/app`) assembles the server exactly as
+`RunServer` does, with a fake GitHub as its App, and sends **every route** the
+router serves as eight people: signed out, Owner, Admin, a granted Developer, a
+granted Developer whom GitHub no longer lets read the code, a granted Reviewer, a
+removed member and another workspace's owner. Repository routes run against a
+granted and an ungranted repository, with valid forms. It needs only an exported
+`TEST_DATABASE_URL` and runs in the ordinary `go test ./...`:
+
+```sh
+go test -race -count=1 -run '^(TestEveryRouteRespectsEveryRole|TestPagesOfferOnlyWhatPeopleCanUse)$' ./internal/app
+```
+
+`TestPagesOfferOnlyWhatPeopleCanUse` crawls every page each of those people can
+open and fails on a disabled control, a form the server would refuse them or a
+link that is refused or bounces them (see [21](21-ui-architecture.md)). To list
+what it finds without failing, run `USABILITY_DUMP=/path/usability.tsv go test
+-count=1 -run '^TestUsabilityDump$' ./internal/app`.
+
+**Expected:** `ok` in about a minute. Every answer matches `accessMatrix`, the
+database afterwards matches each person's fingerprint (refused requests change
+nothing), each person's sidebar matches `accessNavigation`, and the crawl finds
+nothing. A new route fails the test with `… is not in accessMatrix: classify who
+may use it`; to see what the server now answers, record the observed matrix with
+`ACCESS_MATRIX_DUMP=/path/matrix.tsv go test -count=1 -run '^TestAccessMatrixDump$'
+./internal/app`, review it against the roles in [28](28-shared-workspaces.md#roles)
+and [30](30-reviews.md#access), then update the table.
 
 ### Browser regression checks (optional)
 
