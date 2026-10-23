@@ -39,7 +39,7 @@ templ Navbar(loggedIn bool) {
 						@Arrow()
 					}
 				} else {
-					@button.Button(button.Props{Href: "/auth/github/login", Class: "nav-cta"}) {
+					@button.Button(button.Props{Href: SignInURL(ctx), Class: "nav-cta"}) {
 						<span class="hidden sm:inline">Get started</span><span class="sm:hidden">Sign in</span>
 						@Arrow()
 					}

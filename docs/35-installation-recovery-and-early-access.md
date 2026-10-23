@@ -82,6 +82,8 @@ Configured `SUPPORT_OPERATOR_GITHUB_IDS` operators use `/operator/early-access` 
 review pending workspaces (25/page) and approve with a native CSRF-protected form.
 An Owner/Admin is not an operator. An empty allowlist denies all operator access;
 set the operator's numeric GitHub **user** ID before inviting early-access users.
+A production server refuses to start with early access on and an empty allowlist
+(`check-config` says so); a development server starts and logs a warning.
 The env comments and [development setup](02-development-setup.md#f5f6-installation-recovery-and-workspace-approval)
 explain where to find it. No approval email is promised.
 

@@ -7,9 +7,13 @@ Developer/Admin access to an existing workspace.
 
 ## User flow
 
-1. The public page offers GitHub and, when configured, Google. Protected-page
+1. The public page offers GitHub and, when configured, Google. With Google
+   configured, the navbar's **Get started** opens the sign-in choices
+   (`/auth/login`); without it, it goes straight to GitHub. Protected-page
    redirects use `/auth/login` to offer both and preserve the original review or
    preview destination. Existing GitHub-only configuration retains its old flow.
+   After a logout, GitHub shows its account picker so another account can be used
+   ([sign-in](04-github-sign-in-and-app.md)); Google always shows its chooser.
 2. A Google-only signup creates an account without GitHub or an administrative
    workspace. `/workspaces` explains how to join a team. Existing invited members
    can use their granted previews/reviews, findings and comments without GitHub.

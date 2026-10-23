@@ -12,6 +12,15 @@ func GoogleLoginEnabled(ctx context.Context) bool {
 	return enabled
 }
 
+// SignInURL is where a "Get started" that names no method goes: the choice of
+// sign-in methods when Google is on, otherwise straight to GitHub.
+func SignInURL(ctx context.Context) string {
+	if GoogleLoginEnabled(ctx) {
+		return "/auth/login"
+	}
+	return "/auth/github/login"
+}
+
 type githubConnectedContextKey struct{}
 
 func WithGitHubConnected(ctx context.Context, connected bool) context.Context {

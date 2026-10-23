@@ -1353,7 +1353,7 @@ needed when the support address changes:
 | --- | --- |
 | `SUPPORT_EMAIL` | Empty; displayed support contact. The owner's local `.env` is configured. |
 | `OPERATOR_NAME` | `Previa operator`; public policy operator name. |
-| `SUPPORT_OPERATOR_GITHUB_IDS` | Empty denies everyone; comma-separated numeric **user** IDs. |
+| `SUPPORT_OPERATOR_GITHUB_IDS` | Empty denies everyone; comma-separated numeric **user** IDs. Required in production while `EARLY_ACCESS_ENABLED=true`. |
 | `SUPPORT_MESSAGE_MAX_BYTES` | 16384 UTF-8 bytes; 1024–65536 allowed. |
 | `SUPPORT_REQUESTS_PER_DAY` | 5 per user per UTC day; 1–100 allowed. |
 | `SUPPORT_RETENTION_DAYS` | 90 after resolution; open requests stay until resolved/deleted. |
@@ -1428,6 +1428,20 @@ five minutes and at startup, even with builds paused. No installation token is
 stored in PostgreSQL. `SUPPORT_OPERATOR_GITHUB_IDS` also authorizes approvals at
 `/operator/early-access`; empty denies everyone. Use numeric GitHub user IDs from
 the GitHub user API response's numeric `id` (`https://api.github.com/users/YOUR_LOGIN`), not logins, App IDs or installation IDs.
+
+With early access on and no operator, nobody could approve a new workspace. A
+development server still starts and logs this warning once:
+
+```json
+{"level":"WARN","msg":"early access is on but SUPPORT_OPERATOR_GITHUB_IDS is empty, so nobody can approve new workspaces; set your numeric GitHub user ID or EARLY_ACCESS_ENABLED=false"}
+```
+
+(abridged: the real line also carries the time and process fields).
+
+With `APP_ENV=production` the server refuses to start, and `check-config` exits 1
+with `SUPPORT_OPERATOR_GITHUB_IDS is required when APP_ENV=production and
+EARLY_ACCESS_ENABLED=true`. Set the operator's ID or `EARLY_ACCESS_ENABLED=false`.
+The worker approves nothing and does not check this.
 
 After creating a workspace, expect `/early-access` with Awaiting approval. A
 configured operator approves it in the console. Refresh status: Approved.

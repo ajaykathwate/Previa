@@ -1,15 +1,31 @@
 # Project handoff
-Last updated: 2026-10-22
+Last updated: 2026-10-23
 
-## Latest task — full regression (roles, access, build → preview), uncommitted
-- Owner asked for a full step-by-step regression with weight on build → preview and
-  roles/access; chose simulated + live GitHub, "fix defects with a test", "add tests
-  for gaps". Branch mvp-complete, base 0195b73. Nothing committed or pushed: commit
-  only when the owner asks (suggested: one commit per topic in the report).
-- Report: test-docs/2026-10-22-full-regression-report.md (indexed in test-docs/README).
+## Latest task — owner requests after the regression (committed)
+- Branch mvp-complete: regression (7c5ce97..d216e7d), landing page (4404700), then
+  Open Source Tested and account switching/operator check/stable browser tests.
+  Nothing pushed. Commit only when the owner asks; push to main only.
+- Open Source Tested (nav/footer/home/page title; URL /open-source-tests kept): ten
+  projects (mermaid-live-editor, umami, miniflux, fastapi template, bakerydemo,
+  saleor, sure, spring-petclinic, bookstack, docmost); no per-project status or Core
+  tags (TestPageRendersEveryProjectOnceWithoutStatuses); each card's disclosure is
+  "Test it yourself". Caveat for the owner: none of the ten has a recorded live run.
+- Logout → account switch: logout sets previa_signed_out (__Host- over HTTPS, 30
+  days); next GitHub login adds prompt=select_account until a sign-in completes;
+  connecting GitHub from the profile always does. Navbar Get started goes to
+  /auth/login when Google is configured (components.SignInURL). Docs 04, 36, DESIGN.
+- Production refuses EARLY_ACCESS_ENABLED=true with empty SUPPORT_OPERATOR_GITHUB_IDS
+  (server config + check-config); development logs a warning. prod smoke env sets
+  operator 1. Docs 02, 25, 35, both env examples.
+- Flaky browser tests: root cause was the live stream's first refetch swapping the
+  panel; htmx wires new fields after its 20 ms settle, so a fill in that window
+  was lost. ui.test.cjs liveIdle() now waits before typing on live pages.
+- Google sign-in needs the owner's Google OAuth Web client (docs/02 F7 section);
+  local .env has no GOOGLE_OAUTH_* yet, so sign-in is GitHub-only there.
 - Every command may be prefixed /home/ajaykathwatee/.local/bin/rtk. No subagents.
   Do not edit technical-docs/inside-previa.md.
 
+## Previous task — full regression (report test-docs/2026-10-22-full-regression-report.md)
 ## Defects fixed (each with a test)
 - D-01 Go 1.26.10 (GO-2026-6809, reachable crypto/x509): go.mod, tools/go.mod,
   Dockerfile GO_IMAGE digest (index digest fe3da92a…), docs/02, docs/23, tech docs.
@@ -43,9 +59,8 @@ Last updated: 2026-10-22
   Use -p≤3: higher parallelism exhausts Postgres locks (SQLSTATE 53200).
 - Real Docker: builder 6+8, runtime 11+5, routing 8, housekeeping 2, e2e 5 journeys
   (incl. role journey) all PASS.
-- Browser: 7 suites PASS; main suite 54/55 per full run, failure always one of the
-  timing-sensitive repository-page scenarios (slow search / never-answers); pass
-  alone; A/B shows it predates the countdown. Follow-up: harden those two tests.
+- Browser: 7 suites PASS; main suite 54/55 per full run then (slow search /
+  never-answers flakes), hardened 2026-10-23 (see Latest task).
 - release-images (Go 1.26.10 pin) + prod-smoke 33/33 PASS (no age installed).
 - make lint 0 issues; make vuln 0 reachable.
 - Live GitHub (ajaykathwate/previa-live-test, DB previa_live in the test container):
@@ -58,7 +73,8 @@ Last updated: 2026-10-22
 - Untick Active on the GitHub App webhook (URL points at a dead trycloudflare tunnel;
   the API cannot toggle Active). Close PR #1 of previa-live-test when convenient.
 - Still from earlier: real Google OAuth client/env, migration 46 on intended DB,
-  SUPPORT_OPERATOR_GITHUB_IDS for production, release/deployment acceptance.
+  SUPPORT_OPERATOR_GITHUB_IDS for production (now enforced), release/deployment
+  acceptance.
 
 ## Environment / boundaries
 - Disposable DB previa-f56-tests-postgres 127.0.0.1:55439: previa_ux_test (tests),

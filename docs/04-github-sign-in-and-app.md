@@ -53,12 +53,24 @@ and SameSite=Lax. Logout is a CSRF-protected POST behind a confirmation modal; i
 deletes the session row and leaves your GitHub session untouched. A legacy GET
 `/auth/logout` only opens that modal.
 
+Because GitHub stays signed in and remembers that you authorized Previa, its sign-in
+would otherwise return straight to the same account. Logout therefore sets a
+non-secret `previa_signed_out` marker cookie (HttpOnly, `__Host-` prefixed over HTTPS,
+30 days). While it is present, **Get started** adds `prompt=select_account`, so
+GitHub shows its account picker: continue as the signed-in account or choose **Use a
+different account**. The next completed sign-in clears the marker. Connecting GitHub
+to a Google-created account from the profile always shows the picker, so the wrong
+GitHub account is never linked silently. Google's sign-in always shows its own
+account chooser.
+
 ### Check it
 
 1. Private window → `http://localhost:8080/` → **Get started with GitHub**.
 2. Approve on GitHub; expect `/dashboard` with your username.
 3. Restart the server and refresh: the database-backed session survives.
 4. **Account menu → Log out → Confirm logout**; `/protected` now redirects to sign-in.
+5. **Get started with GitHub** again: GitHub shows its account picker instead of
+   signing you straight back in; **Use a different account** signs in as someone else.
 
 Failure paths:
 
@@ -71,7 +83,8 @@ Failure paths:
 - **Outages:** database/GitHub failures show a retry page and never issue a session.
 
 Automated tests simulate GitHub and cover state/cookie checks, replay rejection,
-session rotation and deletion, CSRF, idle/absolute expiry and HTTPS cookie flags;
+session rotation and deletion, CSRF, idle/absolute expiry, HTTPS cookie flags and
+the account picker after logout and when connecting GitHub;
 the PostgreSQL test covers persisted sessions across restarts.
 
 ## Part B · Repository access (GitHub App)

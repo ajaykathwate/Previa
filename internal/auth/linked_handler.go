@@ -62,12 +62,21 @@ func (h *Handler) beginOAuth(w http.ResponseWriter, r *http.Request, provider st
 		h.sessions.Put(r.Context(), "after_login", next)
 	}
 	http.SetCookie(w, h.stateCookie(h.signState(state), int(stateLifetime.Seconds())))
-	target := h.provider.AuthCodeURL(state)
+	var target string
 	if provider == "google" {
+		// Google always shows its account chooser.
 		nonce, verifier := randomToken(), oauth2.GenerateVerifier()
 		h.sessions.Put(r.Context(), "google_nonce", nonce)
 		h.sessions.Put(r.Context(), "google_verifier", verifier)
 		target = h.google.AuthCodeURL(state, nonce, verifier)
+	} else {
+		target = h.provider.AuthCodeURL(state)
+		// After signing out, or when connecting GitHub to an account, let the
+		// person choose: GitHub would otherwise reuse the account the browser
+		// is signed in to without asking.
+		if link > 0 || h.signedOut(r) {
+			target = withAccountPicker(target)
+		}
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
@@ -124,6 +133,9 @@ func (h *Handler) finishSignIn(w http.ResponseWriter, r *http.Request, u User) {
 	h.sessions.Put(r.Context(), "user_id", u.ID)
 	h.sessions.Put(r.Context(), "session_epoch", u.SessionEpoch)
 	h.sessions.Put(r.Context(), "csrf_token", randomToken())
+	if h.signedOut(r) {
+		http.SetCookie(w, h.signedOutCookie(-1))
+	}
 	next := h.sessions.PopString(r.Context(), "after_login")
 	if !LocalPath(next) {
 		next = "/dashboard"

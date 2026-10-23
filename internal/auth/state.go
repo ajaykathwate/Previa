@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -16,8 +17,16 @@ const (
 	// Over HTTPS the state cookie is __Host- prefixed (which requires path /),
 	// so a preview on a sibling subdomain cannot plant OAuth state.
 	secureStateCookieName = "__Host-previa_oauth_state"
+	// signedOutCookieName marks a browser whose person signed out, so the next
+	// GitHub sign-in shows GitHub's account picker instead of silently reusing
+	// the GitHub account the browser is still signed in to.
+	signedOutCookieName       = "previa_signed_out"
+	secureSignedOutCookieName = "__Host-previa_signed_out"
 )
-const stateLifetime = 10 * time.Minute
+const (
+	stateLifetime     = 10 * time.Minute
+	signedOutLifetime = 30 * 24 * time.Hour
+)
 
 func randomToken() string { return rand.Text() + rand.Text() }
 
@@ -54,13 +63,51 @@ func (h *Handler) stateCookieName() string {
 }
 
 func (h *Handler) stateCookie(value string, maxAge int) *http.Cookie {
+	return h.authCookie(h.stateCookieName(), value, maxAge)
+}
+
+func (h *Handler) signedOutCookieName() string {
+	if h.secure {
+		return secureSignedOutCookieName
+	}
+	return signedOutCookieName
+}
+
+// signedOutCookie is set by sign-out and cleared by the next completed sign-in.
+func (h *Handler) signedOutCookie(maxAge int) *http.Cookie {
+	value := "1"
+	if maxAge < 0 {
+		value = ""
+	}
+	return h.authCookie(h.signedOutCookieName(), value, maxAge)
+}
+
+func (h *Handler) signedOut(r *http.Request) bool {
+	_, err := r.Cookie(h.signedOutCookieName())
+	return err == nil
+}
+
+func (h *Handler) authCookie(name, value string, maxAge int) *http.Cookie {
 	path := "/auth"
 	if h.secure {
 		path = "/"
 	}
 	return &http.Cookie{
-		Name: h.stateCookieName(), Value: value, Path: path,
+		Name: name, Value: value, Path: path,
 		HttpOnly: true, Secure: h.secure, SameSite: http.SameSiteLaxMode,
 		MaxAge: maxAge,
 	}
+}
+
+// withAccountPicker asks GitHub to show its account picker, where the person
+// can continue as the signed-in account or use a different one.
+func withAccountPicker(target string) string {
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	q := u.Query()
+	q.Set("prompt", "select_account")
+	u.RawQuery = q.Encode()
+	return u.String()
 }

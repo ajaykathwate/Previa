@@ -276,6 +276,9 @@ func (c ServerConfig) validate() error {
 		if strings.TrimSpace(c.GitHubWebhookSecret) == "" {
 			return errors.New("GITHUB_WEBHOOK_SECRET is required when APP_ENV=production")
 		}
+		if c.EarlyAccessWithoutOperator() {
+			return errors.New("SUPPORT_OPERATOR_GITHUB_IDS is required when APP_ENV=production and EARLY_ACCESS_ENABLED=true: otherwise nobody can approve new workspaces; set your numeric GitHub user ID, or EARLY_ACCESS_ENABLED=false")
+		}
 	}
 	if err := checkURLPort("APP_BASE_URL", base); err != nil {
 		return err

@@ -95,6 +95,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, h.stateCookie("", -1))
+	http.SetCookie(w, h.signedOutCookie(int(signedOutLifetime.Seconds())))
 	publicid.Redirect(w, r, "/", http.StatusSeeOther)
 }
 

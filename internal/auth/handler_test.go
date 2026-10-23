@@ -320,6 +320,61 @@ func TestHTTPSCookieFlagsAndCallbackReplay(t *testing.T) {
 	}
 }
 
+func TestSignOutLetsTheNextGitHubSignInChooseTheAccount(t *testing.T) {
+	for _, secure := range []bool{false, true} {
+		name := map[bool]string{false: "http", true: "https"}[secure]
+		t.Run(name, func(t *testing.T) {
+			provider := &fakeProvider{identity: Identity{ID: 42, Username: "octocat"}}
+			b, h, sessions := newTestBrowser(t, memstore.NewWithCleanupInterval(0), &fakeUsers{}, provider)
+			h.secure, sessions.Cookie.Secure = secure, secure
+			prompt := func() string {
+				t.Helper()
+				w := b.request(http.MethodGet, "/auth/github/login", "")
+				target, err := url.Parse(w.Header().Get("Location"))
+				if err != nil || target.Query().Get("state") == "" {
+					t.Fatalf("login redirect %q: %v", w.Header().Get("Location"), err)
+				}
+				return target.Query().Get("prompt")
+			}
+			signIn := func() {
+				t.Helper()
+				if w := b.request(http.MethodGet, "/auth/github/callback?code=valid&state="+b.loginState(), ""); w.Code != http.StatusSeeOther {
+					t.Fatalf("sign-in status = %d", w.Code)
+				}
+			}
+			if got := prompt(); got != "" {
+				t.Fatalf("first sign-in prompt = %q, want GitHub's usual flow", got)
+			}
+			signIn()
+			match := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(b.request(http.MethodGet, "/dashboard", "").Body.String())
+			if len(match) != 2 {
+				t.Fatal("missing logout CSRF token")
+			}
+			if w := b.request(http.MethodPost, "/auth/logout", "", map[string]string{"X-CSRF-Token": match[1]}); w.Code != http.StatusSeeOther {
+				t.Fatalf("logout status = %d", w.Code)
+			}
+			marker := b.cookies[h.signedOutCookieName()]
+			wantPath := map[bool]string{false: "/auth", true: "/"}[secure]
+			if marker == nil || !marker.HttpOnly || marker.Secure != secure || marker.Path != wantPath || marker.MaxAge != int(signedOutLifetime.Seconds()) {
+				t.Fatalf("sign-out marker = %+v", marker)
+			}
+			// Abandoning GitHub's picker keeps offering it until a sign-in completes.
+			for range 2 {
+				if got := prompt(); got != "select_account" {
+					t.Fatalf("sign-in after sign-out prompt = %q, want select_account", got)
+				}
+			}
+			signIn()
+			if _, exists := b.cookies[h.signedOutCookieName()]; exists {
+				t.Fatal("completed sign-in kept the sign-out marker")
+			}
+			if got := prompt(); got != "" {
+				t.Fatalf("sign-in after a completed sign-in prompt = %q", got)
+			}
+		})
+	}
+}
+
 type failingStore struct {
 	scs.Store
 	failDelete bool

@@ -1392,7 +1392,9 @@ dc run --rm --no-deps server check-config
 dc run --rm --no-deps worker check-config
 ```
 
-Both should print `configuration is valid` and exit 0. This validates config,
+Both should print `configuration is valid` and exit 0. With early access on (the
+default), the server's check fails until `SUPPORT_OPERATOR_GITHUB_IDS` holds your
+numeric GitHub user ID, because otherwise nobody could approve new workspaces. This validates config,
 `SENTRY_DSN`'s format and file checks; it does not prove GitHub access,
 successful certificate issuance, valid encrypted repository data, database
 migrations or a complete preview. Those are separate startup/live checks below.

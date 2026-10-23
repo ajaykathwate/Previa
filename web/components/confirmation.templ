@@ -18,7 +18,7 @@ templ ConfirmationDialog(id string, title string, description string) {
 }
 
 templ LogoutConfirmation(csrfToken string) {
-	@ConfirmationDialog("logout-confirmation", "Log out of your workspace?", "This ends your Previa session. Your GitHub session is unchanged, and you can sign in again whenever you're ready.") {
+	@ConfirmationDialog("logout-confirmation", "Log out of your workspace?", "This ends your Previa session. You stay signed in to GitHub, so next time you sign in, GitHub asks which account to use.") {
 		<form method="post" action="/auth/logout" class="dialog-actions">
 			<input type="hidden" name="csrf_token" value={ csrfToken }/>
 			@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "logout-confirmation", "command": "close", "data-close-dialog": true}}) {

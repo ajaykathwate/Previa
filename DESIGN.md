@@ -122,6 +122,8 @@ Low to Medium. Simple in concept; security settings matter.
 4. Set both an idle timeout and an absolute lifetime.
 5. Logout asks for confirmation in a modal over the current screen; confirming
    submits a CSRF-protected POST that deletes the server-side record and clears the cookie.
+   GitHub stays signed in, so the next sign-in from that browser asks GitHub to show
+   its account picker (`prompt=select_account`), letting the person switch accounts.
 6. State-changing dashboard actions (for example "tear down now") require a CSRF token.
 
 ### Design decisions and edge cases

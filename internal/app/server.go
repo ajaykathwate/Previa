@@ -72,6 +72,11 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		return fmt.Errorf("configure server: %w", err)
 	}
 	cfg.ApplicationName = "previa-server"
+	if cfg.EarlyAccessWithoutOperator() {
+		// Production refuses this; a development server starts but says why
+		// new workspaces will wait.
+		logger.Warn("early access is on but SUPPORT_OPERATOR_GITHUB_IDS is empty, so nobody can approve new workspaces; set your numeric GitHub user ID or EARLY_ACCESS_ENABLED=false")
+	}
 	pool, err := openDatabase(ctx, cfg.SharedConfig, "server", cfg.AppEnv, logger)
 	if err != nil {
 		return err

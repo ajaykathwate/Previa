@@ -40,6 +40,12 @@ func (c CustomerConfig) OperatorIDs() ([]int64, error) {
 	return ids, nil
 }
 
+// EarlyAccessWithoutOperator reports that early access holds every new
+// workspace for approval while nobody is configured to approve it.
+func (c CustomerConfig) EarlyAccessWithoutOperator() bool {
+	return c.EarlyAccessEnabled && strings.TrimSpace(c.SupportOperatorGitHubIDs) == ""
+}
+
 func (c CustomerConfig) checkCustomer() error {
 	if c.InstallationReconcileMaxChanges < 1 || c.InstallationReconcileMaxChanges > 100 {
 		return errors.New("INSTALLATION_RECONCILE_MAX_CHANGES must be between 1 and 100")

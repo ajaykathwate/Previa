@@ -78,6 +78,14 @@ test('automatic build shows its progress live as status, not a dead button, and 
     await page.getByRole('button', {name: 'Rebuild preview', exact: true}).waitFor();
   } finally { await change(''); }
 });
+// A live page refetches its panel once its event stream connects, and htmx
+// wires the swapped-in fields only after that swap settles: a value typed in
+// between sends no request. Wait until the stream is live and nothing is
+// requesting, swapping or settling before typing into a live page.
+async function liveIdle(target = page, options) {
+  await target.waitForFunction(() => document.documentElement.dataset.liveState === 'live' &&
+    !document.querySelector('.htmx-request, .htmx-swapping, .htmx-settling, .htmx-added'), null, options);
+}
 async function readyPanel(id) {
   await page.locator(`[data-selected-repo="${id}"]`).waitFor();
   await page.waitForFunction(()=>!document.getElementById('repository-detail').hasAttribute('aria-busy'));
@@ -806,6 +814,7 @@ test('PR workspace live search pagination modal and build control', async () => 
   await page.waitForURL(/page=2/);
   assert.match(await page.locator('.pr-table tbody tr').first().innerText(),/#11/);
   const search=page.locator('#pull-request-search');
+  await liveIdle();
   await search.fill('preview 25');
   await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
   await search.fill('');
@@ -927,6 +936,7 @@ test('dedicated repository and PR pages preserve filters through breadcrumbs and
  // A live refresh can swap the summary in just before ui.js makes it relative again.
  await page.waitForFunction(()=>{const t=document.querySelector('.pr-summary time');return t && t.textContent.trim()!==t.title;});
  assert.notEqual(await synced.innerText(),'4 Oct 2026, 10:00 UTC','shown relative, with the exact time as its title');
+ await liveIdle();
  await page.locator('#pull-request-search').fill('preview 25');await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
  await page.locator('.pr-table tbody .pr-cell-text a').click();await page.waitForURL(url=>url.pathname==='/repositories/25/pull-requests/25');
  assert.match(await page.locator('.app-breadcrumb-current').innerText(),/#25.*A careful change to preview 25/);
@@ -1379,6 +1389,7 @@ const isSearch = (query) => url => url.pathname === '/repositories/1' && url.sea
 test('slow searches show progress, apply only the newest results and stay responsive', async () => {
   await login();
   await page.goto(`${origin}/repositories/1`);
+  await liveIdle();
   let searches = 0;
   await page.route(url => url.pathname === '/repositories/1' && url.searchParams.has('pr_q'), async route => {
     searches++;
@@ -1455,6 +1466,7 @@ test('refused, failed and offline requests explain themselves and leave the page
 test('a request that never answers times out with a message and can be retried', async () => {
   await login();
   await page.goto(`${origin}/repositories/1`);
+  await liveIdle();
   await page.route(isSearch('preview 9'), () => {}); // never answered
   await page.locator('#pull-request-search').fill('preview 9');
   await page.waitForFunction(() => /Could not update this view/.test(document.querySelector('#pull-request-filters [data-repository-feedback]')?.textContent || ''), null, {timeout: 15000});
@@ -1497,6 +1509,7 @@ test('the workspace loads within its page weight and stays usable on a slow netw
     .reduce((sum, entry) => sum + (entry.transferSize || 0), 0));
   assert(bytes > 0 && bytes < 512 * 1024, `page weight ${bytes} bytes`);
   assert(loadMs < 15000, `slow-network load took ${loadMs} ms`);
+  await liveIdle(page, {timeout: 20000});
   await page.locator('#pull-request-search').fill('preview 25');
   await page.waitForFunction(() => document.querySelectorAll('.pr-table tbody tr').length === 1, null, {timeout: 15000});
   await page.locator('.pr-table tbody .pr-cell-text a').first().click();

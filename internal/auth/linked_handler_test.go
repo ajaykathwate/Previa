@@ -114,3 +114,27 @@ func TestProviderLinkingRequiresExplicitCSRFProtectedAction(t *testing.T) {
 		t.Fatal("ordinary provider login silently linked an account")
 	}
 }
+
+func TestConnectingGitHubAsksWhichAccount(t *testing.T) {
+	users := &linkedFakeUsers{}
+	b, h, _ := newTestBrowser(t, memstore.NewWithCleanupInterval(0), users, &fakeProvider{identity: Identity{ID: 42, Username: "owner"}})
+	h.WithGoogle(&testGoogle{})
+	start := b.request(http.MethodGet, "/auth/google/login", "")
+	target, err := url.Parse(start.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := b.request(http.MethodGet, "/auth/google/callback?code=code&state="+target.Query().Get("state"), ""); w.Code != http.StatusSeeOther {
+		t.Fatalf("Google sign-in status = %d", w.Code)
+	}
+	profile := b.request(http.MethodGet, "/protected", "")
+	match := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(profile.Body.String())
+	if len(match) != 2 {
+		t.Fatal("missing CSRF")
+	}
+	start = b.request(http.MethodPost, "/auth/github/link", "csrf_token="+match[1])
+	target, err = url.Parse(start.Header().Get("Location"))
+	if err != nil || target.Query().Get("state") == "" || target.Query().Get("prompt") != "select_account" {
+		t.Fatalf("connecting GitHub redirects to %q, want GitHub's account picker", start.Header().Get("Location"))
+	}
+}

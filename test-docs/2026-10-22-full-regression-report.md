@@ -133,7 +133,14 @@ test preview was removed locally at the end; its PR comment still reads Ready.
   flakiness with and without the new countdown script (2 and 4 failures), so it
   predates this cycle: an earlier scenario's live refresh or request can collide
   with their precise request timing. The relative-time check now waits for the
-  text; the other two should be hardened the same way (recommended follow-up).
+  text. **Hardened on 23 October:** the cause was within each scenario, not
+  between them. A live page refetches its panel when its event stream connects,
+  and htmx wires the swapped-in search field only after its 20 ms settle, so a
+  search typed in that window sent no request. `liveIdle()` in `ui.test.cjs` now
+  waits until the stream is live and nothing is requesting, swapping or settling
+  before these scenarios (and three others that type on a freshly loaded live
+  page) type. A person types several keys, so the next key searches; no product
+  change was needed.
 - `internal/installations/service.go` is not `gofmt`-formatted at the base commit
   (unchanged here; the linter does not flag it).
 
