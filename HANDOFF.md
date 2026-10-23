@@ -22,6 +22,13 @@ Last updated: 2026-10-23
   was lost. ui.test.cjs liveIdle() now waits before typing on live pages.
 - Google sign-in needs the owner's Google OAuth Web client (docs/02 F7 section);
   local .env has no GOOGLE_OAUTH_* yet, so sign-in is GitHub-only there.
+- Committed (2026-10-23): .previewrc.yaml so Previa previews itself (dashboard
+  on managed PostgreSQL 17, setup previa-migrate up; secrets SESSION_SECRET and a
+  previews GitHub OAuth App; APP_BASE_URL added after the first build; docs/02
+  "Preview Previa on Previa"); Dockerfile stage order now ends with server (release
+  builds all name targets, instructions identical; verified by a real no-target
+  build, read-only run, 200 on own host, 421 by address). Sign-in choices page
+  redesigned (web/pages/auth/login.templ, .auth-* in workspace.css, GoogleMark).
 - Every command may be prefixed /home/ajaykathwatee/.local/bin/rtk. No subagents.
   Do not edit technical-docs/inside-previa.md.
 

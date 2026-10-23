@@ -12,6 +12,8 @@ Developer/Admin access to an existing workspace.
    (`/auth/login`); without it, it goes straight to GitHub. Protected-page
    redirects use `/auth/login` to offer both and preserve the original review or
    preview destination. Existing GitHub-only configuration retains its old flow.
+   The choices page shows each method as a full-width button (Google's own mark on
+   its button) with a short guide: GitHub to build previews, Google to only review.
    After a logout, GitHub shows its account picker so another account can be used
    ([sign-in](04-github-sign-in-and-app.md)); Google always shows its chooser.
 2. A Google-only signup creates an account without GitHub or an administrative
