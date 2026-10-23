@@ -29,6 +29,11 @@ Last updated: 2026-10-23
   builds all name targets, instructions identical; verified by a real no-target
   build, read-only run, 200 on own host, 421 by address). Sign-in choices page
   redesigned (web/pages/auth/login.templ, .auth-* in workspace.css, GoogleMark).
+- CI on PR #2 (mvp-complete → master) failed twice, both fixed: go.mod was not tidy
+  (go-jose is a direct import; CI runs go mod tidy + git diff), and the running-build
+  browser scenario read the tracker across a live-refresh swap (now one snapshot).
+  Local replay of the checks job: generate, build, lint, vuln, race suite 54 pkgs,
+  observability; browser 55/55.
 - Every command may be prefixed /home/ajaykathwatee/.local/bin/rtk. No subagents.
   Do not edit technical-docs/inside-previa.md.
 

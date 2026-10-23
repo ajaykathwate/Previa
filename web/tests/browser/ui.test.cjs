@@ -648,15 +648,27 @@ test('a running build follows its log to the current step, with a clock and the 
   await context.request.post(`${origin}/__fixture/logs/seed`);
   await login();
   await page.goto(`${origin}/repositories/1/pull-requests/6`);
-  const tracker = page.locator('[data-pr-status] .build-tracker');
+  await liveIdle();
+  // A live refresh swaps in the server's tracker (queue done, the rest working)
+  // until its log stream repaints it, so read each state in one snapshot.
+  const trackerAt = async stage => (await page.waitForFunction(at => {
+    const tracker = document.querySelector('[data-pr-status] .build-tracker');
+    const current = tracker?.querySelector('.is-current');
+    if (current?.dataset.stage !== at) return false;
+    return {
+      done: [...tracker.querySelectorAll('.is-done')].map(step => step.dataset.stage),
+      text: tracker.querySelector('[data-progress-text]')?.textContent || '',
+      status: current.querySelector('.sr-only')?.textContent || '',
+    };
+  }, stage)).jsonValue();
   // Output from the image build means the code is in and the image is building.
-  await page.waitForFunction(() => document.querySelector('.build-tracker .is-current')?.dataset.stage === 'image');
-  assert.deepEqual(await tracker.locator('.is-done').evaluateAll(steps => steps.map(step => step.dataset.stage)), ['queue', 'code']);
-  assert.equal(await tracker.locator('[data-progress-text]').innerText(), 'indented output');
+  const building = await trackerAt('image');
+  assert.deepEqual(building.done, ['queue', 'code']);
+  assert.equal(building.text, 'indented output');
   await context.request.post(`${origin}/__fixture/logs/append`, {form: {text: 'Pulling the postgres:17 image.', system: '1'}});
-  await page.waitForFunction(() => document.querySelector('.build-tracker .is-current')?.dataset.stage === 'start');
-  assert.equal(await tracker.locator('[data-progress-text]').innerText(), 'Pulling the postgres:17 image.');
-  assert.match(await tracker.locator('.is-current .sr-only').innerText(), /in progress/);
+  const starting = await trackerAt('start');
+  assert.equal(starting.text, 'Pulling the postgres:17 image.');
+  assert.match(starting.status, /in progress/);
   const clock = page.locator('time[data-elapsed]');
   const first = await clock.innerText();
   assert.match(first, /^\d+m \d+s$/);
