@@ -643,6 +643,10 @@ worker use distroless images without a shell. Use their `healthcheck` and
 `previa-migrate` and `previa-secrets-reencrypt`; the worker image contains
 `previa-route-sync` and `previa-housekeeping`. These maintenance commands are
 run on demand, not deployed as additional always-running processes.
+Every build here names its target (`server`, `worker`, `egress`). `server` is the
+Dockerfile's last stage only so that a build without a target, as a Previa preview
+of this repository runs ([`.previewrc.yaml`](../.previewrc.yaml)), yields the dashboard;
+the stage order does not change any release image.
 
 ### Containers created by the worker
 

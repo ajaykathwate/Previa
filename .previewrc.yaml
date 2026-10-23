@@ -1,0 +1,28 @@
+# Previews of Previa itself: the dashboard (the Dockerfile's last stage) on a
+# managed PostgreSQL. The worker needs the Docker socket, which a preview never
+# gets, so a preview of Previa shows "no worker" and starts no builds; every
+# page, sign-in and setting can still be reviewed.
+#
+# Repository secrets to set on the Secrets tab before the first build:
+#   SESSION_SECRET              32 or more random characters
+#   GITHUB_OAUTH_CLIENT_ID      a GitHub OAuth App for previews whose callback
+#   GITHUB_OAUTH_CLIENT_SECRET  is https://<preview base domain>/auth/github/callback
+#                               (GitHub accepts the preview subdomains under it)
+port: 8080
+resource_tier: small
+services:
+  postgres: 17
+# Goose and River migrations; safe to repeat on existing data.
+setup: ["/usr/local/bin/previa-migrate", "up"]
+env:
+  # A preview is a test instance: no webhook secret or operator is required.
+  - APP_ENV=development
+  # Nobody operates a preview, so new workspaces are not held for approval.
+  # To review early access, set it to true and add SUPPORT_OPERATOR_GITHUB_IDS.
+  - EARLY_ACCESS_ENABLED=false
+  # Previa answers only for its own address. After the first build, add the
+  # preview's link (it stays the same for the pull request) and build again:
+  # - APP_BASE_URL=https://<your-preview-link>
+# No health_check_path: the readiness probe reaches the container by its
+# address, and Previa answers any host but its own with 421, so readiness is
+# the port accepting connections.

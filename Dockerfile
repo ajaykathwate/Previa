@@ -1,6 +1,7 @@
 # Previa release images (docs/25-production-deployment.md). One build stage
 # compiles every command from source with generated templates and CSS; the
-# runtime images hold only static binaries and run as UID 65532.
+# runtime images hold only static binaries and run as UID 65532. Release
+# builds always name their --target; without one the build yields the server.
 #
 #   docker build --target server -t previa-server .
 #   docker build --target worker -t previa-worker .
@@ -35,14 +36,6 @@ for command in server worker migrate route-sync housekeeping secrets-reencrypt e
 done
 BUILD
 
-FROM ${RUNTIME_IMAGE} AS server
-COPY --from=build /out/bin/previa-server /out/bin/previa-migrate /out/bin/previa-secrets-reencrypt /usr/local/bin/
-USER 65532:65532
-EXPOSE 8080 9090
-ENV HTTP_ADDR=0.0.0.0:8080 INTERNAL_ADDR=0.0.0.0:9090 APP_ENV=production
-HEALTHCHECK --interval=15s --timeout=6s --start-period=30s --retries=3 CMD ["/usr/local/bin/previa-server", "healthcheck"]
-ENTRYPOINT ["/usr/local/bin/previa-server"]
-
 FROM ${RUNTIME_IMAGE} AS worker
 COPY --from=build /out/bin/previa-worker /out/bin/previa-route-sync /out/bin/previa-housekeeping /usr/local/bin/
 # Source workspaces, the route file and encrypted test-data baselines live
@@ -62,3 +55,13 @@ USER 65532:65532
 EXPOSE 3128
 ENTRYPOINT ["/previa-egress"]
 CMD ["serve"]
+
+# The dashboard is the last stage, so a build without --target (a Previa
+# preview of this repository, see .previewrc.yaml) produces it.
+FROM ${RUNTIME_IMAGE} AS server
+COPY --from=build /out/bin/previa-server /out/bin/previa-migrate /out/bin/previa-secrets-reencrypt /usr/local/bin/
+USER 65532:65532
+EXPOSE 8080 9090
+ENV HTTP_ADDR=0.0.0.0:8080 INTERNAL_ADDR=0.0.0.0:9090 APP_ENV=production
+HEALTHCHECK --interval=15s --timeout=6s --start-period=30s --retries=3 CMD ["/usr/local/bin/previa-server", "healthcheck"]
+ENTRYPOINT ["/usr/local/bin/previa-server"]

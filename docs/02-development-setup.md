@@ -1521,3 +1521,37 @@ invitation/consent and reviewer pages at1440/390 in both themes.
 [manual rows M1–M9](../technical-docs/user-guide.md#manual-test-checklist) cover live
 consent. Automated tests use a signed fake Google over TLS; they do not configure
 or claim to exercise your real Google Cloud client.
+
+## Preview Previa on Previa
+
+The repository's own [`.previewrc.yaml`](../.previewrc.yaml) lets a Previa instance
+preview pull requests to Previa. A preview runs the dashboard only: the
+Dockerfile's last stage, `server`, on a managed PostgreSQL 17, with
+`previa-migrate up` (Goose and River, safe to repeat) as its setup. The worker
+needs the Docker socket, which previews never get, so a preview of Previa starts no
+builds; pages, sign-in and settings can all be reviewed.
+
+1. Create a GitHub OAuth App for previews (GitHub → Settings → Developer settings →
+   OAuth Apps) with the callback `https://<PREVIEW_BASE_DOMAIN>/auth/github/callback`.
+   GitHub accepts the preview hostnames below that domain. Keep it separate from
+   the production sign-in app.
+2. On the Previa repository's **Secrets** tab in Previa, set `SESSION_SECRET` (32+
+   random characters, for example `openssl rand -hex 32`), `GITHUB_OAUTH_CLIENT_ID`
+   and `GITHUB_OAUTH_CLIENT_SECRET`. A missing one stops the server at start, and
+   the build log names it.
+3. Build a pull request. Expected: setup prints `Goose: schema at migration 46` and
+   `River: 7 of 7 migrations applied`, and the preview is published.
+4. Opening the link now answers `This server does not serve that host.` (HTTP 421):
+   Previa serves only `APP_BASE_URL`. In that pull request, uncomment
+   `APP_BASE_URL=https://<your-preview-link>` in `.previewrc.yaml` with the link
+   (it stays the same for the pull request), push, and build again. Expected: the
+   home page loads and **Get started** signs in through the previews OAuth App.
+
+The preview runs with `APP_ENV=development` (no webhook secret or operator needed)
+and `EARLY_ACCESS_ENABLED=false`. There is no `health_check_path`, because the
+readiness probe reaches the container by address and Previa answers other hosts
+with 421; readiness is the port accepting connections.
+`TestPreviasOwnPreviewConfigBuildsTheDashboard` (in `internal/app`) checks the file
+against Previa's own rules and that the Dockerfile's last stage is the server
+holding the setup command. Google sign-in on a preview would need each preview's
+exact callback registered with Google, so it is left off.
