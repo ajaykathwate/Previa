@@ -124,10 +124,12 @@ type Actions struct {
 	// build, the repository is unavailable, mergeability, ...), and Hint what
 	// turns it back on.
 	Unavailable, Hint string
-	// Blocked is the label of the build action shown disabled next to
-	// Unavailable; empty when no build action applies (closed PRs).
+	// Blocked names the build action that would apply once Unavailable is
+	// fixed (it makes the notice a warning); empty when none applies (closed
+	// PRs). No disabled control is shown for it.
 	Blocked string
-	// InProgress labels a disabled action while this commit is queued or building.
+	// InProgress is the status shown instead of an action while this commit
+	// is queued or building.
 	InProgress string
 }
 

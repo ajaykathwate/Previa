@@ -426,11 +426,11 @@ test('the FAQ answers as a conversation on the home page, from a link and in the
   await faq.getByRole('button', {name: /^All topics/}).click();
   await faq.locator('[data-faq-search]').fill('frameworks');
   assert.equal(await visible.count(), 1);
-  assert.equal(await faq.locator('[data-faq-status]').innerText(), '1 of 22 questions shown.');
+  assert.equal(await faq.locator('[data-faq-status]').innerText(), '1 of 24 questions shown.');
   await faq.locator('[data-faq-search]').fill('zzz-nothing');
   assert(await faq.locator('[data-faq-empty]').isVisible());
   await faq.getByRole('button', {name: 'show every question', exact: true}).click();
-  assert.equal(await visible.count(), 22);
+  assert.equal(await visible.count(), 24);
   // A shared #faq-… link opens its answer.
   await page.goto('about:blank');
   await page.goto(`${origin}/#faq-secrets`);

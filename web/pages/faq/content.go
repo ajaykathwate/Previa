@@ -51,14 +51,16 @@ func Questions() []Question {
 		{ID: "languages", Topic: "start", Ask: "Which languages and frameworks work?", Answer: languages()},
 		{ID: "sign-in-access", Topic: "start", Ask: "Does signing in give you access to my code?", Answer: signInAccess()},
 		{ID: "connect-repository", Topic: "start", Ask: "How do I connect a repository?", Answer: connectRepository()},
+		{ID: "teams", Topic: "start", Ask: "Can my team share Previa?", Answer: teams()},
 
 		{ID: "when-it-builds", Topic: "builds", Ask: "When does a preview get built?", Answer: whenItBuilds()},
 		{ID: "preview-link", Topic: "builds", Ask: "Where do I find the preview link?", Answer: previewLink()},
+		{ID: "review-feedback", Topic: "builds", Ask: "How do reviewers give feedback?", Answer: reviewFeedback()},
 		{ID: "new-commit", Topic: "builds", Ask: "What happens when I push a new commit?", Answer: newCommit()},
 		{ID: "preview-lifetime", Topic: "builds", Ask: "How long does a preview live?", Answer: previewLifetime()},
 		{ID: "backend-apps", Topic: "builds", Ask: "Does it work for APIs and full-stack apps?", Answer: backendApps()},
 		{ID: "build-failed", Topic: "builds", Ask: "What if a build fails?", Answer: buildFailed()},
-		{ID: "build-disabled", Topic: "builds", Ask: "Why is the Build button disabled?", Answer: buildDisabled()},
+		{ID: "build-disabled", Topic: "builds", Ask: "Why can't I build a pull request?", Answer: buildDisabled()},
 		{ID: "waiting-for-capacity", Topic: "builds", Ask: "What does “Waiting for capacity” mean?", Answer: waitingForCapacity()},
 
 		{ID: "fork-pull-requests", Topic: "security", Ask: "Is it safe to build pull requests from forks?", Answer: forkPullRequests()},

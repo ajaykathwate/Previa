@@ -80,7 +80,7 @@ func FailureMessage(code string) string {
 	case "service_unavailable":
 		return "A managed service's image could not be pulled on the server."
 	case "service_failed":
-		return "A managed service (PostgreSQL or Redis) did not become ready or stopped."
+		return "A managed service (PostgreSQL, MySQL or Redis) did not become ready or stopped."
 	case "setup_failed":
 		return "The setup command (migrations or seed data) failed or ran out of time."
 	case "seed_failed":

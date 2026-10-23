@@ -108,6 +108,7 @@ templ whatIsPrevia() {
 
 templ isItFree() {
 	<p>Yes. I'm free while I'm in early access, so you can try me on your own pull requests.</p>
+	<p>Each workspace has a monthly allowance of build minutes and live previews; its <strong>Usage</strong> page shows how much is left.</p>
 }
 
 templ repositoryFiles() {
@@ -129,10 +130,12 @@ templ signInAccess() {
 templ connectRepository() {
 	<p>Open <strong>Repositories</strong> and choose <strong>Install on GitHub</strong>. Pick the repositories there, then authorize as the same account you signed in with. I make sure the installation is really yours before linking anything.</p>
 	<p>New repositories start in Manual mode, so nothing builds until you ask. Then open the repository's <strong>Setup</strong> tab: it walks one pull request to its first preview.</p>
+	<p>While I'm in early access, each new workspace is approved by hand first. Its <strong>Early access</strong> page shows where it stands; connecting opens once it's approved.</p>
 }
 
 templ whenItBuilds() {
 	<p>In <strong>Manual</strong> mode, the default, when you press <strong>Build latest commit</strong> on a pull request. In <strong>Automatic</strong> mode, five minutes after your last push, so a burst of pushes becomes one build.</p>
+	<p>In Automatic mode the pull request counts down to its build, and another push restarts the five minutes. If GitHub's notice of a push goes missing, I find the commit on my next check of your live previews, or when you choose <strong>Sync Pull Requests</strong>.</p>
 	<p>Either way I check with GitHub right before building, and I only build a pull request that can merge.</p>
 }
 
@@ -153,7 +156,7 @@ templ previewLifetime() {
 
 templ backendApps() {
 	<p>Yes. An API's preview link answers requests just like a website's does.</p>
-	<p>In <code>.previewrc.yaml</code> you can ask for PostgreSQL, Redis or MySQL from the server's catalog, run a setup command for migrations and seed data, keep up to three background processes running and link your API docs. Each preview gets its own fresh copy of its data. Docker Compose and separate app images are not available; processes use the same image as the app.</p>
+	<p>In <code>.previewrc.yaml</code> you can ask for PostgreSQL, Redis or MySQL from the server's catalog, run a setup command for migrations and seed data, keep up to three background processes running and link your API docs. Each preview gets its own databases; turn on <strong>Test data</strong> to seed them, start from a snapshot of your default branch and keep data between pushes. Docker Compose and separate app images are not available; processes use the same image as the app.</p>
 	<p>If a preview needs an outside test database or service, approve it on the repository's <strong>Outbound</strong> tab.</p>
 }
 
@@ -163,12 +166,14 @@ templ buildFailed() {
 }
 
 templ buildDisabled() {
-	<p>Because I couldn't build it right now, and the note beside the button says why and what fixes it. The usual reasons:</p>
+	<p>When I can't build it right now, its page says why and what fixes it instead of offering the button. The usual reasons:</p>
 	<ul>
 		<li>GitHub is still checking whether the pull request can merge, or it has conflicts;</li>
 		<li>the pull request is closed or merged;</li>
-		<li>I no longer have access to the repository.</li>
+		<li>I no longer have access to the repository, or GitHub no longer lets you read its code;</li>
+		<li>your workspace is still waiting for early-access approval.</li>
 	</ul>
+	<p>Reviewers don't build: they open previews and leave feedback.</p>
 }
 
 templ waitingForCapacity() {
@@ -195,8 +200,24 @@ templ internalNetwork() {
 }
 
 templ whoCanOpen() {
-	<p>Anyone who has its link. Each link has a random part, so previews can't be guessed, but they aren't behind a login.</p>
-	<p>Use test data and sandbox credentials in previews, never production ones.</p>
+	<p>By default, anyone who has its link. Each link has a random part, so previews can't be guessed.</p>
+	<p>An Owner or Admin can make a repository's previews <strong>private</strong>: visitors sign in first, and only people with access to that repository can open them.</p>
+	<p>Either way, use test data and sandbox credentials in previews, never production ones.</p>
+}
+
+templ teams() {
+	<p>Yes. Create a workspace and invite people by their GitHub username. Each person gets a role:</p>
+	<ul>
+		<li><strong>Owners</strong> and <strong>Admins</strong> manage the workspace, its repositories and its members;</li>
+		<li><strong>Developers</strong> build and inspect the repositories you grant them;</li>
+		<li><strong>Reviewers</strong> open previews and leave feedback, without seeing code, logs or secrets.</li>
+	</ul>
+	<p>Everyone sees only what their role allows, and removing someone ends their access at once.</p>
+}
+
+templ reviewFeedback() {
+	<p>On the pull request's <strong>review page</strong> in Previa. Developers write what to test; anyone with preview access records findings against the exact deployment they tested, replies and resolves them.</p>
+	<p>My comment on the pull request links straight to it, and feedback stays in Previa rather than in the GitHub thread.</p>
 }
 
 templ dashboardSafety() {
