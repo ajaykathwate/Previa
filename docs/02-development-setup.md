@@ -122,8 +122,11 @@ docker compose version
 **Expected:** each prints a version. No local PostgreSQL, Node.js or globally
 installed Go tools are needed. Official Tailwind CSS **v4.1.18** is downloaded
 once into ignored `bin/` and verified against pinned SHA-256 digests (Linux/WSL 2
-and macOS x64/arm64; about 115 MB on Linux x64). Node.js 20+ is needed only for
-the optional browser tests.
+and macOS x64/arm64; about 115 MB on Linux x64). The download retries up to five
+times on a failed or dropped response from GitHub, and a verified copy already at
+the destination is reused. Image builds keep it in a BuildKit cache mount, so a
+rebuild, including a Previa preview of this repository, need not download it
+again. Node.js 20+ is needed only for the optional browser tests.
 
 On WSL, if `docker version` reports a socket permission error, check that your
 user is in the `docker` group (`id -nG`) and open a new terminal or run
@@ -1234,7 +1237,8 @@ FROM build_log_streams ORDER BY updated_at DESC LIMIT 20;
 - **GitHub sign-in fails:** the OAuth callback must equal `APP_BASE_URL` +
   `/auth/github/callback`; use `localhost` consistently (not `127.0.0.1`). See [04](04-github-sign-in-and-app.md).
 - **Tailwind download or checksum failure:** check curl, SHA-256 tool and GitHub
-  release access; never bypass a checksum mismatch. Edit `web/styles`, not the
+  release access; `curl: (22) … 502` after the retries means GitHub's release
+  downloads were failing, so build again later. Never bypass a checksum mismatch. Edit `web/styles`, not the
   generated `web/static/css/app.css`.
 - **Stylesheet missing after a manual build:** run `make assets` before compiling;
   the server embeds assets at build time.

@@ -18,18 +18,30 @@ case "$(uname -s):$(uname -m)" in
     digest=7f27711dceac1a580b6ad58ddac46e59202c85a6c16f2f08f6fdcdee261008e1 ;;
   *) echo 'Unsupported platform: use Linux/WSL2 or macOS on x64/arm64.' >&2; exit 1 ;;
 esac
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sum=$(sha256sum "$1")
+  else
+    sum=$(shasum -a 256 "$1")
+  fi
+  echo "${sum%% *}"
+}
+# A verified copy (for example in a build cache) needs no download.
+if [ -f "$destination" ] && [ "$(sha256 "$destination")" = "$digest" ]; then
+  chmod 755 "$destination"
+  echo "Official Tailwind CSS v${version} is already installed."
+  exit 0
+fi
 mkdir -p "$(dirname "$destination")"
 temporary=$(mktemp "${destination}.download.XXXXXX")
 trap 'rm -f "$temporary"' EXIT HUP INT TERM
+# GitHub's release downloads fail now and then (a 502, a dropped stream), so
+# retry a few times before failing a build.
 curl --fail --location --silent --show-error \
+  --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 20 \
   "https://github.com/tailwindlabs/tailwindcss/releases/download/v${version}/${asset}" \
   --output "$temporary"
-if command -v sha256sum >/dev/null 2>&1; then
-  actual=$(sha256sum "$temporary")
-else
-  actual=$(shasum -a 256 "$temporary")
-fi
-actual=${actual%% *}
+actual=$(sha256 "$temporary")
 if [ "$actual" != "$digest" ]; then
   echo 'Tailwind download checksum mismatch; refusing to install.' >&2
   exit 1

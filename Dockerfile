@@ -23,10 +23,12 @@ COPY tools/go.mod tools/go.sum tools/
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 ARG VERSION=dev
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build <<BUILD
+# The verified Tailwind binary is kept in a build cache, so repeated builds
+# need not download it from GitHub again.
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/root/.cache/previa-tools <<BUILD
 set -eu
-sh deploy/install-tailwind.sh bin/tailwindcss
-bin/tailwindcss -i web/styles/app.css -o web/static/css/app.css --minify
+sh deploy/install-tailwind.sh /root/.cache/previa-tools/tailwindcss
+/root/.cache/previa-tools/tailwindcss -i web/styles/app.css -o web/static/css/app.css --minify
 go tool -modfile=tools/go.mod templ generate -path web
 mkdir -p /out/bin /out/state/sources /out/state/router /out/state/baselines
 chmod 0700 /out/state/baselines
