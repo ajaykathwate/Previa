@@ -195,8 +195,9 @@ How it works:
 - The proxy identifies the repository by **the network the connection arrived
   on** (its own address there), never by anything the preview sends. It resolves
   the name itself, refuses private, loopback, link-local, metadata and other
-  special ranges, dials exactly the address it checked and relays the bytes, so
-  **TLS verification works end to end** with the real name.
+  special ranges, dials only the addresses it checked (IPv4 first, each given 4
+  seconds, so one address that does not answer falls back to the next) and relays
+  the bytes, so **TLS verification works end to end** with the real name.
 - Bounds: 32 connections per preview network and 256 in all; each at most an hour,
   1 GiB, and 10 idle minutes. A withdrawn approval closes open connections within
   30 seconds.
