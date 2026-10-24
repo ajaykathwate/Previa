@@ -276,9 +276,9 @@ requires an owner-controlled, CSRF-protected confirmation modal. Search, sync
 progress and policy saves update in place through HTMX, and committed changes
 (sync progress, webhook and mergeability updates) are pushed to open repository
 pages over Server-Sent Events rather than polled. Each repository also has a
-**Secrets** tab where its owner stores encrypted runtime values (write-only, never
-given to fork PRs), several at once or from pasted `.env` text, and deletes the
-selected ones together. Page URLs are shareable
+**Secrets** tab where its Owners and Admins keep one encrypted `.env` file of
+runtime values (comments kept, values masked until they choose to edit, never
+given to fork PRs). Page URLs are shareable
 and navigation works without JavaScript.
 
 PR discovery, latest/requested/deployed commit views and the owner's Build,

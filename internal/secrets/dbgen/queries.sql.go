@@ -11,6 +11,35 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countEnvFilesByKeyVersion = `-- name: CountEnvFilesByKeyVersion :many
+SELECT key_version, count(*) AS files FROM repository_env_files GROUP BY key_version ORDER BY key_version
+`
+
+type CountEnvFilesByKeyVersionRow struct {
+	KeyVersion int32
+	Files      int64
+}
+
+func (q *Queries) CountEnvFilesByKeyVersion(ctx context.Context) ([]CountEnvFilesByKeyVersionRow, error) {
+	rows, err := q.db.Query(ctx, countEnvFilesByKeyVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountEnvFilesByKeyVersionRow
+	for rows.Next() {
+		var i CountEnvFilesByKeyVersionRow
+		if err := rows.Scan(&i.KeyVersion, &i.Files); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countSecrets = `-- name: CountSecrets :one
 SELECT count(*) FROM env_secrets WHERE repo_id = $1
 `
@@ -51,6 +80,33 @@ func (q *Queries) CountSecretsByKeyVersion(ctx context.Context) ([]CountSecretsB
 	return items, nil
 }
 
+const createEnvFile = `-- name: CreateEnvFile :one
+INSERT INTO repository_env_files (repo_id, encrypted_text, key_version, updated_by)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (repo_id) DO NOTHING
+RETURNING revision
+`
+
+type CreateEnvFileParams struct {
+	RepoID        int64
+	EncryptedText []byte
+	KeyVersion    int32
+	UpdatedBy     pgtype.Int8
+}
+
+// The first save; no row means someone else saved a file first.
+func (q *Queries) CreateEnvFile(ctx context.Context, arg CreateEnvFileParams) (int64, error) {
+	row := q.db.QueryRow(ctx, createEnvFile,
+		arg.RepoID,
+		arg.EncryptedText,
+		arg.KeyVersion,
+		arg.UpdatedBy,
+	)
+	var revision int64
+	err := row.Scan(&revision)
+	return revision, err
+}
+
 const deleteOwnedSecrets = `-- name: DeleteOwnedSecrets :execrows
 DELETE FROM env_secrets s
 USING repos r JOIN installations i ON i.id = r.installation_id
@@ -70,6 +126,85 @@ func (q *Queries) DeleteOwnedSecrets(ctx context.Context, arg DeleteOwnedSecrets
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteSecretsNotIn = `-- name: DeleteSecretsNotIn :exec
+DELETE FROM env_secrets WHERE repo_id = $1 AND NOT (key = ANY($2::text[]))
+`
+
+type DeleteSecretsNotInParams struct {
+	RepoID int64
+	Keys   []string
+}
+
+func (q *Queries) DeleteSecretsNotIn(ctx context.Context, arg DeleteSecretsNotInParams) error {
+	_, err := q.db.Exec(ctx, deleteSecretsNotIn, arg.RepoID, arg.Keys)
+	return err
+}
+
+const envFile = `-- name: EnvFile :one
+SELECT f.encrypted_text, f.key_version, f.revision, f.updated_at, coalesce(u.username, '')::text AS updated_by
+FROM repository_env_files f LEFT JOIN users u ON u.id = f.updated_by
+WHERE f.repo_id = $1
+`
+
+type EnvFileRow struct {
+	EncryptedText []byte
+	KeyVersion    int32
+	Revision      int64
+	UpdatedAt     pgtype.Timestamptz
+	UpdatedBy     string
+}
+
+func (q *Queries) EnvFile(ctx context.Context, repoID int64) (EnvFileRow, error) {
+	row := q.db.QueryRow(ctx, envFile, repoID)
+	var i EnvFileRow
+	err := row.Scan(
+		&i.EncryptedText,
+		&i.KeyVersion,
+		&i.Revision,
+		&i.UpdatedAt,
+		&i.UpdatedBy,
+	)
+	return i, err
+}
+
+const envFilesNeedingRotation = `-- name: EnvFilesNeedingRotation :many
+SELECT repo_id, encrypted_text, key_version FROM repository_env_files
+WHERE key_version <> $1 AND repo_id > $2
+ORDER BY repo_id LIMIT $3
+`
+
+type EnvFilesNeedingRotationParams struct {
+	ActiveVersion int32
+	AfterRepoID   int64
+	BatchSize     int32
+}
+
+type EnvFilesNeedingRotationRow struct {
+	RepoID        int64
+	EncryptedText []byte
+	KeyVersion    int32
+}
+
+func (q *Queries) EnvFilesNeedingRotation(ctx context.Context, arg EnvFilesNeedingRotationParams) ([]EnvFilesNeedingRotationRow, error) {
+	rows, err := q.db.Query(ctx, envFilesNeedingRotation, arg.ActiveVersion, arg.AfterRepoID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EnvFilesNeedingRotationRow
+	for rows.Next() {
+		var i EnvFilesNeedingRotationRow
+		if err := rows.Scan(&i.RepoID, &i.EncryptedText, &i.KeyVersion); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const existingSecretNames = `-- name: ExistingSecretNames :many
@@ -188,6 +323,33 @@ func (q *Queries) OwnedRepository(ctx context.Context, arg OwnedRepositoryParams
 	var i OwnedRepositoryRow
 	err := row.Scan(&i.ID, &i.FullName, &i.Available)
 	return i, err
+}
+
+const rotateEnvFile = `-- name: RotateEnvFile :execrows
+UPDATE repository_env_files SET encrypted_text = $1, key_version = $2
+WHERE repo_id = $3 AND key_version = $4 AND encrypted_text = $5
+`
+
+type RotateEnvFileParams struct {
+	NewText    []byte
+	NewVersion int32
+	RepoID     int64
+	OldVersion int32
+	OldText    []byte
+}
+
+func (q *Queries) RotateEnvFile(ctx context.Context, arg RotateEnvFileParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rotateEnvFile,
+		arg.NewText,
+		arg.NewVersion,
+		arg.RepoID,
+		arg.OldVersion,
+		arg.OldText,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const rotateSecret = `-- name: RotateSecret :execrows
@@ -326,6 +488,37 @@ func (q *Queries) SetSecretBuild(ctx context.Context, arg SetSecretBuildParams) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateEnvFile = `-- name: UpdateEnvFile :one
+UPDATE repository_env_files
+SET encrypted_text = $1, key_version = $2,
+    revision = revision + 1, updated_by = $3, updated_at = clock_timestamp()
+WHERE repo_id = $4 AND revision = $5::bigint
+RETURNING revision
+`
+
+type UpdateEnvFileParams struct {
+	EncryptedText    []byte
+	KeyVersion       int32
+	UpdatedBy        pgtype.Int8
+	RepoID           int64
+	ExpectedRevision int64
+}
+
+// Saves only while the file is still at the revision its editor opened; no
+// row means someone else saved meanwhile.
+func (q *Queries) UpdateEnvFile(ctx context.Context, arg UpdateEnvFileParams) (int64, error) {
+	row := q.db.QueryRow(ctx, updateEnvFile,
+		arg.EncryptedText,
+		arg.KeyVersion,
+		arg.UpdatedBy,
+		arg.RepoID,
+		arg.ExpectedRevision,
+	)
+	var revision int64
+	err := row.Scan(&revision)
+	return revision, err
 }
 
 const upsertSecret = `-- name: UpsertSecret :exec

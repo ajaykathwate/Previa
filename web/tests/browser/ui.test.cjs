@@ -479,7 +479,7 @@ test('content and native confirmation remain usable without JavaScript', async (
     assert.equal(await nativePage.locator('[data-film-play]').isVisible(), false);
     assert.equal(await nativePage.locator('[data-film-video]').getAttribute('controls'), '');
     await nativePage.locator('#faq-secrets summary').click();
-    assert.match(await nativePage.locator('#faq-secrets .faq-answer').innerText(), /Encrypted as soon as you save them/);
+    assert.match(await nativePage.locator('#faq-secrets .faq-answer').innerText(), /one encrypted .env file per repository/);
     await nativePage.goto(`${origin}/auth/github/login`);
     await nativePage.waitForURL(`${origin}/dashboard`);
     await nativePage.goto(`${origin}/repositories?page=2`);
@@ -549,6 +549,8 @@ test('owners approve outbound destinations and remove them only after confirming
   await page.goto(`${origin}/repositories/1/outbound`);
   assert.equal(await page.getByRole('link', {name: 'Outbound', exact: true}).getAttribute('aria-current'), 'page');
   assert.match(await page.locator('main').innerText(), /No destinations approved/);
+  assert.equal(await page.locator('#add-destination').evaluate(form => getComputedStyle(form).paddingTop), '18px', 'the form panel keeps its padding');
+  if(process.env.UI_BROWSER_SCREENSHOTS==='1') {await page.emulateMedia({reducedMotion:'reduce'});await page.screenshot({path:path.join(__dirname,'artifacts','outbound-form.png'),fullPage:true});}
   // Addresses are refused with the reason, next to the field.
   await page.getByLabel('Host').fill('10.0.0.1');
   await page.getByRole('button', {name: 'Approve', exact: true}).click();
@@ -1131,28 +1133,23 @@ test('live updates push changes across tabs without polling',async()=>{
  } finally {await other.close();}
 });
 
-test('repository secrets editor saves several at once, never shows values, and deletes selected ones',async()=>{
+test('the Secrets tab is one .env file: values hidden until editing, comments kept, removals confirmed in a modal',async()=>{
  await login();await page.goto(`${origin}/repositories/1`);await readyPanel('1');
  await page.locator('.repo-tabs').getByRole('link',{name:'Secrets',exact:true}).click();
  await page.waitForURL(`${origin}/repositories/1/secrets`);
  assert.match(await page.locator('.app-breadcrumb').innerText(),/repository-1[\s\S]*Secrets/);
  assert.equal(await page.locator('.repo-tabs a[aria-current=page]').innerText(),'Secrets');
- const name=n=>page.getByRole('textbox',{name:`Name, line ${n}`,exact:true});
- const value=n=>page.getByRole('textbox',{name:`Value, line ${n}`,exact:true});
- // One line per secret; a duplicate name is refused before anything is sent.
- await name(1).fill('API_KEY');await value(1).fill('sk_test_never_shown_123');
- await page.getByRole('button',{name:'Add another line',exact:true}).click();
- await name(2).fill('API_KEY');await value(2).fill('duplicate');
- await page.locator('[data-secret-submit]').click();
- assert.match(await page.locator('[data-secret-row]').nth(1).innerText(),/appears more than once/);
- assert.equal(new URL(page.url()).search,'','a refused save stays on the page');
- await name(2).fill('WEBHOOK_SECRET');
- assert.equal(await page.locator('[data-secret-submit-label]').innerText(),'Save 2 secrets');
- await page.locator('[data-secret-submit]').click();
- await page.waitForURL(url=>url.searchParams.get('saved_count')==='2');
- assert.match(await page.locator('.connection-notice').innerText(),/Saved 2 secrets \(2 new, 0 replaced\)/);
- assert.match(await page.locator('.secrets-table').innerText(),/API_KEY[\s\S]*WEBHOOK_SECRET/);
- assert(!(await page.content()).includes('sk_test_never_shown_123'),'the value must never be rendered');
+ // An empty file has nothing to hide: the editor is open straight away.
+ const editor=page.locator('#env-text');
+ await editor.fill('# Payments sandbox\nAPI_KEY=sk_test_never_shown_123\nWEBHOOK_SECRET="whsec with spaces"\n\nUNSET_FOR_NOW=\n');
+ await page.getByRole('button',{name:'Save .env',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('saved')==='1'&&url.searchParams.get('added')==='2');
+ assert.match(await page.locator('.connection-notice').innerText(),/Saved the \.env file: 2 added\./);
+ const view=page.locator('.env-view');
+ assert.match(await view.innerText(),/# Payments sandbox[\s\S]*API_KEY=••••••••[\s\S]*WEBHOOK_SECRET=••••••••[\s\S]*UNSET_FOR_NOW=not set/);
+ assert(!(await page.content()).includes('sk_test_never_shown_123'),'values are hidden until editing');
+ assert.match(await page.locator('.env-file header').innerText(),/Sets 2 variables · 102 B of 64 KiB · saved/);
+ assert.equal(await page.locator('.secrets-table tbody tr').count(),2,'build access lists names with values only');
  // Build credentials require a modal opt-in and can be revoked in place.
  await page.getByRole('button',{name:'Let builds read API_KEY',exact:true}).click();
  const allow=page.locator('#allow-build-secret-0');
@@ -1166,50 +1163,62 @@ test('repository secrets editor saves several at once, never shows values, and d
  assert.match(await page.locator('.secrets-table tbody tr').first().innerText(),/Allowed/);
  await page.getByRole('button',{name:'Stop giving API_KEY to builds',exact:true}).click();
  await page.waitForURL(url=>url.searchParams.get('build_off')==='API_KEY');
- // Pasting NAME=value lines into a name splits them into lines.
- await name(1).evaluate(input=>{const data=new DataTransfer();data.setData('text/plain','API_KEY=replaced\nFEATURE_FLAG=on');input.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));});
- assert.equal(await name(2).inputValue(),'FEATURE_FLAG');
- assert.match(await page.locator('[data-secret-row]').first().innerText(),/Replaces the stored value/);
- await page.locator('[data-secret-submit]').click();
- await page.waitForURL(url=>url.searchParams.get('saved_count')==='2');
- assert.match(await page.locator('.connection-notice').innerText(),/1 new, 1 replaced/);
- // A row's Replace prefills its name and never its value.
- await page.getByRole('link',{name:'Replace API_KEY',exact:true}).click();
- await page.waitForURL(url=>url.searchParams.get('replace')==='API_KEY');
- assert.equal(await name(1).inputValue(),'API_KEY');assert.equal(await value(1).inputValue(),'');
- // A single delete confirms in its own modal; Escape changes nothing.
- const remove=page.getByRole('button',{name:'Delete API_KEY',exact:true});
- await remove.click();await page.waitForFunction(()=>document.querySelector('#delete-secret-0').matches(':modal'));
- assert.equal(await page.evaluate(()=>document.activeElement.textContent.trim()),'Cancel');
- await page.keyboard.press('Escape');
- assert.equal(await page.locator('#delete-secret-0').evaluate(e=>e.open),false);
- assert.equal(await page.locator('.secrets-table tbody tr').count(),3);
- // Selected secrets are deleted together after one confirmation.
- const bulk=page.locator('[data-bulk-delete]');
- assert(await bulk.isDisabled(),'nothing is selected yet');
- await page.getByRole('checkbox',{name:'Select all secrets'}).check();
- assert.match(await bulk.innerText(),/\(3\)/);
- await bulk.click();await page.waitForFunction(()=>document.querySelector('#delete-selected-secrets').matches(':modal'));
- assert.match(await page.locator('[data-bulk-delete-summary]').innerText(),/3 secrets: API_KEY, FEATURE_FLAG, WEBHOOK_SECRET/);
- await page.locator('#delete-selected-secrets').getByRole('button',{name:'Delete selected',exact:true}).click();
- await page.waitForURL(url=>url.searchParams.get('deleted_count')==='3');
- await page.getByText('No secrets yet').waitFor();
+ // Show values and edit opens the file exactly as saved.
+ await page.getByRole('link',{name:'Show values and edit',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('edit')==='1');
+ assert.equal(await editor.inputValue(),'# Payments sandbox\nAPI_KEY=sk_test_never_shown_123\nWEBHOOK_SECRET="whsec with spaces"\n\nUNSET_FOR_NOW=\n');
+ if(process.env.UI_BROWSER_SCREENSHOTS==='1') {await page.emulateMedia({reducedMotion:'reduce'});await page.waitForTimeout(500);await page.screenshot({path:path.join(__dirname,'artifacts','secrets-env-editor.png'),fullPage:true});}
+ // The editor counts the file's size against its limit as it changes.
+ const size=page.locator('[data-env-size]');
+ assert.equal(await size.innerText(),'102 B of 64 KiB');
+ await editor.fill('X='+'a'.repeat(2046));
+ assert.equal(await size.innerText(),'2.0 KiB of 64 KiB');
+ await editor.fill('X='+'a'.repeat(65535));
+ assert.equal(await size.innerText(),'64.0 KiB of 64 KiB');
+ assert.match(await size.getAttribute('class'),/is-over/,'one byte over the limit is flagged');
+ // A save that removes a name asks first, in a modal over the editor.
+ await editor.fill('# Payments sandbox\nAPI_KEY=sk_test_rotated_456\nUNSET_FOR_NOW=\n');
+ await page.getByRole('button',{name:'Save .env',exact:true}).click();
+ const confirm=page.locator('#confirm-env-removals');
+ await page.waitForFunction(()=>document.querySelector('#confirm-env-removals')?.matches(':modal'));
+ assert.match(await confirm.innerText(),/Remove WEBHOOK_SECRET\?[\s\S]*WEBHOOK_SECRET/);
+ if(process.env.UI_BROWSER_SCREENSHOTS==='1') {await page.emulateMedia({reducedMotion:'reduce'});await page.waitForTimeout(500);await page.screenshot({path:path.join(__dirname,'artifacts','secrets-env-removal.png')});}
+ await confirm.getByRole('button',{name:'Keep editing',exact:true}).click();
+ assert.equal(await confirm.evaluate(e=>e.open),false);
+ assert.equal(await editor.inputValue(),'# Payments sandbox\nAPI_KEY=sk_test_rotated_456\nUNSET_FOR_NOW=\n','the edited text is kept');
+ await page.getByRole('button',{name:'Save .env',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#confirm-env-removals')?.matches(':modal'));
+ await confirm.getByRole('button',{name:'Remove and save',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('changed')==='1'&&url.searchParams.get('removed')==='1');
+ assert.match(await page.locator('.connection-notice').innerText(),/1 changed, 1 removed/);
+ assert.doesNotMatch(await view.innerText(),/WEBHOOK_SECRET/);
+ // A file from disk replaces the editor's text; a line Previa cannot read
+ // is named, nothing is saved and the text stays to fix.
+ await page.getByRole('link',{name:'Show values and edit',exact:true}).click();
+ await page.locator('[data-env-file]').setInputFiles({name:'.env',mimeType:'text/plain',buffer:Buffer.from('# from disk\nAPI_KEY=sk_test_rotated_456\nNOT A LINE\n')});
+ await page.waitForFunction(()=>/Loaded \.env/.test(document.querySelector('[data-env-feedback]')?.textContent||''));
+ assert.match(await editor.inputValue(),/^# from disk/);
+ await page.getByRole('button',{name:'Save .env',exact:true}).click();
+ await page.locator('#env-error').waitFor();
+ assert.match(await page.locator('#env-error').innerText(),/Line 3: expected NAME=value\. Nothing was saved\./);
+ assert.match(await editor.inputValue(),/NOT A LINE/);
+ assert.equal(await editor.getAttribute('aria-invalid'),'true');
  for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
- await page.locator('.repo-tabs').getByRole('link',{name:'Pull requests',exact:true}).click();
- await page.waitForURL(`${origin}/repositories/1`);
+ await page.getByRole('link',{name:'Cancel',exact:true}).click();
+ await page.waitForURL(url=>!url.searchParams.has('edit'));
+ assert.match(await view.innerText(),/API_KEY=••••••••/);
 });
 
-test('the secrets editor works without JavaScript and pasted .env text is saved',async()=>{
+test('the .env file works without JavaScript, including the removal confirmation',async()=>{
  const noJS=await browser.newContext({javaScriptEnabled:false});
  try {
   const plain=await noJS.newPage();
   await plain.goto(`${origin}/auth/github/login`);await plain.waitForURL(`${origin}/dashboard`);
   await plain.goto(`${origin}/repositories/3/secrets`);
-  assert.equal(await plain.locator('[data-secret-row]').count(),4,'one line plus three spare lines');
-  await plain.locator('summary').filter({hasText:'Paste or import a .env file'}).click();
-  await plain.locator('#secret-dotenv').fill('# comment\nexport DB_URL=postgres://preview\nPRIVATE_KEY="-----BEGIN\nabc\n-----END"');
-  await plain.locator('[data-secret-submit]').click();
-  await plain.waitForURL(url=>url.searchParams.get('saved_count')==='2');
+  await plain.locator('#env-text').fill('# comment\nexport DB_URL=postgres://preview\nPRIVATE_KEY="-----BEGIN\nabc\n-----END"');
+  await plain.getByRole('button',{name:'Save .env',exact:true}).click();
+  await plain.waitForURL(url=>url.searchParams.get('added')==='2');
+  assert.match(await plain.locator('.env-view').innerText(),/# comment[\s\S]*DB_URL=••••••••[\s\S]*PRIVATE_KEY=••••••••/);
   assert.match(await plain.locator('.secrets-table').innerText(),/DB_URL[\s\S]*PRIVATE_KEY/);
   await plain.getByRole('button',{name:'Let builds read DB_URL',exact:true}).click();
   const allow=plain.locator('#allow-build-secret-0');
@@ -1218,11 +1227,14 @@ test('the secrets editor works without JavaScript and pasted .env text is saved'
   await plain.waitForURL(url=>url.searchParams.get('build_on')==='DB_URL');
   await plain.getByRole('button',{name:'Stop giving DB_URL to builds',exact:true}).click();
   await plain.waitForURL(url=>url.searchParams.get('build_off')==='DB_URL');
-  await plain.locator('summary').filter({hasText:'Paste or import a .env file'}).click();
-  await plain.locator('#secret-dotenv').fill('NOT A LINE');
-  await plain.locator('[data-secret-submit]').click();
-  assert.match(await plain.locator('#secret-dotenv-error').innerText(),/Line 1: expected NAME=value/);
-  assert.equal(await plain.locator('#secret-dotenv').inputValue(),'','pasted text is never rendered back');
+  await plain.getByRole('link',{name:'Show values and edit',exact:true}).click();
+  await plain.locator('#env-text').fill('DB_URL=postgres://preview');
+  await plain.getByRole('button',{name:'Save .env',exact:true}).click();
+  assert.match(await plain.locator('.env-removals-fallback').innerText(),/Remove PRIVATE_KEY\?/);
+  assert.equal(await plain.locator('#env-text').inputValue(),'DB_URL=postgres://preview','the edited text is kept while confirming');
+  await plain.locator('.env-removals-fallback').getByRole('button',{name:'Remove and save',exact:true}).click();
+  await plain.waitForURL(url=>url.searchParams.get('removed')==='1');
+  assert.doesNotMatch(await plain.locator('.env-view').innerText(),/PRIVATE_KEY/);
  } finally {await noJS.close();}
 });
 

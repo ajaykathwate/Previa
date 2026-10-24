@@ -18,7 +18,6 @@ Last updated: 2026-10-23
 - Flaky browser tests: root cause was the live stream's first refetch swapping the
   panel; htmx wires new fields after its 20 ms settle, so a fill in that window
   was lost. ui.test.cjs liveIdle() now waits before typing on live pages.
-- Google sign-in: the owner created a Google OAuth client locally (docs/02 F7).
 - .previewrc.yaml so Previa previews itself (dashboard
   on managed PostgreSQL 17, setup previa-migrate up; secrets SESSION_SECRET and a
   previews GitHub OAuth App; APP_BASE_URL added after the first build; docs/02
@@ -26,14 +25,16 @@ Last updated: 2026-10-23
   builds all name targets, instructions identical; verified by a real no-target
   build, read-only run, 200 on own host, 421 by address). Sign-in choices page
   redesigned (web/pages/auth/login.templ, .auth-* in workspace.css, GoogleMark).
-- CI on PR #2 (mvp-complete → master) failed twice, both fixed: go.mod was not tidy
-  (go-jose is a direct import; CI runs go mod tidy + git diff), and the running-build
-  browser scenario read the tracker across a live-refresh swap (now one snapshot).
-  Local replay of the checks job: generate, build, lint, vuln, race suite 54 pkgs,
-  observability; browser 55/55. The Docker job's prod smoke then failed in the backup
-  drill: deletion-journal.sh was 100644 in Git (added from /mnt/c), so backup.sh and
-  the systemd journal unit could not run it in production either. Now 100755, guarded
-  by TestDeployScriptsAreExecutableInGit; full smoke incl. drill run from a Linux clone.
+- CI fixes (committed): go.mod tidy (go-jose direct), tracker read in one snapshot,
+  deletion-journal.sh executable in Git (TestDeployScriptsAreExecutableInGit).
+- Secrets became one .env file per repository (owner decision, 2026-10-23; DESIGN
+  §16 deviation). repository_env_files (migration 47, SchemaVersion 47) stores the
+  sealed file (AAD ".env"); SaveFile keeps env_secrets = names with values in one tx
+  (revision check, removals confirmed in a modal, NAME= kept but unset, 64 KiB, 500
+  names); masked view + Show values and edit (Owner/Admin), live size, guidance card
+  scrolls at the file panel's height; Reencrypt rotates files (FileRotationStore).
+  Old per-line editor and /secrets/delete removed. Docs 02, 07, 21, DESIGN, README,
+  FAQ/home copy updated.
 - Every command may be prefixed /home/ajaykathwatee/.local/bin/rtk. No subagents.
   Do not edit technical-docs/inside-previa.md.
 
@@ -84,7 +85,7 @@ Last updated: 2026-10-23
 ## Owner actions pending
 - Untick Active on the GitHub App webhook (URL points at a dead trycloudflare tunnel;
   the API cannot toggle Active). Close PR #1 of previa-live-test when convenient.
-- Still from earlier: real Google OAuth client/env, migration 46 on intended DB,
+- Still from earlier: real Google OAuth client/env, migrations 46-47 on intended DB,
   SUPPORT_OPERATOR_GITHUB_IDS for production (now enforced), release/deployment
   acceptance.
 

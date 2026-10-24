@@ -564,6 +564,15 @@ type RepositoryDestination struct {
 	PublicID  pgtype.UUID
 }
 
+type RepositoryEnvFile struct {
+	RepoID        int64
+	EncryptedText []byte
+	KeyVersion    int32
+	Revision      int64
+	UpdatedBy     pgtype.Int8
+	UpdatedAt     pgtype.Timestamptz
+}
+
 type RepositoryMembership struct {
 	RepoID      int64
 	WorkspaceID int64

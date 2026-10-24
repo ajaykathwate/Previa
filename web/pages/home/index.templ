@@ -290,7 +290,7 @@ templ features() {
 			@featureGroup("Run") {
 				@feature("Databases included", "Ask for PostgreSQL, MySQL or Redis, run a setup command and up to three background processes, in one of three sizes.", components.DatabaseIcon())
 				@feature("Ready-to-test data", "Seed every preview, start from a snapshot of your default branch, keep data between pushes and give reviewers a test login.", components.ServerIcon())
-				@feature("Encrypted secrets", "Write-only in the dashboard, or paste a whole .env file. Added when a preview starts and masked in logs.", components.KeyIcon())
+				@feature("Encrypted secrets", "One .env file per repository, comments and all. Values stay hidden until an Owner or Admin edits it, are added when a preview starts and are masked in logs.", components.KeyIcon())
 			}
 			@featureGroup("Review") {
 				@feature("One HTTPS link, public or private", "One unguessable link per pull request that stays the same for its whole life. Make it private and visitors sign in first.", components.LinkIcon())
@@ -337,7 +337,7 @@ templ security() {
 			<ul class="security-list">
 				@guarantee("Every build is isolated", "Each build and preview runs on its own, without admin rights, with firm limits and no way into anything private.", components.ShieldIcon())
 				@guarantee("Forks get less", "Pull requests from forks never receive your secrets or your approved connections.", components.BranchIcon())
-				@guarantee("Secrets stay secret", "Encrypted, added only when a preview starts, masked in logs and never shown again.", components.KeyIcon())
+				@guarantee("Secrets stay secret", "Encrypted, visible only to Owners and Admins, added only when a preview starts and masked in logs.", components.KeyIcon())
 				@guarantee("Your account stays separate", "Previews never run on Previa's own address, so a preview can't touch your sign-in.", components.UserIcon())
 				@guarantee("Unguessable, or private", "Each link has a random part. Make a repository's previews private and only people with access can open them. Use test data either way.", components.LockIcon())
 				@guarantee("Access by role", "Reviewers open previews and leave feedback without seeing your code, logs or secrets. Removing someone ends their access at once.", components.TeamIcon())

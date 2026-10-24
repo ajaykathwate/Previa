@@ -165,8 +165,8 @@ busy button's spinner and label until the next page), `initElapsed` (counts
 `time[data-elapsed]` up every second), `initRelativeTimes` (rewrites
 `time[data-relative]` as "3 minutes ago" every 30 s and after swaps, keeping the
 exact UTC time as the title), `initCopyButtons` (`data-copy` text or a log list's
-lines to the clipboard, confirmed for two seconds), `initSecretEditor` and
-`initBulkDelete` (the Secrets tab, below), `initStory` and `initFAQ` (the
+lines to the clipboard, confirmed for two seconds), `initEnvEditor` (the
+Secrets tab's file loader, size and removal modal, below), `initStory` and `initFAQ` (the
 conversations, below), `initOverview` (the Overview, above), `initReviews` (the
 review page, below). A `js-enabled` class on `<html>` scopes
 CSS that only makes sense with scripting. No third-party JavaScript besides HTMX.
@@ -432,26 +432,35 @@ See [30](30-reviews.md) and [31](31-test-data.md).
 
 ## Secrets tab
 
-Write-only by design. The list and editor sit beside a **How secrets reach your
-previews** panel (below 1100px it follows them); the Outbound tab uses the same
-layout for **How outbound connections work**. The **Stored secrets** table lists names, build permissions and update times,
-each with Replace and Delete. **Allow** opens a modal explaining that trusted branch
-code can read the credential; **Stop** revokes build use. Values are runtime-only
-by default, while `REGISTRY_AUTH` is reserved for base image pulls. All permission
-changes are owner-only, CSRF-protected POSTs; forks receive none. Checkboxes and **Delete selected** remove several
-after one confirmation (the checkboxes belong to the dialog's form, so this works
-without JavaScript). The editor below adds or replaces several values at once, one
-name and value per line like a key-value table, plus a **Paste or import a .env
-file** section. With JavaScript, **Add another line** and × manage lines, pasting
-several `NAME=value` lines into a name splits them into lines, a chosen .env file is
-read in the browser (never uploaded on its own), **Move into lines above** turns
-pasted text into lines to review, names that exist say "Replaces the stored value",
-and duplicate, reserved or incomplete lines are flagged before submit. Without
-JavaScript the page renders spare lines and the server parses pasted text with the
-same rules (`secrets.ParseDotenv`). The server saves everything in one transaction
-(all or nothing; the limit counts new names only). A rejected save re-renders the
-names with the reason but never a value or the pasted text. See
-[07](07-repository-secrets.md).
+One `.env` file per repository (owner decision, 2026-10-23). The **.env** panel sits
+beside **How the .env file reaches your previews**, which takes the panel's height
+and scrolls (it is focusable, so the keyboard can scroll it); below 1100px the
+guidance follows the panels with a capped height. **Build access** follows the
+file. The Outbound tab keeps the earlier side panel for **How outbound connections
+work**.
+
+- **Masked view.** Comments, blank lines and order as written, each value shown as
+  `••••••••` and an empty name as *not set*. The header reads "Sets 2 variables ·
+  1.2 KiB of 64 KiB · saved … by …". The page holds no value.
+- **Show values and edit** (`?edit=1`) opens the whole file in a monospace editor
+  (sent with `no-store`); an empty file opens the editor straight away. Under it,
+  the size against the 64 KiB limit updates as you type and turns red when over.
+  **Load a file…** reads a file in the browser into the editor (nothing is sent
+  until **Save .env**). The form posts to `?edit=1`, so **Cancel** always leaves a
+  refused save.
+- **Saving** replaces the file and the repository's secrets in one transaction. A
+  line Previa cannot read is named ("Line 3: expected NAME=value. Nothing was
+  saved.") with the text kept to fix. A save that removes names returns with
+  **Remove … ?** as a modal over the editor (focus on **Keep editing**; **Remove
+  and save** resubmits the same form); without JavaScript the same confirmation
+  appears inline. A save from an outdated editor reopens it with the typed text and
+  says someone else saved first.
+- **Build access** lists the names with values: **Allow** opens a modal explaining
+  that trusted branch code can read the credential; **Stop** revokes build use.
+  `REGISTRY_AUTH` is reserved for base image pulls.
+
+Only Owners and Admins reach the tab; every change is a CSRF-protected POST and
+forks receive nothing. See [07](07-repository-secrets.md).
 
 ## Build log page
 
@@ -606,7 +615,8 @@ real auth, session, CSRF and realtime stream code and fake GitHub/queue provider
 It covers responsive layout and overflow, navigation and the drawer, modal focus and
 dismissal, logout, CSRF, live search, pagination, Automatic confirmation, live
 updates without polling, the command palette, theme persistence, the repository
-Secrets tab (write-only saving, replacing, modal deletion), build logs (live append,
+Secrets tab (the masked `.env` file, editing, live size, the removal modal, loading
+a file, a refused line and the flow without JavaScript), build logs (live append,
 following, reset for a new attempt, inert script-looking output, paging without
 JavaScript, the tracker following progress lines), failed builds (plain title, next
 steps, collapsed technical details, Retry showing **Starting…** then the queued step),

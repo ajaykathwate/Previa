@@ -291,11 +291,9 @@ func (f *accessFixture) form(t *testing.T, persona, pattern, repo string) url.Va
 	case "/repositories/{repoID}/preview-access":
 		return url.Values{"private": {"true"}}
 	case "/repositories/{repoID}/secrets":
-		return url.Values{"name": {"MATRIX_SECRET"}, "value": {"matrix-value"}}
+		return url.Values{"env": {"MATRIX_SECRET=matrix-value"}, "revision": {"0"}}
 	case "/repositories/{repoID}/secrets/build":
 		return url.Values{"name": {"MATRIX_SECRET"}, "build": {"true"}}
-	case "/repositories/{repoID}/secrets/delete":
-		return url.Values{"name": {"MATRIX_UNUSED"}} // the saved secret stays as evidence
 	case "/repositories/{repoID}/outbound":
 		return url.Values{"host": {"db.example.com"}, "port": {"5432"}}
 	case "/repositories/{repoID}/test-data/settings":
@@ -772,8 +770,6 @@ var accessMatrix = map[string]string{
 	"POST /repositories/{repoID}/secrets B":                                                                     "403 >/repositories/*/secrets >/repositories/*/secrets 404 404 404 404 404",
 	"POST /repositories/{repoID}/secrets/build A":                                                               "403 >/repositories/*/secrets >/repositories/*/secrets 404 404 404 404 404",
 	"POST /repositories/{repoID}/secrets/build B":                                                               "403 >/repositories/*/secrets >/repositories/*/secrets 404 404 404 404 404",
-	"POST /repositories/{repoID}/secrets/delete A":                                                              "403 >/repositories/*/secrets >/repositories/*/secrets 404 404 404 404 404",
-	"POST /repositories/{repoID}/secrets/delete B":                                                              "403 >/repositories/*/secrets >/repositories/*/secrets 404 404 404 404 404",
 	"GET /repositories/{repoID}/setup A":                                                                        "L 200 200 200 200 >/previews 404 404",
 	"GET /repositories/{repoID}/setup B":                                                                        "L 200 200 404 404 404 404 404",
 	"POST /repositories/{repoID}/setup/check A":                                                                 "403 >/repositories/*/setup >/repositories/*/setup >/repositories/*/setup 404 404 404 404",

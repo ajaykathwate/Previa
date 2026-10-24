@@ -1184,259 +1184,37 @@
     });
   }
 
-  // .env text: the same rules as the server's secrets.ParseDotenv.
-  function parseDotenv(text) {
-    const lines = text.replace(/\r\n/g, '\n').split('\n');
-    const entries = [];
-    const closing = (body) => {
-      for (let i = 0; i < body.length; i++) {
-        if (body[i] === '\\') i++;
-        else if (body[i] === '"') return i;
-      }
-      return -1;
-    };
-    const unescape = body => body.replace(/\\(.)/g, (_, c) => (c === 'n' ? '\n' : c === 't' ? '\t' : c));
-    for (let i = 0; i < lines.length; i++) {
-      const number = i + 1;
-      let line = lines[i].trim();
-      if (!line || line.startsWith('#')) continue;
-      if (line.startsWith('export ')) line = line.slice(7);
-      const equals = line.indexOf('=');
-      const name = equals < 0 ? '' : line.slice(0, equals).trim();
-      if (!name) throw new Error(`Line ${number}: expected NAME=value.`);
-      let raw = line.slice(equals + 1).trim();
-      let value;
-      if (raw.startsWith('"')) {
-        let body = raw.slice(1);
-        for (;;) {
-          const end = closing(body);
-          if (end >= 0) { value = unescape(body.slice(0, end)); break; }
-          i++;
-          if (i >= lines.length) throw new Error(`Line ${number}: the quoted value of ${name} is not closed.`);
-          body += '\n' + lines[i].replace(/[ \t]+$/, '');
-        }
-      } else if (raw.startsWith("'")) {
-        const end = raw.lastIndexOf("'");
-        if (end === 0) throw new Error(`Line ${number}: the quoted value of ${name} is not closed.`);
-        value = raw.slice(1, end);
-      } else {
-        const comment = raw.indexOf(' #');
-        if (comment >= 0) raw = raw.slice(0, comment).trim();
-        value = raw;
-      }
-      entries.push([name, value]);
-    }
-    return entries;
-  }
-
-  // Secrets editor: lines of name and value like a key-value table. Pasting
-  // several NAME=value lines into a name splits them into lines; a .env file
-  // or pasted text can be moved into lines to review before saving. Checks
-  // run before submit; the server checks everything again.
-  function initSecretEditor() {
-    const form = document.querySelector('[data-secret-editor]');
+  // Secrets: the repository's .env file. The editor can load a file from disk
+  // (the server checks every line on save); a save that would remove names
+  // comes back with its confirmation, which opens as a modal.
+  function initEnvEditor() {
+    const removals = document.querySelector('#confirm-env-removals[data-open-on-load]');
+    if (removals && !removals.open) removals.showModal();
+    const form = document.querySelector('[data-env-editor]');
     if (!form) return;
-    const list = form.querySelector('[data-secret-rows]');
-    const template = form.querySelector('[data-secret-row-template]');
-    const existing = new Set((form.dataset.existingNames || '').split(' ').filter(Boolean));
-    const remaining = Number(form.dataset.remaining || 0);
-    const dotenv = form.querySelector('[data-dotenv-text]');
-    const dotenvFeedback = form.querySelector('[data-dotenv-feedback]');
-    const feedback = form.querySelector('[data-secret-editor-feedback]');
-    const submitLabel = form.querySelector('[data-secret-submit-label]');
-    const namePattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
-    const rows = () => [...list.querySelectorAll('[data-secret-row]')];
-    const fields = row => [row.querySelector('[name="name"]'), row.querySelector('[name="value"]')];
-    // setNote shows a hint, or an error that marks invalidField.
-    const setNote = (row, text, invalidField = null) => {
-      const note = row.querySelector('[data-row-note]');
-      row.classList.toggle('has-error', Boolean(invalidField));
-      fields(row).forEach((field) => {
-        if (field === invalidField) field.setAttribute('aria-invalid', 'true'); else field.removeAttribute('aria-invalid');
-      });
-      note.replaceChildren();
-      if (!text) return;
-      if (invalidField) {
-        const span = document.createElement('span');
-        span.className = 'field-error';
-        span.textContent = text;
-        note.append(span);
-      } else note.textContent = text;
+    const text = form.querySelector('textarea[name="env"]');
+    const feedback = form.querySelector('[data-env-feedback]');
+    // The file's size against its limit, as the server counts it (UTF-8).
+    const size = form.querySelector('[data-env-size]');
+    const max = Number(size?.dataset.envMax || 0);
+    const kib = n => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KiB`);
+    const measure = () => {
+      if (!size || !text) return;
+      const bytes = new TextEncoder().encode(text.value).length;
+      size.textContent = `${kib(bytes)} of ${max / 1024} KiB`;
+      size.classList.toggle('is-over', bytes > max);
     };
-    const hint = (row) => {
-      const name = fields(row)[0].value.trim();
-      if (!row.classList.contains('has-error')) setNote(row, existing.has(name) ? 'Replaces the stored value.' : '');
-    };
-    const grow = (area) => { area.rows = Math.min(8, Math.max(1, area.value.split('\n').length)); };
-    const relabel = () => rows().forEach((row, index) => {
-      const [name, value] = fields(row);
-      name.setAttribute('aria-label', `Name, line ${index + 1}`);
-      value.setAttribute('aria-label', `Value, line ${index + 1}`);
-      row.querySelector('[data-remove-secret-row]').setAttribute('aria-label', `Remove line ${index + 1}`);
-    });
-    const count = () => {
-      const filled = rows().filter(row => fields(row).some(field => field.value.trim() !== '')).length;
-      let pasted = 0;
-      try { pasted = dotenv?.value.trim() ? parseDotenv(dotenv.value).length : 0; } catch { /* Reported on submit. */ }
-      const total = filled + pasted;
-      if (submitLabel) submitLabel.textContent = total > 1 ? `Save ${total} secrets` : total === 1 ? 'Save 1 secret' : 'Save secrets';
-    };
-    const addRow = (name = '', value = '') => {
-      const empty = rows().find(row => fields(row).every(field => field.value === ''));
-      const row = empty || template.content.firstElementChild.cloneNode(true);
-      if (!empty) list.append(row);
-      const [nameField, valueField] = fields(row);
-      nameField.value = name;
-      valueField.value = value;
-      grow(valueField);
-      hint(row);
-      relabel();
-      return row;
-    };
-    const fill = (entries) => {
-      entries.forEach(([name, value]) => addRow(name, value));
-      count();
-    };
-    list.addEventListener('input', (event) => {
-      const row = event.target.closest('[data-secret-row]');
-      if (!row) return;
-      if (event.target.name === 'value') grow(event.target);
-      if (row.classList.contains('has-error')) setNote(row, '');
-      hint(row);
-      count();
-    });
-    list.addEventListener('paste', (event) => {
-      if (event.target.name !== 'name') return;
-      const text = event.clipboardData?.getData('text') || '';
-      if (!text.includes('=')) return;
-      try {
-        const entries = parseDotenv(text);
-        if (!entries.length) return;
-        event.preventDefault();
-        const row = event.target.closest('[data-secret-row]');
-        fields(row).forEach(field => { field.value = ''; });
-        fill(entries);
-        if (feedback) feedback.textContent = `Added ${entries.length} line${entries.length === 1 ? '' : 's'} from the pasted text.`;
-      } catch { /* Not .env text: paste it as typed. */ }
-    });
-    list.addEventListener('click', (event) => {
-      const remove = event.target.closest('[data-remove-secret-row]');
-      if (!remove) return;
-      const row = remove.closest('[data-secret-row]');
-      if (rows().length > 1) {
-        const next = row.nextElementSibling || row.previousElementSibling;
-        row.remove();
-        fields(next)[0]?.focus();
-      } else {
-        fields(row).forEach(field => { field.value = ''; });
-        setNote(row, '');
-        fields(row)[0].focus();
-      }
-      relabel();
-      count();
-    });
-    form.querySelector('[data-add-secret-row]')?.addEventListener('click', () => {
-      const row = template.content.firstElementChild.cloneNode(true);
-      list.append(row);
-      relabel();
-      fields(row)[0].focus();
-    });
-    dotenv?.addEventListener('input', count);
-    form.querySelector('[data-dotenv-file]')?.addEventListener('change', async (event) => {
+    text?.addEventListener('input', measure);
+    form.querySelector('[data-env-file]')?.addEventListener('change', async (event) => {
       const file = event.target.files?.[0];
-      if (!file || !dotenv) return;
-      if (file.size > 256 * 1024) { dotenvFeedback.textContent = 'That file is too large for secrets (256 KiB at most).'; return; }
-      dotenv.value = await file.text();
       event.target.value = '';
-      dotenvFeedback.textContent = `Loaded ${file.name}. Review it, then save or move it into lines.`;
-      count();
+      if (!file || !text) return;
+      if (file.size > 64 * 1024) { feedback.textContent = `${file.name} is larger than 64 KiB, the most a .env file may hold.`; return; }
+      text.value = await file.text();
+      measure();
+      feedback.textContent = `Loaded ${file.name}. Review it, then save.`;
+      text.focus();
     });
-    form.querySelector('[data-dotenv-split]')?.addEventListener('click', () => {
-      if (!dotenv?.value.trim()) { dotenvFeedback.textContent = 'Paste .env text or choose a file first.'; return; }
-      try {
-        const entries = parseDotenv(dotenv.value);
-        fill(entries);
-        dotenv.value = '';
-        dotenv.removeAttribute('aria-invalid');
-        dotenvFeedback.textContent = `Moved ${entries.length} line${entries.length === 1 ? '' : 's'} above.`;
-        count();
-      } catch (error) {
-        dotenvFeedback.textContent = error.message;
-      }
-    });
-    form.addEventListener('submit', (event) => {
-      const seen = new Map();
-      let firstInvalid = null;
-      let fresh = 0;
-      const fail = (row, message, field) => { setNote(row, message, field); firstInvalid ||= field; };
-      rows().forEach((row) => {
-        const [nameField, valueField] = fields(row);
-        const name = nameField.value.trim();
-        const value = valueField.value;
-        if (!name && !value) { setNote(row, ''); return; }
-        if (!name) return fail(row, 'Enter a name for this value.', nameField);
-        if (!namePattern.test(name)) return fail(row, 'Use letters, digits and underscores, starting with a letter or underscore.', nameField);
-        if (name.toUpperCase().startsWith('PREVIA_')) return fail(row, 'Names starting with PREVIA_ are reserved for the platform.', nameField);
-        if (seen.has(name)) return fail(row, `${name} appears more than once. Keep one value per name.`, nameField);
-        if (!value) return fail(row, `Enter a value for ${name}.`, valueField);
-        seen.set(name, row);
-        if (!existing.has(name)) fresh++;
-        hint(row);
-      });
-      let pasted = [];
-      try {
-        pasted = dotenv?.value.trim() ? parseDotenv(dotenv.value) : [];
-      } catch (error) {
-        dotenvFeedback.textContent = error.message;
-        firstInvalid ||= dotenv;
-      }
-      for (const [name] of pasted) {
-        if (seen.has(name)) {
-          dotenvFeedback.textContent = `${name} is both in the lines above and in the pasted text. Keep one.`;
-          firstInvalid ||= dotenv;
-        }
-        seen.set(name, null);
-        if (!existing.has(name)) fresh++;
-      }
-      if (!firstInvalid && seen.size === 0) {
-        if (feedback) feedback.textContent = 'Add at least one name and value.';
-        firstInvalid = fields(rows()[0])[0];
-      } else if (!firstInvalid && fresh > remaining) {
-        if (feedback) feedback.textContent = `Only ${remaining} more name${remaining === 1 ? '' : 's'} fit. Delete some secrets or save fewer new names.`;
-        firstInvalid = fields(rows()[0])[0];
-      }
-      if (firstInvalid) {
-        event.preventDefault();
-        firstInvalid.closest('details')?.setAttribute('open', '');
-        firstInvalid.focus();
-      }
-    });
-    rows().forEach((row) => { hint(row); grow(fields(row)[1]); });
-    count();
-  }
-
-  // Bulk delete: checkboxes belong to the confirmation's form; the trigger
-  // shows how many are selected and stays disabled until one is.
-  function initBulkDelete() {
-    const trigger = document.querySelector('[data-bulk-delete]');
-    if (!trigger) return;
-    const boxes = [...document.querySelectorAll('[data-select-secret]')];
-    const all = document.querySelector('[data-select-all]');
-    const counter = trigger.querySelector('[data-bulk-delete-count]');
-    const summary = document.querySelector('[data-bulk-delete-summary]');
-    const update = () => {
-      const chosen = boxes.filter(box => box.checked);
-      trigger.disabled = chosen.length === 0;
-      counter.textContent = chosen.length ? `(${chosen.length})` : '';
-      if (all) {
-        all.checked = chosen.length === boxes.length && boxes.length > 0;
-        all.indeterminate = chosen.length > 0 && chosen.length < boxes.length;
-      }
-      if (summary) summary.textContent = chosen.length ? `${chosen.length === 1 ? '1 secret' : chosen.length + ' secrets'}: ${chosen.map(box => box.value).join(', ')}` : '';
-    };
-    boxes.forEach(box => box.addEventListener('change', update));
-    all?.addEventListener('change', () => { boxes.forEach((box) => { box.checked = all.checked; }); update(); });
-    update();
   }
 
   function initRepositorySearch() {
@@ -2146,8 +1924,7 @@
   initCountdowns();
   initRelativeTimes();
   initCopyButtons();
-  initSecretEditor();
-  initBulkDelete();
+  initEnvEditor();
   initRefreshDeadlines();
   initStory();
   initFilm();

@@ -13,6 +13,13 @@ type StoredSecret struct {
 	SealedSecret
 }
 
+// StoredFile is one repository's sealed .env file considered for re-encryption.
+type StoredFile struct {
+	RepoID  int64
+	Value   []byte
+	Version int32
+}
+
 // RotationStore walks and rewrites ciphertext during key rotation.
 type RotationStore interface {
 	NeedingRotation(ctx context.Context, activeVersion int32, afterID int64, limit int32) ([]StoredSecret, error)
@@ -20,6 +27,14 @@ type RotationStore interface {
 	// concurrent owner edit (already on the active key) always wins.
 	Rotate(ctx context.Context, s StoredSecret, sealed []byte, version int32) (bool, error)
 	CountByVersion(ctx context.Context) (map[int32]int64, error)
+}
+
+// FileRotationStore is a RotationStore that also keeps .env files, which
+// Reencrypt rotates after the values.
+type FileRotationStore interface {
+	FilesNeedingRotation(ctx context.Context, activeVersion int32, afterRepoID int64, limit int32) ([]StoredFile, error)
+	// RotateFile replaces a file only if it is unchanged since it was read.
+	RotateFile(ctx context.Context, f StoredFile, sealed []byte, version int32) (bool, error)
 }
 
 // RotationReport summarizes one re-encryption run. Remaining counts values still
@@ -30,9 +45,10 @@ type RotationReport struct {
 	Remaining map[int32]int64
 }
 
-// Reencrypt moves every value onto the active key, in batches. It is safe to run
-// while the server accepts edits and safe to repeat. It stops at the first value
-// it cannot open, so a missing old key is reported instead of losing data.
+// Reencrypt moves every value and .env file onto the active key, in batches.
+// It is safe to run while the server accepts edits and safe to repeat. It
+// stops at the first value it cannot open, so a missing old key is reported
+// instead of losing data.
 func Reencrypt(ctx context.Context, store RotationStore, keys *Keyring, batch int32) (RotationReport, error) {
 	if store == nil || keys == nil || batch <= 0 {
 		return RotationReport{}, errors.New("re-encryption needs a store, a keyring and a positive batch size")
@@ -70,6 +86,11 @@ func Reencrypt(ctx context.Context, store RotationStore, keys *Keyring, batch in
 			after = row.ID
 		}
 	}
+	if files, ok := store.(FileRotationStore); ok {
+		if err := reencryptFiles(ctx, files, keys, batch, &report); err != nil {
+			return report, err
+		}
+	}
 	counts, err := store.CountByVersion(ctx)
 	if err != nil {
 		return report, err
@@ -81,4 +102,40 @@ func Reencrypt(ctx context.Context, store RotationStore, keys *Keyring, batch in
 		}
 	}
 	return report, nil
+}
+
+// reencryptFiles moves every .env file onto the active key, in batches.
+func reencryptFiles(ctx context.Context, store FileRotationStore, keys *Keyring, batch int32, report *RotationReport) error {
+	active := keys.ActiveVersion()
+	var afterRepo int64
+	for {
+		files, err := store.FilesNeedingRotation(ctx, active, afterRepo, batch)
+		if err != nil {
+			return err
+		}
+		if len(files) == 0 {
+			return nil
+		}
+		for _, file := range files {
+			plain, err := keys.Open(file.RepoID, envFileName, file.Version, file.Value)
+			if err != nil {
+				return fmt.Errorf(".env file of repository %d (key version %d): %w", file.RepoID, file.Version, err)
+			}
+			sealed, version, err := keys.Seal(file.RepoID, envFileName, plain)
+			clear(plain)
+			if err != nil {
+				return err
+			}
+			ok, err := store.RotateFile(ctx, file, sealed, version)
+			if err != nil {
+				return err
+			}
+			if ok {
+				report.Rotated++
+			} else {
+				report.Skipped++
+			}
+			afterRepo = file.RepoID
+		}
+	}
 }

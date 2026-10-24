@@ -852,7 +852,7 @@ during the quiet period; queued/running requests show their progress as a status
 ### Focused build stress and fuzz checks
 
 Use an exported `TEST_DATABASE_URL` pointing at a disposable PostgreSQL database
-at Goose 46 / River 007. Direct `go test` commands do **not** load `.env`;
+at Goose 47 / River 007. Direct `go test` commands do **not** load `.env`;
 export test settings first. Existing Make integration targets load `.env` as
 explained above, but an exported test database overrides the fallback.
 
@@ -1540,11 +1540,14 @@ builds; pages, sign-in and settings can all be reviewed.
    OAuth Apps) with the callback `https://<PREVIEW_BASE_DOMAIN>/auth/github/callback`.
    GitHub accepts the preview hostnames below that domain. Keep it separate from
    the production sign-in app.
-2. On the Previa repository's **Secrets** tab in Previa, set `SESSION_SECRET` (32+
-   random characters, for example `openssl rand -hex 32`), `GITHUB_OAUTH_CLIENT_ID`
-   and `GITHUB_OAUTH_CLIENT_SECRET`. A missing one stops the server at start, and
-   the build log names it.
-3. Build a pull request. Expected: setup prints `Goose: schema at migration 46` and
+2. On the Previa repository's **Secrets** tab in Previa, put these lines in its
+   `.env` file: `SESSION_SECRET=` 32+ random characters (for example
+   `openssl rand -hex 32`), `GITHUB_OAUTH_CLIENT_ID=` and
+   `GITHUB_OAUTH_CLIENT_SECRET=` from the previews OAuth App. A missing one stops
+   the server at start, and the build log names it. Do not paste your local Previa
+   `.env`: its `HTTP_ADDR`, `APP_BASE_URL` and `EARLY_ACCESS_ENABLED` would override
+   the preview's own settings, and previews do not need its other credentials.
+3. Build a pull request. Expected: setup prints `Goose: schema at migration 47` and
    `River: 7 of 7 migrations applied`, and the preview is published.
 4. Opening the link now answers `This server does not serve that host.` (HTTP 421):
    Previa serves only `APP_BASE_URL`. In that pull request, uncomment
@@ -1560,3 +1563,25 @@ with 421; readiness is the port accepting connections.
 against Previa's own rules and that the Dockerfile's last stage is the server
 holding the setup command. Google sign-in on a preview would need each preview's
 exact callback registered with Google, so it is left off.
+
+## Secrets as one .env file (migration 47)
+
+Each repository's secrets are now one `.env` file on its **Secrets** tab
+([07](07-repository-secrets.md#the-env-file)). Stop the server and worker, then:
+
+```sh
+make migrate-up        # expected: Goose 47, River 007
+make run-server        # and make run-worker in another terminal
+```
+
+Existing secrets need no conversion: a repository opens with one `NAME=value` line
+per secret until its first save. Re-encryption (`make secrets-reencrypt`) now
+also moves `.env` files onto the active key. Check it:
+
+```sh
+export TEST_DATABASE_URL='postgres://USER:PASSWORD@HOST:PORT/DISPOSABLE_DB'
+go test -count=1 ./internal/secrets
+UI_TEST_PATTERN='Secrets tab is one|\.env file works without' make test-browser
+```
+
+Expected: `ok`, then `pass 2` and `fail 0` from the browser run.

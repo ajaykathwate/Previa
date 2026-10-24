@@ -187,7 +187,7 @@ templ forkPullRequests() {
 
 templ secretsProtected() {
 	<ul>
-		<li>Encrypted as soon as you save them, and never shown again.</li>
+		<li>Kept as one encrypted .env file per repository. Values stay hidden on the page until an Owner or Admin chooses to edit the file; nobody else can open it.</li>
 		<li>Added when a preview starts by default. Builds receive a value only when you explicitly allow it, through a BuildKit secret mount. REGISTRY_AUTH is reserved for private base image pulls and never reaches the app.</li>
 		<li>Masked in build and preview logs.</li>
 		<li>Never given to pull requests from forks.</li>
