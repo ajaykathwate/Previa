@@ -624,6 +624,9 @@ a.sha-link:hover { border-color: var(--line-strong); color: var(--ink); }
 .secrets-list { overflow: clip; margin-bottom: 18px; }
 .secrets-list .repository-empty { border: 0; border-radius: 0; background: transparent; }
 .secrets-table td { vertical-align: middle; }
+/* Many names scroll inside Build access, under headers that stay put. */
+.secrets-list .repository-table-scroll { max-height: 440px; overflow-y: auto; overscroll-behavior: contain; }
+.secrets-table thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); }
 .secret-name code { color: var(--ink); font-family: var(--font-code); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .secret-updated { color: var(--text-muted); font-size: 12.5px; white-space: nowrap; }
 .secret-build { white-space: nowrap; }
@@ -654,7 +657,22 @@ a.sha-link:hover { border-color: var(--line-strong); color: var(--ink); }
 .env-file { overflow: clip; scroll-margin-top: 16px; }
 .env-file h2 code { font-family: var(--font-code); font-size: 15px; font-weight: 640; }
 .env-file > .connection-notice { margin: 16px 18px 0; }
-.env-view { margin: 16px 18px 18px; padding: 10px 0; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); font-family: var(--font-code); font-size: 13px; line-height: 1.75; }
+/* A long file scrolls inside its panel instead of stretching the page; the
+   header keeps its count and size in view. */
+.env-view {
+  max-height: min(60vh, 520px);
+  margin: 16px 18px 18px;
+  padding: 10px 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  font-family: var(--font-code);
+  font-size: 13px;
+  line-height: 1.75;
+}
+.env-view:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .env-line { min-height: 1.75em; padding: 0 14px; white-space: pre; }
 .env-comment { color: var(--text-muted); }
 .env-name { color: var(--ink); font-weight: 600; }
@@ -664,7 +682,8 @@ a.sha-link:hover { border-color: var(--line-strong); color: var(--ink); }
 .env-form { display: grid; gap: 10px; padding: 16px 18px 18px; }
 .env-editor {
   width: 100%;
-  min-height: 320px;
+  height: clamp(320px, 60vh, 640px);
+  min-height: 200px;
   padding: 12px 14px;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
@@ -688,7 +707,7 @@ a.sha-link:hover { border-color: var(--line-strong); color: var(--ink); }
 .env-file-load:focus-within { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 4px; }
 html:not(.js-enabled) .env-file-load { display: none; }
 .env-feedback:empty { display: none; }
-.env-removals { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; padding: 0; list-style: none; }
+.env-removals { display: flex; flex-wrap: wrap; gap: 6px; max-height: 180px; margin: 0 0 16px; padding: 0; overflow-y: auto; list-style: none; }
 .env-removals code { padding: 2px 7px; border-radius: 6px; background: var(--danger-soft); color: var(--danger-ink); font-family: var(--font-code); font-size: 12.5px; }
 .env-removals-fallback { display: grid; gap: 10px; }
 .env-removals-fallback p { margin: 0; }

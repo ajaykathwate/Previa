@@ -1209,6 +1209,47 @@ test('the Secrets tab is one .env file: values hidden until editing, comments ke
  assert.match(await view.innerText(),/API_KEY=••••••••/);
 });
 
+test('a large .env file scrolls inside its panels instead of stretching the page',async()=>{
+ await login();await page.goto(`${origin}/repositories/5/secrets`);
+ const lines=['# A large app'];
+ for(let i=0;i<300;i++) lines.push(`VAR_${String(i).padStart(3,'0')}=value-${i}`);
+ await page.locator('#env-text').fill(lines.join('\n')+'\n');
+ await page.getByRole('button',{name:'Save .env',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('added')==='300');
+ const scrolls=selector=>page.locator(selector).evaluate(e=>({client:e.clientHeight,scroll:e.scrollHeight}));
+ // The masked file and Build access scroll inside their panels.
+ const view=await scrolls('.env-view');
+ assert(view.client<=520&&view.scroll>view.client*3,`the masked file scrolls inside its panel (${view.client}/${view.scroll})`);
+ assert.equal(await page.locator('.env-view').getAttribute('tabindex'),'0','the keyboard can scroll it');
+ const [file,guide]=await Promise.all(['#env-file','.secrets-guidance'].map(selector=>page.locator(selector).evaluate(e=>Math.round(e.getBoundingClientRect().height))));
+ assert.equal(guide,file,'the guidance takes the file panel height');
+ const table=await scrolls('.secrets-list .repository-table-scroll');
+ assert(table.client<=440&&table.scroll>table.client,`Build access scrolls inside its panel (${table.client}/${table.scroll})`);
+ const headerStays=await page.locator('.secrets-list .repository-table-scroll').evaluate(e=>{e.scrollTop=e.scrollHeight;const header=e.querySelector('thead th').getBoundingClientRect().top;return Math.abs(header-e.getBoundingClientRect().top)<2;});
+ assert(headerStays,'the column headers stay in view while the names scroll');
+ const pageHeight=await page.evaluate(()=>(document.querySelector('.app-content')||document.documentElement).scrollHeight);
+ assert(pageHeight<2000,`the page stays about two screens tall (${pageHeight}px)`);
+ if(process.env.UI_BROWSER_SCREENSHOTS==='1') {
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.screenshot({path:path.join(__dirname,'artifacts','secrets-env-large.png')});
+  await page.evaluate(()=>{const scroller=document.querySelector('.app-content');scroller.scrollTop=scroller.scrollHeight;});
+  await page.screenshot({path:path.join(__dirname,'artifacts','secrets-env-large-bottom.png')});
+ }
+ // The editor keeps a bounded height and scrolls too.
+ await page.getByRole('link',{name:'Show values and edit',exact:true}).click();
+ const editor=await scrolls('#env-text');
+ assert(editor.client<=640&&editor.scroll>editor.client,`the editor scrolls (${editor.client}/${editor.scroll})`);
+ // Removing every name keeps the confirmation and its buttons on screen.
+ await page.locator('#env-text').fill('# nothing left\n');
+ await page.getByRole('button',{name:'Save .env',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#confirm-env-removals')?.matches(':modal'));
+ assert.match(await page.locator('#confirm-env-removals h2').innerText(),/Remove 300 secrets\?/);
+ const fits=await page.locator('#confirm-env-removals').evaluate(e=>e.getBoundingClientRect().bottom<=innerHeight);
+ assert(fits,'the confirmation fits the screen');
+ assert(await page.getByRole('button',{name:'Remove and save',exact:true}).isVisible());
+ for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
+});
+
 test('the .env file works without JavaScript, including the removal confirmation',async()=>{
  const noJS=await browser.newContext({javaScriptEnabled:false});
  try {
