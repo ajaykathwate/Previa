@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -404,15 +405,61 @@ func (f *accessFixture) send(t *testing.T, persona, method, path string, form ur
 		r.AddCookie(c)
 	}
 	if strings.HasSuffix(r.URL.Path, "/events") {
-		// A granted live stream stays open; its status is written first.
-		ctx, cancel := context.WithTimeout(r.Context(), 300*time.Millisecond)
-		defer cancel()
-		r = r.WithContext(ctx)
+		return f.openStream(r)
 	}
 	w := httptest.NewRecorder()
 	f.router.ServeHTTP(w, r)
 	return w
 }
+
+// openStream sends a live-updates request and closes it as soon as its status
+// is written: a granted stream stays open, and a fixed short deadline would
+// cut slow checks (a loaded CI runner) off before the status. 30 s is a
+// backstop for a stream that never answers.
+func (f *accessFixture) openStream(r *http.Request) *httptest.ResponseRecorder {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	w := &headerSignal{ResponseRecorder: httptest.NewRecorder(), written: make(chan struct{})}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.router.ServeHTTP(w, r.WithContext(ctx))
+	}()
+	select {
+	case <-w.written:
+	case <-done:
+	}
+	cancel()
+	<-done
+	return w.ResponseRecorder
+}
+
+// headerSignal records a response and says when its status has been written.
+type headerSignal struct {
+	*httptest.ResponseRecorder
+	once    sync.Once
+	written chan struct{}
+}
+
+func (h *headerSignal) signal() { h.once.Do(func() { close(h.written) }) }
+
+func (h *headerSignal) WriteHeader(code int) {
+	h.ResponseRecorder.WriteHeader(code)
+	h.signal()
+}
+
+func (h *headerSignal) Write(b []byte) (int, error) {
+	n, err := h.ResponseRecorder.Write(b)
+	h.signal()
+	return n, err
+}
+
+func (h *headerSignal) Flush() {
+	h.ResponseRecorder.Flush()
+	h.signal()
+}
+
+func (h *headerSignal) Unwrap() http.ResponseWriter { return h.ResponseRecorder }
 
 // matrixRoutes lists every method and pattern the assembled router serves.
 func matrixRoutes(t *testing.T, router http.Handler) []string {

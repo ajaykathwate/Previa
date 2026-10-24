@@ -1,5 +1,5 @@
 # Project handoff
-Last updated: 2026-10-23
+Last updated: 2026-10-24
 
 ## Latest task — owner requests after the regression (committed)
 - Branch mvp-complete, PR #2 into master. Commit only when the owner asks.
@@ -15,18 +15,15 @@ Last updated: 2026-10-23
 - Production refuses EARLY_ACCESS_ENABLED=true with empty SUPPORT_OPERATOR_GITHUB_IDS
   (server config + check-config); development logs a warning. prod smoke env sets
   operator 1. Docs 02, 25, 35, both env examples.
-- Flaky browser tests: root cause was the live stream's first refetch swapping the
-  panel; htmx wires new fields after its 20 ms settle, so a fill in that window
-  was lost. ui.test.cjs liveIdle() now waits before typing on live pages.
-- .previewrc.yaml so Previa previews itself (dashboard
-  on managed PostgreSQL 17, setup previa-migrate up; secrets SESSION_SECRET and a
-  previews GitHub OAuth App; APP_BASE_URL added after the first build; docs/02
-  "Preview Previa on Previa"); Dockerfile stage order now ends with server (release
-  builds all name targets, instructions identical; verified by a real no-target
-  build, read-only run, 200 on own host, 421 by address). Sign-in choices page
-  redesigned (web/pages/auth/login.templ, .auth-* in workspace.css, GoogleMark).
-- CI fixes (committed): go.mod tidy (go-jose direct), tracker read in one snapshot,
-  deletion-journal.sh executable in Git (TestDeployScriptsAreExecutableInGit).
+- Flaky browser tests: a fill during the live refetch's settle was lost; liveIdle().
+- .previewrc.yaml so Previa previews itself (server stage last in the Dockerfile;
+  secrets SESSION_SECRET + previews GitHub OAuth App; APP_BASE_URL after the first
+  build; docs/02 "Preview Previa on Previa"). Sign-in choices page redesigned.
+- CI fixes: go.mod tidy, tracker snapshot, deletion-journal.sh executable in Git,
+  access matrix waits for stream headers (no 300 ms deadline). Egress proxy and
+  forwarder now try every vetted address (IPv4 first, 4 s each): Docker DNS listed an
+  unreachable GitHub download address first, failing every self-preview build with 502.
+  Tailwind download retries and is cached in a BuildKit mount.
 - Secrets became one .env file per repository (owner decision, 2026-10-23; DESIGN
   §16 deviation). repository_env_files (migration 47, SchemaVersion 47) stores the
   sealed file (AAD ".env"); SaveFile keeps env_secrets = names with values in one tx
