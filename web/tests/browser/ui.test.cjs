@@ -1546,10 +1546,13 @@ test('a request that never answers times out with a message and can be retried',
 test('a forged CSRF token is refused and changes nothing', async () => {
   await login();
   await page.goto(`${origin}/repositories/1/pull-requests/11`);
+  await liveIdle();
   const response = page.waitForResponse(r => r.url().endsWith('/pull-requests/11/build'));
-  // Submit the forged form atomically so a live refresh cannot replace it
-  // between tampering with the token and dispatching the request.
-  await page.locator('form[action$="/pull-requests/11/build"]').evaluate(form => {
+  // Find, forge and submit the form in one step. A locator finds its element
+  // before its function runs, so a live refresh in between would hand it a
+  // form that is no longer on the page, and that submit is silently dropped.
+  await page.evaluate(() => {
+    const form = document.querySelector('form[action$="/pull-requests/11/build"]');
     form.querySelector('input[name="csrf_token"]').value = 'forged';
     form.requestSubmit(form.querySelector('button[type="submit"]'));
   });

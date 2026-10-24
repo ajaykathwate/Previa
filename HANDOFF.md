@@ -24,6 +24,10 @@ Last updated: 2026-10-24
   forwarder now try every vetted address (IPv4 first, 4 s each): Docker DNS listed an
   unreachable GitHub download address first, failing every self-preview build with 502.
   Tailwind download retries and is cached in a BuildKit mount.
+- CI flakes (2026-10-24): routing stand-in app was a one-connection nc loop (Traefik
+  500 on overlap), now `nc -lk -e`; forged-CSRF browser test submitted a form a live
+  refresh had just replaced (locator lookup then evaluate), now liveIdle() + query in
+  page.evaluate. Builder/runtime fixtures still use the old nc loop.
 - Secrets became one .env file per repository (owner decision, 2026-10-23; DESIGN
   §16 deviation). repository_env_files (migration 47, SchemaVersion 47) stores the
   sealed file (AAD ".env"); SaveFile keeps env_secrets = names with values in one tx
@@ -69,8 +73,7 @@ Last updated: 2026-10-24
   Use -p≤3: higher parallelism exhausts Postgres locks (SQLSTATE 53200).
 - Real Docker: builder 6+8, runtime 11+5, routing 8, housekeeping 2, e2e 5 journeys
   (incl. role journey) all PASS.
-- Browser: 7 suites PASS; main suite 54/55 per full run then (slow search /
-  never-answers flakes), hardened 2026-10-23 (see Latest task).
+- Browser: 7 suites PASS; main suite 56/56 after the 2026-10-24 CSRF-test fix.
 - release-images (Go 1.26.10 pin) + prod-smoke 33/33 PASS (no age installed).
 - make lint 0 issues; make vuln 0 reachable.
 - Live GitHub (ajaykathwate/previa-live-test, DB previa_live in the test container):

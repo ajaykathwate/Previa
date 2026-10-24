@@ -64,8 +64,10 @@ const (
 )
 
 // The candidate app answers every request with its MARKER, which names the
-// PR, generation and revision it was built for.
-const appCommand = `while true; do printf "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ${#MARKER}\r\nConnection: close\r\n\r\n%s" "$MARKER" | nc -l -p 8080 >/dev/null 2>&1; done`
+// PR, generation and revision it was built for. One nc keeps listening and
+// answers each connection in its own shell after reading the request headers,
+// so a request that overlaps another (a probe, a retry) is never reset.
+const appCommand = `exec nc -lk -p 8080 -e sh -c 'cr=$(printf "\r"); while IFS= read -r line; do { [ -z "$line" ] || [ "$line" = "$cr" ]; } && break; done; printf "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "${#MARKER}" "$MARKER"'`
 
 // dnsHook is lego's exec DNS provider: it publishes the DNS-01 TXT record in
 // Pebble's challenge test server, which Pebble then queries to validate.
