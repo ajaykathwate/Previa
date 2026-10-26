@@ -298,7 +298,7 @@ Each step links to its detailed instructions below.
 4. **Code and host.** Add the deploy key, clone and check out the release tag,
    run `setup.sh`, then move SSH to Tailscale and close port 22
    ([Step 3](#step-3--install-the-checkout-and-prepare-the-host)).
-5. **GitHub registrations and credential files** ([Step 4](#step-4--register-github-integrations-and-install-credential-files)).
+5. **GitHub registrations (and optional Google sign-in) and credential files** ([Step 4](#step-4--register-github-integrations-and-install-credential-files)).
 6. **Settings** in `/etc/previa/previa.env`, including `SENTRY_DSN`
    ([Step 5](#step-5--put-production-environment-variables-in-the-correct-file)).
 7. **Backups**: the offline age key, the R2 bucket and rclone
@@ -1135,9 +1135,19 @@ access uses a GitHub **App**; their client IDs/secrets are different.
 5. Save the App ID, App slug, App client ID and newly generated App client secret.
    Generate and download an App private key. Install the App on a disposable test
    repository first; sign-in alone does not grant that repository access.
+6. Optional, **Google sign-in** for people who only review (for example Reviewers
+   invited by email). Skip it to launch with GitHub sign-in only. In Google Cloud,
+   configure the consent screen (audience **External**) and create an OAuth client
+   of type **Web application** with the authorized redirect URI
+   `https://previa.live/auth/google/callback`, exactly. Previa asks only for
+   `openid`, `email` and `profile`. Before launch, set the app's publishing status
+   to **In production**: while it is **Testing**, only the test users you list can
+   sign in. Copy the client ID and secret.
 
 See [04 · GitHub sign-in and App installation](04-github-sign-in-and-app.md)
-for the distinction and permission rationale.
+for the distinction and permission rationale, and
+[36 · Google sign-in and reviewer invitations](36-google-sign-in-and-reviewer-invitations.md)
+for Google.
 
 Upload the private key from your **workstation** to your SSH user's home:
 
@@ -1199,6 +1209,10 @@ additional production env files to copy.
 | `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | GitHub App credentials, used for installation authorization; not the OAuth App credentials. |
 | `GITHUB_APP_PRIVATE_KEY_FILE` | Host path `/etc/previa/github-app.pem`; this tells Compose which file to mount. |
 | `GITHUB_WEBHOOK_SECRET` | Generated secret, also set identically in GitHub's webhook configuration. |
+| `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | Optional Google Web client from Step 4, item 6. Set both or neither; both empty turns Google sign-in off. |
+| `SUPPORT_OPERATOR_GITHUB_IDS` | Your numeric GitHub **user** ID (the `id` field at `https://api.github.com/users/YOUR_LOGIN`), comma-separated for several. Operators approve early access and handle support. **Required while early access is on**: the server refuses to start without it. |
+| `EARLY_ACCESS_ENABLED` | `true` (the default): every new workspace, your own first one included, waits for an operator's approval at `/operator/early-access` before it can connect repositories or build. |
+| `SUPPORT_EMAIL`, `OPERATOR_NAME` | The contact address and the name shown on Help and policy pages. |
 | `SECRETS_ENCRYPTION_KEYS` | Generated `1:<base64-encoded-32-byte-key>`. Multiple rotation versions use commas: `1:<key>,2:<key>`. Back up every needed version offline. |
 | `SECRETS_ACTIVE_KEY_VERSION` | `1` initially; the version used to encrypt new repository secrets. |
 | `PREVIEW_BASE_DOMAIN` | `preview.` plus the preview domain from Step 2, here `preview.example.net`; lowercase DNS name, no scheme or wildcard. |
@@ -1230,6 +1244,7 @@ additional production env files to copy.
 | OAuth client ID/secret | GitHub OAuth App | `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET` in `previa.env`. |
 | App client ID/secret and App ID | GitHub App | `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` and `GITHUB_APP_ID` in `previa.env`. |
 | App signing PEM | GitHub App private-key generation | `/etc/previa/github-app.pem`, UID 65532, mode 600. |
+| Google client ID/secret (optional) | Google Cloud OAuth client (Web application) | `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in `previa.env`. |
 | Repository-secret encryption keyring | `setup.sh` generates the initial version | `SECRETS_ENCRYPTION_KEYS` in `previa.env` and a protected offline recovery copy. |
 | DNS certificate token | Scoped Cloudflare API token | `/etc/previa/dns-credential`, root-owned, mode 600. |
 | R2 access key and secret | Cloudflare → R2 → **Manage API tokens** | Root's protected rclone config; scoped to the production backup bucket. Separate recovery copy. |
@@ -1502,7 +1517,11 @@ than 0 needs investigation. The egress container appears in `docker ps`, not
 
 Then, from an external browser and GitHub:
 
-1. Open `https://previa.live` with trusted TLS. Sign in through GitHub.
+1. Open `https://previa.live` with trusted TLS. Sign in through GitHub. With
+   early access on, the **Early access** page says your new workspace is awaiting
+   approval; open
+   `https://previa.live/operator/early-access` (you are the operator) and approve
+   it. If Google is configured, also sign in with Google from a private window.
 2. Install/link the GitHub App on a disposable repository you own. Wait for PR
    discovery to complete; the Overview should show the required pipeline stages
    connected.

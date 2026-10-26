@@ -737,7 +737,9 @@ set `ACME_CA_SERVER=https://acme-v02.api.letsencrypt.org/directory` and
 existing preview network attachments after the router is recreated. Keep the
 production storage path on later starts. Once issuance completes, ordinary `curl`
 must verify the preview certificate without `-k`; Chrome should open the app or its
-private sign-in flow. The app needs no rebuild. These settings belong to Compose,
+private sign-in flow. The app needs no rebuild. Docker restarts the router after a
+reboot, but not after `make router-down` or `docker stop previa-router`; until the
+next `make router-up`, every build ends in **Publishing failed; retrying**. These settings belong to Compose,
 not the Go config loader; Make loads `.env` automatically, and exported values
 take precedence. See [12](12-routing-and-https.md) for storage and TLS details.
 
@@ -1544,29 +1546,71 @@ builds; pages, sign-in and settings can all be reviewed.
    OAuth Apps) with the callback `https://<PREVIEW_BASE_DOMAIN>/auth/github/callback`.
    GitHub accepts the preview hostnames below that domain. Keep it separate from
    the production sign-in app.
-2. On the Previa repository's **Secrets** tab in Previa, put these lines in its
-   `.env` file: `SESSION_SECRET=` 32+ random characters (for example
-   `openssl rand -hex 32`), `GITHUB_OAUTH_CLIENT_ID=` and
-   `GITHUB_OAUTH_CLIENT_SECRET=` from the previews OAuth App. A missing one stops
-   the server at start, and the build log names it. Do not paste your local Previa
-   `.env`: its `HTTP_ADDR`, `APP_BASE_URL` and `EARLY_ACCESS_ENABLED` would override
-   the preview's own settings, and previews do not need its other credentials.
-3. Build a pull request. Expected: setup prints `Goose: schema at migration 47` and
-   `River: 7 of 7 migrations applied`, and the preview is published.
-4. Opening the link now answers `This server does not serve that host.` (HTTP 421):
-   Previa serves only `APP_BASE_URL`. In that pull request, uncomment
-   `APP_BASE_URL=https://<your-preview-link>` in `.previewrc.yaml` with the link
-   (it stays the same for the pull request), push, and build again. Expected: the
-   home page loads and **Get started** signs in through the previews OAuth App.
+2. On the Previa repository's **Secrets** tab in Previa, write its `.env` file.
+   Use test credentials made for previews, never production ones, and do not paste
+   your local Previa `.env`: its `HTTP_ADDR`, `APP_BASE_URL` and `GITHUB_APP_*`
+   lines would override the preview's settings or point at files a preview does
+   not have. A missing required value stops the server at start, and the build log
+   names it.
 
-The preview runs with `APP_ENV=development` (no webhook secret or operator needed)
-and `EARLY_ACCESS_ENABLED=false`. There is no `health_check_path`, because the
-readiness probe reaches the container by address and Previa answers other hosts
-with 421; readiness is the port accepting connections.
-`TestPreviasOwnPreviewConfigBuildsTheDashboard` (in `internal/app`) checks the file
-against Previa's own rules and that the Dockerfile's last stage is the server
-holding the setup command. Google sign-in on a preview would need each preview's
-exact callback registered with Google, so it is left off.
+   ```dotenv
+   # Required. SESSION_SECRET: 32+ random characters (openssl rand -hex 32).
+   SESSION_SECRET=
+   # From the previews OAuth App (step 1).
+   GITHUB_OAUTH_CLIENT_ID=
+   GITHUB_OAUTH_CLIENT_SECRET=
+
+   # Set after the first build (step 4).
+   # APP_BASE_URL=https://<your-preview-link>
+
+   # Optional: uncomment what you want to try.
+   # The Secrets tab inside the preview. Set both lines or neither; replace the
+   # first with the output of: echo "SECRETS_ENCRYPTION_KEYS=1:$(openssl rand -base64 32)"
+   # SECRETS_ENCRYPTION_KEYS=
+   # SECRETS_ACTIVE_KEY_VERSION=1
+   # Early access as in production; approve at /operator/early-access.
+   # EARLY_ACCESS_ENABLED=true
+   # SUPPORT_OPERATOR_GITHUB_IDS=<your numeric GitHub user ID>
+   # Help and policy pages.
+   # SUPPORT_EMAIL=
+   # OPERATOR_NAME=Previa operator
+   # Google sign-in; step 4 registers the preview's redirect URI.
+   # GOOGLE_OAUTH_CLIENT_ID=
+   # GOOGLE_OAUTH_CLIENT_SECRET=
+   ```
+3. Build a pull request. Expected: setup prints `Goose: schema at migration 47` and
+   `River: 7 of 7 migrations applied`, then `The preview is healthy`, and the
+   preview is published.
+4. Opening the link now answers `This server does not serve that host.` (HTTP 421):
+   Previa serves only `APP_BASE_URL`. The link stays the same for as long as the
+   pull request is open. Set `APP_BASE_URL=https://<your-preview-link>` in the
+   Secrets `.env` (or uncomment it in that pull request's `.previewrc.yaml` and
+   push). With Google, add `https://<your-preview-link>/auth/google/callback` to
+   the Google client's redirect URIs. Then **Rebuild preview**: a saved `.env`
+   reaches a preview only when it is built. Expected: the home page loads and
+   **Get started** signs in.
+
+If it does not work:
+
+- `SECRETS_ENCRYPTION_KEYS version 1 must be exactly 32 random bytes` in the app
+  output: the value after `1:` is not a base64 key (a placeholder, a `-hex` key or
+  a shortened one). Replace the line with the `echo` output above and rebuild.
+- `GitHub App private key file is unavailable`: the `.env` holds `GITHUB_APP_*`
+  lines from a local `.env`. Remove them; a preview runs no worker and needs none.
+- **Publishing failed; retrying** while the build log ends with `The preview is
+  healthy`: the local router is not running (`docker ps --filter
+  name=previa-router` shows nothing up). Run `make router-up`; the worker
+  publishes on its next retry, within about two minutes.
+
+The preview runs with `APP_ENV=development` (no webhook secret needed, and no
+operator unless early access is on) and, unless the Secrets `.env` says otherwise,
+`EARLY_ACCESS_ENABLED=false`; the build log notes each secret that overrides
+`.previewrc.yaml`. A preview of Previa starts with an empty database on every
+build. There is no `health_check_path`, because the readiness probe reaches the
+container by address and Previa answers other hosts with 421; readiness is the
+port accepting connections. `TestPreviasOwnPreviewConfigBuildsTheDashboard` (in
+`internal/app`) checks the file against Previa's own rules and that the
+Dockerfile's last stage is the server holding the setup command.
 
 ## Secrets as one .env file (migration 47)
 

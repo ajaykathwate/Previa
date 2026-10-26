@@ -85,9 +85,9 @@ Last updated: 2026-10-24
 ## Owner actions pending
 - Untick Active on the GitHub App webhook (URL points at a dead trycloudflare tunnel;
   the API cannot toggle Active). Close PR #1 of previa-live-test when convenient.
-- Still from earlier: real Google OAuth client/env, migrations 46-47 on intended DB,
-  SUPPORT_OPERATOR_GITHUB_IDS for production (now enforced), release/deployment
-  acceptance.
+- Go-live (docs/25 Step 4 item 6, Step 5 table, Step 10 item 1): production Google
+  client (publish "In production"), SUPPORT_OPERATOR_GITHUB_IDS, approve own workspace,
+  migrations 46-47 on the intended DB. Self-preview .env: docs/02 "Preview Previa".
 
 ## Environment / boundaries
 - Disposable DB previa-f56-tests-postgres 127.0.0.1:55439: previa_ux_test (tests),
