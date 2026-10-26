@@ -27,7 +27,7 @@ Last updated: 2026-10-24
 - CI flakes (2026-10-24): routing stand-in app was a one-connection nc loop (Traefik
   500 on overlap), now `nc -lk -e`; forged-CSRF browser test submitted a form a live
   refresh had just replaced (locator lookup then evaluate), now liveIdle() + query in
-  page.evaluate. Builder/runtime fixtures still use the old nc loop.
+  page.evaluate. CI green on f4f6de5 (all 4 jobs). Builder/runtime keep the nc loop.
 - Secrets became one .env file per repository (owner decision, 2026-10-23; DESIGN
   §16 deviation). repository_env_files (migration 47, SchemaVersion 47) stores the
   sealed file (AAD ".env"); SaveFile keeps env_secrets = names with values in one tx
