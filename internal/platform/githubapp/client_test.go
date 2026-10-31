@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/platform/config"
+	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/go-github/v91/github"
 )
@@ -220,4 +221,43 @@ func mustID(t *testing.T, value string) int64 {
 		t.Fatal("test GitHub IDs must be positive integers")
 	}
 	return id
+}
+
+func TestTokenMintFailureSignalsWithoutRevokingAccess(t *testing.T) {
+	for _, status := range []int{403, 404, 500, 429} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			c, key := testClient(t)
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }))
+			defer server.Close()
+			c.app = ghinstallation.NewAppsTransportFromPrivateKey(server.Client().Transport, 123, key)
+			var signals atomic.Int64
+			c.WithInstallationSignals(func(_ context.Context, id int64) error {
+				if id != 99 {
+					t.Errorf("wrong installation signal: %d", id)
+				}
+				signals.Add(1)
+				return nil
+			})
+			client, err := c.InstallationClient(99)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.installations[99].BaseURL = server.URL
+			c.installations[99].Client = server.Client()
+			client, err = client.Clone(github.WithURLs(new(server.URL+"/"), nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = client.Repositories.GetByID(t.Context(), 456); err == nil {
+				t.Fatal("failed token mint succeeded")
+			}
+			expected := int64(0)
+			if status == 403 || status == 404 {
+				expected = 1
+			}
+			if signals.Load() != expected {
+				t.Fatalf("signals=%d, want%d", signals.Load(), expected)
+			}
+		})
+	}
 }

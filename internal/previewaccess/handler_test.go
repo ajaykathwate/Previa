@@ -105,7 +105,7 @@ type session struct{ names map[int64]string }
 
 func (s session) UserIDs(ctx context.Context) (int64, int64, bool) {
 	id, ok := ctx.Value(userKey{}).(int64)
-	return id, 0, ok && id > 0
+	return id, id, ok && id > 0
 }
 
 func (s session) Username(ctx context.Context) (string, bool) {
@@ -116,7 +116,7 @@ func (s session) Username(ctx context.Context) (string, bool) {
 
 type github map[string]string
 
-func (g github) RepositoryPermission(_ context.Context, _ int64, fullName, login string) (string, error) {
+func (g github) RepositoryUserPermission(_ context.Context, _ int64, fullName, login string, _ int64) (string, error) {
 	if fullName != "owner/app" {
 		return "", fmt.Errorf("unexpected repository %s", fullName)
 	}
@@ -272,7 +272,7 @@ func TestPrivatePreviewRoundTrip(t *testing.T) {
 	scan(&install, `INSERT INTO installations(github_installation_id,owner_user_id) VALUES (99,$1) RETURNING id`, owner)
 	scan(&repo, `INSERT INTO repos(installation_id,github_repo_id,full_name) VALUES ($1,100,'owner/app') RETURNING id`, install)
 	scan(&pr, `INSERT INTO pull_requests(repo_id,number,head_sha) VALUES ($1,1,'sha') RETURNING id`, repo)
-	if _, err := pool.Exec(ctx, `INSERT INTO environments(pull_request_id,subdomain,expires_at) VALUES ($1,'pr-1-x',now()+interval '1 day')`, pr); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO environments(pull_request_id,subdomain,expires_at,status) VALUES ($1,'pr-1-x',now()+interval '1 day','running')`, pr); err != nil {
 		t.Fatal(err)
 	}
 	queue := &jobs{}
@@ -383,5 +383,157 @@ func TestPrivatePreviewRoundTrip(t *testing.T) {
 	}
 	if res := do(http.MethodGet, signIn.RequestURI(), stranger, nil, nil); res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "https://"+host+"/dashboard?x=1" {
 		t.Fatalf("public: %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+}
+
+func TestPrivatePreviewCookieAndTokenStopAfterMemberRemoval(t *testing.T) {
+	pool := isolatedPool(t)
+	ctx := t.Context()
+	for _, sql := range []string{
+		"INSERT INTO users(github_id,username) VALUES(1,'owner'),(2,'reviewer')",
+		"INSERT INTO installations(github_installation_id,owner_user_id) VALUES(99,1)",
+		"INSERT INTO repos(installation_id,github_repo_id,full_name,private_previews) VALUES(1,100,'owner/app',true)",
+		"INSERT INTO pull_requests(repo_id,number,head_sha) VALUES(1,1,'sha')",
+		"INSERT INTO environments(pull_request_id,subdomain,status,expires_at) VALUES(1,'private-host','running',now()+interval '1 day')",
+		"INSERT INTO workspace_memberships(workspace_id,user_id,role) VALUES(1,2,'reviewer')",
+		"INSERT INTO repository_memberships(repo_id,workspace_id,user_id) VALUES(1,1,2)",
+	} {
+		if _, err := pool.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewHandler(pool, session{names: map[int64]string{2: "reviewer"}}, github{"reviewer": "read"}, nil, "secret", "preview.test", "https://previa.test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	issuingSession := &grantSession{valid: true}
+	h.sessions = issuingSession
+	req := httptest.NewRequest(http.MethodGet, "/previews/access?host=private-host.preview.test&path=/", nil)
+	req = req.WithContext(context.WithValue(ctx, userKey{}, int64(2)))
+	res := httptest.NewRecorder()
+	h.access(res, req)
+	if res.Code != 303 {
+		t.Fatal("reviewer without source access denied", res.Code, res.Body.String())
+	}
+	location, err := url.Parse(res.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	forward := func(uri, cookie string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, routing.AccessPath, nil)
+		request.Header.Set("X-Forwarded-Host", "private-host.preview.test")
+		request.Header.Set("X-Forwarded-Uri", uri)
+		if cookie != "" {
+			request.AddCookie(&http.Cookie{Name: cookieName, Value: cookie})
+		}
+		result := httptest.NewRecorder()
+		h.check(result, request)
+		return result
+	}
+	issued := forward(location.RequestURI(), "")
+	cookies := issued.Result().Cookies()
+	if issued.Code != 302 || len(cookies) != 1 {
+		t.Fatal("cookie was not issued", issued.Code)
+	}
+	if got := forward("/", cookies[0].Value); got.Code != 200 {
+		t.Fatal("valid local grant denied", got.Code)
+	}
+	issuingSession.valid = false
+	if got := forward("/", cookies[0].Value); got.Code == 200 {
+		t.Fatal("logout left the issuing session's private-preview cookie authorized")
+	}
+	if got := forward(location.RequestURI(), ""); got.Code != 403 {
+		t.Fatal("logout left the issuing session's token authorized", got.Code)
+	}
+	issuingSession.valid = true
+	if _, err := pool.Exec(ctx, `UPDATE users SET session_epoch=session_epoch+1 WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
+	if got := forward("/", cookies[0].Value); got.Code == 200 {
+		t.Fatal("revoked session epoch retained private-preview cookie access")
+	}
+	if got := forward(location.RequestURI(), ""); got.Code != 403 {
+		t.Fatal("pre-revocation private-preview token replayed", got.Code)
+	}
+	// Restore the fixture epoch to isolate the separate membership-removal check.
+	if _, err := pool.Exec(ctx, `UPDATE users SET session_epoch=session_epoch-1 WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"publishing", "failed"} {
+		if _, err := pool.Exec(ctx, "UPDATE environments SET status=$1 WHERE pull_request_id=1", status); err != nil {
+			t.Fatal(err)
+		}
+		if got := forward("/", cookies[0].Value); got.Code != 200 {
+			t.Fatal("previous private preview denied during replacement", status, got.Code)
+		}
+	}
+	if _, err := pool.Exec(ctx, "UPDATE workspace_memberships SET state='removed',revision=revision+1 WHERE workspace_id=1 AND user_id=2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := forward("/", cookies[0].Value); got.Code == 200 {
+		t.Fatal("removed member's cookie retained access")
+	}
+	if got := forward(location.RequestURI(), ""); got.Code != 403 {
+		t.Fatal("pre-removal token replayed", got.Code)
+	}
+	denied := httptest.NewRecorder()
+	h.access(denied, req)
+	if denied.Code != 403 {
+		t.Fatal("removed member fell back to GitHub outsider permission", denied.Code)
+	}
+}
+
+type grantSession struct{ valid bool }
+
+func (*grantSession) PreviewSessionID(context.Context) string { return "safe-session-digest" }
+func (s *grantSession) PreviewSessionValid(_ context.Context, id string) (bool, error) {
+	return s.valid && id == "safe-session-digest", nil
+}
+
+// Google-only visitors use local workspace grants; a display name must never
+// be passed off as a GitHub identity for the outsider fallback.
+type googleOnlySession struct{ session }
+
+func (s googleOnlySession) UserIDs(ctx context.Context) (int64, int64, bool) {
+	id, _, ok := s.session.UserIDs(ctx)
+	return id, 0, ok
+}
+func TestGooglePreviewRequiresExplicitLocalGrant(t *testing.T) {
+	pool := isolatedPool(t)
+	ctx := t.Context()
+	for _, query := range []string{
+		`INSERT INTO users(github_id,username) VALUES(1,'owner')`,
+		`INSERT INTO users(google_subject,google_email,username) VALUES('google-reviewer','reviewer@example.test','reviewer')`,
+		`INSERT INTO installations(github_installation_id,owner_user_id) VALUES(99,1)`,
+		`INSERT INTO repos(installation_id,github_repo_id,full_name,private_previews) VALUES(1,100,'owner/app',true)`,
+		`INSERT INTO pull_requests(repo_id,number,head_sha) VALUES(1,1,'sha')`,
+		`INSERT INTO environments(pull_request_id,subdomain,status,expires_at) VALUES(1,'google-private','running',now()+interval '1 day')`,
+	} {
+		if _, err := pool.Exec(ctx, query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewHandler(pool, googleOnlySession{session{names: map[int64]string{2: "reviewer"}}}, github{"reviewer": "read"}, nil, "secret", "preview.test", "https://previa.test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h.sessions = &grantSession{valid: true}
+	request := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/previews/access?host=google-private.preview.test&path=/", nil)
+		r = r.WithContext(context.WithValue(ctx, userKey{}, int64(2)))
+		w := httptest.NewRecorder()
+		h.access(w, r)
+		return w
+	}
+	if w := request(); w.Code != http.StatusForbidden {
+		t.Fatal("uninvited Google identity got outsider access", w.Code)
+	}
+	for _, query := range []string{`INSERT INTO workspace_memberships(workspace_id,user_id,role) VALUES(1,2,'reviewer')`, `INSERT INTO repository_memberships(repo_id,workspace_id,user_id) VALUES(1,1,2)`} {
+		if _, err := pool.Exec(ctx, query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w := request(); w.Code != http.StatusSeeOther {
+		t.Fatal("granted Google reviewer cannot open private preview", w.Code, w.Body.String())
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM repository_memberships WHERE user_id=2`); err != nil {
+		t.Fatal(err)
+	}
+	if w := request(); w.Code != http.StatusForbidden {
+		t.Fatal("revoked Google reviewer retained access", w.Code)
 	}
 }

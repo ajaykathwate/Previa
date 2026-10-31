@@ -33,7 +33,7 @@ func lockIntentScope(ctx context.Context, q *dbgen.Queries, userID, prID int64) 
 	if _, err := q.LockIntentInstallation(ctx, dbgen.LockIntentInstallationParams{InstallationID: scope.InstallationID, UserID: pgtype.Int8{Int64: userID, Valid: true}}); err != nil {
 		return intentScope{}, intentAccessError("lock intent installation", err)
 	}
-	repo, err := q.LockIntentRepository(ctx, dbgen.LockIntentRepositoryParams(scope))
+	repo, err := q.LockIntentRepository(ctx, dbgen.LockIntentRepositoryParams{RepoID: scope.RepoID, InstallationID: scope.InstallationID, UserID: pgtype.Int8{Int64: userID, Valid: true}})
 	if err != nil {
 		return intentScope{}, intentAccessError("lock intent repository", err)
 	}
@@ -50,9 +50,12 @@ func lockIntentScope(ctx context.Context, q *dbgen.Queries, userID, prID int64) 
 func lockOwnerIntentScope(ctx context.Context, q *dbgen.Queries, prID int64, step string) (intentScope, error) {
 	owner, err := q.FindPROwner(ctx, prID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return intentScope{}, ErrIntentUnavailable
+		}
 		return intentScope{}, fmt.Errorf("find %s owner: %w", step, err)
 	}
-	return lockIntentScope(ctx, q, owner.Int64, prID)
+	return lockIntentScope(ctx, q, owner, prID)
 }
 
 func intentAccessError(operation string, err error) error {
@@ -119,6 +122,7 @@ func (r *IntentRepository) requestIntentTx(ctx context.Context, tx pgx.Tx, comma
 		Source: modeManual, RequestAction: string(command.Action),
 		AvailableAt: pgtype.Timestamptz{Time: availableAt, Valid: !availableAt.IsZero()},
 		RequestedBy: pgtype.Int8{Int64: command.UserID, Valid: true}, IdempotencyKey: command.IdempotencyKey,
+		StartSource: pgtype.Text{String: command.StartSource, Valid: command.StartSource != ""},
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return IntentOutcome{}, ErrIntentConflict
@@ -198,7 +202,7 @@ func (r *IntentRepository) ReadIntent(ctx context.Context, userID, prID int64) (
 
 func intentFromRow(row dbgen.BuildIntent) BuildIntent {
 	return BuildIntent{
-		PullRequestID: row.PullRequestID, Revision: row.Revision, BaseRevision: row.BaseRevision,
+		ExecutionJobID: row.ExecutionJobID.Int64, PullRequestID: row.PullRequestID, Revision: row.Revision, BaseRevision: row.BaseRevision,
 		Generation: row.Generation, HeadSHA: row.HeadSha, Source: row.Source, Action: row.RequestAction,
 		RequestedBy: row.RequestedBy.Int64, IdempotencyKey: row.IdempotencyKey, State: IntentState(row.State),
 		AvailableAt: row.AvailableAt.Time, RequestedAt: row.RequestedAt.Time,

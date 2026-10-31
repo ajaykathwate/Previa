@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,6 +106,8 @@ type StreamOptions struct {
 	// MaxDuration ends the stream so the browser reconnects through
 	// authentication again; the cursor makes the reconnect lossless.
 	MaxDuration time.Duration
+	// Authorize rechecks resource access before frames and idle heartbeats.
+	Authorize func(context.Context) error
 }
 
 // DefaultStreamOptions suit dashboard invalidation streams.
@@ -132,6 +135,9 @@ func RequestCursor(r *http.Request) Cursor {
 // catch-up "change"/"resync"); later frames are "change" or "resync" with JSON
 // data {"topic": ...} and the cursor as the event id.
 func Stream(w http.ResponseWriter, r *http.Request, sub *Subscription, opts StreamOptions) error {
+	if err := opts.authorize(r.Context()); err != nil {
+		return err
+	}
 	stream, err := NewSSE(w)
 	if err != nil {
 		return err
@@ -157,10 +163,16 @@ func Stream(w http.ResponseWriter, r *http.Request, sub *Subscription, opts Stre
 		case <-deadline.C:
 			return nil
 		case <-heartbeat.C:
+			if err := opts.authorize(r.Context()); err != nil {
+				return err
+			}
 			if err := stream.Comment("keep-alive"); err != nil {
 				return err
 			}
 		case _, open := <-sub.Ready():
+			if err := opts.authorize(r.Context()); err != nil {
+				return err
+			}
 			if event, ok := sub.Next(); ok {
 				if err := send(stream, event); err != nil {
 					return err
@@ -182,4 +194,14 @@ func send(stream *SSE, e Event) error {
 		return fmt.Errorf("encode realtime event: %w", err)
 	}
 	return stream.Send(Message{ID: e.Cursor.String(), Event: string(e.Kind), Data: string(data)})
+}
+
+func (o StreamOptions) authorize(ctx context.Context) error {
+	if err := CheckSession(ctx); err != nil {
+		return err
+	}
+	if o.Authorize != nil {
+		return o.Authorize(ctx)
+	}
+	return nil
 }

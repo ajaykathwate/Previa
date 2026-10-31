@@ -1,0 +1,127 @@
+package workspaces
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+templ Hidden(p Page) {
+	<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+	<input type="hidden" name="workspace_revision" value={ ID(p.Revision) }/>
+}
+
+templ RoleChoices(prefix string, owner bool, selected string) {
+	<fieldset class="team-role-choices">
+		<legend>Role</legend>
+		<div class="team-role-options">
+			@RoleChoice(prefix, "developer", "Developer", "Build and inspect logs", selected)
+			@RoleChoice(prefix, "reviewer", "Reviewer", "Open shared previews", selected)
+			if owner {
+				@RoleChoice(prefix, "admin", "Admin", "Manage people and repos", selected)
+			}
+		</div>
+	</fieldset>
+}
+
+templ RoleChoice(prefix, role, label, description, selected string) {
+	<label class="team-role-choice" for={ prefix + "-role-" + role }>
+		<input id={ prefix + "-role-" + role } type="radio" name="role" value={ role } checked?={ selected==role } data-workspace-role-select required/>
+		<span><strong>{ label }</strong><small>{ description }</small></span>
+	</label>
+}
+
+templ RepositoryChoices(p Page, selected []int64) {
+	<fieldset class="team-repository-choices" data-repository-picker>
+		<legend>Repository access</legend>
+		<p>Only selected repositories are shared. New repositories require a separate grant.</p>
+		if len(p.Repositories)==0 {
+			<p class="text-muted">Connect a repository to assign access. Administrators can connect repositories.</p>
+		} else {
+			<div class="team-repository-toolbar" data-repository-enhancement hidden>
+				<input type="search" placeholder="Search repositories" aria-label="Search repositories" data-repository-search/>
+				<div class="team-repository-selection"><span data-repository-count aria-live="polite"></span><div><button type="button" data-repository-select>Select visible</button><button type="button" data-repository-clear>Clear visible</button></div></div>
+			</div>
+			<div class="team-repository-list" data-repository-list>
+				for _,repo:=range p.Repositories {
+					<label class="team-repository-option" data-repository-option data-repository-name={ repo.Name }>
+						<input type="checkbox" name="repository" value={ components.ResourceToken(ctx, "repository", repo.ID) } checked?={ HasRepository(selected,repo.ID) }/>
+						<code title={ repo.Name }>{ repo.Name }</code>
+						if !repo.Available {
+							<span class="badge tone-neutral">Unavailable</span>
+						}
+					</label>
+				}
+				<p class="team-field-hint" data-repository-empty hidden>No matching repositories. Your selections are kept.</p>
+			</div>
+		}
+	</fieldset>
+}
+
+templ AcceptInvitation(username string, p Page) {
+	@layouts.App("Workspace invitation", username, p.CSRF, components.NavWorkspaces) {
+		<div class="team-page team-invitation-page">
+			<section class="workspace-panel team-settings-panel">
+				<span class="workspace-avatar">{ components.WorkspaceInitial(p.Name) }</span>
+				<span class="eyebrow">You're invited</span>
+				<h1>Join { p.Name }</h1>
+				<p class="team-inline">
+					Join as
+					@components.WorkspaceRole(p.Role)
+					using your signed-in account.
+				</p>
+				if p.Role == "admin" {
+					<p>Administrators can access every repository in this workspace and manage members and repository settings.</p>
+				} else {
+					<p>Your access includes private previews for exactly these repositories:</p>
+					<ul>
+						for _, repo := range p.Repositories {
+							<li><code>{ repo.Name }</code></li>
+						}
+					</ul>
+					if len(p.Repositories) == 0 {
+						<p>No repositories are granted yet. Ask an administrator to assign access after joining.</p>
+					}
+					if p.Role == "developer" {
+						<p>Developers can run repository code and inspect logs after a current GitHub source permission check. Runtime secrets may be available to that code.</p>
+					}
+				}
+				<form method="post" action={ components.PublicURL(ctx, p.InvitationURL) } class="dialog-actions">
+					<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+					<button class="secondary-action" type="submit" name="action" value="decline">Decline</button>
+					<button class="primary-action" type="submit" name="action" value="accept">Join workspace</button>
+				</form>
+			</section>
+		</div>
+	}
+}
+
+templ Failure(username, csrf, message, target, label string) {
+	@layouts.App("Workspace action", username, csrf, components.NavWorkspaces) {
+		<div class="team-page team-failure">
+			<section class="workspace-panel team-settings-panel team-failure-card">
+				<span class="team-empty-icon" aria-hidden="true">
+					@components.AlertIcon()
+				</span>
+				<div>
+					<h1>Action needs attention</h1>
+					<p role="alert">{ message }</p>
+					<a class="secondary-action" href={ components.PublicURL(ctx, target) }>{ label }</a>
+				</div>
+			</section>
+		</div>
+	}
+}
+
+templ Pagination(p Page) {
+	if p.PageCount > 1 {
+		<nav class="pagination" aria-label="Workspace pages">
+			if p.PageNumber > 1 {
+				<a class="secondary-action" href={ components.PublicURL(ctx, p.PageURL(p.PageNumber-1)) }>Previous</a>
+			}
+			<span>Page { ID(p.PageNumber) } of { ID(p.PageCount) }</span>
+			if p.PageNumber < p.PageCount {
+				<a class="secondary-action" href={ components.PublicURL(ctx, p.PageURL(p.PageNumber+1)) }>Next</a>
+			}
+		</nav>
+	}
+}

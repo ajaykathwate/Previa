@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/a-h/templ"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strconv"
 
 	"github.com/ajaykathwatee/previa/internal/platform/egress"
 	pages "github.com/ajaykathwatee/previa/web/pages/outbound"
@@ -51,7 +52,7 @@ func outboundURL(repoID int64, query url.Values) string {
 }
 
 func (h *Handler) identity(r *http.Request) (int64, int64, bool) {
-	repoID, err := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+	repoID, err := publicid.Param(r, "repoID", "repository")
 	user, _, ok := h.users.UserIDs(r.Context())
 	return user, repoID, err == nil && repoID > 0 && ok
 }
@@ -91,7 +92,7 @@ func (h *Handler) add(w http.ResponseWriter, r *http.Request) {
 	d, err := h.service.Add(r.Context(), user, repoID, host, port)
 	if err == nil {
 		h.logger.InfoContext(r.Context(), "outbound destination approved", "repo_id", repoID, "port", d.Port)
-		http.Redirect(w, r, outboundURL(repoID, url.Values{"approved": {d.String()}}), http.StatusSeeOther)
+		publicid.Redirect(w, r, outboundURL(repoID, url.Values{"approved": {d.String()}}), http.StatusSeeOther)
 		return
 	}
 	view := pages.Page{Host: host, Port: port}
@@ -126,7 +127,7 @@ func (h *Handler) add(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 	user, repoID, ok := h.identity(r)
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := publicid.Param(r, "id", "destination")
 	if !ok || err != nil || id <= 0 {
 		http.NotFound(w, r)
 		return
@@ -135,7 +136,7 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrUnavailable):
 		// Gone already, or not this user's: nothing to remove.
-		http.Redirect(w, r, outboundURL(repoID, nil), http.StatusSeeOther)
+		publicid.Redirect(w, r, outboundURL(repoID, nil), http.StatusSeeOther)
 		return
 	case err != nil:
 		h.logger.ErrorContext(r.Context(), "remove outbound destination failed", "repo_id", repoID)
@@ -143,7 +144,7 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.logger.InfoContext(r.Context(), "outbound destination removed", "repo_id", repoID, "port", d.Port)
-	http.Redirect(w, r, outboundURL(repoID, url.Values{"removed": {d.String()}}), http.StatusSeeOther)
+	publicid.Redirect(w, r, outboundURL(repoID, url.Values{"removed": {d.String()}}), http.StatusSeeOther)
 }
 
 func (h *Handler) render(w http.ResponseWriter, r *http.Request, user, repoID int64, status int, view pages.Page) {
@@ -169,9 +170,5 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, user, repoID in
 		view.Destinations = append(view.Destinations, pages.Destination{ID: d.ID, Host: d.Host, Port: d.Port, CreatedAt: d.CreatedAt})
 	}
 	username, _ := h.users.Username(r.Context())
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	if err := pages.Index(username, h.users.CSRFToken(r.Context()), view).Render(r.Context(), w); err != nil {
-		h.logger.ErrorContext(r.Context(), "render outbound page failed", "repo_id", repoID)
-	}
+	publicid.Handler(r, pages.Index(username, h.users.CSRFToken(r.Context()), view), view, templ.WithStatus(status)).ServeHTTP(w, r)
 }

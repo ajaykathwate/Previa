@@ -58,10 +58,10 @@ const readReportSnapshot = `-- name: ReadReportSnapshot :one
 
 SELECT pr.id, pr.number, pr.head_sha, pr.state, pr.generation, pr.build_status, pr.needs_refresh,
        pr.is_fork, pr.github_comment_id, pr.teardown_requested_generation, pr.teardown_reason,
-       r.id AS repo_id, r.github_repo_id, r.accessible, i.github_installation_id,
+       r.id AS repo_id, r.public_id::text AS repo_public_id, pr.public_id::text AS pr_public_id, r.github_repo_id, r.accessible, i.github_installation_id,
        i.status AS installation_status,
        b.revision AS intent_revision, b.generation AS intent_generation, b.head_sha AS intent_head_sha,
-       b.state AS intent_state, b.available_at AS intent_available_at,
+       COALESCE(b.execution_error_code,'')::text AS intent_execution_error, b.state AS intent_state, b.available_at AS intent_available_at,
        COALESCE(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END, '')::text AS intent_waiting,
        e.id AS environment_id, e.status AS environment_status, e.subdomain, e.head_sha AS deployed_sha,
        e.applied_generation, e.applied_revision, e.pending_generation, e.pending_revision,
@@ -70,15 +70,22 @@ SELECT pr.id, pr.number, pr.head_sha, pr.state, pr.generation, pr.build_status, 
        rep.wanted_version, rep.reported_version, rep.comment_digest, rep.check_head_sha,
        rep.check_revision, rep.check_run_id, rep.check_open, rep.check_digest,
        pc.services AS backend_services, COALESCE(pc.setup, false)::boolean AS backend_setup,
-       pc.processes AS backend_processes, pc.docs_path AS backend_docs_path
+       pc.processes AS backend_processes, pc.docs_path AS backend_docs_path,
+       COALESCE(pc.data_source, '')::text AS backend_data_source, (pc.seed_ms IS NOT NULL)::boolean AS backend_seeded,
+       COALESCE(tds.enabled AND tds.keep_data, false)::boolean AS keeps_test_data
 FROM pull_requests pr
 JOIN repos r ON r.id = pr.repo_id
 JOIN installations i ON i.id = r.installation_id
+LEFT JOIN repository_sampledata_settings tds ON tds.repo_id = r.id
 LEFT JOIN build_intents b ON b.pull_request_id = pr.id
 LEFT JOIN environments e ON e.pull_request_id = pr.id
 LEFT JOIN pull_request_reports rep ON rep.pull_request_id = pr.id
+LEFT JOIN LATERAL (
+    SELECT x.generation, x.revision FROM preview_publications x
+    WHERE x.pull_request_id = pr.id ORDER BY x.sequence DESC LIMIT 1
+) pub ON true
 LEFT JOIN preview_components pc ON pc.pull_request_id = pr.id
-    AND pc.generation = e.applied_generation AND pc.revision = e.applied_revision
+    AND pc.generation = pub.generation AND pc.revision = pub.revision
 WHERE pr.id = $1
 `
 
@@ -95,6 +102,8 @@ type ReadReportSnapshotRow struct {
 	TeardownRequestedGeneration int64
 	TeardownReason              pgtype.Text
 	RepoID                      int64
+	RepoPublicID                string
+	PrPublicID                  string
 	GithubRepoID                pgtype.Int8
 	Accessible                  bool
 	GithubInstallationID        int64
@@ -102,6 +111,7 @@ type ReadReportSnapshotRow struct {
 	IntentRevision              pgtype.Int8
 	IntentGeneration            pgtype.Int8
 	IntentHeadSha               pgtype.Text
+	IntentExecutionError        string
 	IntentState                 pgtype.Text
 	IntentAvailableAt           pgtype.Timestamptz
 	IntentWaiting               string
@@ -128,10 +138,15 @@ type ReadReportSnapshotRow struct {
 	BackendSetup                bool
 	BackendProcesses            []byte
 	BackendDocsPath             pgtype.Text
+	BackendDataSource           string
+	BackendSeeded               bool
+	KeepsTestData               bool
 }
 
 // Reporting reads the PR's persisted truth and keeps its own bookkeeping in
 // pull_request_reports. It never changes lifecycle state.
+// What the serving deployment runs: the newest publication's candidate. After a
+// failed update the environment's applied revision names the failed attempt.
 func (q *Queries) ReadReportSnapshot(ctx context.Context, id int64) (ReadReportSnapshotRow, error) {
 	row := q.db.QueryRow(ctx, readReportSnapshot, id)
 	var i ReadReportSnapshotRow
@@ -148,6 +163,8 @@ func (q *Queries) ReadReportSnapshot(ctx context.Context, id int64) (ReadReportS
 		&i.TeardownRequestedGeneration,
 		&i.TeardownReason,
 		&i.RepoID,
+		&i.RepoPublicID,
+		&i.PrPublicID,
 		&i.GithubRepoID,
 		&i.Accessible,
 		&i.GithubInstallationID,
@@ -155,6 +172,7 @@ func (q *Queries) ReadReportSnapshot(ctx context.Context, id int64) (ReadReportS
 		&i.IntentRevision,
 		&i.IntentGeneration,
 		&i.IntentHeadSha,
+		&i.IntentExecutionError,
 		&i.IntentState,
 		&i.IntentAvailableAt,
 		&i.IntentWaiting,
@@ -181,6 +199,9 @@ func (q *Queries) ReadReportSnapshot(ctx context.Context, id int64) (ReadReportS
 		&i.BackendSetup,
 		&i.BackendProcesses,
 		&i.BackendDocsPath,
+		&i.BackendDataSource,
+		&i.BackendSeeded,
+		&i.KeepsTestData,
 	)
 	return i, err
 }

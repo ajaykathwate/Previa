@@ -54,7 +54,7 @@ func validateShape(data []byte) (shape, error) {
 		valid, fieldIssues, known := fieldShape(field, entry.Value, &found)
 		issues = append(issues, fieldIssues...)
 		if !known {
-			issues = append(issues, shapeIssue("$", "unknown_field", "Unknown key; supported keys are context, build_timeout, dockerfile, port, env, health_check_path, resource_tier, services, setup, processes and docs_path.", entry.Key))
+			issues = append(issues, shapeIssue("$", "unknown_field", "Unknown key; supported keys are context, build_timeout, dockerfile, port, env, health_check_path, resource_tier, services, setup, seed, processes and docs_path.", entry.Key))
 			continue
 		}
 		if !valid {
@@ -89,9 +89,9 @@ func fieldShape(field string, value ast.Node, found *shape) (valid bool, issues 
 				}
 			}
 		}
-	case "setup":
+	case "setup", "seed":
 		valid = true
-		issues = commandShape("setup", value)
+		issues = commandShape(field, value)
 	case "services":
 		services, isMapping := value.(*ast.MappingNode)
 		valid = isMapping

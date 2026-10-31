@@ -26,7 +26,7 @@ templ AppNavbar(username string, current string, parent Crumb, active NavItem) {
 		</details>
 		<nav class="app-breadcrumb" aria-label="Breadcrumb">
 			if parent.Href != "" {
-				<a class="app-breadcrumb-parent" href={ templ.SafeURL(parent.Href) } title={ "Back to " + parent.Label } data-trail-parent>
+				<a class="app-breadcrumb-parent" href={ PublicURL(ctx, parent.Href) } title={ "Back to " + parent.Label } data-trail-parent>
 					<span class="app-breadcrumb-back" aria-hidden="true">
 						@ArrowLeft()
 					</span>
@@ -47,20 +47,29 @@ templ AppNavbar(username string, current string, parent Crumb, active NavItem) {
 			@ThemeToggle()
 			<details class="account-menu" data-menu>
 				<summary aria-label={ "Account menu for " + username }>
-					<span class="user-avatar" aria-hidden="true">{ Initial(username) }</span>
-					<span class="account-name">{ username }</span>
+					@UserAvatar(CurrentViewer(ctx).Avatar, username, "", templ.Attributes{"data-viewer-avatar": true})
+					<span class="account-name" title={ username } data-viewer-name>{ username }</span>
 					<span class="account-chevron">
 						@ChevronDownIcon()
 					</span>
 				</summary>
 				<div class="account-popover">
 					<div class="account-identity">
-						<span class="user-avatar user-avatar-lg" aria-hidden="true">{ Initial(username) }</span>
-						<div><strong>{ username }</strong><span>Signed in with GitHub</span></div>
+						@UserAvatar(CurrentViewer(ctx).Avatar, username, "user-avatar-lg", templ.Attributes{"data-viewer-avatar": true})
+						<div>
+							<strong title={ username } data-viewer-name>{ username }</strong>
+							<span>
+								if CurrentViewer(ctx).Login!="" {
+									{ "@"+CurrentViewer(ctx).Login }
+								} else {
+									Signed in with GitHub
+								}
+							</span>
+						</div>
 					</div>
 					<a href="/protected">
 						@UserIcon()
-						View session
+						Your profile
 					</a>
 					<a href="/">
 						@HomeIcon()

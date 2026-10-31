@@ -12,6 +12,7 @@ marked *command line* are typed before a `make` command instead.
 | [DATABASE_URL](#database_url) | Required | Starting the server, worker and migrations | `.env`, `previa.env` |
 | [APP_ENV](#app_env) | Optional | Production hardening | `.env`, `previa.env` |
 | [LOG_LEVEL](#log_level) | Optional | Log detail | `.env`, `previa.env` |
+| [SENTRY_DSN](#sentry_dsn) | Optional | Error reporting and alerts | `previa.env` (empty in `.env`) |
 | [HTTP_ADDR](#http_addr) | Optional | Dashboard address | `.env` |
 | [APP_BASE_URL](#app_base_url) | Required | Sign-in and previews | `.env`, `previa.env` |
 | [GITHUB_OAUTH_CLIENT_ID](#github_oauth_client_id) | Required | Starting the server; sign-in | `.env`, `previa.env` |
@@ -58,6 +59,10 @@ marked *command line* are typed before a `make` command instead.
 | [PREVIEW_OCI_RUNTIME](#preview_oci_runtime) | Optional | Previews | `.env` |
 | [PREVIEW_SERVICE_CATALOG](#preview_service_catalog) | Optional | Backend previews | `.env` |
 | [PREVIEW_SETUP_TIMEOUT](#preview_setup_timeout) | Optional | Backend previews | `.env` |
+| [PREVIEW_BASELINE_DIR](#preview_baseline_dir) | Optional | Persistent test data | `.env` (compose sets it in production) |
+| [PREVIEW_BASELINE_MAX_SIZE](#preview_baseline_max_size) | Optional | Persistent test data | `.env` |
+| [PREVIEW_DATA_COPY_TIMEOUT](#preview_data_copy_timeout) | Optional | Persistent test data | `.env` |
+| [PREVIEW_BASELINE_MIN_INTERVAL](#preview_baseline_min_interval) | Optional | Persistent test data | `.env` |
 | [PREVIEW_OUTBOUND_PORTS](#preview_outbound_ports) | Optional | Backend previews | `.env` |
 | [PREVIEW_BASE_DOMAIN](#preview_base_domain) | Required | Builds and previews | `.env`, `previa.env` |
 | [ROUTER_DYNAMIC_DIR](#router_dynamic_dir) | Required | Builds and previews | `.env` |
@@ -101,8 +106,7 @@ marked *command line* are typed before a `make` command instead.
 | [BACKUP_AGE_RECIPIENT](#backup_age_recipient) | Required | Production backups | `previa.env` |
 | [BACKUP_REMOTE](#backup_remote) | Required | Production backups | `previa.env` |
 | [BACKUP_RETENTION_DAYS](#backup_retention_days) | Optional | Production backups | `previa.env` |
-| [BACKUP_FAILURE_WEBHOOK](#backup_failure_webhook) | Optional | Production backups | `previa.env` |
-| [GRAFANA_ADMIN_PASSWORD](#grafana_admin_password) | Optional | Production dashboards | `previa.env` |
+| [GRAFANA_ADMIN_PASSWORD](#grafana_admin_password) | Optional | The optional observability profile | `previa.env` |
 | [PREVIA_ENV_FILE](#previa_env_file) | Optional | Production | command line |
 | [PREVIA_ROUTER_DIR](#previa_router_dir) | Optional | Production | command line |
 | [PREVIA_BACKUP_STATUS_DIR](#previa_backup_status_dir) | Optional | Production | command line |
@@ -153,6 +157,27 @@ marked *command line* are typed before a `make` command instead.
 - **How to get it:** keep `info`; use `debug` while investigating a problem.
 - **Example:** `LOG_LEVEL=info`
 
+### `SENTRY_DSN`
+
+- **Type:** Optional. Default empty (nothing is reported).
+- **What it is:** the client key of a Sentry project: where the server and worker
+  send their warnings and errors, and where the nightly backup checks in.
+- **Where it's used:** the server and worker send every warning and error (already
+  redacted) to Sentry; errors become issues Sentry emails you about. `APP_ENV`
+  becomes Sentry's environment. `check-config` refuses a malformed value, and
+  `previa-server sentry-test` sends a test error. `deploy/production/backup.sh`
+  reads it from `previa.env` to check in with the cron monitor `previa-backup`.
+- **How to get it:**
+  1. Sign up at [sentry.io](https://sentry.io) on the free Developer plan (choose
+     the EU data region for a European server).
+  2. Create a project: platform **Go**, name `previa`.
+  3. Open **Settings → Projects → previa → Client Keys (DSN)** and copy the DSN.
+  4. Paste it in `previa.env` as one unquoted line. Leave it empty in `.env`, so
+     local work reports nothing.
+  Full setup, the uptime monitor and the alert rule: docs/25
+  "[Monitoring with Sentry](../docs/25-production-deployment.md#monitoring-with-sentry)".
+- **Example:** `SENTRY_DSN=https://3f1c…@o4500000000000000.ingest.de.sentry.io/4500000000000001`
+
 ## Dashboard (server)
 
 ### `HTTP_ADDR`
@@ -175,8 +200,8 @@ marked *command line* are typed before a `make` command instead.
 - **How to get it:**
   1. On your machine use `http://localhost:8080`, and always open the dashboard as
      `localhost`, not `127.0.0.1` (they are different cookie hosts).
-  2. In production use your dashboard's HTTPS address, for example
-     `https://previa.example.com` (HTTPS is required outside localhost). Create a DNS
+  2. In production use the dashboard's HTTPS address, `https://previa.live`
+     (HTTPS is required outside localhost). Create a DNS
      `A` record for that name pointing at the server, as in
      [PREVIA_DASHBOARD_HOST](#previa_dashboard_host).
 - **Example:** `APP_BASE_URL=http://localhost:8080`
@@ -702,6 +727,55 @@ marked *command line* are typed before a `make` command instead.
 - **How to get it:** keep the default unless migrations are slow.
 - **Example:** `PREVIEW_SETUP_TIMEOUT=5m`
 
+### `PREVIEW_BASELINE_DIR`
+
+- **Type:** Optional. Default `previa-baselines` in the system temporary directory.
+- **What it is:** the directory where the worker writes repositories' encrypted
+  test-data baselines ([docs/32](../docs/32-persistent-test-data.md)). An absolute,
+  clean path; the worker creates it with mode 0700. Baselines are derived data: a
+  lost file is rebuilt from its branch, and backups exclude them.
+- **Where it's used:** the worker, when it captures and restores baselines. It
+  needs `SECRETS_ENCRYPTION_KEYS`; without them no baseline is stored.
+- **How to get it:** leave it empty locally. In production the compose file sets it
+  to `/var/lib/previa/baselines`, the worker's `baselines` volume.
+- **Example:** `PREVIEW_BASELINE_DIR=/var/lib/previa/baselines`
+
+### `PREVIEW_BASELINE_MAX_SIZE`
+
+- **Type:** Optional. Default `64MiB` (1MiB to 4GiB).
+- **What it is:** the most one service's baseline dump may hold after compression.
+  A larger capture fails the refresh as `capture_too_large`; restores are also
+  bounded by the service's data tmpfs.
+- **Where it's used:** the worker, while it captures a baseline.
+- **How to get it:** keep the default; seed less data rather than raising it. A
+  preview's database lives in a 192 MiB (PostgreSQL) or 384 MiB (MySQL) tmpfs, so
+  any database that fits dumps to well below 64 MiB compressed.
+- **Example:** `PREVIEW_BASELINE_MAX_SIZE=64MiB`
+
+### `PREVIEW_DATA_COPY_TIMEOUT`
+
+- **Type:** Optional. Default `2m` (10s to 30m).
+- **What it is:** how long one dump-and-restore may take: a pull request's kept
+  data copied into its next candidate, a baseline restored into a candidate, or a
+  baseline captured. A copy over the limit moves on to the next starting source.
+- **Where it's used:** the worker, for every candidate of a repository with Test
+  data on and every baseline refresh.
+- **How to get it:** keep the default.
+- **Example:** `PREVIEW_DATA_COPY_TIMEOUT=2m`
+
+### `PREVIEW_BASELINE_MIN_INTERVAL`
+
+- **Type:** Optional. Default `1h` (1m to 24h).
+- **What it is:** the least time between automatic baseline refreshes of one
+  repository (after merges, the daily check or an unusable baseline). Refreshes a
+  person asks for are not spaced.
+- **Where it's used:** the worker, when it starts a refresh.
+- **How to get it:** keep the default. Refreshes use the workspace's daily build
+  minutes, which pull request builds share; the first merge after a quiet hour
+  still refreshes at once, and later ones in that hour join one refresh. Lower it
+  only where build minutes are plentiful.
+- **Example:** `PREVIEW_BASELINE_MIN_INTERVAL=1h`
+
 ### `PREVIEW_OUTBOUND_PORTS`
 
 - **Type:** Optional. Default `5432,3306,6379,6380,27017,5671,5672,9092,1433`.
@@ -1086,9 +1160,12 @@ marked *command line* are typed before a `make` command instead.
 - **Type:** Optional. Default `previa-server` (an image built on the host).
 - **What it is:** the image repository of the dashboard server.
 - **Where it's used:** production Compose runs `<this>:<PREVIA_VERSION>`.
-- **How to get it:** leave the default when building on the host, or use your
-  registry's path, for example `ghcr.io/<owner>/previa-server`.
-- **Example:** `PREVIA_SERVER_IMAGE=ghcr.io/ajaykathwatee/previa-server`
+- **How to get it:** leave it unset: production builds its images on the host
+  from the release tag (docs/25 Step 7). Only to deploy images published by the
+  optional Release workflow instead, set the registry's path,
+  `ghcr.io/<owner>/previa-server`.
+- **Example:** unset (the default `previa-server`), or
+  `PREVIA_SERVER_IMAGE=ghcr.io/ajaykathwate/previa-server`
 
 ### `PREVIA_WORKER_IMAGE`
 
@@ -1096,7 +1173,8 @@ marked *command line* are typed before a `make` command instead.
 - **What it is:** the image repository of the worker.
 - **Where it's used:** production Compose runs `<this>:<PREVIA_VERSION>`.
 - **How to get it:** as for [PREVIA_SERVER_IMAGE](#previa_server_image).
-- **Example:** `PREVIA_WORKER_IMAGE=ghcr.io/ajaykathwatee/previa-worker`
+- **Example:** unset (the default `previa-worker`), or
+  `PREVIA_WORKER_IMAGE=ghcr.io/ajaykathwate/previa-worker`
 
 ### `PREVIA_EGRESS_IMAGE`
 
@@ -1105,7 +1183,8 @@ marked *command line* are typed before a `make` command instead.
 - **Where it's used:** production Compose runs `<this>:<PREVIA_VERSION>` and gives
   it to the worker as its egress image.
 - **How to get it:** as for [PREVIA_SERVER_IMAGE](#previa_server_image).
-- **Example:** `PREVIA_EGRESS_IMAGE=ghcr.io/ajaykathwatee/previa-egress`
+- **Example:** unset (the default `previa-egress`), or
+  `PREVIA_EGRESS_IMAGE=ghcr.io/ajaykathwate/previa-egress`
 
 ### `DOCKER_GID`
 
@@ -1136,11 +1215,11 @@ marked *command line* are typed before a `make` command instead.
 - **Where it's used:** the router serves the dashboard on this name and gets its
   HTTPS certificate.
 - **How to get it:**
-  1. Choose the name, for example `previa.example.com`.
+  1. Production uses `previa.live`.
   2. At your DNS provider, add an `A` record for it pointing at the server's public
      IP address (on Cloudflare, **DNS only**).
   3. Paste the name here, without `https://`.
-- **Example:** `PREVIA_DASHBOARD_HOST=previa.example.com`
+- **Example:** `PREVIA_DASHBOARD_HOST=previa.live`
 
 ### `GITHUB_APP_PRIVATE_KEY_FILE`
 
@@ -1193,19 +1272,10 @@ marked *command line* are typed before a `make` command instead.
 - **How to get it:** keep `30`, or any positive number of days.
 - **Example:** `BACKUP_RETENTION_DAYS=30`
 
-### `BACKUP_FAILURE_WEBHOOK`
-
-- **Type:** Optional. Default empty.
-- **What it is:** a URL that receives a message when a backup fails.
-- **Where it's used:** the nightly backup.
-- **How to get it:** create an incoming webhook in your chat tool, for example in
-  Slack: **Apps → Incoming Webhooks → Add to Slack →** choose a channel → copy the
-  **Webhook URL**.
-- **Example:** `BACKUP_FAILURE_WEBHOOK=https://hooks.slack.com/services/T000/B000/XXXX`
-
 ### `GRAFANA_ADMIN_PASSWORD`
 
-- **Type:** Optional; needed when you run the `observability` profile.
+- **Type:** Optional; needed only when you run the optional `observability`
+  profile, which the production deployment does not run.
 - **What it is:** the password of Grafana's `admin` user.
 - **Where it's used:** the Grafana dashboard at `127.0.0.1:3000` on the server (open
   it through `ssh -L 3000:127.0.0.1:3000 <server>`).

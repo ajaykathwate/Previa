@@ -1,0 +1,205 @@
+package workspaces
+
+import "github.com/ajaykathwatee/previa/web/components"
+
+templ Settings(p Page) {
+	<div class="field-grid field-grid-wide">
+		<section class="workspace-panel field-card" aria-labelledby="details-heading">
+			<header class="field-card-head">
+				<h2 id="details-heading">
+					@components.OverviewIcon()
+					General
+				</h2>
+				<span class="field-card-note">Visible to workspace members</span>
+			</header>
+			<div class="field-list">
+				<div class="field-row">
+					<span class="field-label" id="logo-label">Logo</span>
+					<div class="photo-field">
+						<form method="post" action={ components.PublicURL(ctx, p.Base()+"/logo") } enctype="multipart/form-data" class="avatar-editor" data-avatar-form data-image-kind="logo">
+							@ProfileHidden(p)
+							<label for="workspace-logo" class="avatar-editor-target" title="Change logo" data-logo-preview>
+								@components.WorkspaceAvatar(p.Name, p.ID, p.LogoVersion)
+								<span class="avatar-editor-badge" aria-hidden="true">
+									@components.PencilIcon()
+								</span>
+							</label>
+							<input id="workspace-logo" name="logo" type="file" accept="image/png,image/jpeg" required class="avatar-editor-input" aria-labelledby="logo-label" aria-describedby="logo-help"/>
+							<button type="submit" class="avatar-editor-submit field-card-action">Upload</button>
+						</form>
+						<div class="photo-actions">
+							<label for="workspace-logo" class="text-action">Change logo</label>
+							<form method="post" action={ components.PublicURL(ctx, p.Base()+"/logo/remove") } data-avatar-remove hidden?={ p.LogoVersion==0 }>
+								@ProfileHidden(p)
+								<button type="submit" class="text-action">Remove</button>
+							</form>
+							<span id="logo-help" class="field-meta">PNG or JPEG · square works best</span>
+						</div>
+					</div>
+				</div>
+				if p.ErrorField=="logo" {
+					<p class="field-error" role="alert">{ p.Error }</p>
+				}
+			</div>
+			<form method="post" action={ components.PublicURL(ctx, p.Base()+"/settings") } class="field-list field-list-tight" data-inline-form data-workspace-profile>
+				@ProfileHidden(p)
+				<div class="field-row">
+					<label class="field-label" for="rename-workspace">Name</label>
+					@components.InlineText("rename-workspace", "name", p.FormName, "Workspace name", "workspace name", templ.Attributes{"maxlength": "80", "required": true, "autocomplete": "off", "data-workspace-name-input": true, "aria-describedby": "profile-error"})
+				</div>
+				<div class="field-row field-row-top">
+					<label class="field-label" for="workspace-description">Description</label>
+					@components.InlineTextarea("workspace-description", "description", p.FormDescription, "Add a short description of what this team works on", "description", templ.Attributes{"maxlength": "240", "aria-describedby": "profile-error"})
+				</div>
+				if p.ErrorField=="details" {
+					<p id="profile-error" class="field-error" role="alert" data-inline-error>{ p.Error }</p>
+				} else {
+					<p id="profile-error" class="field-error" hidden data-inline-error></p>
+				}
+			</form>
+			<dl class="field-list field-list-tight">
+				<div class="field-row">
+					<dt class="field-label">Workspace ID</dt>
+					<dd class="field-value">
+						<code>{ components.PublicValue(ctx,"workspace",p.ID) }</code>
+						@components.CopyButton(components.ResourceToken(ctx, "workspace", p.ID), "Copy workspace ID")
+					</dd>
+				</div>
+			</dl>
+		</section>
+		<section class="workspace-panel field-card" aria-labelledby="summary-heading">
+			<header class="field-card-head">
+				<h2 id="summary-heading">
+					@components.TeamIcon()
+					Overview
+				</h2>
+			</header>
+			<dl class="field-list">
+				<div class="field-row"><dt class="field-label">Owner</dt><dd class="field-value">{ p.OwnerName }</dd></div>
+				<div class="field-row">
+					<dt class="field-label">Your role</dt>
+					<dd class="field-value">
+						@components.WorkspaceRole(p.Role)
+					</dd>
+				</div>
+				<div class="field-row"><dt class="field-label">Members</dt><dd class="field-value"><a href={ components.PublicURL(ctx, p.Base()+"/members") }>{ CountLabel(p.MemberCount,"member","members") }</a></dd></div>
+				<div class="field-row"><dt class="field-label">Repositories</dt><dd class="field-value"><a href="/repositories">{ CountLabel(p.RepositoryCount,"repository","repositories") }</a></dd></div>
+				<div class="field-row">
+					<dt class="field-label">Created</dt>
+					<dd class="field-value">
+						@components.Time(p.Created, p.Created)
+					</dd>
+				</div>
+			</dl>
+			<p class="field-card-foot">A workspace is one team: people in Members, connected code in Repositories.</p>
+		</section>
+		@Ownership(p)
+		if p.Owner() {
+			@DeleteWorkspace(p)
+		}
+	</div>
+}
+
+// DeleteWorkspace lets an owner request ordered cleanup, including connected
+// repositories and other members, after an in-place typed confirmation.
+templ DeleteWorkspace(p Page) {
+	<section id="delete-workspace-section" class="workspace-panel field-card field-card-span" aria-labelledby="delete-heading">
+		<header class="field-card-head">
+			<h2 id="delete-heading">
+				@components.TrashIcon()
+				Delete workspace
+			</h2>
+		</header>
+		<div class="ownership-row">
+			<p id="delete-workspace-description">Deleting ends access for all members immediately. Previews and test data are removed before workspace records are erased. Track cleanup from Account and connections.</p>
+			<div class="ownership-actions">
+				<button type="button" class="secondary-action team-danger" data-open-dialog="delete-workspace" commandfor="delete-workspace" command="show-modal" aria-haspopup="dialog">Delete workspace…</button>
+			</div>
+			@components.ConfirmationDialog("delete-workspace", "Delete "+p.Name+"?", "Access ends immediately and pending invitations are cancelled. This can't be undone.") {
+				<div class="team-inline-notice delete-alternative">
+					<p>Want to keep it? Invite a teammate, make them an admin, then hand over ownership.</p>
+					<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members") }>Invite a teammate</a>
+				</div>
+				<form method="post" action={ components.PublicURL(ctx, "/account/workspaces/"+components.ResourceToken(ctx, "workspace", p.ID)+"/delete") } class="team-form">
+					@Hidden(p)
+					<input type="hidden" name="revision" value={ ID(p.Revision) }/>
+					<label for="confirm-delete-name">Type <code class="delete-word">{ DeleteConfirmation }</code> to confirm</label>
+					<input id="confirm-delete-name" name="confirm" required autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder={ DeleteConfirmation } pattern={ DeleteConfirmation } title="Type DELETE in capital letters" aria-describedby="delete-workspace-description" data-confirm-match={ DeleteConfirmation }/>
+					<div class="dialog-actions">
+						<button type="button" class="secondary-action" commandfor="delete-workspace" command="close" data-close-dialog>Cancel</button>
+						<button type="submit" class="primary-action danger-action" data-confirm-submit>Delete workspace</button>
+					</div>
+				</form>
+			}
+		</div>
+	</section>
+}
+
+templ ProfileHidden(p Page) {
+	<input type="hidden" name="csrf_token" value={ p.CSRF }/><input type="hidden" name="profile_revision" value={ ID(p.ProfileRevision) }/>
+}
+
+templ Ownership(p Page) {
+	<section id="ownership" class="workspace-panel field-card field-card-span" aria-labelledby="ownership-heading">
+		<header class="field-card-head">
+			<h2 id="ownership-heading">
+				@components.ShieldIcon()
+				Ownership
+			</h2>
+			if p.Transfer!=nil {
+				<span class="badge tone-warn">Transfer awaiting acceptance</span>
+			}
+		</header>
+		<div class="ownership-row">
+			if p.Transfer!=nil {
+				<p>
+					<strong>{ p.Transfer.Login }</strong>{ " must accept before " }
+					@components.Time(p.Transfer.Expires, p.Transfer.Expires)
+					{ ". Until then " }<strong>{ p.OwnerName }</strong>{ " stays the owner." }
+				</p>
+				<div class="ownership-actions">
+					if p.Transfer.Accept {
+						<button type="button" class="primary-action" data-open-dialog="accept-owner" commandfor="accept-owner" command="show-modal" aria-haspopup="dialog">Accept ownership</button>
+						@components.ConfirmationDialog("accept-owner", "Become the workspace owner?", "You become the owner and the previous owner becomes an administrator. Connections, previews and usage stay with this workspace.") {
+							<form method="post" action={ components.PublicURL(ctx, p.Base()+"/ownership") } class="dialog-actions">
+								@Hidden(p)
+								<input type="hidden" name="action" value="accept"/><input type="hidden" name="transfer_revision" value={ ID(p.Transfer.Revision) }/><button type="button" class="secondary-action" commandfor="accept-owner" command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Accept ownership</button>
+							</form>
+						}
+					}
+					if p.Owner() {
+						<form method="post" action={ components.PublicURL(ctx, p.Base()+"/ownership") }>
+							@Hidden(p)
+							<button type="submit" name="action" value="cancel" class="secondary-action">Cancel transfer</button>
+						</form>
+					}
+				</div>
+			} else if p.Owner() {
+				<p><strong>You</strong> own this workspace. To hand it over, choose an admin; you stay the owner until they accept, then become an admin.</p>
+				<div class="ownership-actions">
+					if len(p.Admins)>0 {
+						<button type="button" class="secondary-action" data-open-dialog="nominate-owner" commandfor="nominate-owner" command="show-modal" aria-haspopup="dialog">Request handover</button>
+						@components.ConfirmationDialog("nominate-owner", "Request an ownership handover?", "Choose an existing administrator. They will have seven days to accept in workspace settings.") {
+							<form id="ownership-form" method="post" action={ components.PublicURL(ctx, p.Base()+"/ownership") } class="team-form">
+								@Hidden(p)
+								<input type="hidden" name="action" value="nominate"/><label for="ownership-target">Administrator</label>
+								<select id="ownership-target" name="target" required>
+									<option value="">Choose an administrator</option>
+									for _,m:=range p.Admins {
+										<option value={ components.ResourceToken(ctx, "user", m.ID) }>{ m.Name() }</option>
+									}
+								</select>
+								<div class="dialog-actions"><button type="button" class="secondary-action" commandfor="nominate-owner" command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Request transfer</button></div>
+							</form>
+						}
+					} else {
+						<span class="field-meta">Appoint an admin first</span>
+						<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members") }>Manage members</a>
+					}
+				</div>
+			} else {
+				<p><strong>{ p.OwnerName }</strong> owns this workspace. Only the owner can hand it over or appoint admins.</p>
+			}
+		</div>
+	</section>
+}

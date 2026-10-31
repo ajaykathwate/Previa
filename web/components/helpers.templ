@@ -1,11 +1,23 @@
 package components
 
+import "time"
+
 // Time shows an exact UTC time; ui.js rewrites it as a relative one ("3 min
 // ago", "in 2 h") and keeps the exact time as its title. Without JavaScript the
 // exact time stays.
 templ Time(iso, label string) {
 	if iso != "" {
 		<time datetime={ iso } title={ label } data-relative>{ label }</time>
+	}
+}
+
+// Countdown counts down to iso (RFC 3339): rendered as the time left when the
+// page was made ("4:32"), then ticking every second in ui.js and stopping at
+// 0:00 until a live update replaces it. role="timer" keeps screen readers from
+// announcing every tick; the title holds the exact time.
+templ Countdown(iso, label string) {
+	if iso != "" {
+		<time datetime={ iso } title={ label } role="timer" data-countdown>{ TimeLeft(iso, time.Now()) }</time>
 	}
 }
 

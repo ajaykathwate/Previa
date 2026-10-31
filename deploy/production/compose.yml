@@ -1,5 +1,6 @@
 # Previa on one host: PostgreSQL, the migration step, the server, the worker,
-# the router and (profile "observability") Prometheus and Grafana.
+# the router and (optional profile "observability", which the production
+# deployment does not run) Prometheus and Grafana.
 # docs/25-production-deployment.md walks through it; run it as
 #
 #   docker compose -f deploy/production/compose.yml --env-file /etc/previa/previa.env up -d
@@ -65,6 +66,23 @@ services:
       postgres: {condition: service_healthy}
     networks: [control]
 
+  # One-shot journal commands must use a dynamic IP: a second instance of the
+  # server service would collide with its fixed forward-auth address.
+  journal:
+    <<: *hardened
+    profiles: [maintenance]
+    image: *server-image
+    restart: "no"
+    command: [journal-export]
+    healthcheck: {disable: true}
+    env_file: [*env-file]
+    environment:
+      APP_ENV: production
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github_app_key
+    secrets: [github_app_key]
+    tmpfs: [/tmp]
+    networks: [control]
+
   server:
     <<: *hardened
     image: *server-image
@@ -104,6 +122,8 @@ services:
       WORKER_INTERNAL_ADDR: 0.0.0.0:9091
       GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github_app_key
       SOURCE_WORKSPACE_ROOT: /var/lib/previa/sources
+      # Encrypted test-data baselines (docs/32): derived data, not backed up.
+      PREVIEW_BASELINE_DIR: /var/lib/previa/baselines
       ROUTER_DYNAMIC_DIR: /var/lib/previa/router
       ROUTER_CONTAINER: previa-router
       # Preview request counts ("Last opened"), read inside the router.
@@ -118,6 +138,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - sources:/var/lib/previa/sources
+      - baselines:/var/lib/previa/baselines
       - ${PREVIA_ROUTER_DIR:-/var/lib/previa/router}:/var/lib/previa/router
     tmpfs: [/tmp]
     depends_on:
@@ -290,6 +311,7 @@ networks:
 volumes:
   postgres:
   sources:
+  baselines:
   acme:
   prometheus:
   grafana:

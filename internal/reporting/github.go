@@ -70,13 +70,18 @@ type GitHubAPI struct {
 	now      func() time.Time
 }
 
-// NewGitHubAPI needs the App's ID and slug (githubapp.Client.App) to tell
-// its own comments apart from anyone else's.
+// NewGitHubAPI uses the immutable App ID to prove comment ownership. A known
+// slug additionally recognizes GitHub's bot login. Local cleanup may start with
+// the configured App ID during an upstream outage, without the slug fallback.
 func NewGitHubAPI(clients InstallationClients, appID int64, slug string) (*GitHubAPI, error) {
-	if clients == nil || appID <= 0 || slug == "" {
-		return nil, errors.New("GitHub reporting needs installation clients and the App's ID and slug")
+	if clients == nil || appID <= 0 {
+		return nil, errors.New("GitHub reporting needs installation clients and the App's ID")
 	}
-	return &GitHubAPI{clients: clients, appID: appID, botLogin: slug + "[bot]", now: time.Now}, nil
+	bot := ""
+	if slug != "" {
+		bot = slug + "[bot]"
+	}
+	return &GitHubAPI{clients: clients, appID: appID, botLogin: bot, now: time.Now}, nil
 }
 
 func (g *GitHubAPI) client(installationID int64) (*github.Client, error) {
@@ -103,7 +108,7 @@ func (g *GitHubAPI) Repository(ctx context.Context, installationID, repoID int64
 }
 
 func (g *GitHubAPI) owned(c *github.IssueComment) bool {
-	return c.GetPerformedViaGithubApp().GetID() == g.appID || c.GetUser().GetLogin() == g.botLogin
+	return c.GetPerformedViaGithubApp().GetID() == g.appID || (g.botLogin != "" && c.GetUser().GetLogin() == g.botLogin)
 }
 
 func (g *GitHubAPI) GetComment(ctx context.Context, installationID int64, repo Repo, id int64) (Comment, error) {

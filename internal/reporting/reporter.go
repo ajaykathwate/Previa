@@ -370,7 +370,7 @@ func failure(err error) error {
 // snapshotOf turns the stored row into the persisted truth Derive reads.
 func snapshotOf(row dbgen.ReadReportSnapshotRow) Snapshot {
 	s := Snapshot{
-		PullRequestID: row.ID, RepoID: row.RepoID, Number: row.Number, HeadSHA: row.HeadSha, State: row.State,
+		PullRequestID: row.ID, RepoID: row.RepoID, RepoPublicID: row.RepoPublicID, PRPublicID: row.PrPublicID, Number: row.Number, HeadSHA: row.HeadSha, State: row.State,
 		Generation: row.Generation, BuildStatus: row.BuildStatus, NeedsRefresh: row.NeedsRefresh, Fork: row.IsFork,
 		SecretCount: row.SecretCount, TeardownRequested: row.TeardownRequestedGeneration == row.Generation,
 		TeardownReason: row.TeardownReason.String,
@@ -378,7 +378,7 @@ func snapshotOf(row dbgen.ReadReportSnapshotRow) Snapshot {
 	if row.IntentRevision.Valid {
 		s.Intent = &Intent{
 			Generation: row.IntentGeneration.Int64, Revision: row.IntentRevision.Int64, HeadSHA: row.IntentHeadSha.String,
-			State: row.IntentState.String, AvailableAt: row.IntentAvailableAt.Time, Waiting: row.IntentWaiting,
+			ExecutionError: row.IntentExecutionError, State: row.IntentState.String, AvailableAt: row.IntentAvailableAt.Time, Waiting: row.IntentWaiting,
 		}
 	}
 	if row.EnvironmentID.Valid {
@@ -386,7 +386,9 @@ func snapshotOf(row dbgen.ReadReportSnapshotRow) Snapshot {
 			Status: row.EnvironmentStatus.String, Hostname: row.Subdomain.String, DeployedSHA: row.DeployedSha.String,
 			AppliedGeneration: row.AppliedGeneration.Int64, AppliedRevision: row.AppliedRevision.Int64,
 			LastErrorCode: row.LastErrorCode.String, ExpiresAt: row.ExpiresAt.Time,
-			Backend: environments.ParseBackend(row.BackendServices, row.BackendProcesses, row.BackendSetup, row.BackendDocsPath.String, 0, false),
+			Backend:   environments.ParseBackend(row.BackendServices, row.BackendProcesses, row.BackendSetup, row.BackendDocsPath.String, 0, false),
+			Data:      environments.ParseStartingData(row.BackendDataSource, nil, row.BackendSeeded),
+			KeepsData: row.KeepsTestData,
 		}
 	}
 	return s

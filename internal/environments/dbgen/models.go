@@ -8,11 +8,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// Legacy technical elapsed-time counter; never billed or imported into workspace execution accounting
 type AccountBuildUsage struct {
 	UserID       int64
 	Day          pgtype.Date
 	BuildSeconds int64
 	Builds       int32
+}
+
+type ActivityEvent struct {
+	ID            int64
+	WorkspaceID   int64
+	RepoID        pgtype.Int8
+	PullRequestID pgtype.Int8
+	PublicationID pgtype.Int8
+	ActorUserID   pgtype.Int8
+	Kind          string
+	Visibility    string
+	Metadata      []byte
+	DedupKey      pgtype.Text
+	OccurredAt    pgtype.Timestamptz
+}
+
+type ActivityPruned struct {
+	PullRequestID int64
+	PrunedThrough pgtype.Timestamptz
 }
 
 type AppOutputLine struct {
@@ -33,6 +53,40 @@ type AppOutputWatch struct {
 	UpdatedAt     pgtype.Timestamptz
 }
 
+type BaselineLog struct {
+	RefreshID int64
+	Sequence  int64
+	Kind      string
+	Line      string
+	CreatedAt pgtype.Timestamptz
+}
+
+type BaselineRefresh struct {
+	ID            int64
+	RepoID        int64
+	Sequence      int64
+	Trigger       string
+	RequestedBy   pgtype.Int8
+	State         string
+	AvailableAt   pgtype.Timestamptz
+	WaitingReason pgtype.Text
+	Branch        pgtype.Text
+	CommitSha     pgtype.Text
+	FailureCode   pgtype.Text
+	FailureDetail pgtype.Text
+	Attempts      int32
+	BuildSeconds  pgtype.Int4
+	LogOpen       bool
+	LogLines      int64
+	LogBytes      int64
+	LogTruncated  bool
+	LogOmitted    int64
+	LogLost       int64
+	RequestedAt   pgtype.Timestamptz
+	StartedAt     pgtype.Timestamptz
+	FinishedAt    pgtype.Timestamptz
+}
+
 type BuildFailureDismissal struct {
 	UserID        int64
 	PullRequestID int64
@@ -41,25 +95,31 @@ type BuildFailureDismissal struct {
 }
 
 type BuildIntent struct {
-	PullRequestID    int64
-	Revision         int64
-	BaseRevision     int64
-	Generation       int64
-	HeadSha          string
-	Source           string
-	RequestAction    string
-	RequestedBy      pgtype.Int8
-	IdempotencyKey   string
-	State            string
-	AvailableAt      pgtype.Timestamptz
-	RequestedAt      pgtype.Timestamptz
-	StartedAt        pgtype.Timestamptz
-	CompletedAt      pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-	WaitingRevision  pgtype.Int8
-	WaitingReason    pgtype.Text
-	WaitingSince     pgtype.Timestamptz
-	WaitingCheckedAt pgtype.Timestamptz
+	PullRequestID      int64
+	Revision           int64
+	BaseRevision       int64
+	Generation         int64
+	HeadSha            string
+	Source             string
+	RequestAction      string
+	RequestedBy        pgtype.Int8
+	IdempotencyKey     string
+	State              string
+	AvailableAt        pgtype.Timestamptz
+	RequestedAt        pgtype.Timestamptz
+	StartedAt          pgtype.Timestamptz
+	CompletedAt        pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	WaitingRevision    pgtype.Int8
+	WaitingReason      pgtype.Text
+	WaitingSince       pgtype.Timestamptz
+	WaitingCheckedAt   pgtype.Timestamptz
+	WorkspaceID        pgtype.Int8
+	AuthorizationStamp pgtype.Text
+	ExecutionJobID     pgtype.Int8
+	ExecutionErrorCode string
+	StartSource        pgtype.Text
+	UsageWaitUntil     pgtype.Timestamptz
 }
 
 type BuildLog struct {
@@ -89,6 +149,37 @@ type BuildLogStream struct {
 	PrunedAt      pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
 	DeletedAt     pgtype.Timestamptz
+}
+
+type DeletionJournal struct {
+	Sequence             int64
+	EventID              pgtype.UUID
+	Action               string
+	Target               pgtype.UUID
+	Workspace            pgtype.UUID
+	GithubInstallationID pgtype.Int8
+	GithubRepoID         pgtype.Int8
+	GithubUserID         pgtype.Int8
+	Successor            pgtype.UUID
+	SuccessorGithubID    pgtype.Int8
+	OperationID          pgtype.UUID
+	CreatedAt            pgtype.Timestamptz
+	AcknowledgedAt       pgtype.Timestamptz
+	GoogleSubject        pgtype.Text
+}
+
+type DeletionJournalMetadatum struct {
+	Singleton  bool
+	Instance   pgtype.UUID
+	SnapshotAt pgtype.Timestamptz
+}
+
+type DisconnectComment struct {
+	PullRequestID int64
+	OperationID   pgtype.UUID
+	Attempts      int32
+	State         string
+	AvailableAt   pgtype.Timestamptz
 }
 
 type EnvSecret struct {
@@ -128,6 +219,7 @@ type Environment struct {
 	WokeAt             pgtype.Timestamptz
 	WakeRequestedAt    pgtype.Timestamptz
 	WakeError          string
+	PublicID           pgtype.UUID
 }
 
 type EnvironmentOperation struct {
@@ -171,6 +263,27 @@ type EnvironmentRoute struct {
 	UnconfirmedTargets []byte
 }
 
+type FreePlanPolicy struct {
+	Singleton                bool
+	PeriodKind               string
+	IncludedSeconds          int64
+	ConcurrentBuilds         int32
+	PreviewSlots             int32
+	OperatorDailySeconds     int64
+	OperatorConcurrentBuilds int32
+	OperatorCheckedAt        pgtype.Timestamptz
+	PreviewLifetimeSeconds   pgtype.Int8
+	PreviewIdleSeconds       pgtype.Int8
+	LogRetentionSeconds      pgtype.Int8
+	CutoverAt                pgtype.Timestamptz
+}
+
+type GithubDisconnection struct {
+	GithubInstallationID int64
+	GithubRepoID         int64
+	CreatedAt            pgtype.Timestamptz
+}
+
 type Installation struct {
 	ID                   int64
 	GithubInstallationID int64
@@ -181,6 +294,11 @@ type Installation struct {
 	Revision             int64
 	SourceUpdatedAt      pgtype.Timestamptz
 	CleanupPending       bool
+	WorkspaceID          pgtype.Int8
+	PublicID             pgtype.UUID
+	DisconnectedAt       pgtype.Timestamptz
+	ReconciledAt         pgtype.Timestamptz
+	ReconcileRequestedAt pgtype.Timestamptz
 }
 
 type InstallationRepositoryEvent struct {
@@ -188,6 +306,32 @@ type InstallationRepositoryEvent struct {
 	GithubRepoID    int64
 	SourceUpdatedAt pgtype.Timestamptz
 	Removed         bool
+}
+
+type LifecycleOperation struct {
+	ID               pgtype.UUID
+	Kind             string
+	TargetID         int64
+	TargetPublicID   pgtype.UUID
+	WorkspaceID      pgtype.Int8
+	ActorID          int64
+	ParentID         pgtype.UUID
+	Stage            string
+	LastError        string
+	AvailableAt      pgtype.Timestamptz
+	JournalAckAt     pgtype.Timestamptz
+	ReceiptHash      []byte
+	ReceiptExpiresAt pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	CompletedAt      pgtype.Timestamptz
+}
+
+type OperatorActivity struct {
+	ID        int64
+	GithubID  int64
+	Action    string
+	Reference pgtype.UUID
+	CreatedAt pgtype.Timestamptz
 }
 
 type PlatformInstance struct {
@@ -200,6 +344,25 @@ type PrReconciliation struct {
 	PullRequestID int64
 	ReconciledAt  pgtype.Timestamptz
 	Outcome       string
+}
+
+type PrReviewCounter struct {
+	PullRequestID int64
+	Threads       int32
+	Messages      int32
+}
+
+type PrReviewInstruction struct {
+	PullRequestID int64
+	Summary       string
+	Steps         string
+	Expected      string
+	StartPath     pgtype.Text
+	DocsPath      pgtype.Text
+	Revision      int64
+	UpdatedBy     int64
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
 }
 
 type PrSync struct {
@@ -225,6 +388,12 @@ type PreviewComponent struct {
 	Outbound         int32
 	OutboundWithheld bool
 	RecordedAt       pgtype.Timestamptz
+	ConfigHash       pgtype.Text
+	SetupMs          pgtype.Int4
+	Seed             bool
+	SeedMs           pgtype.Int4
+	DataSource       pgtype.Text
+	DataDetail       []byte
 }
 
 type PreviewCrash struct {
@@ -233,6 +402,64 @@ type PreviewCrash struct {
 	EnvironmentID int64
 	ExitCode      int32
 	CrashedAt     pgtype.Timestamptz
+}
+
+type PreviewFeedbackMessage struct {
+	ID             int64
+	ThreadID       int64
+	PullRequestID  int64
+	Position       int32
+	AuthorUserID   int64
+	PublicationID  pgtype.Int8
+	Body           string
+	PagePath       pgtype.Text
+	Details        pgtype.Text
+	Revision       int64
+	IdempotencyKey pgtype.Text
+	CreatedAt      pgtype.Timestamptz
+	EditedAt       pgtype.Timestamptz
+	RemovedAt      pgtype.Timestamptz
+	RemovedBy      pgtype.Int8
+	RemovalReason  pgtype.Text
+}
+
+type PreviewFeedbackThread struct {
+	ID                    int64
+	PullRequestID         int64
+	Number                int32
+	PublicationID         pgtype.Int8
+	AuthorUserID          int64
+	State                 string
+	Revision              int64
+	StateChangedBy        pgtype.Int8
+	StateChangedAt        pgtype.Timestamptz
+	ResolvedPublicationID pgtype.Int8
+	RemovalReason         pgtype.Text
+	IdempotencyKey        string
+	CreatedAt             pgtype.Timestamptz
+}
+
+type PreviewOpen struct {
+	PullRequestID int64
+	UserID        int64
+	DeployedSha   string
+	OpenedAt      pgtype.Timestamptz
+}
+
+type PreviewPublication struct {
+	ID            int64
+	PullRequestID int64
+	RepoID        int64
+	WorkspaceID   int64
+	Sequence      int32
+	HeadSha       string
+	Generation    int64
+	Revision      int64
+	ContainerID   pgtype.Text
+	ImageTag      pgtype.Text
+	ConfigHash    pgtype.Text
+	Backfilled    bool
+	ActivatedAt   pgtype.Timestamptz
 }
 
 type PreviewVisitCounter struct {
@@ -266,6 +493,14 @@ type PullRequest struct {
 	TeardownRequestedGeneration int64
 	TeardownReason              pgtype.Text
 	MergeabilityUnresolvedAt    pgtype.Timestamptz
+	PublicID                    pgtype.UUID
+	Description                 string
+	DescriptionUpdatedAt        pgtype.Timestamptz
+	HeadCommitSha               string
+	HeadCommitMessage           string
+	HeadCommitAuthor            string
+	HeadCommitAt                pgtype.Timestamptz
+	HeadCommitCheckedAt         pgtype.Timestamptz
 }
 
 type PullRequestReport struct {
@@ -296,6 +531,27 @@ type Repo struct {
 	BuildMode          string
 	ObservationVersion int64
 	PrivatePreviews    bool
+	PublicID           pgtype.UUID
+	DisconnectedAt     pgtype.Timestamptz
+}
+
+type RepositoryBaseline struct {
+	ID              int64
+	RepoID          int64
+	RefreshID       pgtype.Int8
+	ServiceKind     string
+	ServiceVersion  string
+	Branch          string
+	CommitSha       string
+	ConfigHash      pgtype.Text
+	RefreshSequence int64
+	StorageKey      string
+	SizeBytes       int64
+	Checksum        string
+	KeyVersion      int32
+	Status          string
+	BuiltAt         pgtype.Timestamptz
+	RetiredAt       pgtype.Timestamptz
 }
 
 type RepositoryDestination struct {
@@ -305,11 +561,98 @@ type RepositoryDestination struct {
 	Port      int32
 	CreatedBy pgtype.Int8
 	CreatedAt pgtype.Timestamptz
+	PublicID  pgtype.UUID
+}
+
+type RepositoryEnvFile struct {
+	RepoID        int64
+	EncryptedText []byte
+	KeyVersion    int32
+	Revision      int64
+	UpdatedBy     pgtype.Int8
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type RepositoryMembership struct {
+	RepoID      int64
+	WorkspaceID int64
+	UserID      int64
+	Revision    int64
+}
+
+type RepositorySampledataSetting struct {
+	RepoID         int64
+	Enabled        bool
+	KeepData       bool
+	UseBaseline    bool
+	BaselineBranch pgtype.Text
+	AutoRefresh    bool
+	Revision       int64
+	UpdatedBy      int64
+	UpdatedAt      pgtype.Timestamptz
+	CheckedAt      pgtype.Timestamptz
+	CheckedBranch  pgtype.Text
+	CheckedSha     pgtype.Text
+}
+
+type RepositorySetupCheck struct {
+	ID            int64
+	PullRequestID int64
+	Revision      int64
+	HeadSha       string
+	Generation    int64
+	State         string
+	FailureCode   string
+	RequestedBy   pgtype.Int8
+	RequestedAt   pgtype.Timestamptz
+	StartedAt     pgtype.Timestamptz
+	FinishedAt    pgtype.Timestamptz
+	ResultSha     string
+	Result        []byte
+	CheckedAt     pgtype.Timestamptz
+	ExpiresAt     pgtype.Timestamptz
+	Platform      string
+}
+
+type ReviewTestAccess struct {
+	RepoID           int64
+	ID               int64
+	Account          string
+	SecretCiphertext []byte
+	KeyVersion       pgtype.Int4
+	Revision         int64
+	UpdatedBy        int64
+	UpdatedAt        pgtype.Timestamptz
+	LastRevealedBy   pgtype.Int8
+	LastRevealedAt   pgtype.Timestamptz
+}
+
+type ReviewWriteBudget struct {
+	UserID          int64
+	WindowStartedAt pgtype.Timestamptz
+	Used            int32
 }
 
 type RouteTable struct {
 	Singleton bool
 	Version   int64
+}
+
+type ServiceAvailability struct {
+	WorkerID  string
+	Component string
+	State     string
+	CheckedAt pgtype.Timestamptz
+}
+
+type ServiceIncident struct {
+	ID        pgtype.UUID
+	Component string
+	Summary   string
+	State     string
+	Revision  int64
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
 }
 
 type Session struct {
@@ -318,12 +661,63 @@ type Session struct {
 	Expiry pgtype.Timestamptz
 }
 
+type SetupCheckBudget struct {
+	WorkspaceID     int64
+	WindowStartedAt pgtype.Timestamptz
+	Used            int32
+}
+
+type SupportDailyUsage struct {
+	UserID   int64
+	Day      pgtype.Date
+	Requests int32
+}
+
+type SupportRequest struct {
+	ID                   pgtype.UUID
+	WorkspaceID          pgtype.Int8
+	UserID               int64
+	Category             string
+	Message              string
+	DiagnosticReference  pgtype.UUID
+	RepositoryReference  pgtype.UUID
+	PullRequestReference pgtype.UUID
+	State                string
+	Revision             int64
+	CreatedAt            pgtype.Timestamptz
+	ResolvedAt           pgtype.Timestamptz
+}
+
 type User struct {
-	ID        int64
-	GithubID  int64
-	Username  string
-	CreatedAt pgtype.Timestamptz
-	AvatarUrl string
+	ID               int64
+	GithubID         pgtype.Int8
+	Username         string
+	CreatedAt        pgtype.Timestamptz
+	AvatarUrl        string
+	FirstName        string
+	LastName         string
+	ProfileRevision  int64
+	GithubName       string
+	Email            string
+	EmailSyncError   bool
+	GithubProfileUrl string
+	GithubBio        string
+	GithubCompany    string
+	GithubLocation   string
+	GithubCreatedAt  pgtype.Timestamptz
+	ProfileSyncedAt  pgtype.Timestamptz
+	PublicID         pgtype.UUID
+	AvatarVersion    int64
+	CustomAvatar     bool
+	SessionEpoch     int64
+	DeletedAt        pgtype.Timestamptz
+	GoogleSubject    pgtype.Text
+	GoogleEmail      string
+}
+
+type UserAvatar struct {
+	UserID int64
+	Data   []byte
 }
 
 type WebhookDelivery struct {
@@ -346,4 +740,135 @@ type WorkerCapability struct {
 	Services        []string
 	BuildTimeoutNs  int64
 	PrivatePreviews bool
+	Baselines       bool
+}
+
+type Workspace struct {
+	ID               int64
+	Name             string
+	OwnerUserID      int64
+	LegacyUserID     pgtype.Int8
+	State            string
+	Revision         int64
+	CreatedAt        pgtype.Timestamptz
+	Description      string
+	ProfileRevision  int64
+	PublicID         pgtype.UUID
+	DeletedAt        pgtype.Timestamptz
+	EarlyAccessState string
+}
+
+type WorkspaceApproval struct {
+	WorkspaceID      int64
+	OperatorGithubID int64
+	ApprovedAt       pgtype.Timestamptz
+}
+
+// Legacy technical elapsed-time counter; never billed or imported into workspace execution accounting
+type WorkspaceBuildUsage struct {
+	WorkspaceID  int64
+	Day          pgtype.Date
+	BuildSeconds int64
+	Builds       int32
+}
+
+type WorkspaceEntitlement struct {
+	WorkspaceID       int64
+	PlanKey           string
+	Revision          int64
+	PeriodKind        string
+	IncludedSeconds   int64
+	ConcurrentBuilds  int32
+	PreviewSlots      int32
+	ComputeRestricted bool
+	Source            string
+	VerifiedAt        pgtype.Timestamptz
+}
+
+type WorkspaceInvitation struct {
+	ID          int64
+	WorkspaceID int64
+	GithubID    pgtype.Int8
+	Login       string
+	Role        string
+	TokenHash   []byte
+	ExpiresAt   pgtype.Timestamptz
+	State       string
+	CreatedBy   int64
+	Revision    int64
+	CreatedAt   pgtype.Timestamptz
+	PublicID    pgtype.UUID
+	Email       string
+}
+
+type WorkspaceInvitationRepository struct {
+	InvitationID int64
+	RepoID       int64
+}
+
+type WorkspaceLogo struct {
+	WorkspaceID int64
+	Version     int64
+	Data        []byte
+}
+
+type WorkspaceMembership struct {
+	WorkspaceID          int64
+	UserID               int64
+	Role                 string
+	State                string
+	Revision             int64
+	JoinedAt             pgtype.Timestamptz
+	RemovedAt            pgtype.Timestamptz
+	RemovedBy            pgtype.Int8
+	RemovedRepositoryIds []int64
+}
+
+type WorkspacePreference struct {
+	UserID      int64
+	WorkspaceID pgtype.Int8
+}
+
+type WorkspaceTransfer struct {
+	WorkspaceID int64
+	FromUserID  int64
+	ToUserID    int64
+	Revision    int64
+	ExpiresAt   pgtype.Timestamptz
+}
+
+type WorkspaceUsageAttempt struct {
+	AttemptKey        pgtype.UUID
+	WorkspaceID       int64
+	RepoID            pgtype.Int8
+	PullRequestID     pgtype.Int8
+	BaselineRefreshID pgtype.Int8
+	Generation        int64
+	Revision          int64
+	State             string
+	Outcome           string
+	Provisional       bool
+	AdmittedAt        pgtype.Timestamptz
+	StartedAt         pgtype.Timestamptz
+	FinishedAt        pgtype.Timestamptz
+}
+
+type WorkspaceUsagePeriod struct {
+	WorkspaceID int64
+	StartsAt    pgtype.Timestamptz
+	EndsAt      pgtype.Timestamptz
+	ConsumedUs  int64
+	MeasuredAt  pgtype.Timestamptz
+}
+
+type WorkspaceUsageSegment struct {
+	AttemptKey    pgtype.UUID
+	Sequence      int32
+	WorkspaceID   int64
+	PeriodStart   pgtype.Timestamptz
+	Day           pgtype.Date
+	StartsAt      pgtype.Timestamptz
+	ReservedUntil pgtype.Timestamptz
+	EndedAt       pgtype.Timestamptz
+	ConsumedUs    int64
 }

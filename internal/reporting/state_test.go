@@ -214,3 +214,53 @@ func TestReadyCommentNamesTheBackendAndDocs(t *testing.T) {
 		t.Fatalf("plain preview comment changed:\n%s", body)
 	}
 }
+
+// With persistent test data the Ready comment names where the data started,
+// in one line without data, and says that data is kept between builds.
+func TestReadyCommentNamesTheTestDataSource(t *testing.T) {
+	s := Snapshot{PullRequestID: 1, RepoID: 2, Number: 3, HeadSHA: "abcdef1234567", State: "open", Generation: 1, BuildStatus: "open",
+		Intent: &Intent{Generation: 1, Revision: 1, HeadSHA: "abcdef1234567", State: "succeeded"},
+		Environment: &Environment{Status: "running", Hostname: "pr-3-x-abc", DeployedSHA: "abcdef1234567", AppliedGeneration: 1, AppliedRevision: 1,
+			Backend:   environments.Backend{Services: []environments.BackendService{{Kind: "postgres", Version: "17"}}, Setup: true},
+			Data:      environments.ParseStartingData("kept", nil, false),
+			KeepsData: true}}
+	body := CommentContent(Derive(s, Settings{PreviewBaseDomain: "preview.example.com"}, false, time.Now()))
+	for _, want := range []string{"Runs with PostgreSQL 17 · setup ran. Data is kept between builds.", "Test data: kept from previous build."} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("comment lacks %q:\n%s", want, body)
+		}
+	}
+	s.Environment.Data, s.Environment.KeepsData = environments.ParseStartingData("empty", nil, true), false
+	if body := CommentContent(Derive(s, Settings{PreviewBaseDomain: "preview.example.com"}, false, time.Now())); !strings.Contains(body, "Test data: empty database and seed.") || !strings.Contains(body, "Data does not survive a rebuild.") {
+		t.Fatalf("empty:\n%s", body)
+	}
+}
+
+// The living comment links the pull request's review in Previa and nothing
+// more: no review status, counts, people or feedback text reach GitHub.
+func TestCommentLinksTheReviewOnly(t *testing.T) {
+	s := open(intent("succeeded", 2), &Environment{Status: "running", Hostname: "pr-42-x-abc", DeployedSHA: headB, AppliedGeneration: 5, AppliedRevision: 2})
+	s.RepoPublicID, s.PRPublicID = "repo-uuid", "pr-uuid"
+	v := Derive(s, settings, false, now)
+	if v.ReviewURL != "https://previa.example.com/repositories/repo-uuid/pull-requests/pr-uuid/review" {
+		t.Fatalf("review link %q", v.ReviewURL)
+	}
+	body := CommentContent(v)
+	if !strings.Contains(body, "[Review in Previa]("+v.ReviewURL+") · [Build log]("+v.LogsURL+") (sign in to Previa)") {
+		t.Fatalf("links line:\n%s", body)
+	}
+	for _, private := range []string{"finding", "Findings", "Reviewed", "Changes requested"} {
+		if strings.Contains(body, private) {
+			t.Fatalf("the comment carries review state %q:\n%s", private, body)
+		}
+	}
+	// A closed pull request keeps its review link; its removed preview has no log link.
+	closed := s
+	closed.State, closed.Environment = "closed", nil
+	if body := CommentContent(Derive(closed, settings, true, now)); !strings.Contains(body, "[Review in Previa]") || strings.Contains(body, "Build log") {
+		t.Fatalf("closed:\n%s", body)
+	}
+	if v := Derive(s, Settings{CheckName: "x"}, false, now); v.ReviewURL != "" {
+		t.Fatal("no dashboard address, no link")
+	}
+}

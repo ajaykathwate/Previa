@@ -18,7 +18,7 @@ templ ConfirmationDialog(id string, title string, description string) {
 }
 
 templ LogoutConfirmation(csrfToken string) {
-	@ConfirmationDialog("logout-confirmation", "Log out of your workspace?", "This ends your Previa session. Your GitHub session is unchanged, and you can sign in again whenever you're ready.") {
+	@ConfirmationDialog("logout-confirmation", "Log out of your workspace?", "This ends your Previa session. You stay signed in to GitHub, so next time you sign in, GitHub asks which account to use.") {
 		<form method="post" action="/auth/logout" class="dialog-actions">
 			<input type="hidden" name="csrf_token" value={ csrfToken }/>
 			@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "logout-confirmation", "command": "close", "data-close-dialog": true}}) {
@@ -27,6 +27,22 @@ templ LogoutConfirmation(csrfToken string) {
 			@button.Button(button.Props{Type: button.TypeSubmit}) {
 				Confirm logout
 			}
+		</form>
+	}
+}
+
+// CreateWorkspaceDialog is part of the app shell, so "Create workspace" opens
+// over the current page; only a successful create navigates.
+templ CreateWorkspaceDialog(csrfToken string) {
+	@ConfirmationDialog("create-workspace", "Create a workspace", "Give your team a name. Next, you'll invite teammates and connect repositories.") {
+		<form method="post" action="/workspaces" class="team-form create-workspace-form">
+			<input type="hidden" name="csrf_token" value={ csrfToken }/>
+			<label for="workspace-name">Workspace name</label>
+			<input id="workspace-name" name="name" autofocus maxlength="80" required placeholder="Acme Engineering" autocomplete="off"/>
+			<div class="dialog-actions">
+				<button type="button" class="secondary-action" commandfor="create-workspace" command="close" data-close-dialog>Cancel</button>
+				<button class="primary-action" type="submit">Create workspace</button>
+			</div>
 		</form>
 	}
 }

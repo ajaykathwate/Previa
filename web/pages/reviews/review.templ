@@ -1,0 +1,1225 @@
+package reviews
+
+import (
+	"strconv"
+
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/button"
+	"github.com/ajaykathwatee/previa/web/layouts"
+	prpages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
+)
+
+// Index is the review page. People who can build reach it from the pull
+// request's Review tab; Reviewers from Previews.
+templ Index(username string, p Page) {
+	if p.CanOperate {
+		@layouts.AppTrail(p.DocumentTitle(), components.Crumb{Label: p.RepositoryName(), Href: prpages.RepoURL(p.RepoID)}, p.TrailCurrent(), username, p.CSRF, components.NavRepositories) {
+			@body(p)
+		}
+	} else {
+		@layouts.AppTrail(p.DocumentTitle(), components.Crumb{Label: "Previews", Href: "/previews"}, p.TrailCurrent(), username, p.CSRF, components.NavPreviews) {
+			@body(p)
+		}
+	}
+}
+
+templ body(p Page) {
+	@components.Toasts(p.Toast)
+	<div class="review-workspace">
+		<section id="review-detail" class="review-page" aria-label="Pull request review" hx-sync="this:replace" hx-request='{"timeout":10000}'>
+			@Detail(p)
+		</section>
+		if p.LiveURL != "" {
+			// Change signals refetch the review through its GET handler; ui.js
+			// keeps drafts and waits while someone types or confirms.
+			<div hidden data-live-events={ components.PublicURL(ctx, p.LiveURL) } data-live-refresh hx-get={ components.PublicURL(ctx, p.CurrentURL()) } hx-trigger="live-update from:body" hx-target="#review-detail" hx-sync="#review-detail:drop"></div>
+		}
+		@removeDialog(p)
+	</div>
+}
+
+// Detail is the part live updates replace.
+templ Detail(p Page) {
+	<div class="review-shell" data-review-deployment={ strconv.Itoa(int(p.ShownDeployment())) }>
+		@hero(p)
+		if p.CanOperate {
+			@components.PullRequestTabs(p.RepoID, p.Number, "review", p.OpenFindings)
+		}
+		if p.Notice.Text != "" {
+			<p class={ "connection-notice", "tone-" + p.Notice.Tone } role="status">
+				if p.Notice.Tone == "warn" {
+					@components.AlertIcon()
+				} else {
+					@components.InfoIcon()
+				}
+				<span>{ p.Notice.Text }</span>
+			</p>
+		}
+		if p.Closed() {
+			<p class="connection-notice tone-neutral" role="note">
+				@components.LockIcon()
+				<span>This pull request is { p.ClosedWord() }. Its review stays here for reference and can no longer change.</span>
+			</p>
+		}
+		<div class="review-layout">
+			<div class="review-main">
+				if p.Remove != nil {
+					<noscript>
+						<section class="workspace-panel review-confirm" role="alertdialog" aria-labelledby="review-confirm-title">
+							<h2 id="review-confirm-title">{ removeTitle(p.Remove) }</h2>
+							<p>{ removeText(p.Remove) }</p>
+							@removeForm(p, false)
+						</section>
+					</noscript>
+				}
+				@instructionsCard(p)
+				@findings(p)
+			</div>
+			<aside class="review-aside" aria-label="Deployment and context">
+				@previewCard(p)
+				@testAccessCard(p)
+				@descriptionCard(p)
+				<p class="review-later">
+					@components.InfoIcon()
+					<span>Asking specific people to review, and recording review decisions, are not available yet.</span>
+				</p>
+			</aside>
+		</div>
+	</div>
+}
+
+templ hero(p Page) {
+	<header class="page-hero pr-panel-heading pr-hero review-hero">
+		<div class="page-hero-main">
+			<span class={ "page-hero-icon", "pr-hero-icon", prpages.Tone(p.State) } aria-hidden="true">
+				if p.State == "merged" {
+					@components.MergeIcon()
+				} else {
+					@components.PullRequestIcon()
+				}
+			</span>
+			<div class="page-hero-text">
+				<p class="page-hero-kicker">
+					<span>{ p.Repository }</span>
+					<span class="page-hero-kicker-sep" aria-hidden="true">·</span>
+					<span>#{ strconv.Itoa(int(p.Number)) }</span>
+				</p>
+				<h1 tabindex="-1" class="pr-hero-title">{ p.Title }</h1>
+				<div class="page-hero-meta pr-meta">
+					<span class={ "badge", prpages.Tone(p.State) }><span class="badge-dot" aria-hidden="true"></span>{ prpages.Label(p.State) }</span>
+					if p.Author != "" {
+						<span class="pr-meta-item"><span class="user-avatar user-avatar-sm" aria-hidden="true">{ components.Initial(p.Author) }</span>{ p.Author }</span>
+					}
+					if p.Branch != "" {
+						<code class="branch-chip">
+							@components.BranchIcon()
+							{ p.Branch }
+						</code>
+					}
+					<span class="live-indicator" aria-hidden="true"><span class="live-dot"></span><span class="live-label-live">Live updates</span><span class="live-label-reconnecting">Reconnecting</span><span class="live-label-offline">Live updates paused · reload to resume</span></span>
+				</div>
+			</div>
+		</div>
+		<div class="page-hero-actions">
+			if p.AbsoluteURL != "" {
+				<button type="button" class="hero-link review-copy-link" data-copy={ p.AbsoluteURL } aria-label="Copy the link to this review">
+					@components.CopyIcon()
+					<span data-copy-status>Copy review link</span>
+				</button>
+			}
+			if p.GitHubURL != "" && components.CanOperate(ctx) {
+				<a class="hero-link github-link" href={ templ.SafeURL(p.GitHubURL) } target="_blank" rel="noopener noreferrer">
+					@components.GitHubMark()
+					View on GitHub
+					@components.ArrowUpRight()
+				</a>
+			}
+		</div>
+	</header>
+}
+
+// instructionsCard is how to test the change, editable in place by people
+// who can build it.
+templ instructionsCard(p Page) {
+	{{ editable := p.CanOperate && !p.Closed() }}
+	{{ editing := editable && p.Editing("instructions") }}
+	<section class="workspace-panel field-card review-instructions" id="instructions" aria-labelledby="instructions-title">
+		<header class="field-card-head">
+			<h2 id="instructions-title">
+				@components.ChecklistIcon()
+				How to test
+			</h2>
+			<div class="review-card-tools">
+				if p.Instructions.Revision > 0 {
+					<span class="field-card-note">
+						{ "Updated by " + p.Instructions.UpdatedBy.Display() + " · " }
+						@components.Time(p.Instructions.UpdatedAt, prpages.TimeLabel(p.Instructions.UpdatedAt))
+					</span>
+				}
+				if editable && !p.Instructions.Empty() {
+					<a class="field-card-action" href={ components.PublicURL(ctx, p.EditURL("instructions", "instructions")) } data-edit-open="instructions" hidden?={ editing }>
+						@components.PencilIcon()
+						Edit
+					</a>
+				}
+			</div>
+		</header>
+		<div class="review-card-body" data-edit-view="instructions" hidden?={ editing }>
+			if p.Instructions.Empty() {
+				<div class="review-empty-inline">
+					if editable {
+						<p>Tell reviewers what changed, how to check it and what should happen. Instructions stay with this pull request; the GitHub description never overwrites them.</p>
+						<a class="field-card-action review-write" href={ components.PublicURL(ctx, p.EditURL("instructions", "instructions")) } data-edit-open="instructions">
+							@components.PencilIcon()
+							Write instructions
+						</a>
+					} else {
+						<p>No testing instructions yet. Read the description from GitHub, or record a finding to ask the author what to check.</p>
+					}
+				</div>
+			} else {
+				if p.Instructions.Summary != "" {
+					<p class="review-summary">{ p.Instructions.Summary }</p>
+				}
+				if steps := p.Instructions.StepList(); len(steps) > 0 {
+					<ol class="review-steps">
+						for _, step := range steps {
+							<li>{ step }</li>
+						}
+					</ol>
+				}
+				if p.Instructions.Expected != "" {
+					<div class="review-expected">
+						<span class="review-label">Expected</span>
+						<p>{ p.Instructions.Expected }</p>
+					</div>
+				}
+				if p.Instructions.StartPath != "" || p.Instructions.DocsPath != "" {
+					<div class="review-entry">
+						if p.Instructions.StartPath != "" {
+							@entryLink(p, "Start at", p.Instructions.StartPath)
+						}
+						if p.Instructions.DocsPath != "" {
+							@entryLink(p, "Docs", p.Instructions.DocsPath)
+						}
+					</div>
+				}
+			}
+		</div>
+		if editable {
+			@instructionsForm(p, editing)
+		}
+	</section>
+}
+
+templ entryLink(p Page, label, path string) {
+	<span class="review-entry-item">
+		<span class="review-label">{ label }</span>
+		if p.Preview.Running() {
+			<a class="review-chip review-path" href={ components.PublicURL(ctx, p.PreviewHref(path)) } target="_blank" rel="noopener noreferrer" title={ "Open " + path + " in the preview" }>
+				{ path }
+				@components.ArrowUpRight()
+			</a>
+		} else {
+			<code class="review-chip">{ path }</code>
+		}
+	</span>
+}
+
+templ instructionsForm(p Page, editing bool) {
+	{{ d := p.Draft }}
+	{{ drafting := d != nil && d.Form == "instructions" }}
+	{{ v := p.Instructions }}
+	{{ revision := v.Revision }}
+	if drafting {
+		{{ v = d.Instructions }}
+		{{ revision = d.Revision }}
+	}
+	<form id="instructions-form" method="post" action={ components.PublicURL(ctx, p.ActionURL("/instructions")) } class="review-form review-instructions-form" data-edit-form="instructions" data-draft-form="instructions" data-busy-form hidden?={ !editing }>
+		<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+		<input type="hidden" name="return_query" value={ p.ReturnQuery() }/>
+		<input type="hidden" name="revision" value={ strconv.FormatInt(revision, 10) }/>
+		if drafting && d.Conflict != nil && d.Conflict.Kind == "instructions" {
+			<div class="review-conflict" role="alert">
+				<p><strong>Someone saved these instructions while you were editing.</strong> Theirs are below; yours are still in the form.</p>
+				<div class="review-saved">
+					if d.Conflict.Saved.Summary != "" {
+						<p>{ d.Conflict.Saved.Summary }</p>
+					}
+					if steps := d.Conflict.Saved.StepList(); len(steps) > 0 {
+						<ol class="review-steps">
+							for _, step := range steps {
+								<li>{ step }</li>
+							}
+						</ol>
+					}
+					if d.Conflict.Saved.Expected != "" {
+						<p><span class="review-label">Expected</span> { d.Conflict.Saved.Expected }</p>
+					}
+				</div>
+				<p class="review-muted">Saving replaces theirs with yours.</p>
+			</div>
+		} else if drafting && d.Error != "" {
+			<p class="review-form-error" role="alert">{ d.Error }</p>
+		}
+		@field("instructions-summary", "Summary", "What changed, in one line", fieldError(d, drafting, "summary")) {
+			<input id="instructions-summary" name="summary" value={ v.Summary } maxlength="500" placeholder="Checkout now validates the delivery address" autocomplete="off" data-draft-key="summary" aria-invalid={ invalid(fieldError(d, drafting, "summary") != "") }/>
+		}
+		@field("instructions-steps", "Steps", "One step per line, numbered for reviewers. Name the sample data they will find; passwords go under Test access", fieldError(d, drafting, "steps")) {
+			<textarea id="instructions-steps" name="steps" rows="5" placeholder={ "Open the checkout\nLeave the address empty\nChoose Pay" } data-draft-key="steps" aria-invalid={ invalid(fieldError(d, drafting, "steps") != "") }>{ v.Steps }</textarea>
+		}
+		@field("instructions-expected", "Expected result", "", fieldError(d, drafting, "expected")) {
+			<textarea id="instructions-expected" name="expected" rows="2" placeholder="An inline error asks for the address; nothing is charged" data-draft-key="expected" aria-invalid={ invalid(fieldError(d, drafting, "expected") != "") }>{ v.Expected }</textarea>
+		}
+		<div class="review-form-row">
+			@field("instructions-start", "Start page", "A path in the preview", fieldError(d, drafting, "start_path")) {
+				<input id="instructions-start" name="start_path" value={ v.StartPath } maxlength="300" placeholder="/checkout" autocomplete="off" spellcheck="false" data-draft-key="start_path" aria-invalid={ invalid(fieldError(d, drafting, "start_path") != "") }/>
+			}
+			@field("instructions-docs", "Docs page", "For API previews", fieldError(d, drafting, "docs_path")) {
+				<input id="instructions-docs" name="docs_path" value={ v.DocsPath } maxlength="300" placeholder="/docs" autocomplete="off" spellcheck="false" data-draft-key="docs_path" aria-invalid={ invalid(fieldError(d, drafting, "docs_path") != "") }/>
+			}
+		</div>
+		<div class="review-actions">
+			<a class="secondary-action" href={ components.PublicURL(ctx, p.CurrentURL()+"#instructions") } data-edit-cancel="instructions">Cancel</a>
+			<button type="submit" class="primary-action busy-button">
+				<span class="busy-text">
+					if drafting && d.Conflict != nil {
+						Save mine instead
+					} else {
+						Save instructions
+					}
+				</span>
+				<span class="busy-label">Saving…</span>
+			</button>
+		</div>
+	</form>
+}
+
+// field is one labelled form field with its hint and problem.
+templ field(id, label, hint, problem string) {
+	<div class="review-field">
+		<label for={ id }>{ label }</label>
+		{ children... }
+		if problem != "" {
+			<p class="review-field-error" id={ id + "-error" }>{ problem }</p>
+		} else if hint != "" {
+			<p class="review-field-hint">{ hint }</p>
+		}
+	</div>
+}
+
+// previewCard is the deployment under review and how to open it.
+templ previewCard(p Page) {
+	{{ label, tone := p.Preview.Status() }}
+	<section class="workspace-panel field-card review-preview" aria-labelledby="review-preview-title">
+		<header class="field-card-head">
+			<h2 id="review-preview-title">
+				@components.EnvironmentIcon()
+				Preview
+			</h2>
+			<span class={ "badge", tone }><span class="badge-dot" aria-hidden="true"></span>{ label }</span>
+		</header>
+		<div class="review-card-body">
+			if p.Preview.Current != nil {
+				<p class="review-deployment">
+					<strong>{ p.Preview.Current.Label() }</strong>
+					<code class="sha" title={ p.Preview.Current.SHA }>{ p.Preview.Current.Short() }</code>
+				</p>
+				<p class="review-muted">
+					if p.Preview.Current.Backfilled {
+						Present at migration
+					} else if p.Preview.Current.PublishedAt != "" {
+						{ "Published " }
+						@components.Time(p.Preview.Current.PublishedAt, prpages.TimeLabel(p.Preview.Current.PublishedAt))
+					}
+					if p.Preview.ExpiresAt != "" {
+						{ " · expires " }
+						@components.Time(p.Preview.ExpiresAt, prpages.TimeLabel(p.Preview.ExpiresAt))
+					}
+				</p>
+			} else if p.Preview.Running() {
+				<p class="review-muted">This preview went live before deployments were recorded, so findings recorded now are not tied to a deployment. Its next build records one.</p>
+			} else {
+				<p class="review-muted">Nothing is deployed yet. Findings recorded now are not tied to a deployment.</p>
+			}
+			if note := p.Preview.Note(); note != "" {
+				<p class={ "lifecycle-note", templ.KV("tone-warn", p.Preview.Building == "" && (p.Preview.Outdated() || p.Preview.Failed || p.Preview.State == "previous")) }>{ note }</p>
+			}
+			if p.Preview.Deployed != "" {
+				<ul class="review-facts">
+					<li>
+						<span class="review-label">Setup</span>
+						if !p.Preview.SetupDeclared {
+							<span>No setup declared</span>
+						} else if p.Preview.SetupTook != "" {
+							<span>{ "Completed in " + p.Preview.SetupTook }</span>
+						} else {
+							<span>Completed</span>
+						}
+					</li>
+					if p.Preview.Data {
+						<li>
+							<span class="review-label">Test data</span>
+							<span data-test-data-line>{ p.Preview.DataLine() }</span>
+						</li>
+					}
+				</ul>
+			}
+			if p.Preview.Running() {
+				<div class="review-actions review-open">
+					@button.Button(button.Props{Href: p.PreviewHref(""), Target: "_blank", Attributes: templ.Attributes{"rel": "noopener noreferrer"}}) {
+						Open preview
+						@components.ArrowUpRight()
+					}
+					if p.Preview.DocsPath != "" {
+						@button.Button(button.Props{Href: p.PreviewHref(p.Preview.DocsPath), Target: "_blank", Variant: button.VariantOutline, Attributes: templ.Attributes{"rel": "noopener noreferrer"}}) {
+							Open docs
+							@components.ArrowUpRight()
+						}
+					}
+					if p.Reset != nil && (p.Preview.Data || p.Preview.SetupDeclared) {
+						<button type="button" class="secondary-action review-reset-button" commandfor="review-reset" command="show-modal" data-open-dialog="review-reset" aria-haspopup="dialog">
+							@components.RestartIcon()
+							Reset test data
+						</button>
+					}
+				</div>
+				<p class="review-address" title="The preview's address">{ p.Preview.Address }</p>
+			}
+		</div>
+		if p.Reset != nil && (p.Preview.Data || p.Preview.SetupDeclared) {
+			@resetDialog(p)
+		}
+	</section>
+}
+
+// resetDialog confirms Reset test data: a Rebuild of the serving commit
+// through the pull request's own Build action, which comes back here.
+templ resetDialog(p Page) {
+	@components.ConfirmationDialog("review-reset", "Reset test data?", resetText(p)) {
+		<form method="post" action={ components.PublicURL(ctx, prpages.PRURL(p.RepoID, p.Number)+"/build") } class="dialog-actions" data-busy-form>
+			<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+			<input type="hidden" name="workspace_query" value={ components.PublicQuery(ctx, p.RepoID, "pr="+strconv.Itoa(int(p.Number))) }/>
+			<input type="hidden" name="expected_revision" value={ strconv.FormatInt(p.Reset.ExpectedRevision, 10) }/>
+			<input type="hidden" name="request_key" value={ p.Reset.RequestKey }/>
+			<input type="hidden" name="action" value="rebuild"/>
+			<input type="hidden" name="reset" value="true"/>
+			<input type="hidden" name="return" value="review"/>
+			if p.Reset.Baseline != "" {
+				<fieldset class="review-reset-sources">
+					<legend>Start from</legend>
+					<label>
+						<input type="radio" name="start_source" value="baseline" checked/>
+						<span><strong>Repository baseline</strong> <code>{ p.Reset.Baseline }</code>, then setup</span>
+					</label>
+					<label>
+						<input type="radio" name="start_source" value="empty"/>
+						<span>
+							<strong>Empty database</strong>
+							if p.Preview.SeedDeclared {
+								, then setup and seed
+							} else {
+								, then setup
+							}
+						</span>
+					</label>
+				</fieldset>
+			} else {
+				<input type="hidden" name="start_source" value="empty"/>
+			}
+			<button type="button" class="secondary-action" autofocus commandfor="review-reset" command="close" data-close-dialog>Cancel</button>
+			<button type="submit" class="primary-action busy-button">
+				<span class="busy-text">Reset test data</span>
+				<span class="busy-label">Requesting…</span>
+			</button>
+		</form>
+	}
+}
+
+func resetText(p Page) string {
+	fresh := "that runs its setup command again"
+	switch {
+	case p.Reset.Baseline != "":
+		fresh = "whose databases start from the source you choose"
+	case p.Preview.Data && p.Preview.SeedDeclared:
+		fresh = "whose databases start empty and run setup and seed again"
+	case p.Preview.Data && p.Preview.SetupDeclared:
+		fresh = "whose databases start empty and are seeded again by its setup command"
+	case p.Preview.Data:
+		fresh = "whose databases start empty"
+	}
+	text := "Previa rebuilds commit " + shortSHA(p.Reset.Commit) + " into a new deployment " + fresh + ". Everything testers created in this preview is replaced once it is live; until then this preview keeps serving."
+	if p.Preview.Current != nil {
+		text += " Findings stay with " + p.Preview.Current.Label() + "."
+	}
+	return text
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}
+
+// testAccessCard says how reviewers sign in to this repository's previews.
+templ testAccessCard(p Page) {
+	{{ t := p.TestAccess }}
+	{{ editing := t.CanEdit && p.Editing("test-access") }}
+	if t.Set() || t.CanEdit {
+		<section class="workspace-panel field-card review-access" id="test-access" aria-labelledby="test-access-title">
+			<header class="field-card-head">
+				<h2 id="test-access-title">
+					@components.KeyIcon()
+					Test access
+				</h2>
+				if t.CanEdit && t.Set() {
+					<a class="field-card-action" href={ components.PublicURL(ctx, p.EditURL("test-access", "test-access")) } data-edit-open="test-access" hidden?={ editing }>
+						@components.PencilIcon()
+						Edit
+					</a>
+				}
+			</header>
+			<div class="review-card-body" data-edit-view="test-access" hidden?={ editing }>
+				if !t.Set() {
+					<div class="review-empty-inline">
+						<p>Tell reviewers how to sign in: a preview-only account that this repository's setup creates on every deployment.</p>
+						<a class="field-card-action" href={ components.PublicURL(ctx, p.EditURL("test-access", "test-access")) } data-edit-open="test-access">
+							@components.PlusIcon()
+							Add test access
+						</a>
+					</div>
+				} else {
+					if t.Account != "" {
+						<p class="review-account">
+							<span class="review-label">Sign in as</span>
+							<code>{ t.Account }</code>
+							@components.CopyButton(t.Account, "Copy the account")
+						</p>
+					}
+					if t.HasSecret {
+						if t.Revealed != "" {
+							<div class="review-secret" role="status">
+								<span class="review-label">Password</span>
+								<code data-reveal-value>{ t.Revealed }</code>
+								@components.CopyButton(t.Revealed, "Copy the password")
+							</div>
+						} else {
+							<form method="post" action={ components.PublicURL(ctx, p.ActionURL("/test-access/reveal")) } class="review-reveal" data-reveal-form={ strconv.FormatInt(t.Revision, 10) }>
+								<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+								<input type="hidden" name="return_query" value={ p.ReturnQuery() }/>
+								<span class="review-label">Password</span>
+								<span class="review-masked" aria-hidden="true">••••••••</span>
+								<button type="submit" class="secondary-action review-reveal-button">
+									@components.EyeIcon()
+									Reveal
+								</button>
+							</form>
+							<div class="review-secret" data-reveal-output hidden>
+								<span class="review-label">Password</span>
+								<code data-reveal-value></code>
+								<button type="button" class="copy-button" data-copy="" data-reveal-copy aria-label="Copy the password" title="Copy the password">
+									@components.CopyIcon()
+									<span data-copy-status>Copy</span>
+								</button>
+							</div>
+						}
+					}
+					<p class="review-muted">Preview-only. Members with access to this repository can reveal it, and each reveal is recorded.</p>
+					if t.LastRevealedAt != "" {
+						<p class="review-muted">
+							{ "Last revealed by " + t.LastRevealedBy.Display() + " · " }
+							@components.Time(t.LastRevealedAt, prpages.TimeLabel(t.LastRevealedAt))
+						</p>
+					}
+				}
+			</div>
+			if t.CanEdit {
+				@testAccessForm(p, editing)
+			}
+		</section>
+	}
+}
+
+templ testAccessForm(p Page, editing bool) {
+	{{ t := p.TestAccess }}
+	{{ d := p.Draft }}
+	{{ drafting := d != nil && d.Form == "test-access" }}
+	{{ account := t.Account }}
+	if drafting {
+		{{ account = d.Body }}
+	}
+	<form method="post" action={ components.PublicURL(ctx, p.ActionURL("/test-access")) } class="review-form review-access-form" data-edit-form="test-access" data-draft-form="test-access" data-busy-form hidden?={ !editing }>
+		<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+		<input type="hidden" name="return_query" value={ p.ReturnQuery() }/>
+		<input type="hidden" name="revision" value={ strconv.FormatInt(t.Revision, 10) }/>
+		if drafting && d.Error != "" {
+			<p class="review-form-error" role="alert">{ d.Error }</p>
+		}
+		@field("test-access-account", "Account", "An email or username; shown to everyone with access", fieldError(d, drafting, "account")) {
+			<input id="test-access-account" name="account" value={ account } maxlength="300" placeholder="reviewer@preview.test" autocomplete="off" spellcheck="false" data-draft-key="account" aria-invalid={ invalid(fieldError(d, drafting, "account") != "") }/>
+		}
+		if t.Sealing {
+			@field("test-access-secret", "Password or token", secretHint(t), fieldError(d, drafting, "secret")) {
+				<input id="test-access-secret" name="secret" type="password" maxlength="512" autocomplete="new-password" aria-invalid={ invalid(fieldError(d, drafting, "secret") != "") }/>
+			}
+		} else {
+			<p class="review-field-hint">This server cannot store passwords because secret encryption is not set up, so only the account is saved.</p>
+		}
+		if t.HasSecret {
+			<label class="review-check"><input type="checkbox" name="remove_secret" value="true"/> Remove the stored password</label>
+		}
+		<p class="review-field-hint">Use a preview-only account your setup creates on every deployment, never a real or production login. To remove test access, clear both.</p>
+		<div class="review-actions">
+			<a class="secondary-action" href={ components.PublicURL(ctx, p.CurrentURL()+"#test-access") } data-edit-cancel="test-access">Cancel</a>
+			<button type="submit" class="primary-action busy-button">
+				<span class="busy-text">Save test access</span>
+				<span class="busy-label">Saving…</span>
+			</button>
+		</div>
+	</form>
+}
+
+func secretHint(t TestAccess) string {
+	if t.HasSecret {
+		return "Stored and hidden; leave empty to keep it"
+	}
+	return "Stored encrypted; members reveal it on request"
+}
+
+templ descriptionCard(p Page) {
+	<section class="workspace-panel pr-description review-description" aria-labelledby="review-description-title">
+		<div class="pr-description-heading">
+			<h2 id="review-description-title">From GitHub</h2>
+			<span class="field-card-note">Imported description</span>
+		</div>
+		if p.Description != "" {
+			<div class="pr-description-content" tabindex="0">{ p.Description }</div>
+		} else {
+			<p class="pr-description-empty">The author didn't add a description on GitHub.</p>
+		}
+	</section>
+}
+
+// findings is the conversation: filters, the new-finding form and the list.
+templ findings(p Page) {
+	{{ f := p.Findings }}
+	<section class="review-findings" id="findings" aria-labelledby="findings-title">
+		<header class="review-findings-head">
+			<h2 id="findings-title">
+				if f.Focus > 0 {
+					Finding #{ strconv.Itoa(int(f.Focus)) }
+				} else {
+					Findings
+				}
+			</h2>
+			if f.Focus > 0 {
+				<a class="text-link" href={ components.PublicURL(ctx, p.AllURL()) }>
+					@components.ArrowLeft()
+					All findings
+				</a>
+			} else {
+				<nav class="segmented review-states" aria-label="Finding state">
+					@stateLink(p, StateOpen, "Open", f.Open)
+					@stateLink(p, StateResolved, "Resolved", f.Resolved)
+					@stateLink(p, StateAll, "All", f.All)
+				</nav>
+			}
+		</header>
+		if f.Focus == 0 {
+			if f.All > 0 || f.Filtered() {
+				@filters(p)
+			}
+			if !p.Closed() {
+				if f.Full {
+					<p class="connection-notice tone-neutral" role="note">
+						@components.InfoIcon()
+						<span>This pull request reached its limit of { strconv.Itoa(f.Limit) } findings or 5,000 messages. Reply to an existing finding instead.</span>
+					</p>
+				} else {
+					@composer(p)
+				}
+			}
+		}
+		if f.FocusMissing {
+			<div class="workspace-panel review-empty">
+				<h3>This finding does not exist.</h3>
+				<p>Its link may be mistyped, or it belongs to another pull request.</p>
+			</div>
+		} else if len(f.Threads) == 0 && f.Focus == 0 {
+			<div class="workspace-panel review-empty">
+				if f.Filtered() {
+					<h3>No findings match these filters.</h3>
+					<a class="text-link" href={ components.PublicURL(ctx, p.ClearURL()) }>Clear filters</a>
+				} else if f.All == 0 {
+					<h3>No findings yet.</h3>
+					if p.Closed() {
+						<p>Nobody recorded a finding before this pull request was { p.ClosedWord() }.</p>
+					} else {
+						<p>Test the preview, then record what you find: what happened, the page, and how to reproduce it.</p>
+					}
+				} else if f.Filter.State == StateOpen {
+					<h3>No open findings.</h3>
+					<p>
+						{ strconv.FormatInt(f.Resolved, 10) }
+						if f.Resolved == 1 {
+							{ " finding is resolved." }
+						} else {
+							{ " findings are resolved." }
+						}
+					</p>
+				} else {
+					<h3>Nothing here.</h3>
+				}
+			</div>
+		} else {
+			<div class="review-thread-list">
+				for _, t := range f.Threads {
+					@threadCard(p, t)
+				}
+			</div>
+		}
+		if f.Pages > 1 && f.Focus == 0 {
+			<nav class="review-pagination" aria-label="Finding pages">
+				if f.Page > 1 {
+					<a class="secondary-action" href={ components.PublicURL(ctx, p.PageURL(f.Page-1)) } rel="prev">Previous</a>
+				}
+				<span>Page { strconv.FormatInt(f.Page, 10) } of { strconv.FormatInt(f.Pages, 10) }</span>
+				if f.Page < f.Pages {
+					<a class="secondary-action" href={ components.PublicURL(ctx, p.PageURL(f.Page+1)) } rel="next">Next</a>
+				}
+			</nav>
+		}
+	</section>
+}
+
+templ stateLink(p Page, state, label string, count int64) {
+	<a
+		href={ components.PublicURL(ctx, p.StateURL(state)) }
+		if p.Findings.Filter.State == state {
+			aria-current="page"
+		}
+	>
+		{ label }
+		<span class="review-count">{ strconv.FormatInt(count, 10) }</span>
+	</a>
+}
+
+templ filters(p Page) {
+	{{ f := p.Findings }}
+	<form method="get" action={ components.PublicURL(ctx, p.URL()) } class="review-filters" role="search" aria-label="Filter findings" data-live-pause>
+		if f.Filter.State != StateOpen {
+			<input type="hidden" name="state" value={ f.Filter.State }/>
+		}
+		<div class="search-field review-search">
+			<label for="review-search" class="sr-only">Search findings</label>
+			<span class="search-field-icon">
+				@components.SearchIcon()
+			</span>
+			<input id="review-search" type="search" name="q" value={ f.Filter.Search } maxlength="100" placeholder="Search findings" autocomplete="off"/>
+		</div>
+		<label class="sr-only" for="review-author">Author</label>
+		<select id="review-author" name="author" class="review-select" data-auto-submit>
+			<option value="">Anyone</option>
+			for _, a := range f.Authors {
+				<option value={ components.PublicValue(ctx, "user", a.ID) } selected?={ a.ID == f.Filter.Author }>
+					{ a.Display() }
+					if a.You {
+						{ " (you)" }
+					}
+				</option>
+			}
+		</select>
+		if len(f.Deployments) > 0 {
+			<label class="sr-only" for="review-deployment">Deployment</label>
+			<select id="review-deployment" name="deployment" class="review-select" data-auto-submit>
+				<option value="">Any deployment</option>
+				for _, d := range f.Deployments {
+					<option value={ strconv.Itoa(int(d.Sequence)) } selected?={ d.Sequence == f.Filter.Deployment }>{ d.Label() + " · " + d.Short() }</option>
+				}
+			</select>
+		}
+		<button type="submit" class="secondary-action review-apply">Apply</button>
+	</form>
+}
+
+// composer starts a finding against the deployment the page shows.
+templ composer(p Page) {
+	{{ d := p.Draft }}
+	{{ drafting := d != nil && d.Form == "finding" }}
+	{{ key := p.Findings.ComposerKey }}
+	{{ shown := p.ShownDeployment() }}
+	{{ var body, path, details string }}
+	if drafting {
+		{{ key, shown, body, path, details = d.RequestKey, d.Deployment, d.Body, d.Path, d.Details }}
+	}
+	<section class="workspace-panel review-composer" id="new-finding" aria-labelledby="new-finding-title">
+		<form method="post" action={ components.PublicURL(ctx, p.ActionURL("/findings")) } class="review-form" data-busy-form data-draft-form="finding">
+			<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+			<input type="hidden" name="request_key" value={ key } data-draft-key="request_key"/>
+			<h3 id="new-finding-title" class="review-composer-title">
+				@components.MessageIcon()
+				Record a finding
+			</h3>
+			if drafting && d.Error != "" && d.Conflict == nil {
+				<p class="review-form-error" role="alert">{ d.Error }</p>
+			}
+			<label for="finding-body" class="sr-only">What did you find?</label>
+			<textarea id="finding-body" name="body" rows="3" maxlength="8192" placeholder="What did you find? Say what happened and what you expected." data-draft-key="body" aria-invalid={ invalid(d.FieldError("body") != "" && drafting) } required>{ body }</textarea>
+			if drafting && d.FieldError("body") != "" {
+				<p class="review-field-error">{ d.FieldError("body") }</p>
+			}
+			<div class="review-composer-fields">
+				@field("finding-path", "Page", "Optional: where in the preview, such as /checkout", fieldError(d, drafting, "path")) {
+					<input id="finding-path" name="path" value={ path } maxlength="300" placeholder="/checkout" autocomplete="off" spellcheck="false" data-draft-key="path" aria-invalid={ invalid(fieldError(d, drafting, "path") != "") }/>
+				}
+				<details class="review-repro-toggle" open?={ details != "" || fieldError(d, drafting, "details") != "" }>
+					<summary>
+						@components.PlusIcon()
+						Reproduction details <span class="review-optional">optional</span>
+					</summary>
+					<label for="finding-details" class="sr-only">Reproduction details</label>
+					<textarea id="finding-details" name="details" rows="4" maxlength="8192" class="review-code" placeholder="Steps to reproduce, or a request and the response you expected" data-draft-key="details">{ details }</textarea>
+					if fieldError(d, drafting, "details") != "" {
+						<p class="review-field-error">{ fieldError(d, drafting, "details") }</p>
+					}
+				</details>
+			</div>
+			if drafting && d.Conflict != nil && d.Conflict.Kind == "version" {
+				@versionConflict(p, d)
+			} else {
+				<input type="hidden" name="deployment" value={ strconv.Itoa(int(shown)) } data-draft-key="deployment"/>
+				<div class="review-composer-foot">
+					<p class="review-recorded">
+						if p.Preview.Current != nil {
+							Recorded against <strong>{ p.Preview.Current.Label() }</strong>
+							<code class="sha">{ p.Preview.Current.Short() }</code>
+						} else if p.Preview.Running() {
+							Not tied to a deployment: this preview's deployment was not recorded.
+						} else {
+							Not tied to a deployment: none is published yet.
+						}
+					</p>
+					<button type="submit" class="primary-action busy-button">
+						<span class="busy-text">Add finding</span>
+						<span class="busy-label">Adding…</span>
+					</button>
+				</div>
+			}
+		</form>
+	</section>
+}
+
+// invalid is an aria-invalid value.
+func invalid(problem bool) string { return strconv.FormatBool(problem) }
+
+func fieldError(d *Draft, drafting bool, name string) string {
+	if !drafting {
+		return ""
+	}
+	return d.FieldError(name)
+}
+
+// versionConflict asks which deployment a finding belongs to when a newer one
+// was published while it was written. It is never relabelled silently.
+templ versionConflict(p Page, d *Draft) {
+	<div class="review-conflict" role="alert">
+		<p><strong>A newer deployment was published while you wrote this.</strong></p>
+		<p>
+			if d.Conflict.Current != nil {
+				{ d.Conflict.Current.Label() + " (" + d.Conflict.Current.Short() + ") is the newest now. " }
+			}
+			if d.Conflict.Tested != nil {
+				{ "You were testing " + d.Conflict.Tested.Label() + " (" + d.Conflict.Tested.Short() + ")." }
+			} else {
+				You started before any deployment was published.
+			}
+			Choose what this finding is about; your text is kept.
+		</p>
+		<div class="review-actions">
+			if d.Conflict.Current != nil {
+				<button type="submit" name="deployment" value={ strconv.Itoa(int(d.Conflict.Current.Sequence)) } class="primary-action">{ "Record against " + d.Conflict.Current.Label() }</button>
+			}
+			if d.Conflict.Tested != nil {
+				<button type="submit" name="older_deployment" value={ strconv.Itoa(int(d.Conflict.Tested.Sequence)) } class="secondary-action">{ "Keep " + d.Conflict.Tested.Label() }</button>
+			} else {
+				<button type="submit" name="older_deployment" value="0" class="secondary-action">Record without a deployment</button>
+			}
+			if p.Preview.Running() {
+				<a class="text-link" href={ components.PublicURL(ctx, p.PreviewHref("")) } target="_blank" rel="noopener noreferrer">
+					Retest the newest first
+					@components.ArrowUpRight()
+				</a>
+			}
+		</div>
+	</div>
+}
+
+// threadCard is one finding: its context, conversation and actions.
+templ threadCard(p Page, t Thread) {
+	if t.State == StateRemoved {
+		<article class="workspace-panel review-thread is-removed" id={ FindingAnchor(t.Number) } aria-label={ "Finding #" + strconv.Itoa(int(t.Number)) + ", removed" }>
+			<p class="review-tombstone">
+				@components.TrashIcon()
+				<span>
+					<strong>{ "Finding #" + strconv.Itoa(int(t.Number)) }</strong>
+					{ " · " + t.RemovedText() + " · " }
+					@components.Time(t.StateChangedAt, prpages.TimeLabel(t.StateChangedAt))
+				</span>
+			</p>
+		</article>
+	} else {
+		<article class={ "workspace-panel", "review-thread", templ.KV("is-resolved", t.State == StateResolved) } id={ FindingAnchor(t.Number) } aria-labelledby={ FindingAnchor(t.Number) + "-label" }>
+			<header class="review-thread-head">
+				if t.State == StateResolved {
+					<span class="badge tone-neutral">
+						@components.ResolveIcon()
+						Resolved
+					</span>
+				} else {
+					<span class="badge tone-info"><span class="badge-dot" aria-hidden="true"></span>Open</span>
+				}
+				<h3 id={ FindingAnchor(t.Number) + "-label" } class="review-thread-number">
+					<a href={ components.PublicURL(ctx, p.FindingURL(t.Number)) }>{ "Finding #" + strconv.Itoa(int(t.Number)) }</a>
+				</h3>
+				if t.Deployment != nil {
+					<span class="review-chip" title={ "Recorded against " + t.Deployment.Label() + ", commit " + t.Deployment.SHA }>
+						{ t.Deployment.Label() }
+						<code>{ t.Deployment.Short() }</code>
+					</span>
+					if t.Older(p.Preview.Current) {
+						<span class="badge tone-warn" title="A newer deployment was published after this was recorded">Earlier deployment</span>
+					}
+				} else {
+					<span class="review-chip" title="Recorded before any deployment was published">No deployment</span>
+				}
+				if path := t.Path(); path != "" {
+					if p.Preview.Running() {
+						<a class="review-chip review-path" href={ components.PublicURL(ctx, p.PreviewHref(path)) } target="_blank" rel="noopener noreferrer" title={ "Open " + path + " in the current preview" }>
+							{ path }
+							@components.ArrowUpRight()
+						</a>
+					} else {
+						<code class="review-chip review-path">{ path }</code>
+					}
+				}
+				@threadMenu(p, t)
+			</header>
+			<div class="review-messages">
+				@message(p, t, t.Opening())
+				if t.Earlier > 0 {
+					<a class="review-earlier" href={ components.PublicURL(ctx, p.FindingURL(t.Number)) }>
+						if t.Earlier == 1 {
+							Show 1 earlier reply
+						} else {
+							{ "Show " + strconv.Itoa(t.Earlier) + " earlier replies" }
+						}
+					</a>
+				}
+				for _, m := range t.Replies() {
+					@message(p, t, m)
+				}
+			</div>
+			if t.State == StateResolved {
+				<p class="review-resolution">
+					@components.ResolveIcon()
+					<span>
+						{ t.Resolution() + " · " }
+						@components.Time(t.StateChangedAt, prpages.TimeLabel(t.StateChangedAt))
+					</span>
+				</p>
+			}
+			if t.CanReply || t.CanResolve {
+				<footer class="review-thread-foot">
+					if t.CanReply {
+						@replyForm(p, t)
+					}
+					if t.CanResolve {
+						<form method="post" action={ components.PublicURL(ctx, p.FindingAction(t.Number, stateAction(t))) } class="review-state-form" data-busy-form>
+							<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+							<input type="hidden" name="return_query" value={ p.ReturnQuery() }/>
+							<input type="hidden" name="revision" value={ strconv.FormatInt(t.Revision, 10) }/>
+							<input type="hidden" name="deployment" value={ strconv.Itoa(int(p.ShownDeployment())) }/>
+							<button type="submit" class="secondary-action review-state-button busy-button">
+								@components.ResolveIcon()
+								<span class="busy-text">
+									if t.State == StateResolved {
+										Reopen
+									} else {
+										Resolve
+									}
+								</span>
+								<span class="busy-label">Saving…</span>
+							</button>
+						</form>
+					}
+				</footer>
+			}
+		</article>
+	}
+}
+
+func stateAction(t Thread) string {
+	if t.State == StateResolved {
+		return "/reopen"
+	}
+	return "/resolve"
+}
+
+templ threadMenu(p Page, t Thread) {
+	if p.AbsoluteURL != "" || t.CanRemove {
+		<details class="review-menu" data-menu>
+			<summary class="review-menu-button" aria-label={ "Actions for finding #" + strconv.Itoa(int(t.Number)) }>
+				@components.MoreIcon()
+			</summary>
+			<div class="review-menu-list">
+				if p.AbsoluteURL != "" {
+					<button type="button" class="review-copy-link" data-copy={ p.FindingLink(t.Number) }>
+						@components.LinkIcon()
+						<span data-copy-status>Copy link</span>
+					</button>
+				}
+				if t.CanRemove {
+					{{ target := &RemoveTarget{Finding: t.Number, Moderate: true} }}
+					<a href={ components.PublicURL(ctx, p.RemoveURL(strconv.Itoa(int(t.Number)))) } class="is-danger" data-remove-open data-remove-action={ components.PublicURL(ctx, p.FindingAction(t.Number, "/remove")) } data-remove-moderate="true" data-remove-title={ removeTitle(target) } data-remove-text={ removeText(target) }>
+						@components.TrashIcon()
+						Remove finding
+					</a>
+				}
+			</div>
+		</details>
+	}
+}
+
+// message is one message of a finding, with its tombstone once removed.
+templ message(p Page, t Thread, m Message) {
+	{{ key := strconv.Itoa(int(t.Number)) + "." + strconv.Itoa(int(m.Position)) }}
+	<div class={ "review-message", templ.KV("is-opening", m.Position == 1), templ.KV("is-removed", m.Removed) } id={ MessageAnchor(t.Number, m.Position) }>
+		@avatar(m.Author)
+		<div class="review-message-main">
+			<p class="review-message-meta">
+				<strong>{ m.Author.Display() }</strong>
+				if m.Author.You {
+					<span class="review-you">you</span>
+				}
+				if m.Author.Former {
+					<span class="review-former">former member</span>
+				}
+				<span aria-hidden="true">·</span>
+				@components.Time(m.CreatedAt, prpages.TimeLabel(m.CreatedAt))
+				if m.EditedAt != "" && !m.Removed {
+					<span class="review-edited" title={ "Edited " + prpages.TimeLabel(m.EditedAt) }>Edited</span>
+				}
+				if m.DifferentDeployment && m.Deployment != nil {
+					<span class="review-on" title={ "Written while " + m.Deployment.Label() + " was shown" }>{ "on " + m.Deployment.Label() }</span>
+				}
+			</p>
+			if m.Removed {
+				<p class="review-removed-note">{ m.RemovedText() }</p>
+			} else {
+				<div data-edit-view={ key } hidden?={ p.Editing(key) }>
+					<div class="review-text">{ m.Body }</div>
+					if m.Details != "" {
+						<pre class="review-repro">{ m.Details }</pre>
+					}
+				</div>
+				if m.CanEdit {
+					@editForm(p, t, m, key)
+				}
+			}
+		</div>
+		if m.CanEdit || m.CanRemove {
+			@messageMenu(p, t, m, key)
+		}
+	</div>
+}
+
+templ avatar(person Person) {
+	if person.Avatar != "" {
+		@components.UserAvatar(person.Avatar, person.Display(), "review-avatar", nil)
+	} else {
+		<span class="user-avatar review-avatar" aria-hidden="true">{ components.Initial(person.Display()) }</span>
+	}
+}
+
+templ messageMenu(p Page, t Thread, m Message, key string) {
+	<details class="review-menu" data-menu>
+		<summary class="review-menu-button" aria-label="Message actions">
+			@components.MoreIcon()
+		</summary>
+		<div class="review-menu-list">
+			if m.CanEdit {
+				<a href={ components.PublicURL(ctx, p.EditURL(key, MessageAnchor(t.Number, m.Position))) } data-edit-open={ key }>
+					@components.PencilIcon()
+					Edit
+				</a>
+			}
+			if m.CanRemove {
+				{{ target := &RemoveTarget{Finding: t.Number, Position: m.Position, Moderate: m.Moderate} }}
+				<a href={ components.PublicURL(ctx, p.RemoveURL(key)) } class="is-danger" data-remove-open data-remove-action={ components.PublicURL(ctx, p.MessageAction(t.Number, m.Position, "/remove")) } data-remove-moderate={ strconv.FormatBool(m.Moderate) } data-remove-title={ removeTitle(target) } data-remove-text={ removeText(target) }>
+					@components.TrashIcon()
+					if m.Moderate {
+						Remove as moderator
+					} else {
+						Remove
+					}
+				</a>
+			}
+		</div>
+	</details>
+}
+
+templ editForm(p Page, t Thread, m Message, key string) {
+	{{ d := p.Draft }}
+	{{ drafting := d.For("edit", t.Number, m.Position) }}
+	{{ body, path, details, revision := m.Body, m.Path, m.Details, m.Revision }}
+	if drafting {
+		{{ body, path, details, revision = d.Body, d.Path, d.Details, d.Revision }}
+	}
+	<form method="post" action={ components.PublicURL(ctx, p.MessageAction(t.Number, m.Position, "/edit")) } class="review-form review-edit" data-edit-form={ key } data-draft-form={ "edit-" + key } data-busy-form hidden?={ !p.Editing(key) }>
+		<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+		<input type="hidden" name="return_query" value={ p.ReturnQuery() }/>
+		<input type="hidden" name="revision" value={ strconv.FormatInt(revision, 10) } data-draft-key="revision"/>
+		if drafting && d.Conflict != nil {
+			<p class="review-form-error" role="alert">This message changed in another window. Saving replaces it with the text below.</p>
+		} else if drafting && d.Error != "" {
+			<p class="review-form-error" role="alert">{ d.Error }</p>
+		}
+		<label for={ "edit-" + key } class="sr-only">Edit your message</label>
+		<textarea id={ "edit-" + key } name="body" rows="3" maxlength="8192" data-draft-key="body" aria-invalid={ invalid(fieldError(d, drafting, "body") != "") } required>{ body }</textarea>
+		if fieldError(d, drafting, "body") != "" {
+			<p class="review-field-error">{ fieldError(d, drafting, "body") }</p>
+		}
+		if m.Position == 1 {
+			@field("edit-path-"+key, "Page", "", fieldError(d, drafting, "path")) {
+				<input id={ "edit-path-" + key } name="path" value={ path } maxlength="300" placeholder="/checkout" autocomplete="off" spellcheck="false" data-draft-key="path"/>
+			}
+			@field("edit-details-"+key, "Reproduction details", "", fieldError(d, drafting, "details")) {
+				<textarea id={ "edit-details-" + key } name="details" rows="3" maxlength="8192" class="review-code" data-draft-key="details">{ details }</textarea>
+			}
+		}
+		<div class="review-actions">
+			<a class="secondary-action" href={ components.PublicURL(ctx, p.CurrentURL()+"#"+MessageAnchor(t.Number, m.Position)) } data-edit-cancel={ key }>Cancel</a>
+			<button type="submit" class="primary-action busy-button">
+				<span class="busy-text">Save</span>
+				<span class="busy-label">Saving…</span>
+			</button>
+		</div>
+	</form>
+}
+
+templ replyForm(p Page, t Thread) {
+	{{ d := p.Draft }}
+	{{ drafting := d.For("reply", t.Number, 0) }}
+	{{ key, body, shown := t.ReplyKey, "", p.ShownDeployment() }}
+	if drafting {
+		{{ key, body, shown = d.RequestKey, d.Body, d.Deployment }}
+	}
+	{{ id := "reply-" + strconv.Itoa(int(t.Number)) }}
+	<form method="post" action={ components.PublicURL(ctx, p.FindingAction(t.Number, "/replies")) } class="review-reply" data-busy-form data-draft-form={ id }>
+		<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+		<input type="hidden" name="return_query" value={ p.ReturnQuery() }/>
+		<input type="hidden" name="request_key" value={ key } data-draft-key="request_key"/>
+		<input type="hidden" name="deployment" value={ strconv.Itoa(int(shown)) } data-draft-key="deployment"/>
+		<label for={ id } class="sr-only">{ "Reply to finding #" + strconv.Itoa(int(t.Number)) }</label>
+		<textarea id={ id } name="body" rows="1" maxlength="8192" placeholder="Reply…" data-draft-key="body" aria-invalid={ invalid(fieldError(d, drafting, "body") != "") } required>{ body }</textarea>
+		<button type="submit" class="secondary-action busy-button">
+			<span class="busy-text">Reply</span>
+			<span class="busy-label">Sending…</span>
+		</button>
+		if drafting && (d.Error != "" || d.FieldError("body") != "") {
+			<p class="review-field-error review-reply-error" role="alert">
+				if d.FieldError("body") != "" {
+					{ d.FieldError("body") }
+				} else {
+					{ d.Error }
+				}
+			</p>
+		}
+	</form>
+}
+
+// removeDialog confirms a removal over the page; ui.js fills it from the
+// chosen menu item. A request without JavaScript shows it in place instead.
+templ removeDialog(p Page) {
+	<dialog
+		id="review-remove"
+		class="confirmation-dialog review-remove-dialog"
+		aria-labelledby="review-remove-title"
+		aria-describedby="review-remove-description"
+		data-confirmation-dialog
+		data-review-remove
+		if p.Remove != nil {
+			data-open-on-load
+		}
+	>
+		<button type="button" class="dialog-close" aria-label="Close confirmation" commandfor="review-remove" command="close" data-close-dialog><span aria-hidden="true">×</span></button>
+		<span class="dialog-icon review-dialog-icon" aria-hidden="true">
+			@components.TrashIcon()
+		</span>
+		<span class="eyebrow">Please confirm</span>
+		<h2 id="review-remove-title" data-remove-title>{ removeTitle(p.Remove) }</h2>
+		<p id="review-remove-description" data-remove-text>{ removeText(p.Remove) }</p>
+		@removeForm(p, true)
+	</dialog>
+}
+
+templ removeForm(p Page, dialog bool) {
+	{{ moderate := p.Remove != nil && p.Remove.Moderate }}
+	{{ action := p.URL() }}
+	if p.Remove != nil {
+		{{ action = p.Remove.Action }}
+	}
+	<form method="post" action={ components.PublicURL(ctx, action) } class="review-remove-form" data-remove-form data-busy-form>
+		<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+		<input type="hidden" name="return_query" value={ p.ReturnQuery() }/>
+		<fieldset class="review-reasons" data-remove-reasons hidden?={ !moderate }>
+			<legend>Why are you removing it?</legend>
+			for _, r := range Reasons {
+				<label class="review-reason">
+					<input type="radio" name="reason" value={ r.Value } required?={ moderate }/>
+					<span>{ r.Label }</span>
+				</label>
+			}
+		</fieldset>
+		<div class="dialog-actions">
+			if dialog {
+				<button type="button" class="secondary-action" autofocus commandfor="review-remove" command="close" data-close-dialog>Cancel</button>
+			} else {
+				<a class="secondary-action" href={ components.PublicURL(ctx, p.CurrentURL()) }>Cancel</a>
+			}
+			<button type="submit" class="destructive-action busy-button">
+				<span class="busy-text">Remove</span>
+				<span class="busy-label">Removing…</span>
+			</button>
+		</div>
+	</form>
+}
+
+func removeTitle(t *RemoveTarget) string {
+	switch {
+	case t == nil:
+		return "Remove this?"
+	case t.Position == 0:
+		return "Remove this finding?"
+	case t.Moderate:
+		return "Remove this message?"
+	case t.Position == 1:
+		return "Remove your finding?"
+	}
+	return "Remove your message?"
+}
+
+func removeText(t *RemoveTarget) string {
+	switch {
+	case t == nil:
+		return "Its text is erased for everyone."
+	case t.Position == 0:
+		return "Every message in it is erased for everyone. The finding keeps its number and shows who removed it and why."
+	case t.Moderate:
+		return "You are removing someone else's message as a moderator. Its text is erased for everyone; the conversation shows who removed it and why."
+	case t.Position == 1:
+		return "Its text is erased for everyone. If nobody has replied, the whole finding is removed; otherwise a note that you removed it stays."
+	}
+	return "Its text is erased for everyone. A note that you removed it stays in the conversation."
+}

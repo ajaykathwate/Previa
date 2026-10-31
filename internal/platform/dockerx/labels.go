@@ -14,7 +14,8 @@ const (
 	LabelRevision    = "io.previa.revision"
 	LabelSHA         = "io.previa.head-sha"
 	LabelBaseRepo    = "io.previa.base-repository-id"
-	LabelAccount     = "io.previa.account-id" // the installation owner's Previa user, for per-account limits
+	LabelWorkspace   = "io.previa.workspace-id" // stable workspace identity; distinguishes legacy user labels
+	LabelAccount     = "io.previa.account-id"   // legacy account label, retained for inventory compatibility
 	LabelHeadRepo    = "io.previa.head-repository-id"
 	LabelEnvironment = "io.previa.environment-id"
 	LabelImage       = "io.previa.image"        // a preview's image reference
@@ -35,6 +36,10 @@ const (
 	// LabelComponent names a companion: postgres, redis, setup or a process.
 	LabelComponent = "io.previa.component"
 	LabelVersion   = "io.previa.service-version" // a backend service's version
+	// LabelBaseline marks what a repository baseline refresh creates (its
+	// build, services, setup and seed containers and network) with the
+	// refresh's ID. Such objects have no pull request.
+	LabelBaseline = "io.previa.baseline-refresh-id"
 
 	KindImage          = "image"
 	KindBuilder        = "builder"
@@ -48,6 +53,9 @@ const (
 	KindSetup          = "setup"           // the one-off setup container
 	KindProcess        = "process"         // an unrouted process from the app's image
 	KindServiceNetwork = "service-network" // the PR's network shared with its services
+	// KindBaselineNetwork is a baseline refresh's own internal network: its
+	// services, setup and seed, with no egress, router or other preview.
+	KindBaselineNetwork = "baseline-network"
 )
 
 // CandidateKinds are the container kinds that belong to a candidate.

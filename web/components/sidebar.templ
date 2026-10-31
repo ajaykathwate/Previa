@@ -1,27 +1,57 @@
 package components
 
-// SidebarContent is shared by the desktop sidebar and the mobile drawer.
+// SidebarContent is the mobile drawer's navigation: the workspace switcher,
+// the destinations, then help and tools.
 templ SidebarContent(active NavItem) {
+	@WorkspaceSwitcher()
+	@SidebarNav(active)
+	@SidebarUtility(active)
+}
+
+// SidebarNav lists the workspace's destinations: day-to-day work first, then
+// the workspace's own people and settings.
+templ SidebarNav(active NavItem) {
 	<nav aria-label="Workspace navigation" class="sidebar-nav">
 		<div class="nav-group">
-			<p class="nav-group-label">Workspace</p>
-			@WorkspaceLink("/dashboard", "Overview", OverviewIcon(), NavOverview, active)
-			@WorkspaceLink("/repositories", "Repositories", RepositoryIcon(), NavRepositories, active)
-			@WorkspaceLink("/starter-kits", "Starter kits", KitIcon(), NavStarterKits, active)
+			if CanOperate(ctx) {
+				@WorkspaceLink("/dashboard", "Overview", OverviewIcon(), NavOverview, active)
+				@WorkspaceLink("/repositories", "Repositories", RepositoryIcon(), NavRepositories, active)
+				@WorkspaceLink("/builds", "Builds", BuildIcon(), NavBuilds, active)
+			}
+			if HasWorkspace(ctx) {
+				@WorkspaceLink("/previews", "Previews", EnvironmentIcon(), NavPreviews, active)
+			}
+			if CanOperate(ctx) {
+				@WorkspaceLink("/starter-kits", "Starter kits", KitIcon(), NavStarterKits, active)
+			}
 		</div>
-		<div class="nav-group">
-			<p class="nav-group-label">Delivery</p>
-			@WorkspaceLink("/builds", "Builds", BuildIcon(), NavBuilds, active)
-			@WorkspaceLink("/previews", "Previews", EnvironmentIcon(), NavPreviews, active)
-		</div>
-		<div class="nav-group">
-			<p class="nav-group-label">System</p>
+		if Workspace(ctx).ID>0 {
+			<div class="nav-group">
+				<p class="nav-group-label">Workspace</p>
+				@WorkspaceLink(WorkspaceURL(Workspace(ctx).ID, "members"), "Members", TeamIcon(), NavMembers, active)
+				if CanOperate(ctx) {
+					@WorkspaceLink(WorkspaceURL(Workspace(ctx).ID, "usage"), "Usage", BuildIcon(), NavUsage, active)
+				}
+				if CanManage(ctx) {
+					@WorkspaceLink(WorkspaceURL(Workspace(ctx).ID, "settings"), "Settings", WrenchIcon(), NavWorkspaceSettings, active)
+				}
+			</div>
+		}
+	</nav>
+}
+
+// SidebarUtility holds secondary destinations at the bottom of the sidebar.
+templ SidebarUtility(active NavItem) {
+	<nav aria-label="Help and tools" class="sidebar-utility">
+		if CanManage(ctx) {
 			@WorkspaceLink("/developer-tools", "Developer tools", TerminalIcon(), NavTools, active)
-		</div>
-		<div class="nav-group">
-			<p class="nav-group-label">Help</p>
-			@WorkspaceLink("/faq", "FAQ", QuestionIcon(), NavFAQ, active)
-		</div>
+		}
+		@WorkspaceLink("/faq", "Help & FAQ", QuestionIcon(), NavFAQ, active)
+		@WorkspaceLink("/help", "Support & status", QuestionIcon(), NavSupport, active)
+		@WorkspaceLink("/account", "Account & connections", UserIcon(), NavAccount, active)
+		if CanOperate(ctx) {
+			@WorkspaceLink("/early-access", "Early access", UserIcon(), NavEarlyAccess, active)
+		}
 	</nav>
 }
 
@@ -31,19 +61,14 @@ templ Sidebar(active NavItem) {
 			@Brand()
 			<span class="version-label">Early access</span>
 		</div>
+		<div class="sidebar-workspace">
+			@WorkspaceSwitcher()
+		</div>
 		<div class="sidebar-scroll">
-			@SidebarContent(active)
+			@SidebarNav(active)
 		</div>
 		<div class="sidebar-bottom">
-			<button type="button" class="sidebar-command" data-command-open aria-haspopup="dialog" aria-controls="command-palette">
-				@SearchIcon()
-				<span class="nav-label">Quick jump</span>
-				<kbd class="kbd" data-shortcut-label>Ctrl K</kbd>
-			</button>
-			<p class="sidebar-status">
-				@ServerIcon()
-				<span class="nav-label">Self-hosted control plane</span>
-			</p>
+			@SidebarUtility(active)
 		</div>
 	</aside>
 }
@@ -51,7 +76,7 @@ templ Sidebar(active NavItem) {
 // WorkspaceLink renders identical desktop/mobile navigation with explicit selection.
 templ WorkspaceLink(href string, label string, icon templ.Component, item NavItem, active NavItem) {
 	<a
-		href={ href }
+		href={ PublicURL(ctx, href) }
 		class="nav-link"
 		title={ label }
 		if active==item {

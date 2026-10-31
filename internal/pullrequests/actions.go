@@ -1,20 +1,22 @@
 package pullrequests
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/environments"
+	workspacescope "github.com/ajaykathwatee/previa/internal/platform/scope"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
-	"github.com/go-chi/chi/v5"
 )
 
 // Builds records owner build requests and their durable wake-ups; the
@@ -62,6 +64,7 @@ type Actions struct {
 
 // WithActions enables Build, Retry, Rebuild and teardown.
 func (h *Handler) WithActions(a Actions) *Handler {
+	h.previewDomain = a.PreviewBaseDomain
 	if a.Builds != nil && a.Verifier != nil && a.Teardowns != nil && a.Capabilities != nil {
 		h.actions = &a
 	}
@@ -122,14 +125,15 @@ func requestKey() string {
 // columns, why work waits or failed (with the end of its output), the
 // preview's address and expiry, and the actions the owner may take now.
 func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR, error) {
-	pr := pages.PR{Number: row.Number, Title: row.Title, Author: row.Author,
+	pr := pages.PR{Number: row.Number, Title: row.Title, Description: row.Description, Author: row.Author,
 		Branch: row.HeadBranch, SHA: row.HeadSha, State: DisplayStatus(row.State, row.BuildStatus), Build: row.BuildState,
 		URL: row.HtmlUrl, RequestedSHA: row.RequestedSha, DeployedSHA: row.DeployedSha,
 		Environment: row.EnvironmentStatus, Available: row.Available.Bool,
 		Deadline: timestamp(row.AvailableAt), Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh,
 		PublishedAt: timestamp(row.PublishedAt), RequestCurrent: row.RequestCurrent,
 		RequestSource: row.RequestSource, RequestedBy: row.RequestedByLogin,
-		RequestedAt: timestamp(row.RequestedAt), StartedAt: timestamp(row.StartedAt), CompletedAt: timestamp(row.CompletedAt)}
+		RequestedAt: timestamp(row.RequestedAt), StartedAt: timestamp(row.StartedAt), CompletedAt: timestamp(row.CompletedAt),
+		OpenFindings: row.OpenFindings}
 	switch {
 	case previewDeployed(row.DeployedSha, row.EnvironmentStatus):
 		h.describePreview(&pr, row)
@@ -138,9 +142,23 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 		// the request column carries its state.
 		pr.Environment = "Not deployed"
 	}
+	if row.BuildState == "failed" && pr.Environment == "publishing" {
+		pr.Environment = "Not deployed"
+		if pr.DeployedSHA != "" {
+			pr.Environment = environments.StatusRunning
+		}
+	}
 	if row.RequestCurrent && row.WaitingReason != "" {
 		pr.Waiting, pr.WaitingNote = environments.WaitingTitle(row.WaitingReason), environments.WaitingMessage(row.WaitingReason)
 	}
+	if c := h.headCommit(ctx, row); c.Message != "" {
+		pr.CommitMessage, pr.CommitAuthor = c.Message, c.Author
+		if !c.At.IsZero() {
+			pr.CommitAt = c.At.UTC().Format(time.RFC3339)
+		}
+	}
+	pr.ExecutionRetrying = row.ExecutionErrorCode == "worker_retrying"
+	pr.PublicationRetrying = row.EnvironmentStatus == "publishing" && row.PublicationErrorCode != ""
 	h.describeFailure(ctx, &pr, row)
 	pr.RemovedNote = removedNote(row)
 	if pr.State == "checking" && row.MergeabilityUnresolvedAt.Valid {
@@ -152,6 +170,7 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 			return pages.PR{}, err
 		}
 		pr.NoWorker = !caps.Discovery
+		pr.BuildWorkerMissing = !caps.Execution && !caps.Paused
 		pr.ServicesOffered, pr.ExecutionWorker = caps.Services, caps.Execution || caps.Paused
 	}
 	actions, err := h.actionsFor(ctx, row, pr.NoWorker)
@@ -159,7 +178,7 @@ func (h *Handler) detailPR(ctx context.Context, row dbgen.OwnedPRRow) (pages.PR,
 		return pages.PR{}, err
 	}
 	pr.Actions = actions
-	pr.Headline = headline(pr, row)
+	pr.Headline = headline(pr, row, h.now())
 	return pr, nil
 }
 
@@ -172,10 +191,10 @@ func previewDeployed(deployedSHA, environmentStatus string) bool {
 
 // previewURL is a preview's address, or "" without a preview domain.
 func (h *Handler) previewURL(hostname string) string {
-	if h.actions == nil || h.actions.PreviewBaseDomain == "" || hostname == "" {
+	if h.previewDomain == "" || hostname == "" {
 		return ""
 	}
-	return "https://" + hostname + "." + h.actions.PreviewBaseDomain
+	return "https://" + hostname + "." + h.previewDomain
 }
 
 // describePreview adds the deployed preview: whether it serves an older
@@ -189,6 +208,12 @@ func (h *Handler) describePreview(pr *pages.PR, row dbgen.OwnedPRRow) {
 	}
 	backend := environments.ParseBackend(row.BackendServices, row.BackendProcesses, row.BackendSetup, row.BackendDocsPath, row.BackendOutbound, row.BackendOutboundWithheld)
 	pr.Backend, pr.Outbound, pr.OutboundWithheld = backend.Summary(), backend.Outbound, backend.OutboundWithheld
+	if row.BackendSeeded {
+		pr.Backend += " · seed ran"
+	}
+	data := environments.ParseStartingData(row.BackendDataSource, row.BackendDataDetail, row.BackendSeeded)
+	pr.DataSource, pr.DataReasons, pr.KeepsData = data.Title(), data.Reasons(), row.KeepsTestData
+	pr.DataKept = data.Source == "kept"
 	if pr.PreviewURL != "" && backend.DocsPath != "" {
 		pr.DocsURL = pr.PreviewURL + backend.DocsPath
 	}
@@ -199,12 +224,12 @@ func (h *Handler) describePreview(pr *pages.PR, row dbgen.OwnedPRRow) {
 func (h *Handler) describeFailure(ctx context.Context, pr *pages.PR, row dbgen.OwnedPRRow) {
 	switch {
 	case row.RequestCurrent && row.BuildState == string(environments.IntentFailed):
-		code := ""
-		if row.FailureCurrent {
+		code := row.ExecutionErrorCode
+		if code == "" && row.FailureCurrent {
 			code = row.FailureCode
 		}
 		pr.Failure, pr.FailureCode = environments.FailureMessage(code), code
-		if h.logs != nil && row.EnvironmentID > 0 {
+		if h.logs != nil && row.EnvironmentID > 0 && h.canReadLogTail(ctx, row.RepoID) {
 			lines, err := h.logs.Tail(ctx, row.EnvironmentID, row.Generation, row.RequestRevision.Int64, failureLogLines)
 			if err != nil {
 				// The page stays useful without the excerpt; the log page has it all.
@@ -218,7 +243,7 @@ func (h *Handler) describeFailure(ctx context.Context, pr *pages.PR, row dbgen.O
 }
 
 // headline sums the PR's preview up in one line, most pressing first.
-func headline(pr pages.PR, row dbgen.OwnedPRRow) pages.Headline {
+func headline(pr pages.PR, row dbgen.OwnedPRRow, now time.Time) pages.Headline {
 	current := row.RequestCurrent
 	switch {
 	case !row.Available.Bool:
@@ -234,17 +259,35 @@ func headline(pr pages.PR, row dbgen.OwnedPRRow) pages.Headline {
 			title, tone = "Pull request merged", "tone-merged"
 		}
 		return pages.Headline{Tone: tone, Title: title, Detail: detail}
+	case pr.PublicationRetrying:
+		return pages.Headline{Tone: "tone-warn", Title: "Publishing failed; retrying", Detail: environments.FailureMessage(row.PublicationErrorCode) + " Previa will retry automatically; any earlier preview stays available."}
 	case pr.Waiting != "":
 		return pages.Headline{Tone: "tone-info", Title: pr.Waiting, Detail: pr.WaitingNote}
+	case current && (row.BuildState == "running" || row.BuildState == "queued") && row.ExecutionErrorCode == "worker_retrying":
+		return pages.Headline{Tone: "tone-warn", Title: "Build attempt failed; retrying", Detail: "Previa will retry automatically. If attempts are exhausted, this request is marked failed. Check build logs for available output."}
+	case current && (row.BuildState == "running" || row.BuildState == "queued") && pr.BuildWorkerMissing:
+		return pages.Headline{Tone: "tone-warn", Title: "Build waiting for a worker", Detail: "No build worker is available. This request resumes when a worker reconnects; it is not publishing a new preview right now."}
 	case current && row.BuildState == "running":
 		return pages.Headline{Tone: "tone-info", Title: "Building " + pages.Short(row.RequestedSha),
 			Detail: "The preview updates when the build succeeds. Follow it in the build log."}
 	case current && row.BuildState == "queued":
 		return pages.Headline{Tone: "tone-info", Title: "Queued to build " + pages.Short(row.RequestedSha),
 			Detail: "It starts as soon as a worker has a free build slot."}
+	case current && row.BuildState == "pending" && row.RequestSource == "automatic" && row.AvailableAt.Valid && row.AvailableAt.Time.After(now):
+		// The quiet period: a countdown, and what resets or skips it.
+		title := "Commit " + pages.Short(row.RequestedSha) + " builds in"
+		detail := "Automatic builds wait until no new commit has arrived for five minutes, so a burst of pushes builds once; another push restarts the wait."
+		if pr.DeployedSHA != "" && pr.DeployedSHA != row.RequestedSha {
+			title = "New commit " + pages.Short(row.RequestedSha) + " builds in"
+			detail += " The preview keeps serving " + pages.Short(pr.DeployedSHA) + " meanwhile."
+		}
+		if pr.Actions.BuildNow {
+			detail += " Build now starts it at once."
+		}
+		return pages.Headline{Tone: "tone-info", Title: title, Detail: detail, Until: row.AvailableAt.Time.UTC().Format(time.RFC3339)}
 	case current && row.BuildState == "pending":
-		return pages.Headline{Tone: "tone-info", Title: "Waiting to build " + pages.Short(row.RequestedSha),
-			Detail: "Automatic builds start after five minutes without new commits. Build now starts it at once."}
+		return pages.Headline{Tone: "tone-info", Title: "Starting the build of " + pages.Short(row.RequestedSha),
+			Detail: "It starts as soon as a worker picks it up."}
 	case current && row.BuildState == "failed":
 		return pages.Headline{Tone: "tone-danger", Title: "Build failed", Detail: pr.Failure}
 	case row.EnvironmentStatus == "failed" && row.FailureCode == "preview_missing":
@@ -304,7 +347,8 @@ func removedNote(row dbgen.OwnedPRRow) string {
 func (h *Handler) actionsFor(ctx context.Context, row dbgen.OwnedPRRow, noWorker bool) (pages.Actions, error) {
 	a := pages.Actions{ExpectedRevision: row.RequestRevision.Int64, RequestKey: requestKey()}
 	unfinished := row.RequestCurrent && (row.BuildState == "pending" || row.BuildState == "queued" || row.BuildState == "running")
-	if row.State == environments.StateOpen && row.Available.Bool && !row.TeardownRequested && h.actions != nil {
+	denied := h.sourceDenied(ctx, row.RepoID)
+	if row.State == environments.StateOpen && row.Available.Bool && !row.TeardownRequested && h.actions != nil && !denied {
 		// Teardown needs no worker to be recorded; the removal runs when one does.
 		deployed := previewDeployed(row.DeployedSha, row.EnvironmentStatus)
 		a.Teardown = deployed || unfinished
@@ -319,6 +363,10 @@ func (h *Handler) actionsFor(ctx context.Context, row dbgen.OwnedPRRow, noWorker
 	case row.State != "open":
 		a.Unavailable = "Closed and merged pull requests are not built."
 		return a, nil
+	case denied:
+		a.Unavailable = "GitHub no longer gives you access to this repository's code."
+		a.Hint = "Building, tearing down and reading build logs need it. Once a repository administrator on GitHub restores your access, reload this page."
+		return a, nil
 	}
 	if err := environments.BuildBlockReason(row.BuildStatus, row.NeedsRefresh); err != nil {
 		a.Unavailable, a.Hint, a.Blocked = blockSentence(err), blockHint(err), label
@@ -332,6 +380,17 @@ func (h *Handler) actionsFor(ctx context.Context, row dbgen.OwnedPRRow, noWorker
 			}
 		}
 		return a, nil
+	}
+	if h.admission != nil {
+		allowed, err := h.admission.Allowed(ctx, workspacescope.WorkspaceID(ctx))
+		if err != nil {
+			return a, err
+		}
+		if !allowed {
+			a.Unavailable, a.Hint, a.Blocked = "This workspace is waiting for early-access approval.",
+				"An operator approves each new workspace before its first build; Early access shows its status. Approval starts no build by itself.", label
+			return a, nil
+		}
 	}
 	available, why, err := h.executionAvailable(ctx)
 	if err != nil {
@@ -418,7 +477,7 @@ func (h *Handler) ownedPR(w http.ResponseWriter, r *http.Request) (int64, int64,
 		h.fail(w, r, err)
 		return 0, 0, dbgen.OwnedPRRow{}, false
 	}
-	n, err := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
+	n, err := publicid.PRNumber(r, id)
 	if err != nil || n <= 0 {
 		http.NotFound(w, r)
 		return 0, 0, dbgen.OwnedPRRow{}, false
@@ -463,10 +522,16 @@ func (h *Handler) build(w http.ResponseWriter, r *http.Request) {
 	// What is wrong with the PR itself comes first; then whether a worker can
 	// build at all.
 	if row.State != "open" {
+		if refusedFromSetup(w, r, id, "build-closed") {
+			return
+		}
 		http.Error(w, "Closed and merged pull requests are not built.", http.StatusConflict)
 		return
 	}
 	if err := environments.BuildBlockReason(row.BuildStatus, row.NeedsRefresh); err != nil {
+		if refusedFromSetup(w, r, id, "build-blocked") {
+			return
+		}
 		http.Error(w, blockSentence(err), http.StatusConflict)
 		return
 	}
@@ -476,17 +541,27 @@ func (h *Handler) build(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !available {
+		if refusedFromSetup(w, r, id, "build-unavailable") {
+			return
+		}
 		http.Error(w, why.reason+" No build was requested.", http.StatusServiceUnavailable)
 		return
 	}
 	if _, err := h.actions.Verifier.VerifyUpstream(r.Context(), row.ID); err != nil {
-		h.refuse(w, r, err)
+		h.refuse(w, r, id, err)
 		return
+	}
+	// Reset test data starts from the chosen source: the repository baseline
+	// or empty databases; never from the serving deployment's data.
+	reset, source := action == environments.Rebuild && r.PostForm.Get("reset") == "true", ""
+	if reset {
+		source = cmp.Or(r.PostForm.Get("start_source"), environments.StartEmpty)
 	}
 	if _, err := h.actions.Builds.RequestBuild(r.Context(), environments.IntentCommand{
 		UserID: user, PullRequestID: row.ID, ExpectedRevision: expected, IdempotencyKey: key, Action: action,
+		Reset: reset, StartSource: source,
 	}); err != nil {
-		h.refuse(w, r, err)
+		h.refuse(w, r, id, err)
 		return
 	}
 	h.finishMutation(w, r, user, id)
@@ -519,15 +594,19 @@ func (h *Handler) teardown(w http.ResponseWriter, r *http.Request) {
 		if err != nil || page < 1 {
 			page = 1
 		}
-		http.Redirect(w, r, "/previews?page="+strconv.FormatInt(page, 10), http.StatusSeeOther)
+		publicid.Redirect(w, r, "/previews?page="+strconv.FormatInt(page, 10), http.StatusSeeOther)
 		return
 	}
 	h.finishMutation(w, r, user, id)
 }
 
-// refuse answers a refused build with a short, safe reason.
-func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {
+// refuse answers a refused build with a short, safe reason. From the Setup
+// tab it returns to the checklist with the matching notice.
+func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, repoID int64, err error) {
 	var limited *environments.UpstreamRetryAfter
+	if code := setupRefusal(err); code != "" && refusedFromSetup(w, r, repoID, code) {
+		return
+	}
 	switch {
 	case errors.As(err, &limited):
 		w.Header().Set("Retry-After", strconv.Itoa(int(max(limited.Delay, time.Second)/time.Second)))
@@ -547,4 +626,23 @@ func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		h.fail(w, r, err)
 	}
+}
+
+// setupRefusal names a refused build for the Setup tab's notice; "" for
+// errors that are not a refusal.
+func setupRefusal(err error) string {
+	var limited *environments.UpstreamRetryAfter
+	switch {
+	case errors.As(err, &limited), errors.Is(err, environments.ErrUpstreamUnavailable):
+		return "build-github"
+	case errors.Is(err, environments.ErrUpstreamInaccessible), errors.Is(err, environments.ErrIntentUnavailable):
+		return "build-access"
+	case errors.Is(err, environments.ErrUpstreamClosed), errors.Is(err, environments.ErrPRClosed):
+		return "build-closed"
+	case errors.Is(err, environments.ErrPRConflicts), errors.Is(err, environments.ErrPRChecking), errors.Is(err, environments.ErrPRRefresh):
+		return "build-blocked"
+	case errors.Is(err, environments.ErrUpstreamChanged), errors.Is(err, environments.ErrIntentConflict), errors.Is(err, environments.ErrIntentKeyConflict), errors.Is(err, environments.ErrIntentAction):
+		return "build-changed"
+	}
+	return ""
 }

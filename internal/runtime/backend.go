@@ -53,12 +53,15 @@ type backend struct {
 	nonce     string // makes service hostnames unique to this candidate
 	services  []serviceRun
 	setup     []string
+	seed      []string // runs after setup on empty databases (docs/32)
 	processes []repoconfig.Process
 	env       map[string]string // the connection settings Previa sets
 	secrets   []string          // generated credentials, for the log redactor
 	// redactEnv names the variables whose values output must never show:
 	// the repository's secrets and the credentials in env (LabelRedactEnv).
 	redactEnv []string
+	// configHash is the effective configuration the candidate was built with.
+	configHash string
 }
 
 // credentialNames are the variables of env that carry a generated password.
@@ -87,7 +90,7 @@ func planBackend(key string, settings repoconfig.Config) (backend, error) {
 	if err != nil {
 		return backend{}, err
 	}
-	b := backend{key: key, nonce: nonce, setup: settings.Setup, processes: settings.Processes, env: map[string]string{}}
+	b := backend{key: key, nonce: nonce, setup: settings.Setup, seed: settings.Seed, processes: settings.Processes, env: map[string]string{}}
 	for _, s := range settings.Services {
 		profile, ok := serviceProfiles[s.Kind]
 		if !ok {
@@ -139,7 +142,8 @@ func randomToken(n int) (string, error) {
 }
 
 // resources are what the whole candidate may use: its app, processes,
-// services and setup container, which all exist (created) together.
+// services and setup and seed containers, which all exist (created)
+// together.
 func (b backend) resources(settings repoconfig.Config) (cpuMillis, memory int64) {
 	cpuMillis, memory = settings.Resources.CPUMillis, settings.Resources.MemoryBytes
 	for _, s := range b.services {
@@ -149,6 +153,9 @@ func (b backend) resources(settings repoconfig.Config) (cpuMillis, memory int64)
 		cpuMillis, memory = cpuMillis+p.Resources.CPUMillis, memory+p.Resources.MemoryBytes
 	}
 	if len(b.setup) > 0 {
+		cpuMillis, memory = cpuMillis+settings.Resources.CPUMillis, memory+settings.Resources.MemoryBytes
+	}
+	if len(b.seed) > 0 {
 		cpuMillis, memory = cpuMillis+settings.Resources.CPUMillis, memory+settings.Resources.MemoryBytes
 	}
 	return cpuMillis, memory

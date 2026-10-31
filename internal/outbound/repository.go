@@ -61,6 +61,11 @@ func (r *Repository) List(ctx context.Context, userID, repoID int64) ([]Approved
 func (r *Repository) Add(ctx context.Context, userID, repoID int64, d egress.Destination, limit int) error {
 	return database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
+		if _, err := q.LockOutboundInstallation(ctx, repoID); errors.Is(err, pgx.ErrNoRows) {
+			return ErrUnavailable
+		} else if err != nil {
+			return fmt.Errorf("lock outbound installation: %w", err)
+		}
 		if _, err := q.LockOwnedRepository(ctx, dbgen.LockOwnedRepositoryParams{RepoID: repoID, UserID: owner(userID)}); errors.Is(err, pgx.ErrNoRows) {
 			if _, ownErr := q.OwnedRepository(ctx, dbgen.OwnedRepositoryParams{RepoID: repoID, UserID: owner(userID)}); ownErr == nil {
 				return ErrAccessRemoved

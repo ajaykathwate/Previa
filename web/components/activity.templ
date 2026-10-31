@@ -1,0 +1,89 @@
+package components
+
+// ActivityFeed lists recent actions newest first. showWorkspace names the
+// workspace on each row when the feed spans several workspaces.
+templ ActivityFeed(items []ActivityItem, showWorkspace bool, empty string) {
+	if len(items) == 0 {
+		<p class="activity-empty">{ empty }</p>
+	} else {
+		<ol class="activity-feed">
+			for _, v := range items {
+				<li class={ "activity-item", "activity-" + v.Kind }>
+					<span class="activity-icon" aria-hidden="true">
+						@activityIcon(v.Kind)
+					</span>
+					<p class="activity-text">
+						@activityText(v, showWorkspace)
+					</p>
+					@Time(v.At, v.At)
+				</li>
+			}
+		</ol>
+	}
+}
+
+templ activityIcon(kind string) {
+	switch kind {
+		case "build":
+			@BuildIcon()
+		case "created":
+			@PlusIcon()
+		case "joined":
+			@TeamIcon()
+		case "invited":
+			@SendIcon()
+		default:
+			@LogoutIcon()
+	}
+}
+
+templ activityText(v ActivityItem, showWorkspace bool) {
+	switch v.Kind {
+		case "build":
+			{ activityBuildVerb(v.Detail) + " " }
+			<a href={ PublicURL(ctx, activityPRURL(v)) }>{ "#" + itoa(v.PRNumber) + " " + v.PRTitle }</a>
+			<span class="activity-meta">
+				<code>{ v.Repo }</code>
+				if showWorkspace {
+					{ " · " + v.Workspace }
+				}
+			</span>
+		case "created":
+			Created
+			@activityWorkspace(v, showWorkspace)
+		case "joined":
+			Joined
+			@activityWorkspace(v, showWorkspace)
+			{ " as " + RoleName(v.Detail) }
+		case "invited":
+			Invited <strong>{ activityRecipient(v.Login) }</strong>
+			if showWorkspace {
+				{ " to " }
+				<strong>{ v.Workspace }</strong>
+			}
+			{ " as " + RoleName(v.Detail) }
+		case "left":
+			Left
+			@activityWorkspace(v, showWorkspace)
+		default:
+			if v.Login != "" {
+				Removed <strong>{ "@" + v.Login }</strong>
+				if showWorkspace {
+					{ " from " }
+					<strong>{ v.Workspace }</strong>
+				}
+			} else {
+				Was removed from
+				@activityWorkspace(v, showWorkspace)
+			}
+	}
+}
+
+templ activityWorkspace(v ActivityItem, showWorkspace bool) {
+	if showWorkspace {
+		{ " " }
+		<strong>{ v.Workspace }</strong>
+	} else {
+		{ " the workspace" }
+	}
+}

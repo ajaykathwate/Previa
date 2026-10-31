@@ -11,32 +11,45 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
+
+	"github.com/ajaykathwatee/previa/internal/accounts"
+	"github.com/ajaykathwatee/previa/internal/activity"
 	"github.com/ajaykathwatee/previa/internal/appoutput"
 	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/dashboard"
+	"github.com/ajaykathwatee/previa/internal/earlyaccess"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/idle"
 	"github.com/ajaykathwatee/previa/internal/installations"
+	"github.com/ajaykathwatee/previa/internal/onboarding"
 	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/githubapp"
 	"github.com/ajaykathwatee/previa/internal/platform/httpx"
 	"github.com/ajaykathwatee/previa/internal/platform/queue"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
+	"github.com/ajaykathwatee/previa/internal/platform/scope"
 	"github.com/ajaykathwatee/previa/internal/platform/version"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/previewaccess"
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
+	"github.com/ajaykathwatee/previa/internal/reviews"
 	"github.com/ajaykathwatee/previa/internal/routing"
+	"github.com/ajaykathwatee/previa/internal/sampledata"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/starterkits"
+	"github.com/ajaykathwatee/previa/internal/support"
+	"github.com/ajaykathwatee/previa/internal/usage"
 	"github.com/ajaykathwatee/previa/internal/webhooks"
+	"github.com/ajaykathwatee/previa/internal/workspaces"
 	"github.com/ajaykathwatee/previa/web"
 	dashboardpages "github.com/ajaykathwatee/previa/web/pages/dashboard"
 	"github.com/alexedwards/scs/pgxstore"
 	"github.com/alexedwards/scs/v2"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/go-github/v91/github"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -45,7 +58,7 @@ import (
 const (
 	webhookPath        = "/webhooks/github"
 	webhookConcurrency = 32
-	maxFormBytes       = 256 << 10 // the largest form is a 32 KiB secret value
+	maxFormBytes       = 256 << 10 // includes bounded 192 KiB workspace-logo uploads
 )
 
 // signInPaths are reachable without a session or start one; each client may
@@ -59,6 +72,11 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 		return fmt.Errorf("configure server: %w", err)
 	}
 	cfg.ApplicationName = "previa-server"
+	if cfg.EarlyAccessWithoutOperator() {
+		// Production refuses this; a development server starts but says why
+		// new workspaces will wait.
+		logger.Warn("early access is on but SUPPORT_OPERATOR_GITHUB_IDS is empty, so nobody can approve new workspaces; set your numeric GitHub user ID or EARLY_ACCESS_ENABLED=false")
+	}
 	pool, err := openDatabase(ctx, cfg.SharedConfig, "server", cfg.AppEnv, logger)
 	if err != nil {
 		return err
@@ -99,28 +117,63 @@ func RunServer(ctx context.Context, logger *slog.Logger) error {
 // and queue. The server records observations, owner requests and teardowns
 // with their durable wake-ups and operations; workers execute them.
 type serverFeatures struct {
-	sessions      *scs.SessionManager
-	auth          *auth.Handler
-	installations *installations.Handler
-	prs           *pullrequests.Handler
-	secrets       *secrets.Handler
-	outbound      *outbound.Handler
-	logs          *buildlogs.Handler
-	output        *appoutput.Handler
-	wake          *idle.WakePage
-	access        *previewaccess.Handler
-	deliveries    *webhooks.DeliveryService
-	pings         *queue.Service
-	summary       dashboard.SummaryReader
-	environments  *environments.Repository
-	capabilities  *workers.Reader
-	kits          *starterkits.Handler
+	sessions       *scs.SessionManager
+	auth           *auth.Handler
+	installations  *installations.Handler
+	prs            *pullrequests.Handler
+	secrets        *secrets.Handler
+	outbound       *outbound.Handler
+	logs           *buildlogs.Handler
+	output         *appoutput.Handler
+	wake           *idle.WakePage
+	access         *previewaccess.Handler
+	deliveries     *webhooks.DeliveryService
+	pings          *queue.Service
+	summary        dashboard.SummaryReader
+	environments   *environments.Repository
+	capabilities   *workers.Reader
+	kits           *starterkits.Handler
+	workspaces     *workspaces.Handler
+	workspaceScope *workspaces.Middleware
+	publicIDs      *publicid.Catalog
+	setup          *onboarding.Handler
+	reviews        *reviews.Handler
+	testData       *sampledata.Handler
+	usage          *usage.Handler
+	accounts       *accounts.Handler
+	support        *support.Handler
+	earlyAccess    *earlyaccess.Handler
+}
+
+// serverGitHubApp is the GitHub App surface the server uses: *githubapp.Client
+// in production, a fake GitHub in tests that drive the assembled server.
+type serverGitHubApp interface {
+	GitHubApp
+	Installation(context.Context, int64) (*github.Installation, error)
+	Invalidate(int64)
+	WithInstallationSignals(func(context.Context, int64) error)
 }
 
 func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger) (*serverFeatures, error) {
+	var app serverGitHubApp
+	if cfg.GitHubAppID != 0 {
+		client, err := githubapp.New(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("initialize GitHub App: %w", err)
+		}
+		app = client
+	}
+	return newServerFeaturesWithApp(cfg, pool, store, hub, logger, app)
+}
+
+func newServerFeaturesWithApp(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.Store, hub *realtime.Hub, logger *slog.Logger, appClient serverGitHubApp) (*serverFeatures, error) {
 	f := &serverFeatures{capabilities: workers.NewReader(pool)}
 	f.sessions = auth.NewSessionManager(store, strings.HasPrefix(strings.ToLower(cfg.AppBaseURL), "https://"), logger)
+	f.publicIDs = publicid.New(pool)
 	f.auth = auth.NewHandler(cfg, f.sessions, auth.NewRepository(pool), auth.NewGitHubOAuth(cfg), logger)
+	if cfg.GoogleOAuthClientID != "" {
+		f.auth.WithGoogle(auth.NewGoogleOAuth(cfg))
+	}
 	kits, err := newStarterKits(f.auth, f.capabilities, logger)
 	if err != nil {
 		return nil, err
@@ -136,13 +189,9 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 		return nil, err
 	}
 	f.environments = environments.NewRepository(pool, operations)
-	coordinator := environments.NewRequestBroker(pool, producer)
-	var appClient *githubapp.Client
+	coordinator := environments.NewRequestBroker(pool, producer).WithResets(resetActivity{recorder: activity.NewRecorder()})
 	var upstream pullrequests.Source
-	if cfg.GitHubAppID != 0 {
-		if appClient, err = githubapp.New(cfg); err != nil {
-			return nil, fmt.Errorf("initialize GitHub App: %w", err)
-		}
+	if appClient != nil {
 		upstream = pullrequests.NewGitHubSource(appClient)
 		// With the App, workers can report: record report work for PR changes.
 		f.environments.WithReports()
@@ -156,7 +205,22 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 		service = installations.NewService(installations.NewRepository(pool, syncService), appClient, installations.NewGitHubAuthorization(cfg), nil)
 	}
 	f.installations = installations.NewHandler(service, f.auth, f.sessions, cfg.GitHubAppSlug, logger)
-	f.deliveries = webhooks.NewDeliveryService(pool, coordinator, invalidate, syncService)
+	testDataStore, err := sampledata.NewStore(pool, producer, environments.BuildQueue)
+	if err != nil {
+		return nil, err
+	}
+	f.deliveries = webhooks.NewDeliveryService(pool, coordinator, invalidate, syncService).WithMerges(testDataStore)
+	if appClient != nil {
+		appClient.WithInstallationSignals(installations.SignalReconciliation(pool, producer))
+		service.WithReconciler(installations.NewReconciler(installations.NewRepository(pool), appClient, f.deliveries, logger, cfg.GitHubAppID, cfg.InstallationReconcileMaxChanges))
+	}
+	operatorIDs, err := cfg.OperatorIDs()
+	if err != nil {
+		return nil, err
+	}
+	admission := earlyaccess.NewService(pool, cfg.EarlyAccessEnabled, operatorIDs)
+	f.earlyAccess = earlyaccess.NewHandler(admission, f.auth, logger)
+	service.WithAdmission(admission)
 	policyStore := installations.NewRepository(pool)
 	if appClient != nil {
 		policyStore.WithReports(coordinator) // a switch to Manual updates cancelled PRs' reports
@@ -168,37 +232,71 @@ func newServerFeatures(cfg config.ServerConfig, pool *pgxpool.Pool, store scs.St
 	logStore := buildlogs.NewStore(pool).WithRetention(cfg.BuildLogRetention())
 	prRepository := pullrequests.NewRepository(pool)
 	f.prs = pullrequests.NewHandler(prRepository, syncService, policy, f.auth, logger, cfg.GitHubAppID > 0).
-		WithLiveUpdates(hub).WithLogTail(logStore)
+		WithLiveUpdates(hub).WithLogTail(logStore).WithPreviewDomain(cfg.PreviewBaseDomain)
 	if appClient != nil {
 		// Builds need fresh GitHub reads; without the App the controls say so.
+		f.prs.WithCommits(pullrequests.NewGitHubSource(appClient))
 		f.prs.WithActions(pullrequests.Actions{
 			Builds: coordinator, Verifier: syncService, Teardowns: f.environments, Capabilities: f.capabilities,
 			PreviewBaseDomain: cfg.PreviewBaseDomain,
 		})
 	}
-	f.installations.WithNavigator(f.prs)
-	f.summary = overviewSummary(service, prRepository, f.capabilities, f.prs)
-	if f.secrets, err = newSecretsHandler(cfg, pool, f.auth, logger); err != nil {
+	f.installations.WithNavigator(f.prs).WithApproval(admission)
+	secretsService, err := newSecretsService(cfg, pool)
+	if err != nil {
 		return nil, err
 	}
+	f.secrets = secrets.NewHandler(secretsService, f.auth, logger)
+	setup, setupHandler, err := newOnboarding(cfg, pool, producer, f.capabilities, secretsService, hub, f.auth, logger)
+	if err != nil {
+		return nil, err
+	}
+	f.setup = setupHandler
+	if f.reviews, err = newReviews(cfg, pool, hub, f.auth, logger); err != nil {
+		return nil, err
+	}
+	f.summary = overviewSummary(service, prRepository, f.capabilities, f.prs, setup)
 	if f.outbound, err = newOutboundHandler(cfg, pool, producer, f.auth, logger); err != nil {
 		return nil, err
 	}
 	f.logs = buildlogs.NewHandler(logStore, f.auth, logger).WithLiveUpdates(hub, realtime.DefaultStreamOptions).
 		WithRetention(cfg.BuildLogRetention())
+	testData, err := sampledata.NewService(testDataStore, testDataActivity{recorder: activity.NewRecorder()}, workerTestData{capabilities: f.capabilities})
+	if err != nil {
+		return nil, err
+	}
+	f.testData = sampledata.NewHandler(testData, baselineLogs{store: logStore}, f.auth, hub, logger)
 	f.output = appoutput.NewHandler(appoutput.NewStore(pool), f.auth, producer, hub, realtime.DefaultStreamOptions, logger)
 	f.wake = idle.NewWakePage(pool, producer, cfg.PreviewBaseDomain, routing.UnavailablePage, logger)
 	var permissions previewaccess.Permissions
 	if appClient != nil {
-		permissions = githubPermissions{app: appClient}
+		permissions = workspaceGitHub{app: appClient}
 	}
 	f.access = previewaccess.NewHandler(pool, f.auth, permissions, producer, cfg.SessionSecret, cfg.PreviewBaseDomain, cfg.AppBaseURL, logger).WithCapabilities(f.capabilities)
+	workspaceAccess := workspaceGitHub{}
+	if appClient != nil {
+		workspaceAccess.app = appClient
+	}
+	workspaceService := workspaces.NewService(workspaces.NewRepository(pool), workspaceAccess, workspaceAccess, coordinator)
+	supportService := newSupport(pool, cfg.CustomerConfig)
+	f.support = support.NewHandler(supportService, f.auth, logger)
+	lifecycle := accounts.NewService(pool).WithPreviews(repositoryLifecycle{
+		previews: environments.NewLifecycle(f.environments, coordinator, nil), data: sampledata.NewLifecycle(testDataStore, nil, nil),
+	})
+	lifecycle.WithAccountFences(workspaceService)
+	workspaceService.WithDeletion(workspaceDeletion{lifecycle: lifecycle})
+	f.accounts = accounts.NewHandler(lifecycle, f.auth, logger, f.sessions.Destroy, strings.HasPrefix(cfg.AppBaseURL, "https://"))
+	f.prs.WithSourceAccess(workspaceService).WithAdmission(admission)
+	f.auth.WithAvatarAudience(workspaceService).WithActivity(workspaceService)
+	f.workspaces = workspaces.NewHandler(workspaceService, f.auth, logger, cfg.AppBaseURL)
+	f.workspaceScope = workspaces.NewMiddleware(workspaceService, f.auth, logger)
+	f.usage = usage.NewHandler(usage.NewStore(pool, 0, 0), f.auth, logger)
 	return f, nil
 }
 
-// overviewSummary reads the Overview's counts, worker capabilities and
-// latest builds and previews.
-func overviewSummary(service *installations.Service, prs *pullrequests.Repository, capabilities *workers.Reader, highlights *pullrequests.Handler) dashboard.SummaryReader {
+// overviewSummary reads the Overview's counts, worker capabilities, latest
+// builds and previews, and where this person's first-preview setup stands.
+func overviewSummary(service *installations.Service, prs *pullrequests.Repository, capabilities *workers.Reader, highlights *pullrequests.Handler, setup *onboarding.Service) dashboard.SummaryReader {
 	return func(ctx context.Context, userID int64) (dashboardpages.Summary, error) {
 		summary, err := service.Summary(ctx, userID)
 		if err != nil {
@@ -216,19 +314,35 @@ func overviewSummary(service *installations.Service, prs *pullrequests.Repositor
 		if err != nil {
 			return dashboardpages.Summary{}, err
 		}
+		selection := scope.Current(ctx)
+		journey, err := setup.Journey(ctx, selection.WorkspaceID, userID)
+		if err != nil {
+			return dashboardpages.Summary{}, err
+		}
 		return dashboardpages.Summary{
 			Installations: summary.Installations, Repositories: summary.Repositories, Available: summary.Available,
 			OpenPRs: delivery.OpenPrs, Waiting: delivery.Waiting, Building: delivery.Building, Failed: delivery.Failed, FailedOlder: delivery.FailedOlder, Live: delivery.Live,
 			AttentionDays: int(pullrequests.FailureAttentionWindow / (24 * time.Hour)),
 			Workers:       dashboardpages.Workers{Discovery: caps.Discovery, Execution: caps.Execution, Reporting: caps.Reporting, Housekeeping: caps.Housekeeping, Paused: caps.Paused},
 			Builds:        builds, Previews: previews,
+			Journey: overviewJourney(selection.Role, journey),
 		}, nil
 	}
 }
 
-// newSecretsHandler serves repository secrets; without an encryption key
-// the page says secrets are unavailable.
-func newSecretsHandler(cfg config.ServerConfig, pool *pgxpool.Pool, users *auth.Handler, logger *slog.Logger) (*secrets.Handler, error) {
+// overviewJourney is the Overview's view of first-preview setup.
+func overviewJourney(role string, j onboarding.Journey) dashboardpages.Journey {
+	out := dashboardpages.Journey{Manager: role == "owner" || role == "admin", Repositories: j.Repositories, Available: j.Available,
+		Checked: j.Checked, Published: j.Published, Opened: j.Opened, FocusID: j.FocusID, FocusName: j.FocusName}
+	for _, m := range j.Managers {
+		out.Managers = append(out.Managers, dashboardpages.Person{Login: m.Login, Name: m.Name})
+	}
+	return out
+}
+
+// newSecretsService manages repository secrets; without an encryption key
+// the Secrets tab says secrets are unavailable.
+func newSecretsService(cfg config.ServerConfig, pool *pgxpool.Pool) (*secrets.Service, error) {
 	var keyring *secrets.Keyring
 	if cfg.SecretsConfigured() {
 		var err error
@@ -236,11 +350,7 @@ func newSecretsHandler(cfg config.ServerConfig, pool *pgxpool.Pool, users *auth.
 			return nil, fmt.Errorf("configure repository secrets: %w", err)
 		}
 	}
-	service, err := secrets.NewService(secrets.NewRepository(pool), keyring)
-	if err != nil {
-		return nil, err
-	}
-	return secrets.NewHandler(service, users, logger), nil
+	return secrets.NewService(secrets.NewRepository(pool), keyring)
 }
 
 // newOutboundHandler serves owner-approved outbound connections; a change
@@ -297,15 +407,46 @@ func (f *serverFeatures) routes(cfg config.ServerConfig, logger *slog.Logger) (h
 	router.Post(webhookPath, httpx.LimitConcurrency(webhookConcurrency, webhooks.NewHandler(cfg.GitHubWebhookSecret, f.deliveries, logger)).ServeHTTP)
 	router.Group(func(r chi.Router) {
 		r.Use(f.sessions.LoadAndSave, f.auth.LoadUser, f.auth.CSRF)
+		if f.publicIDs != nil {
+			r.Use(f.publicIDs.Middleware)
+		}
+		if f.workspaceScope != nil {
+			r.Use(f.workspaceScope.Load)
+		}
+		if f.earlyAccess != nil {
+			r.Use(f.earlyAccess.Guard)
+		}
 		f.auth.Mount(r)
+		if f.earlyAccess != nil {
+			f.earlyAccess.Mount(r, auth.RequireUser)
+		}
+		if f.accounts != nil {
+			f.accounts.Mount(r, auth.RequireUser)
+		}
+		if f.support != nil {
+			f.support.Mount(r, auth.RequireUser)
+		}
+		if f.workspaces != nil {
+			f.workspaces.Mount(r, auth.RequireUser)
+		}
+		if f.usage != nil {
+			f.usage.Mount(r, auth.RequireUser)
+		}
 		// Queue diagnostics are for development; production does not serve them.
 		dashboard.MountWithSummary(r, f.auth, auth.RequireUser, dashboard.Options{
 			Summary: f.summary, Identity: f.auth.UserIDs, DeveloperTools: !cfg.Production(),
 		})
 		f.installations.Mount(r, auth.RequireUser)
 		f.prs.Mount(r, auth.RequireUser)
+		if f.setup != nil {
+			f.setup.Mount(r, auth.RequireUser)
+		}
+		if f.reviews != nil {
+			f.reviews.Mount(r, auth.RequireUser)
+		}
 		f.secrets.Mount(r, auth.RequireUser)
 		f.outbound.Mount(r, auth.RequireUser)
+		f.testData.Mount(r, auth.RequireUser)
 		f.logs.Mount(r, auth.RequireUser)
 		f.output.Mount(r, auth.RequireUser)
 		f.access.Mount(r, auth.RequireUser)
@@ -371,24 +512,4 @@ func listenHTTP(addr string) (net.Listener, error) {
 		network = "tcp4"
 	}
 	return net.Listen(network, addr)
-}
-
-// githubPermissions reads a user's role on a repository with the GitHub
-// App's installation token, for private previews.
-type githubPermissions struct{ app *githubapp.Client }
-
-func (g githubPermissions) RepositoryPermission(ctx context.Context, installationID int64, fullName, login string) (string, error) {
-	client, err := g.app.InstallationClient(installationID)
-	if err != nil {
-		return "", err
-	}
-	owner, repo, _ := strings.Cut(fullName, "/")
-	level, res, err := client.Repositories.GetPermissionLevel(ctx, owner, repo, login)
-	if res != nil && res.StatusCode == http.StatusNotFound {
-		return "none", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("read %s's permission: %w", login, err)
-	}
-	return level.GetPermission(), nil
 }

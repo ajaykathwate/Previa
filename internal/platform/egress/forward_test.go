@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -395,5 +396,20 @@ func TestParseDestination(t *testing.T) {
 		if _, err := ParseDestination(bad); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
+	}
+}
+
+func TestForwarderFallsBackToTheNextVettedAddress(t *testing.T) {
+	x := newForwardFixture(t, fakeResolver{"db.example.com": {"203.0.114.9", "93.184.216.34"}})
+	live := "93.184.216.34:" + strconv.Itoa(x.port)
+	x.dialer.routes[live] = echoServer(t)
+	x.allow(Destination{Host: "db.example.com", Port: x.port})
+	if got, err := x.exchange("hello"); err != nil || got != "hello" {
+		t.Fatalf("relay through a dead first address: %q %v", got, err)
+	}
+	x.dialer.mu.Lock()
+	defer x.dialer.mu.Unlock()
+	if !slices.Equal(x.dialer.dialed, []string{"203.0.114.9:" + strconv.Itoa(x.port), live}) {
+		t.Fatalf("dialled %v", x.dialer.dialed)
 	}
 }

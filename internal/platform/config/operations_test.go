@@ -68,6 +68,20 @@ func TestProductionRequiresHTTPSWebhookSecretAndPrivateKeys(t *testing.T) {
 		t.Fatalf("no webhook secret in production: %v", err)
 	}
 	t.Setenv("GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("EARLY_ACCESS_ENABLED", "true")
+	unsetEnvironment(t, "SUPPORT_OPERATOR_GITHUB_IDS")
+	if _, err := LoadServer(); err == nil || !strings.Contains(err.Error(), "SUPPORT_OPERATOR_GITHUB_IDS is required") {
+		t.Fatalf("early access without an operator in production: %v", err)
+	}
+	if _, err := LoadWorker(); err != nil {
+		t.Fatalf("the worker approves nothing and needs no operator: %v", err)
+	}
+	t.Setenv("EARLY_ACCESS_ENABLED", "false")
+	if _, err := LoadServer(); err != nil {
+		t.Fatalf("production without early access needs no operator: %v", err)
+	}
+	t.Setenv("EARLY_ACCESS_ENABLED", "true")
+	t.Setenv("SUPPORT_OPERATOR_GITHUB_IDS", "71059395")
 	if _, err := LoadServer(); err != nil {
 		t.Fatal(err)
 	}
@@ -101,5 +115,9 @@ func TestProductionRequiresHTTPSWebhookSecretAndPrivateKeys(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	if _, err := LoadWorker(); err != nil {
 		t.Fatal(err)
+	}
+	unsetEnvironment(t, "SUPPORT_OPERATOR_GITHUB_IDS")
+	if cfg, err := LoadServer(); err != nil || !cfg.EarlyAccessWithoutOperator() {
+		t.Fatalf("development must start without an operator and report it: %v", err)
 	}
 }

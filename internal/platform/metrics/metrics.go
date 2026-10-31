@@ -23,7 +23,7 @@ const other = "other"
 var identifier = regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}$`)
 
 // waitReasons bound the waiting label (environments.Wait*).
-var waitReasons = []string{"capacity", "disk", "paused", "account", "quota"}
+var waitReasons = []string{"capacity", "disk", "paused", "account", "quota", "workspace_builds", "workspace_minutes", "workspace_daily", "workspace_previews", "workspace_restricted", "workspace_accounting"}
 
 // bounded returns v when it is in allowed (or, with no allowed set, a short
 // code-defined identifier), and "other" otherwise.

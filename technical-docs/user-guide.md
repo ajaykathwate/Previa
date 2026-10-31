@@ -29,6 +29,13 @@ and a checklist to test it all by hand, including the edge cases. Labels in
 - **Starter kits**: pick your stack and what it uses, and Previa writes the
   `Dockerfile` and `.previewrc.yaml` your repository needs, checked and editable,
   ready to copy or download.
+- **Ready to test**: your seed creates sample data in every preview's own database,
+  the review page says how setup went, **Reset test data** starts again from the
+  seed, and **Test access** hands reviewers a preview-only login.
+- **Test data that survives builds**: with **Test data** on, previews start from a
+  baseline built from your default branch, and a pull request keeps its testers'
+  records across new commits and rebuilds; every copy stays inside its own pull
+  request.
 
 ## The journey at a glance
 
@@ -279,6 +286,32 @@ preview):
 3. Your app runs as a non-root user (UID 65532) with a read-only file system and a
    writable `/tmp`; write only to `/tmp`.
 
+### Check it on the Setup tab
+
+A repository's **Setup** tab (for Owners, Admins and Developers) walks one open pull
+request to its first preview, five checks in order:
+
+1. **Connect the repository**: done when Previa can read it. If access was lost,
+   Owners and Admins get a link to restore it; Developers see whom to ask.
+2. **Check the configuration**: **Check setup** asks Previa to read
+   `.previewrc.yaml` and your Dockerfile at the pull request's latest commit. Nothing
+   is built or run, and the page updates by itself within seconds. Problems are listed
+   with the key and line and the fix (for a missing file, **Create it with a Starter
+   kit**). Fix them on the pull request's branch, push, and check the new commit. A
+   commit that already built counts as checked.
+3. **Review what the app needs**: the panel beside the list shows the port, health
+   check, services, setup command and the secrets stored (or, for Developers, who
+   manages them). **Build preview** starts the build; what only a real start can
+   prove (the app answers its health check, migrations run) is checked during it.
+4. **Publish a preview**: follows the build; a failure says what went wrong, with
+   **Retry build** and the pull request page's details.
+5. **Open it from Previa**: **Open preview** opens it in a new tab and finishes
+   setup. Previa records that it was opened, not whether it works.
+
+Pick another open pull request from the menu at the top of the list. A new commit
+starts the path again from its own check. Previa allows 60 checks per workspace an
+hour; checking the same commit twice in a row does nothing new.
+
 ## 6. Choose when previews build
 
 On the repository page (pull request list only):
@@ -359,6 +392,56 @@ again**.
 - With **Private previews** on, reviewers sign in with GitHub first; anyone who
   cannot see the repository gets **You can't open this preview**.
 
+### Review it in Previa
+
+Every pull request has a review page: choose **Review** beside **Preview** under
+the pull request's title (the number counts open findings). Reviewers reach it
+from **Review** on **Previews**, from a shared review link, or from a pull request
+link, which takes them there.
+
+- **How to test** (Owners, Admins, Developers): **Write instructions** or **Edit**
+  opens the form in place: a one-line summary, steps (one per line, numbered for
+  reviewers), the expected result, and optional **Start page** and **Docs page**
+  paths such as `/checkout`, which open inside the preview. **Save instructions**
+  confirms with a toast. If a teammate saved meanwhile, both versions are shown and
+  **Save mine instead** replaces theirs. Reviewers read them; the GitHub
+  description stays separate under **From GitHub**.
+- **Record a finding:** say what happened and what you expected, optionally the
+  page and **Reproduction details** (steps, or a request and the response you
+  expected), then **Add finding**. It is recorded against the deployment named under
+  the form (*Deployment 2 · abc1234*). If a newer deployment went live while you
+  wrote, Previa asks: **Record against Deployment 3** or **Keep Deployment 2**.
+- **Reply** under any finding (Ctrl/⌘+Enter sends). The **⋯** menu on your own
+  message offers **Edit** (in place, marked *Edited*) and **Remove** (confirmed;
+  the text is erased and a note says you removed it). Owners, Admins and Developers
+  can also **Remove as moderator** or **Remove finding**, choosing a reason.
+- **Resolve** marks a finding resolved (its author, or anyone who can build); the
+  line says who and on which deployment. **Reopen** brings it back. Clicking a
+  finding's header opens it on its own page; **Copy link** in its menu shares it.
+- **Open / Resolved / All**, search, author and deployment filters narrow the list.
+  The **Preview** card shows the deployment under review, whether a newer commit is
+  building or failed, how its setup went (*Setup: Completed in 12.4 s*), **Open
+  preview** and **Open docs**.
+- **Reset test data** (Owners, Admins, Developers; on the Preview card when the
+  preview runs a database or a setup command): a confirmation explains that Previa
+  rebuilds the same commit into a new deployment whose setup seeds a fresh
+  database, that the current preview keeps serving until then, and that findings
+  stay with the current deployment. With **Test data** on and a baseline ready, it
+  also asks where to start: **Repository baseline** (the default) or **Empty
+  database** (then setup and seed). **Reset test data** confirms; the page says
+  *Reset requested* and shows the new deployment when it is live. The Preview
+  card's **Test data** line then says where the deployment's data started.
+- **Test access** (beside the Preview card): how to sign in to the repository's
+  previews. Owners and Admins choose **Add test access** (or **Edit**): an account
+  such as `reviewer@preview.test` and its password, stored encrypted and never shown
+  in the form again. Everyone with access sees the account (with a copy button) and
+  can **Reveal** the password for two minutes; each reveal is recorded (*Last
+  revealed by …*). Use only a preview-only account your setup creates on every
+  deployment ([docs/31](../docs/31-test-data.md)).
+- After the pull request closes or merges, the review stays readable; only removal
+  is still possible. Asking specific people to review and recording review
+  decisions are not available yet.
+
 ## 11. Feedback on the pull request (GitHub)
 
 One comment, always edited in place, titled **Previa preview: …**:
@@ -375,7 +458,10 @@ One comment, always edited in place, titled **Previa preview: …**:
 | Removing / Preview removed / Preview expired | Teardown in progress / done / by expiry |
 
 A **Previa preview** check run is added for each build request on its exact commit
-(a retry or rebuild of the same commit gets its own run).
+(a retry or rebuild of the same commit gets its own run). The comment ends with
+**Review in Previa** (and **Build log** while a preview exists): links that need
+Previa sign-in. Findings, instructions and review status are never copied to
+GitHub.
 
 ## 12. Read build logs
 
@@ -462,16 +548,21 @@ them in `.previewrc.yaml` (details and examples in
 
 ```yaml
 services: { postgres: 17, redis: 7 }   # versions this server offers
-setup: ["bin/api", "migrate", "--seed"]
+setup: ["bin/api", "migrate"]          # every build, also on kept data
+seed: ["bin/api", "seed"]              # only when the databases start empty
 processes:
   - name: worker
     command: ["bin/api", "worker"]
 docs_path: /docs
 ```
 
-1. Every build gets **its own fresh** PostgreSQL and Redis; the app, the setup
-   command and the processes receive `DATABASE_URL`, `PG*` and `REDIS_URL`.
-   **Data does not survive a rebuild.**
+1. Every build gets **its own** PostgreSQL and Redis; the app, the setup and seed
+   commands and the processes receive `DATABASE_URL`, `PG*` and `REDIS_URL`.
+   Without Test data **data does not survive a rebuild**: the databases start
+   empty and `seed` creates synthetic test data (Starter kits write migrations and
+   seed commands per stack); a preview-only test account makes every preview ready
+   to test ([docs/31](../docs/31-test-data.md)). With Test data on (below), a pull
+   request keeps its data between builds.
 2. The build log shows each service becoming ready, the setup command's output and
    the processes starting. If one fails, the build fails with that reason and the
    previous preview keeps serving.
@@ -482,6 +573,32 @@ docs_path: /docs
    repository's **Outbound** tab, enter the host name, choose an allowed port and
    **Approve**. **Remove** confirms in a dialog. Pull requests from forks never get
    these connections.
+
+### Test data that survives builds
+
+The repository's **Test data** tab (next to **Setup**; Owners, Admins and
+Developers with a grant) keeps reviewers' work and saves preparation
+([docs/32](../docs/32-persistent-test-data.md)):
+
+1. An Owner or Admin switches **Test data** on and confirms. Previa builds a
+   **baseline** from the repository's default branch (or a branch you choose):
+   its migrations and `seed`, without repository secrets. The tab shows it per
+   database with its branch, commit, time and size; the build uses build minutes.
+2. A pull request's first build **restores the baseline**: `setup` runs only the
+   pull request's new migrations, and `seed` is skipped.
+3. A tester's records **stay** when the developer pushes again or rebuilds: the
+   next build copies the serving preview's databases. The PR page says *Started
+   from: Previous build (…)*, and the GitHub comment *Test data: kept from previous
+   build*.
+4. If copied data does not work with a branch (its setup fails on it), the build
+   tries the baseline, then empty databases and the seed, and the PR page says why.
+5. **Reset test data** on the review page starts again from the baseline or from
+   empty databases and the seed.
+6. A pull request merged into the baseline branch refreshes the baseline, and a
+   daily check notices a moved branch. **Refresh baseline** (confirmed, uses build
+   minutes) rebuilds it now. Each refresh has its result and a **Build log**.
+7. **Turn off** (confirmed) deletes the baselines; builds start empty again.
+   Only data in PostgreSQL and MySQL is kept; Redis always starts empty.
 
 ## 16. Builds, Previews and Overview
 
@@ -515,6 +632,31 @@ to the other.
 
 ## 17. Everyday navigation
 
+### Usage and free limits
+
+Open **Usage** in the workspace sidebar. The free early-access plan includes
+**300 build minutes per UTC calendar month, one concurrent build and two active
+preview slots**. Minutes reset at 00:00 UTC on the first day of the next month.
+Owners and Admins see workspace totals and limits. Developers see technical usage
+for their granted repositories; Reviewers cannot open Usage.
+
+Consumed minutes measure execution, including failed/superseded attempts, baseline
+refreshes, setup, seed and data fallbacks. Each real retry counts separately.
+Queued and capacity-wait time is free. Reserved minutes are held for running
+attempts and released when unused; a reservation lasts at most 60 seconds. A worker
+crash can leave provisional usage bounded by that last reservation, clearly
+labelled on the page. **Refresh usage** reads a new timestamped measurement.
+
+Two slots allow two PRs to retain previews. Sleeping previews keep a slot; updating
+the same PR reuses its slot. To free one, tear down an unused preview or wait for
+its published expiry. Usage also shows the reported expiry, idle and log retention
+policy, and blocked work with its next check and permitted action. An additional
+operator daily ceiling resets at 00:00 UTC and cannot be bypassed.
+
+Running out stops new compute; existing previews, reading, feedback and teardown
+stay available. No data is deleted because minutes ran out. There are no payments
+or purchase controls in this release.
+
 - Sidebar: **Overview**, **Repositories**, **Starter kits**, **Builds**,
   **Previews**, **Developer tools** (development only) and **FAQ**. On phones, the menu button opens it.
 - **FAQ** answers common questions as a conversation with Previa; the home page has
@@ -541,7 +683,7 @@ to the other.
 | A container disappears | The preview is marked failed (its container went missing); Retry, Rebuild or a new commit brings it back |
 | A live preview's app crashes | Docker restarts it (three times at most); its last lines go into the build log |
 | Nobody opens a preview for a few hours (if the operator enabled it) | It sleeps; the next visit wakes it in seconds |
-| A shared server is busy | Accounts take turns; your build may wait for **your other build** or until your **daily build minutes** reset at midnight UTC |
+| A shared server is busy or a workspace reaches its free limits | Builds wait fairly; **Usage** explains build/preview slots, minutes and their reset, and any operator ceiling. Existing previews and feedback remain available |
 | Old history | Build logs go after 14 days, closed pull requests' records after 90 days |
 
 ## 19. When Previa says no
@@ -551,6 +693,7 @@ out, and the box beside it shows the message and the fix below.
 
 | Message | Why | What to do |
 | --- | --- | --- |
+| This workspace needs early-access approval. | New workspaces wait for an operator | Open **Early access** for the workspace reference; contact support if needed. Approval starts no build. |
 | GitHub access to this repository is unavailable. | The App no longer has access | Restore access with **Choose repositories on GitHub** |
 | Closed and merged pull requests are not built. | The PR is closed | Reopen it on GitHub |
 | Build refused: resolve merge conflicts and push a new commit first. | **Conflicts** | Fix the conflict and push |
@@ -594,13 +737,22 @@ as the same Previa user. Your repositories, history and build mode return, and o
 pull requests are discovered again. Nothing rebuilds by itself: Manual waits for a
 click, and Automatic waits for the next push.
 
-**If Previa was offline when you uninstalled**, it missed GitHub's notification, and
-GitHub does not resend it on its own. Previews keep serving until they expire (48
-hours by default). Reinstalling then fails for those repositories with "This
-installation could not be linked…". To fix this, the App's owner opens the App on
-GitHub (**Developer settings → GitHub Apps → Advanced → Recent Deliveries**) and
-redelivers the failed `installation` delivery. GitHub allows this for 3 days. Previa
-then removes everything as described above.
+**If Previa missed GitHub's notification**, the worker checks installation access
+at startup and every five minutes. It only acts on verified deletion, suspension
+or a complete repository listing; outages and partial responses change nothing.
+A circuit breaker stops unusually broad losses (including the only known
+installation) for operator review. The operator checks GitHub delivery history
+and redelivers the real signed event. An explicit verified reconnect can also
+confirm a deleted old installation and preserve history in the same workspace.
+Nothing rebuilds just because access returns. See [the runbook](../docs/24-incident-runbook.md#missed-github-lifecycle-deliveries).
+
+**Early access:** new workspaces start Pending. The sidebar's **Early access** page
+shows their reference and status. An operator approves each workspace separately;
+being its Owner/Admin or creating another workspace does not bypass this. You can
+still manage members/settings, use support, sign out or delete while waiting.
+Existing workspaces are approved when the migration is applied. Operators set
+their numeric GitHub user IDs in `SUPPORT_OPERATOR_GITHUB_IDS` and use
+`/operator/early-access`. The gate defaults on in both server and worker.
 
 ---
 
@@ -633,6 +785,21 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | B6 | On GitHub, **Suspend** the App | All its repositories move to **Unavailable**; their previews are removed |
 | B7 | **Unsuspend** it | **Available** again; nothing rebuilds by itself |
 | B8 | **Uninstall** the App, then install it again with the same account | Previews removed and PR pages say access is unavailable; after reinstalling, repositories and build mode return and nothing rebuilds |
+
+### B2. Repository Setup tab
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| BS1 | Connect a repository, open it, choose **Setup** | Five steps; **Connect the repository** done; the newest open PR selected; **Check setup** offered |
+| BS2 | On a PR whose commit has no `.previewrc.yaml`, **Check setup** | Toast **Setup check started**, then (worker running) the step shows the missing file and **Create it with a Starter kit** (the Own Dockerfile kit when a root Dockerfile exists) |
+| BS3 | Add the file on the PR's branch and push | The step says the new commit is not checked yet; **Check setup** passes; **What the app needs** lists port, health check, services and secret names |
+| BS4 | Use a service version the server does not offer, check | The problem names `services.<kind>`, its line and the versions offered |
+| BS5 | **Build preview** | Toast **Build requested**; the publish step follows the build; **Open preview** appears when live |
+| BS6 | **Open preview** | A new tab opens the preview; the Setup tab shows **Opened by you** and **Ready for review**; **Write testing instructions** leads to the review page and the note says asking specific people to review is not available yet |
+| BS7 | As a Developer, open Setup | Secret names are hidden; the panel names the Owners and Admins to ask; there is no Secrets tab |
+| BS8 | As a Reviewer, open a repository's Setup address | You are sent to **Previews** |
+| BS9 | Stop the worker, **Check setup**, wait two minutes | The step says the check did not finish and offers **Check again** |
+| BS10 | Accept an invitation as a Reviewer, then as a Developer | Reviewer lands on **Previews**, Developer on the Overview's next steps; a toast names the workspace |
 
 ### C. Pull requests and mergeability
 
@@ -698,6 +865,63 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | F8 | Open an address that never existed (`https://pr-999-x-y.<preview domain>`) | "Preview not found or expired" |
 | F9 | As another GitHub user, try the first user's PR page URL | Not found (owners only) |
 
+### F2. Reviews
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| R1 | As a Developer on a PR with a live preview, choose **Review**, **Write instructions**, fill in and save | The form opens in place; toast **Testing instructions saved**; numbered steps; **Start at** opens that page in the preview |
+| R2 | As a Reviewer, open **Previews**, then **Review** | The review page without the Preview tab or instruction editing; **Recorded against Deployment N** under the form |
+| R3 | Record a finding with a page and reproduction details | Toast **Finding added**; the finding shows the deployment, the page link and the details as code |
+| R4 | Reply with Ctrl/⌘+Enter, edit the reply from **⋯**, then remove it | **Reply added**, **Message updated** (marked *Edited*), a confirmation modal, then *Message removed by its author* |
+| R5 | **Resolve**, open **Resolved**, then **Reopen** | *Resolved by … on Deployment N*; the Open count changes; reopening returns it |
+| R6 | Start typing a finding, have a teammate reply elsewhere | A note says new activity appears when you leave the field; afterwards the reply shows and your text is still there |
+| R7 | With a draft unsent, publish a new commit, then **Add finding** | The page asks **Record against Deployment N+1** or **Keep Deployment N**; your text is kept |
+| R8 | As a Developer, **Remove as moderator** on a Reviewer's message without a reason, then with one | Remove waits for a reason; the tombstone shows who and why |
+| R9 | As a Reviewer, open the PR's build logs or Secrets address | Sent to **Previews**; forged posts to build or settings addresses are refused |
+| R10 | Merge the PR, open its review | Readable; no new findings, replies, edits or resolving; **Remove** still works |
+| R11 | Turn JavaScript off and repeat R3–R5 | Every action works; removal confirms on the page |
+| R12 | On a preview whose setup seeds data, open **Review** | The Preview card says *Setup: Completed in …* and *Test data: Fresh from setup for each deployment…* |
+| R13 | As a Developer, change some data in the preview, then **Reset test data** and confirm | A modal over the page names the commit; after confirming, *Reset requested…*; when the new deployment is live the preview has only the seeded data again, and earlier findings still say the earlier deployment |
+| R14 | As a Reviewer, look for **Reset test data** | Not shown |
+| R15 | As an Owner, **Add test access** with an account and a password, save; reopen **Edit** | Toast **Test access saved**; the account shows with a copy button, the password as dots; the form's password field is empty (*leave empty to keep it*) |
+| R16 | As a Reviewer, **Reveal** the password, use it to sign in to the preview | The password shows with a copy button; after a page reload it is hidden again and *Last revealed by …* names you |
+| R17 | Push a commit whose seed fails | The update fails in its setup command; the review says so and the earlier deployment keeps serving its data |
+| R18 | Turn JavaScript off and **Reveal** | The page comes back with the password shown |
+
+### F3. Test data
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| T1 | As a Developer, open a repository's **Test data** tab | Status, refreshes and the settings shown read-only (*Owners and Admins change these*); no **Turn on** |
+| T2 | As a Reviewer, open the same address | Sent to **Previews**; no tab |
+| T3 | As an Owner, switch **Test data** on, then **Cancel**; switch it on and confirm | Cancel changes nothing; confirming says *Test data is on*, and a refresh appears as **Waiting** then **Building** without reloading |
+| T4 | Wait for the refresh (the repository's default branch declares `seed` and PostgreSQL) | **Ready**; the baseline row shows *PostgreSQL 17*, the branch and commit, the time and size; **Build log** shows the seed's output and *Captured … encrypted* |
+| T5 | Open a pull request and build it | The PR page says *Started from: Repository baseline (main@…)*; the preview has the seeded records; the build log shows setup but no seed |
+| T6 | Add a record in the preview, push a commit, build | *Started from: Previous build (…)*; the record is still there; the GitHub comment says *Test data: kept from previous build* |
+| T7 | **Rebuild preview** | The record is still there |
+| T8 | On the review page, **Reset test data**, keep **Repository baseline**, confirm | The new deployment has only the baseline's records; the Preview card says *Reset to the repository baseline…* |
+| T9 | **Reset test data** with **Empty database** | Only the seeded records; *Fresh seeded data for this deployment.* |
+| T10 | Change **Baseline branch** to a branch that does not exist and press Enter | Saved with a toast; a refresh fails as *Branch not found* naming the branch; the previous baseline stays |
+| T11 | Type `two words` as the branch | *Branch names cannot contain spaces…* beside the field; nothing saved |
+| T12 | As a Developer, **Refresh baseline** and confirm | *Baseline refresh requested*; a new refresh row |
+| T13 | Merge a pull request into the default branch on GitHub | A refresh with trigger *Pull request merged* (a second merge within the hour joins one later refresh) |
+| T14 | As an Owner, switch **Test data** off and confirm | *Test data is off and its baselines are deleted*; the next build starts with empty databases and the seed, and the PR page and comment no longer name a test data source |
+
+### F4. Usage and free limits (roadmap F3)
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| U1 | As Owner/Admin, open **Usage** | Free early access: 300 minutes/month (UTC), one concurrent build, two preview slots; actual consumed/reserved totals and measured time; no purchase control |
+| U2 | Open as a Developer with one granted repository, then as a Reviewer | Developer sees only that repository's technical usage; no workspace totals or ungranted names. Reviewer receives no usage access |
+| U3 | Two members request builds while one workspace build runs | One executes; the other waits for a workspace build slot. Usage shows the reservation and actionable wait, without a queue position |
+| U4 | Finish/fail a build, retry it, then replay a finished request | Execution is counted once per physical attempt; retry execution adds time; replay and queue time add none |
+| U5 | Build with baseline/kept data and force a starting-data fallback | Baselines and every attempted setup/seed/fallback spend the shared allowance; baselines take no preview slot |
+| U6 | Use both preview slots, build a third PR, then update an existing PR | Third PR waits; the same-PR update reuses its slot. Teardown/expiry frees a slot without deleting another preview |
+| U7 | On a disposable workspace, exhaust minutes or lower its entitlement for testing | Execution stops at its reserved deadline and waits; the current preview, feedback, reading and teardown keep working. Usage gives the actual next check/reset |
+| U8 | Cross a UTC day/month boundary and let an allowance reset | Execution is split into the correct UTC segments; a fresh period admits waiting work without importing legacy counters |
+| U9 | Stop a test worker during execution; restart after the reservation expires | Expired holds are released; crash usage is bounded and labelled provisional; recovery/replay cannot count twice |
+| U10 | Open Usage without JavaScript, at 1440 and 390 px, in both themes | Refresh and exact timestamps work; every repository value is visible on the phone; no sideways page scrolling or CSP errors |
+
 ### G. GitHub feedback
 
 | # | Steps | Expected |
@@ -706,6 +930,7 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | G2 | Fail a build | The comment says Failed with the reason; the check run fails |
 | G3 | Delete the Previa comment on GitHub, then rebuild | A new comment is created (still only one) |
 | G4 | Tear down | The comment says Preview removed; an unfinished check run is closed as stopped |
+| G5 | Open the comment's **Review in Previa** link signed out, then as a workspace member | Sign-in first; then the review page. No finding text appears on GitHub |
 
 ### H. Secrets
 
@@ -769,6 +994,36 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | J11 | With a build that failed over 7 days ago, open **Overview**, then **Builds** → **Older failures**; **Dismiss** it, then **Undo** | Overview shows "No new failures · 1 older" in grey, not red; the row is grey with "Over 7 days old"; after Dismiss it is gone from the older count and listed under **Dismissed** with **Undo**; Undo counts it again |
 | J12 | With a build that failed before going live and a live preview, open **Previews**; click a row outside its title; open `/environments` | Only the live preview is listed, with **Open preview**; the failed build is on **Builds**; the click stays on Previews; `/environments` opens Previews |
 
+F4 adds **Account & connections** and **Support & status** to the sidebar. In Your
+profile, **End other sessions** keeps this browser signed in and revokes other
+sessions/streams and previously issued private-preview access. Repository or
+installation disconnection is local; uninstall the App separately in GitHub.
+Owners can delete a workspace with other members and connected repositories.
+Deletion stays pending until runtime/file/cache cleanup and the independent
+encrypted deletion journal both succeed. Personal deletion first requires all
+owned workspaces transferred or fully deleted; other teams retain their work
+with pseudonymous attribution.
+
+### J2. Account exits, support and recovery (F4)
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| A1 | Sign in in two browsers; Your profile → End other sessions; confirm | Current browser stays signed in; the other browser and its streams lose access. |
+| A2 | Leave a workspace after any required ownership transfer | Grants/private cookies/live views stop; other members' previews stay. |
+| A3 | Account & connections → Disconnect repository; cancel, then type DISCONNECT and confirm | Cancel changes nothing; confirmation opens progress, fences new work and removes resources. |
+| A4 | Repeat for an installation | All its repositories are cleaned; the UI explains App uninstall is separate. |
+| A5 | Owner deletes a workspace with connected repos and other members | Members lose access; progress stays pending until ordered cleanup and journal acknowledgement; then Complete. |
+| A6 | Try to delete your account while owning a workspace, then after handover | First refused; second revokes sessions, provides a private seven-day receipt and pseudonymizes shared attribution. |
+| A7 | Stop the worker or journal publisher during cleanup; restart it | Progress stays pending and resumes; no premature Complete. |
+| A8 | Deliver an old signed GitHub event after disconnect | Repository/installation stays disconnected; erased rows are not recreated. |
+| A9 | Help → submit a support request with a repository/PR public ID | Persisted request and copyable diagnostic reference; another member cannot read its body. |
+| A10 | Submit beyond the per-day support limit or over the message size | Clear refusal; deleting a workspace does not reset that person's daily allowance. |
+| A11 | Visit operator console as Owner with operator IDs unset; then configure your numeric user ID | First denied; configured operator can read/resolve requests and publish incidents, with audit records. |
+| A12 | Open Status before any worker probe, then with working/stale probes | Unknown until checked; actual dependency results and checked times; no invented uptime. |
+| A13 | Read Privacy, Terms and Acceptable use signed out | Public plain-language data/permissions/retention/limit/deletion information and configurable contact. |
+| A14 | Rehearse restore with the independent latest encrypted journal, then with it missing | Completed revocations survive an old snapshot; missing journal keeps traffic stopped. |
+| A15 | Repeat account/support flows without JavaScript, at phone width and both themes | Native forms/dialogs work, focus is contained, content stays within the viewport. |
+
 ### K. Operator behaviour you can observe
 
 | # | Steps | Expected |
@@ -778,3 +1033,54 @@ whose log says `execution=true` (step 0). Use a test repository with a small
 | K3 | Remove `BUILDS_PAUSED` and restart | Waiting requests build by themselves |
 | K4 | Open **Developer tools**, **Send a ping** (development) | "Ping queued. Job #N. Your worker will process it."; sending the same key again says an active ping already exists |
 | K5 | With `APP_ENV=production` | **Developer tools** says the queue ping is off in production |
+
+### L. Missed installation events and early access (F5/F6)
+
+Use a disposable workspace and preview for destructive checks. Operator review
+and real GitHub delivery redelivery are owner-run checks, separate from fake-TLS
+GitHub automated evidence.
+
+| ID | Action | Expected |
+| --- | --- | --- |
+| L1 | Create a workspace with early access enabled | Pending page with copyable reference; connect/build is refused; support and settings work |
+| L2 | Open `/operator/early-access` as a customer Owner/Admin without a configured operator ID | Unavailable; customer roles cannot approve |
+| L3 | Configure the operator numeric user ID, restart server/worker, approve the pending workspace | Audited Approved state; connecting works; no build starts |
+| L4 | Repeat L1–L3 without JavaScript and at phone width in both themes | Native forms work, no horizontal overflow or CSP errors |
+| L5 | Check a pre-migration workspace, then create another | Existing remains approved; the new workspace still needs separate approval |
+| L6 | On a disposable test installation with another known healthy installation, drop its uninstall delivery | Reconciliation removes the preview; cleanup completes without installation access |
+| L7 | Simulate GitHub outage/401/partial listing or all-known revocation | Access remains unchanged; warning/error and operator runbook apply |
+| L8 | Reinstall the deleted App into the same authorized workspace | History/Manual mode preserved; no build starts; another workspace cannot take history |
+| L9 | Redeliver the original loss after reconciliation; restore access | Teardown is not duplicated; restoration never starts a build |
+
+## Google sign-in and reviewing without GitHub
+
+If enabled by the operator, choose **Continue with Google** on the public/sign-in
+page. A new account without GitHub sees a welcome page explaining how to join a
+workspace. Ask your team to invite your verified email as Reviewer; they copy
+the invitation link to you manually. Previa does not send invitation emails.
+
+Open the link, sign in with its addressed account/verified email, inspect the
+workspace/repository access, then accept. You can open shared previews (including
+private ones), follow testing instructions and leave findings/comments without
+GitHub. Signing in or possessing a URL does not grant access on its own.
+
+Already use Previa? Sign in with your original method and connect the second one
+from **Your profile** first. Matching email addresses do not merge accounts, and
+identities already owned by separate accounts cannot be moved. Google can sign
+you into your existing Developer/Admin account after GitHub is connected; GitHub
+can sign you into a Reviewer account. Connecting GitHub never promotes your role.
+A manager must assign technical access, and new workspaces still await approval.
+
+### M. Google identity and email Reviewer invitations (F7)
+
+| ID | Action | Expected |
+| --- | --- | --- |
+| M1 | Configure a real Google Web client, exact callback URI and both env values; restart server | Google appears alongside GitHub; an incomplete credential pair fails configuration |
+| M2 | Sign up with Google without an invitation | Welcome/Workspaces, no Owner workspace; profile shows GitHub not connected |
+| M3 | Invite a verified email as Reviewer and select one repository | Link to copy, no mail sent; email cannot receive a technical role |
+| M4 | Forward link to another verified mailbox, or use an expired/revoked link | Refused; correct recipient can explicitly accept or decline |
+| M5 | Accept as Google-only Reviewer, open granted public/private preview and leave a finding/comment | Works without GitHub; source, logs, build and admin operations remain unavailable |
+| M6 | Remove their repository grant or membership | Preview/review and existing private grants stop; re-invite targets their email |
+| M7 | Existing GitHub user connects Google from profile, signs out and returns using Google | Same local account/memberships/roles/history; no automatic promotion |
+| M8 | Google user connects an unused GitHub identity, then requests Developer access | Account preserved; still Reviewer until manager explicitly changes role; current source permission remains required |
+| M9 | Repeat with scripts off, phone width and dark/light; delete a disposable Google account and rehearse restore | Native forms work; no overflow/CSP errors; profile/email erased, provider tombstone and v2 journal prevent resurrection |

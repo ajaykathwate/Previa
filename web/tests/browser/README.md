@@ -80,3 +80,121 @@ npm exec --prefix web/tests/browser -- playwright install-deps chromium
 If the browser executable is missing, rerun `make browser-install`. Both Air
 configurations exclude this directory so dependencies/artifacts do not trigger
 application reloads. Installed packages and screenshots are Git-ignored.
+
+
+Shared-team flows also have a database-backed suite:
+
+```sh
+set -a; . ./.env; set +a
+export TEST_DATABASE_URL="$DATABASE_URL"
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-workspace-browser
+```
+
+`internal/workspaces/browser_test.go` creates a temporary schema and serves real
+session/CSRF/workspace handlers with fixture GitHub responses. Four scenarios in
+`workspaces.test.cjs` cover layouts, access confirmation, workspace creation and
+switching, JavaScript-free invitation consent, and ownership handover. Screenshots
+use the existing `UI_BROWSER_SCREENSHOTS=1` setting and ignored artifacts folder.
+
+The workspace suite also checks direct Members/Settings navigation, username
+search, separate invitations, switcher alignment, profile edits, PNG upload and
+removal, stale forms, narrow layouts, and no-JavaScript saves against PostgreSQL.
+Its fixture timeout is five minutes. `UI_BROWSER_SCREENSHOTS=1` includes settings,
+logo, invitation and switcher screenshots in the ignored artifacts directory.
+
+The repository Setup tab has its own PostgreSQL-backed suite:
+
+```sh
+set -a; . ./.env; set +a
+export TEST_DATABASE_URL="$DATABASE_URL"
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-setup-browser
+```
+
+`internal/onboarding/browser_test.go` migrates a temporary schema and serves the
+real session, CSRF, public-ID, workspace, pull request and setup handlers, with live
+updates from PostgreSQL `LISTEN`/`NOTIFY` through the realtime hub. Test-only routes
+stand in for the worker's GitHub reads, a pushed commit, a build and a deployment.
+Five scenarios in `onboarding.test.cjs` cover the Overview's role-aware next steps,
+an owner's whole path (check, problem with its fix, push, recheck, build, publish,
+open in a new tab, live completion), the pull request picker as a menu of links
+(Escape, closing before navigation, a phone-width menu), the Developer and Reviewer
+views, and checking without JavaScript. `UI_BROWSER_SCREENSHOTS=1` writes
+`setup-*.png` captures in light, dark and phone layouts.
+
+Pull request review pages have their own PostgreSQL-backed suite too:
+
+```sh
+set -a; . ./.env; set +a
+export TEST_DATABASE_URL="$DATABASE_URL"
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-review-browser
+```
+
+`internal/reviews/browser_test.go` migrates a temporary schema and serves the real
+session, CSRF, public-ID, workspace, pull request and review handlers with live
+updates through `LISTEN`/`NOTIFY`. Test-only routes stand in for a worker
+publishing the next deployment (after a pushed commit), a teammate replying and
+another change waking the page. Deployment 1 ran a setup command with a database,
+and the review service seals test access with a test keyring.
+Six scenarios in `reviews.test.cjs` cover:
+- a Developer writing instructions in place (Escape cancels);
+- an Owner seeing the setup facts, opening the Reset test data confirmation in place (Escape closes it) and adding test access in place; a Reviewer revealing the password, which a live refresh keeps and a reload drops, with *Last revealed by* shown;
+- a Reviewer's whole conversation: a finding with its page and details, the finding header opening its own page, a Ctrl/⌘+Enter reply, an in-place edit, removal in the shared modal, resolving and reopening;
+- a live reply and a new deployment arriving while a draft is unsent (the draft stays; the version is chosen on purpose);
+- a Developer moderating with a required reason from the pull request page's Review tab;
+- the whole flow without JavaScript, a test-access reveal included (run with reduced motion, since the site's smooth scrolling never lets the test robot's own scrolling settle without scripts).
+
+Every scenario fails on any CSP violation. `UI_BROWSER_SCREENSHOTS=1` writes `review-*.png` captures (light, dark and phone, grown to the full content height).
+
+A repository's Test data tab has its own PostgreSQL-backed suite:
+
+```sh
+set -a; . ./.env; set +a
+export TEST_DATABASE_URL="$DATABASE_URL"
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-test-data-browser
+```
+
+`internal/sampledata/browser_test.go` migrates a temporary schema and serves the
+real session, CSRF, public-ID, workspace, pull request (its event stream) and Test
+data handlers, with live updates through `LISTEN`/`NOTIFY`. A test-only route
+stands in for the worker: the waiting refresh starts, then succeeds with a
+PostgreSQL 17 baseline and a short log. Three scenarios in `testdata.test.cjs`
+cover an Owner turning Test data on in a modal (Cancel first), following the
+refresh live to *Ready*, saving a switch and the baseline branch in place (a bad
+name explained beside the field, a live refresh never replacing the field while
+it is being typed in), confirming Refresh baseline and reading the refresh's build
+log; the Developer's read-only view and the Reviewer sent to Previews; and turning
+Test data off in a modal. Every scenario fails on any CSP violation.
+`UI_BROWSER_SCREENSHOTS=1` writes `test-data-*.png` captures at 1440 and 390 px in
+light and dark, checking that a phone never scrolls sideways.
+
+Account exits, support, status and policies use another PostgreSQL-backed suite:
+
+```sh
+export TEST_DATABASE_URL='postgres://USER:PASSWORD@HOST:PORT/DISPOSABLE_DB'
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-accounts-browser
+```
+
+`internal/accounts/browser_test.go` creates an isolated schema and serves real
+auth, session/CSRF, workspace, account and support handlers with fixture GitHub
+authentication. Seven scenarios cover persisted/escaped support messages, operator
+incidents, public status/policies, in-place typed disconnect confirmation, durable
+cleanup progress and ending another browser's session, plus pending workspace
+approval, operator isolation and approval with JavaScript enabled and disabled. Mutations also run with
+JavaScript disabled; CSP violations fail the suite. `UI_BROWSER_SCREENSHOTS=1`
+records account, support, operator, policy, progress and modal views at 1440/390
+in both themes, including pending/approved early-access and operator approval
+views. No live GitHub mutations occur.
+
+Google sign-in and email Reviewer consent have their own database-backed suite:
+
+```sh
+export TEST_DATABASE_URL='postgres://USER:PASSWORD@HOST:PORT/DISPOSABLE_DB'
+UI_BROWSER_EXECUTABLE=/snap/bin/chromium make test-google-browser
+```
+
+The provider is simulated only in the fixture; real signed ID-token/TLS tests
+separately cover verification. Three scenarios cover Google-only signup/welcome,
+email consent and actual review findings with JavaScript on/off, explicit linking,
+CSRF/technical-access refusals and returning to an existing GitHub account through
+Google. Screenshot mode captures new/changed screens at1440/390 in both themes.
+No live Google client credentials or provider writes are required by these tests.

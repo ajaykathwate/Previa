@@ -2,13 +2,14 @@ package installations
 
 import (
 	"errors"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
+	"github.com/ajaykathwatee/previa/internal/platform/scope"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/a-h/templ"
 	repositorypages "github.com/ajaykathwatee/previa/web/pages/repositories"
 )
 
@@ -17,7 +18,7 @@ func (h *Handler) repositories(w http.ResponseWriter, r *http.Request) {
 	var selected int64
 	if value := r.URL.Query().Get("repo_id"); value != "" {
 		var err error
-		selected, err = strconv.ParseInt(value, 10, 64)
+		selected, err = publicid.Value(r, "repository", value, 0)
 		if err != nil || selected <= 0 {
 			h.fail(w, r, http.StatusBadRequest, "Choose a valid repository.")
 			return
@@ -52,19 +53,31 @@ func (h *Handler) repositories(w http.ResponseWriter, r *http.Request) {
 		query.Set("page", strconv.FormatInt(result.Page, 10))
 		location := repositorypages.WorkspaceURL(selected, query)
 		if !partial {
-			http.Redirect(w, r, location, http.StatusSeeOther)
+			publicid.Redirect(w, r, location, http.StatusSeeOther)
 			return
 		}
-		w.Header().Set("HX-Replace-Url", location)
+		if err := publicid.SetHeader(w, r, "HX-Replace-Url", location); err != nil {
+			http.Error(w, "Unable to prepare the page address.", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	page := repositoryPage(result, filter, summary.Installations, h.slug != "", r.URL.RawQuery)
 	if partial && r.Header.Get("HX-Target") == "repository-results" {
-		templ.Handler(repositorypages.Results(page)).ServeHTTP(w, r)
+		publicid.Handler(r, repositorypages.Results(page), page).ServeHTTP(w, r)
 		return
+	}
+	if h.approval != nil && page.Enabled {
+		allowed, err := h.approval.Allowed(r.Context(), scope.WorkspaceID(r.Context()))
+		if err != nil {
+			h.logger.ErrorContext(r.Context(), "read workspace approval", "error", err)
+			h.fail(w, r, http.StatusServiceUnavailable, "Repository connections are temporarily unavailable. Please try again.")
+			return
+		}
+		page.AwaitingApproval = !allowed
 	}
 	page.Connected = h.sessions.PopString(r.Context(), "installation_notice") == "linked"
 	username, _ := h.users.Username(r.Context())
-	templ.Handler(repositorypages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
+	publicid.Handler(r, repositorypages.Index(username, h.users.CSRFToken(r.Context()), page), page).ServeHTTP(w, r)
 }
 
 // openWorkspace sends an old query-based bookmark of a repository to its
@@ -80,11 +93,14 @@ func (h *Handler) openWorkspace(w http.ResponseWriter, r *http.Request, userID, 
 	}
 	location := repositorypages.WorkspaceURL(selected, r.URL.Query())
 	if partial {
-		w.Header().Set("HX-Redirect", location)
+		if err := publicid.SetHeader(w, r, "HX-Redirect", location); err != nil {
+			http.Error(w, "Unable to prepare the page address.", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	http.Redirect(w, r, location, http.StatusSeeOther)
+	publicid.Redirect(w, r, location, http.StatusSeeOther)
 }
 
 // repositoryFilter reads the repository list's filter; a malformed one is

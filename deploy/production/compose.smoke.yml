@@ -13,6 +13,9 @@ services:
   server:
     environment:
       GITHUB_APP_PRIVATE_KEY_PATH: ""
+  journal:
+    environment:
+      GITHUB_APP_PRIVATE_KEY_PATH: ""
   worker:
     environment:
       GITHUB_APP_PRIVATE_KEY_PATH: ""

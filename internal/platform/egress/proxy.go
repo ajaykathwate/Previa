@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,11 +19,17 @@ import (
 const Port = "3128"
 
 const (
-	dialTimeout   = 10 * time.Second
-	idleTimeout   = 2 * time.Minute
-	maxDuration   = time.Hour
-	maxConns      = 512
-	headerTimeout = time.Minute
+	dialTimeout = 10 * time.Second
+	// addressTimeout bounds one address of a destination and connectBudget
+	// all of them: a name often has several addresses and one may not answer
+	// (for example one of GitHub's release download addresses), so the next
+	// is tried, as browsers and curl do.
+	addressTimeout = 4 * time.Second
+	connectBudget  = 15 * time.Second
+	idleTimeout    = 2 * time.Minute
+	maxDuration    = time.Hour
+	maxConns       = 512
+	headerTimeout  = time.Minute
 )
 
 var (
@@ -101,12 +108,12 @@ func newProxy(r resolver, d dialer, logger *slog.Logger) *Proxy {
 	p := &Proxy{resolver: r, dialer: d, logger: logger, slots: make(chan struct{}, maxConns), meters: newMeters()}
 	p.transport = &http.Transport{
 		Proxy: nil,
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			target, _ := ctx.Value(vettedTarget{}).(string)
-			if target == "" {
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			targets, _ := ctx.Value(vettedTarget{}).([]string)
+			if len(targets) == 0 {
 				return nil, errBadTarget
 			}
-			return p.dialer.DialContext(ctx, network, target)
+			return dialFirst(ctx, p.dialer, targets, addressTimeout)
 		},
 		ResponseHeaderTimeout: headerTimeout,
 		IdleConnTimeout:       90 * time.Second,
@@ -154,14 +161,15 @@ func hostOf(hostport string) string {
 	return hostport
 }
 
-// vet resolves hostport and returns the single address to dial.
-func (p *Proxy) vet(ctx context.Context, hostport, defaultPort string) (string, error) {
+// vet resolves hostport and returns the addresses to dial, all of them
+// public; a name with any other address is refused.
+func (p *Proxy) vet(ctx context.Context, hostport, defaultPort string) ([]string, error) {
 	host, port, err := net.SplitHostPort(hostport)
 	if err != nil {
 		host, port = hostport, defaultPort
 	}
 	if port != "80" && port != "443" {
-		return "", errDeniedPort
+		return nil, errDeniedPort
 	}
 	host = strings.TrimSuffix(strings.Trim(host, "[]"), ".")
 	var addrs []netip.Addr
@@ -169,21 +177,64 @@ func (p *Proxy) vet(ctx context.Context, hostport, defaultPort string) (string, 
 		addrs = []netip.Addr{a}
 	} else {
 		if host == "" || len(host) > 253 || strings.ContainsAny(host, "/\\@ ") {
-			return "", errBadTarget
+			return nil, errBadTarget
 		}
 		lookupCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 		addrs, err = p.resolver.LookupNetIP(lookupCtx, "ip", host)
 		cancel()
 		if err != nil || len(addrs) == 0 {
-			return "", errUnresolvable
+			return nil, errUnresolvable
 		}
 	}
+	return vetted(addrs, port)
+}
+
+// vetted turns resolved addresses into the targets to dial, IPv4 first
+// (container networks often have no IPv6 route), or refuses the name if any
+// address is not public.
+func vetted(addrs []netip.Addr, port string) ([]string, error) {
 	for _, a := range addrs {
 		if !PublicAddress(a) {
-			return "", errDeniedAddress
+			return nil, errDeniedAddress
 		}
 	}
-	return net.JoinHostPort(addrs[0].Unmap().String(), port), nil
+	ordered := slices.Clone(addrs)
+	slices.SortStableFunc(ordered, func(a, b netip.Addr) int {
+		switch a, b := a.Unmap().Is4(), b.Unmap().Is4(); {
+		case a && !b:
+			return -1
+		case b && !a:
+			return 1
+		}
+		return 0
+	})
+	targets := make([]string, len(ordered))
+	for i, a := range ordered {
+		targets[i] = net.JoinHostPort(a.Unmap().String(), port)
+	}
+	return targets, nil
+}
+
+// dialFirst connects to the first vetted target that answers, in order,
+// giving each perAddress and all of them connectBudget. It dials only these
+// addresses and never resolves the name again.
+func dialFirst(ctx context.Context, d dialer, targets []string, perAddress time.Duration) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, connectBudget)
+	defer cancel()
+	err := errBadTarget
+	for _, target := range targets {
+		attempt, cancelAttempt := context.WithTimeout(ctx, perAddress)
+		var conn net.Conn
+		conn, err = d.DialContext(attempt, "tcp", target)
+		cancelAttempt()
+		if err == nil {
+			return conn, nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, err
 }
 
 func (p *Proxy) deny(w http.ResponseWriter, r *http.Request, host string, err error) {
@@ -197,14 +248,12 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, m *meter) {
 		p.deny(w, r, r.Host, errNotAllowedHost)
 		return
 	}
-	target, err := p.vet(r.Context(), r.Host, "443")
+	targets, err := p.vet(r.Context(), r.Host, "443")
 	if err != nil {
 		p.deny(w, r, r.Host, err)
 		return
 	}
-	dialCtx, cancel := context.WithTimeout(r.Context(), dialTimeout)
-	upstream, err := p.dialer.DialContext(dialCtx, "tcp", target)
-	cancel()
+	upstream, err := dialFirst(r.Context(), p.dialer, targets, addressTimeout)
 	if err != nil {
 		http.Error(w, "upstream unreachable", http.StatusBadGateway)
 		return
@@ -293,12 +342,12 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, m *meter) {
 		p.deny(w, r, r.URL.Host, errNotAllowedHost)
 		return
 	}
-	target, err := p.vet(r.Context(), r.URL.Host, "80")
+	targets, err := p.vet(r.Context(), r.URL.Host, "80")
 	if err != nil {
 		p.deny(w, r, r.URL.Host, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), vettedTarget{}, target), maxDuration)
+	ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), vettedTarget{}, targets), maxDuration)
 	defer cancel()
 	out := r.Clone(ctx)
 	out.RequestURI = ""

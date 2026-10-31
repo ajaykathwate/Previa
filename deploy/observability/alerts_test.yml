@@ -141,3 +141,25 @@ tests:
       - eval_time: 20m
         alertname: PreviaBuildHeavyDownload
         exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'previa_installation_reconciliation_total{outcome="deleted"}'
+        values: '0 0 1 1 1'
+      - series: 'previa_installation_reconciliation_total{outcome="circuit_open"}'
+        values: '0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PreviaMissedGitHubLifecycle
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Installation reconciliation recovered a missed GitHub lifecycle delivery.
+              runbook: docs/24-incident-runbook.md#missed-github-lifecycle-deliveries
+      - eval_time: 3m
+        alertname: PreviaInstallationReconciliationBlocked
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Installation reconciliation stopped without accepting an unverified revocation.
+              runbook: docs/24-incident-runbook.md#missed-github-lifecycle-deliveries

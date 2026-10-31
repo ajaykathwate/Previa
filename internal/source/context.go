@@ -65,27 +65,40 @@ func checkSubmodulePaths(root *os.Root, contextPath string) error {
 	}
 	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(io.LimitReader(f, (64<<10)+1))
-	if err != nil || len(data) > 64<<10 {
+	if err != nil || SubmodulesInContext(data, contextPath) {
 		return failure(CodeSubmodules, submodulesMessage, nil)
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	return nil
+}
+
+// SubmodulesInContext reports whether a root .gitmodules manifest makes a
+// build of contextPath (slash-separated, relative) fail: with the repository
+// root as context any manifest does; otherwise a submodule path at, inside or
+// around the context does. An oversized or malformed manifest counts as a
+// conflict, as it does in a build. Setup checks apply the same rule.
+func SubmodulesInContext(manifest []byte, contextPath string) bool {
+	if contextPath == "." || len(manifest) > 64<<10 {
+		return true
+	}
+	for _, line := range strings.Split(string(manifest), "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if !ok || strings.TrimSpace(key) != "path" {
 			continue
 		}
 		value = strings.TrimSpace(value)
+		var err error
 		if strings.HasPrefix(value, `"`) {
 			value, err = strconv.Unquote(value)
 		}
 		if err != nil || !filepath.IsLocal(value) {
-			return failure(CodeSubmodules, submodulesMessage, nil)
+			return true
 		}
 		value = filepath.ToSlash(filepath.Clean(value))
 		if value == contextPath || strings.HasPrefix(value, contextPath+"/") || strings.HasPrefix(contextPath, value+"/") {
-			return failure(CodeSubmodules, submodulesMessage, nil)
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 var lfsPointer = regexp.MustCompile(`(?m)^oid sha256:[a-f0-9]{64}\r?$\nsize [0-9]+\r?$`)

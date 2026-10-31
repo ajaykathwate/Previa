@@ -12,33 +12,35 @@ import (
 )
 
 const admissionScope = `-- name: AdmissionScope :one
-SELECT r.github_repo_id, i.owner_user_id FROM pull_requests p JOIN repos r ON r.id = p.repo_id
+SELECT r.github_repo_id, i.workspace_id FROM pull_requests p JOIN repos r ON r.id = p.repo_id
 JOIN installations i ON i.id = r.installation_id WHERE p.id = $1
 `
 
 type AdmissionScopeRow struct {
 	GithubRepoID pgtype.Int8
-	OwnerUserID  pgtype.Int8
+	WorkspaceID  pgtype.Int8
 }
 
 // The PR's base repository and account, for the advisory capacity check.
 func (q *Queries) AdmissionScope(ctx context.Context, id int64) (AdmissionScopeRow, error) {
 	row := q.db.QueryRow(ctx, admissionScope, id)
 	var i AdmissionScopeRow
-	err := row.Scan(&i.GithubRepoID, &i.OwnerUserID)
+	err := row.Scan(&i.GithubRepoID, &i.WorkspaceID)
 	return i, err
 }
 
 const executionTarget = `-- name: ExecutionTarget :one
-SELECT p.id AS pull_request_id, p.repo_id, p.number, p.head_sha, p.state, p.generation, p.is_fork, p.head_repo_id,
-       r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status, i.owner_user_id,
-       b.generation AS intent_generation, b.revision AS intent_revision, b.head_sha AS intent_head_sha, b.state AS intent_state
+SELECT workspace_intent_authorized(p.id)::boolean AS workspace_authorized, p.id AS pull_request_id, p.repo_id, p.number, p.head_sha, p.state, p.generation, p.is_fork, p.head_repo_id,
+       r.github_repo_id, r.accessible, i.github_installation_id, i.status AS installation_status, b.workspace_id,
+       b.generation AS intent_generation, b.revision AS intent_revision, b.head_sha AS intent_head_sha, b.state AS intent_state,
+       coalesce(b.start_source, '')::text AS start_source
 FROM pull_requests p JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = p.id
 WHERE p.id = $1
 `
 
 type ExecutionTargetRow struct {
+	WorkspaceAuthorized  bool
 	PullRequestID        int64
 	RepoID               int64
 	Number               int32
@@ -51,11 +53,12 @@ type ExecutionTargetRow struct {
 	Accessible           bool
 	GithubInstallationID int64
 	InstallationStatus   string
-	OwnerUserID          pgtype.Int8
+	WorkspaceID          pgtype.Int8
 	IntentGeneration     pgtype.Int8
 	IntentRevision       pgtype.Int8
 	IntentHeadSha        pgtype.Text
 	IntentState          pgtype.Text
+	StartSource          string
 }
 
 // Everything the runtime rechecks immediately before work that needs access or
@@ -64,6 +67,7 @@ func (q *Queries) ExecutionTarget(ctx context.Context, id int64) (ExecutionTarge
 	row := q.db.QueryRow(ctx, executionTarget, id)
 	var i ExecutionTargetRow
 	err := row.Scan(
+		&i.WorkspaceAuthorized,
 		&i.PullRequestID,
 		&i.RepoID,
 		&i.Number,
@@ -76,17 +80,18 @@ func (q *Queries) ExecutionTarget(ctx context.Context, id int64) (ExecutionTarge
 		&i.Accessible,
 		&i.GithubInstallationID,
 		&i.InstallationStatus,
-		&i.OwnerUserID,
+		&i.WorkspaceID,
 		&i.IntentGeneration,
 		&i.IntentRevision,
 		&i.IntentHeadSha,
 		&i.IntentState,
+		&i.StartSource,
 	)
 	return i, err
 }
 
 const listOutboundPreviews = `-- name: ListOutboundPreviews :many
-SELECT p.id AS pull_request_id, p.repo_id,
+SELECT workspace_intent_authorized(p.id)::boolean AS workspace_authorized, p.id AS pull_request_id, p.repo_id,
        (NOT p.is_fork AND p.head_repo_id IS NOT NULL AND p.head_repo_id = r.github_repo_id)::boolean AS trusted
 FROM pull_requests p
 JOIN repos r ON r.id = p.repo_id
@@ -99,9 +104,10 @@ ORDER BY p.id
 `
 
 type ListOutboundPreviewsRow struct {
-	PullRequestID int64
-	RepoID        int64
-	Trusted       bool
+	WorkspaceAuthorized bool
+	PullRequestID       int64
+	RepoID              int64
+	Trusted             bool
 }
 
 // Pull requests whose preview network may carry outbound connections now: a
@@ -117,7 +123,12 @@ func (q *Queries) ListOutboundPreviews(ctx context.Context) ([]ListOutboundPrevi
 	var items []ListOutboundPreviewsRow
 	for rows.Next() {
 		var i ListOutboundPreviewsRow
-		if err := rows.Scan(&i.PullRequestID, &i.RepoID, &i.Trusted); err != nil {
+		if err := rows.Scan(
+			&i.WorkspaceAuthorized,
+			&i.PullRequestID,
+			&i.RepoID,
+			&i.Trusted,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -130,12 +141,16 @@ func (q *Queries) ListOutboundPreviews(ctx context.Context) ([]ListOutboundPrevi
 
 const recordComponents = `-- name: RecordComponents :exec
 WITH recorded AS (
-    INSERT INTO preview_components (pull_request_id, generation, revision, services, setup, processes, docs_path, outbound, outbound_withheld)
+    INSERT INTO preview_components (pull_request_id, generation, revision, services, setup, processes, docs_path, outbound, outbound_withheld, config_hash, setup_ms,
+                                    seed, seed_ms, data_source, data_detail)
     VALUES ($1, $2, $3, $4, $5,
-            $6, $7, $8, $9)
+            $6, $7, $8, $9, $10, $11,
+            $12, $13, $14, $15)
     ON CONFLICT (pull_request_id, generation, revision) DO UPDATE
     SET services = EXCLUDED.services, setup = EXCLUDED.setup, processes = EXCLUDED.processes, docs_path = EXCLUDED.docs_path,
-        outbound = EXCLUDED.outbound, outbound_withheld = EXCLUDED.outbound_withheld, recorded_at = now()
+        outbound = EXCLUDED.outbound, outbound_withheld = EXCLUDED.outbound_withheld, config_hash = EXCLUDED.config_hash,
+        setup_ms = EXCLUDED.setup_ms, seed = EXCLUDED.seed, seed_ms = EXCLUDED.seed_ms, data_source = EXCLUDED.data_source,
+        data_detail = EXCLUDED.data_detail, recorded_at = now()
     RETURNING pull_request_id
 )
 DELETE FROM preview_components c
@@ -144,6 +159,10 @@ WHERE c.pull_request_id = $1 AND e.pull_request_id = c.pull_request_id
   AND (c.generation, c.revision) < ($2::bigint, $3::bigint)
   AND NOT (c.generation = e.applied_generation AND c.revision = e.applied_revision)
   AND NOT (c.generation IS NOT DISTINCT FROM e.pending_generation AND c.revision IS NOT DISTINCT FROM e.pending_revision)
+  AND NOT EXISTS (
+      SELECT 1 FROM preview_publications x
+      WHERE x.pull_request_id = c.pull_request_id AND x.generation = c.generation AND x.revision = c.revision
+        AND x.sequence = (SELECT max(y.sequence) FROM preview_publications y WHERE y.pull_request_id = c.pull_request_id))
 `
 
 type RecordComponentsParams struct {
@@ -156,10 +175,18 @@ type RecordComponentsParams struct {
 	DocsPath         pgtype.Text
 	Outbound         int32
 	OutboundWithheld bool
+	ConfigHash       pgtype.Text
+	SetupMs          pgtype.Int4
+	Seed             bool
+	SeedMs           pgtype.Int4
+	DataSource       pgtype.Text
+	DataDetail       []byte
 }
 
 // What a ready candidate runs next to its app. Rows of earlier requests that
-// the PR serves neither as its deployed nor as its pending candidate go.
+// the PR serves neither as its deployed nor as its pending candidate go. The
+// serving candidate is the newest publication's: after a failed update the
+// environment's applied revision names the failed attempt instead.
 func (q *Queries) RecordComponents(ctx context.Context, arg RecordComponentsParams) error {
 	_, err := q.db.Exec(ctx, recordComponents,
 		arg.PullRequestID,
@@ -171,6 +198,12 @@ func (q *Queries) RecordComponents(ctx context.Context, arg RecordComponentsPara
 		arg.DocsPath,
 		arg.Outbound,
 		arg.OutboundWithheld,
+		arg.ConfigHash,
+		arg.SetupMs,
+		arg.Seed,
+		arg.SeedMs,
+		arg.DataSource,
+		arg.DataDetail,
 	)
 	return err
 }
@@ -210,4 +243,27 @@ func (q *Queries) RecordPreviewCrash(ctx context.Context, arg RecordPreviewCrash
 	var environment_id int64
 	err := row.Scan(&environment_id)
 	return environment_id, err
+}
+
+const servingDeployment = `-- name: ServingDeployment :one
+SELECT e.container_id::text AS container_id, coalesce(e.head_sha, '')::text AS head_sha,
+       coalesce((SELECT max(x.sequence) FROM preview_publications x WHERE x.pull_request_id = e.pull_request_id), 0)::integer AS sequence
+FROM environments e
+WHERE e.pull_request_id = $1 AND e.status IN ('running', 'publishing', 'failed') AND e.container_id IS NOT NULL
+`
+
+type ServingDeploymentRow struct {
+	ContainerID string
+	HeadSha     string
+	Sequence    int32
+}
+
+// The candidate a pull request serves now, to copy its data into the next
+// one (docs/32): the environment's active container, also while asleep or
+// while a newer update failed, and its newest publication's number.
+func (q *Queries) ServingDeployment(ctx context.Context, pullRequestID int64) (ServingDeploymentRow, error) {
+	row := q.db.QueryRow(ctx, servingDeployment, pullRequestID)
+	var i ServingDeploymentRow
+	err := row.Scan(&i.ContainerID, &i.HeadSha, &i.Sequence)
+	return i, err
 }

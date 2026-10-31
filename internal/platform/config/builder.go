@@ -26,6 +26,11 @@ type ExecutionConfig struct {
 	// SourceWorkspaceRoot holds each build's extracted source while it builds;
 	// empty uses previa-sources in the system temporary directory.
 	SourceWorkspaceRoot string `envconfig:"SOURCE_WORKSPACE_ROOT"`
+	// PreviewBaselineDir holds repositories' encrypted test-data baselines
+	// (docs/32-persistent-test-data.md); empty uses previa-baselines in the
+	// system temporary directory. Baselines are derived data: a lost file is
+	// rebuilt from its branch.
+	PreviewBaselineDir string `envconfig:"PREVIEW_BASELINE_DIR"`
 	BuilderConfig
 	PreviewConfig
 }
@@ -52,6 +57,12 @@ func (c *ExecutionConfig) check() error {
 	}
 	if !filepath.IsAbs(c.SourceWorkspaceRoot) || filepath.Clean(c.SourceWorkspaceRoot) != c.SourceWorkspaceRoot {
 		return errors.New("SOURCE_WORKSPACE_ROOT must be an absolute, clean path")
+	}
+	if c.PreviewBaselineDir == "" {
+		c.PreviewBaselineDir = filepath.Join(os.TempDir(), "previa-baselines")
+	}
+	if !filepath.IsAbs(c.PreviewBaselineDir) || filepath.Clean(c.PreviewBaselineDir) != c.PreviewBaselineDir {
+		return errors.New("PREVIEW_BASELINE_DIR must be an absolute, clean path")
 	}
 	if err := c.BuilderConfig.check(); err != nil {
 		return err
@@ -148,6 +159,13 @@ type PreviewConfig struct {
 	// PreviewIdleSleep stops a preview's app after this long without a
 	// visit, until the next visit wakes it; zero keeps previews running.
 	PreviewIdleSleep time.Duration `envconfig:"PREVIEW_IDLE_SLEEP" default:"0"`
+	// Persistent test data (docs/32-persistent-test-data.md): the compressed
+	// size limit of one baseline dump, the limit of one dump-and-restore
+	// (kept data or a baseline), and the least time between automatic
+	// baseline refreshes of one repository.
+	PreviewBaselineMaxSize     ByteSize      `envconfig:"PREVIEW_BASELINE_MAX_SIZE" default:"64MiB"`
+	PreviewDataCopyTimeout     time.Duration `envconfig:"PREVIEW_DATA_COPY_TIMEOUT" default:"2m"`
+	PreviewBaselineMinInterval time.Duration `envconfig:"PREVIEW_BASELINE_MIN_INTERVAL" default:"1h"`
 }
 
 // ServiceCatalog parses PREVIEW_SERVICE_CATALOG.
@@ -177,6 +195,12 @@ func (c *PreviewConfig) check() error {
 		return errors.New("PREVIEW_OCI_RUNTIME must be a Docker runtime name such as runsc")
 	case c.PreviewSetupTimeout < 10*time.Second || c.PreviewSetupTimeout > 30*time.Minute:
 		return errors.New("PREVIEW_SETUP_TIMEOUT must be between 10s and 30m")
+	case c.PreviewBaselineMaxSize < 1<<20 || c.PreviewBaselineMaxSize > 4<<30:
+		return errors.New("PREVIEW_BASELINE_MAX_SIZE must be between 1MiB and 4GiB")
+	case c.PreviewDataCopyTimeout < 10*time.Second || c.PreviewDataCopyTimeout > 30*time.Minute:
+		return errors.New("PREVIEW_DATA_COPY_TIMEOUT must be between 10s and 30m")
+	case c.PreviewBaselineMinInterval < time.Minute || c.PreviewBaselineMinInterval > 24*time.Hour:
+		return errors.New("PREVIEW_BASELINE_MIN_INTERVAL must be between 1m and 24h")
 	}
 	_, err := c.ServiceCatalog()
 	return err

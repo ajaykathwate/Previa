@@ -30,6 +30,7 @@ const (
 	CodeServiceUnavailable = "service_unavailable" // a managed service's pinned image could not be pulled
 	CodeServiceFailed      = "service_failed"      // a managed service stopped or was not ready in time
 	CodeSetupFailed        = "setup_failed"        // the setup command failed or timed out
+	CodeSeedFailed         = "seed_failed"         // the seed command failed or timed out on an empty database
 	CodeProcessFailed      = "process_failed"      // a process stopped before the preview was ready
 )
 

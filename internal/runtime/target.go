@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/runtime/dbgen"
@@ -23,7 +24,10 @@ type Target struct {
 	// unknown or deleted.
 	BaseRepoID, HeadRepoID int64
 	Fork                   bool
-	AccountID              int64 // the installation owner's Previa user, for per-account limits; 0 if unknown
+	WorkspaceID            int64 // the stable workspace ID, for shared limits; 0 if unknown
+	// StartSource is a Reset test data request's chosen starting data
+	// (SourceBaseline or SourceEmpty); empty otherwise (docs/32).
+	StartSource string
 }
 
 // secretSource is the source identity secrets are decided on. Anything GitHub
@@ -36,7 +40,33 @@ func (t Target) secretSource() secrets.Source {
 }
 
 // TargetStore reads targets from PostgreSQL.
-type TargetStore struct{ pool *pgxpool.Pool }
+type BuildAuthorizer interface {
+	AuthorizeBuild(context.Context, int64) (bool, error)
+}
+
+type TargetStore struct {
+	pool          *pgxpool.Pool
+	authorization BuildAuthorizer
+}
+
+func (s *TargetStore) WithAuthorization(a BuildAuthorizer) *TargetStore {
+	s.authorization = a
+	return s
+}
+
+func (s *TargetStore) authorize(ctx context.Context, pr int64) error {
+	if s.authorization == nil {
+		return nil
+	}
+	allowed, err := s.authorization.AuthorizeBuild(ctx, pr)
+	if err != nil {
+		return failure(CodeUnavailable, "GitHub source permission could not be verified. Try again shortly.", true, err)
+	}
+	if !allowed {
+		return failure(CodeNotCurrent, "This build's requesting member no longer has access.", false, nil)
+	}
+	return nil
+}
 
 func NewTargetStore(pool *pgxpool.Pool) *TargetStore { return &TargetStore{pool: pool} }
 
@@ -50,7 +80,18 @@ func (s *TargetStore) Current(ctx context.Context, request environments.Request)
 	if err != nil {
 		return Target{}, failure(CodeUnavailable, "The build target could not be read.", true, fmt.Errorf("read execution target: %w", err))
 	}
-	return currentTarget(row, request)
+	target, err := currentTarget(row, request)
+	if err != nil {
+		return Target{}, err
+	}
+	if err := s.authorize(ctx, request.PullRequestID); err != nil {
+		return Target{}, err
+	}
+	return target, nil
+}
+
+func (s *TargetStore) AuthorizeRequest(ctx context.Context, pr int64) error {
+	return s.authorize(ctx, pr)
 }
 
 // BaseRepository returns the GitHub ID of the PR's base repository.
@@ -62,12 +103,24 @@ func (s *TargetStore) AdmissionScope(ctx context.Context, pullRequestID int64) (
 	if err != nil {
 		return Target{}, failure(CodeUnavailable, "The build target could not be read.", true, fmt.Errorf("read base repository: %w", err))
 	}
-	return Target{PullRequestID: pullRequestID, BaseRepoID: row.GithubRepoID.Int64, AccountID: row.OwnerUserID.Int64}, nil
+	return Target{PullRequestID: pullRequestID, BaseRepoID: row.GithubRepoID.Int64, WorkspaceID: row.WorkspaceID.Int64}, nil
+}
+
+// Serving returns the deployment a pull request serves now, if any.
+func (s *TargetStore) Serving(ctx context.Context, pullRequestID int64) (Serving, bool, error) {
+	row, err := dbgen.New(s.pool).ServingDeployment(ctx, pullRequestID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Serving{}, false, nil
+	}
+	if err != nil {
+		return Serving{}, false, fmt.Errorf("read the serving deployment: %w", err)
+	}
+	return Serving{ContainerID: row.ContainerID, HeadSHA: row.HeadSha, Sequence: row.Sequence}, row.ContainerID != "", nil
 }
 
 func currentTarget(row dbgen.ExecutionTargetRow, request environments.Request) (Target, error) {
 	switch {
-	case row.State != "open" || row.Generation != request.Generation || row.HeadSha != request.HeadSHA:
+	case !row.WorkspaceAuthorized || !row.WorkspaceID.Valid || row.WorkspaceID.Int64 <= 0 || row.State != "open" || row.Generation != request.Generation || row.HeadSha != request.HeadSHA:
 		return Target{}, failure(CodeNotCurrent, "A newer commit or a close replaced this build.", false, nil)
 	case !row.IntentState.Valid || row.IntentState.String != "running" || row.IntentRevision.Int64 != request.Revision ||
 		row.IntentGeneration.Int64 != request.Generation || row.IntentHeadSha.String != request.HeadSHA:
@@ -82,7 +135,7 @@ func currentTarget(row dbgen.ExecutionTargetRow, request environments.Request) (
 	return Target{
 		PullRequestID: row.PullRequestID, RepoID: row.RepoID, Number: row.Number, InstallationID: row.GithubInstallationID,
 		BaseRepoID: row.GithubRepoID.Int64, HeadRepoID: head, Fork: row.IsFork || head != row.GithubRepoID.Int64,
-		AccountID: row.OwnerUserID.Int64,
+		WorkspaceID: row.WorkspaceID.Int64, StartSource: row.StartSource,
 	}, nil
 }
 
@@ -96,6 +149,21 @@ type Components struct {
 	DocsPath                            string
 	Outbound                            int  // approved destinations given to it
 	OutboundWithheld                    bool // approvals exist but its source is untrusted
+	// ConfigHash is the effective configuration's hash, which the candidate's
+	// publication records (docs/30-reviews.md).
+	ConfigHash string
+	// SetupTook is how long the setup command ran; recorded only when the
+	// candidate declares setup.
+	SetupTook time.Duration
+	// Seed is whether the candidate declares a seed command, SeedTook how
+	// long it ran when it ran (on empty databases only).
+	Seed     bool
+	SeedTook time.Duration
+	// DataSource is where its SQL databases started (SourceKept,
+	// SourceBaseline or SourceEmpty); empty without one. DataDetail records
+	// which deployment or baseline, and every fallback with its reason.
+	DataSource string
+	DataDetail map[string]any
 }
 
 // ServiceComponent is one managed service of a candidate.
@@ -115,10 +183,20 @@ func (s *TargetStore) RecordComponents(ctx context.Context, c Components) error 
 	if err != nil {
 		return err
 	}
+	detail := []byte("{}")
+	if len(c.DataDetail) > 0 {
+		if detail, err = json.Marshal(c.DataDetail); err != nil {
+			return err
+		}
+	}
 	if err := dbgen.New(s.pool).RecordComponents(ctx, dbgen.RecordComponentsParams{
 		PullRequestID: c.PullRequestID, Generation: c.Generation, Revision: c.Revision, Services: services, Setup: c.Setup,
 		Processes: processes, DocsPath: pgtype.Text{String: c.DocsPath, Valid: c.DocsPath != ""},
 		Outbound: int32(c.Outbound), OutboundWithheld: c.OutboundWithheld,
+		ConfigHash: pgtype.Text{String: c.ConfigHash, Valid: c.ConfigHash != ""},
+		SetupMs:    pgtype.Int4{Int32: int32(max(0, min(c.SetupTook.Milliseconds(), 1<<31-1))), Valid: c.Setup},
+		Seed:       c.Seed, SeedMs: pgtype.Int4{Int32: int32(max(0, min(c.SeedTook.Milliseconds(), 1<<31-1))), Valid: c.Seed && c.SeedTook > 0},
+		DataSource: pgtype.Text{String: c.DataSource, Valid: c.DataSource != ""}, DataDetail: detail,
 	}); err != nil {
 		return fmt.Errorf("record preview components: %w", err)
 	}

@@ -3,6 +3,7 @@
 package outbound
 
 import (
+	"github.com/ajaykathwatee/previa/web/components"
 	"strconv"
 	"strings"
 	"time"
@@ -95,4 +96,12 @@ func (p Page) PortsLabel() string {
 // CountLabel is "2 of 10".
 func (p Page) CountLabel() string {
 	return strconv.Itoa(len(p.Destinations)) + " of " + strconv.Itoa(p.Limit)
+}
+
+func (p Page) PublicReferences() []components.ResourceRef {
+	refs := components.ResourceRefs("repository", p.RepoID)
+	for _, d := range p.Destinations {
+		refs = append(refs, components.ResourceRef{Kind: "destination", ID: d.ID})
+	}
+	return refs
 }

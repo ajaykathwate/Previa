@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -37,8 +38,7 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 	r.Group(func(r chi.Router) {
 		r.Use(requireUser)
 		r.Get("/repositories/{repoID}/secrets", h.page)
-		r.Post("/repositories/{repoID}/secrets", h.put)
-		r.Post("/repositories/{repoID}/secrets/delete", h.delete)
+		r.Post("/repositories/{repoID}/secrets", h.save)
 		r.Post("/repositories/{repoID}/secrets/build", h.setBuild)
 	})
 }
@@ -52,53 +52,57 @@ func secretsURL(repoID int64, query url.Values) string {
 }
 
 func (h *Handler) identity(r *http.Request) (int64, int64, bool) {
-	repoID, err := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+	repoID, err := publicid.Param(r, "repoID", "repository")
 	user, _, ok := h.users.UserIDs(r.Context())
 	return user, repoID, err == nil && repoID > 0 && ok
 }
 
+// page shows the .env file with its values hidden, or with them in the
+// editor after Show values and edit (?edit=1).
 func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 	user, repoID, ok := h.identity(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	view := pages.Page{}
 	query := r.URL.Query()
-	view.Notice = notice(query)
-	if name := query.Get("replace"); namePattern.MatchString(name) {
-		view.Replacing = name
-		view.Rows = []pages.Row{{Name: name}}
-	}
-	h.render(w, r, user, repoID, http.StatusOK, view)
+	view := pages.Page{Notice: notice(query), Editing: query.Get("edit") == "1"}
+	h.render(w, r, user, repoID, http.StatusOK, view, nil)
 }
 
-// notice confirms the last save or delete from its redirect query.
+// notice confirms the last save or build-access change from its redirect
+// query.
 func notice(query url.Values) string {
-	count, _ := strconv.Atoi(query.Get("saved_count"))
-	created, _ := strconv.Atoi(query.Get("created"))
-	deleted, _ := strconv.Atoi(query.Get("deleted_count"))
 	switch {
-	case namePattern.MatchString(query.Get("saved")):
-		return "Saved " + query.Get("saved") + ". Its value is encrypted and will not be shown again."
-	case count > 1 && created >= 0 && created <= count:
-		return fmt.Sprintf("Saved %d secrets (%d new, %d replaced). Their values are encrypted and will not be shown again.", count, created, count-created)
-	case namePattern.MatchString(query.Get("deleted")):
-		return "Deleted " + query.Get("deleted") + "."
+	case query.Get("saved") == "1":
+		var parts []string
+		for _, change := range []string{"added", "changed", "removed"} {
+			if n, _ := strconv.Atoi(query.Get(change)); n > 0 && n <= 10000 {
+				parts = append(parts, fmt.Sprintf("%d %s", n, change))
+			}
+		}
+		if len(parts) == 0 {
+			return "Saved the .env file. No values changed."
+		}
+		return "Saved the .env file: " + strings.Join(parts, ", ") + ". Previews get the new values when they are next built."
 	case namePattern.MatchString(query.Get("build_on")):
 		return "Builds of this repository's own branches can now read " + query.Get("build_on") + ". It takes effect at the next build."
 	case namePattern.MatchString(query.Get("build_off")):
 		return "Builds no longer receive " + query.Get("build_off") + "."
-	case deleted > 1:
-		return fmt.Sprintf("Deleted %d secrets.", deleted)
 	}
 	return ""
 }
 
-// put saves every filled editor line and every NAME=value of pasted .env
-// text in one transaction. A rejected save shows the names again with the
-// reason, never the values.
-func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
+// submitted is an edited file shown again after a refused save, so nothing
+// typed is lost. Revision -1 takes the current file's revision.
+type submitted struct {
+	text     []byte
+	revision int64
+}
+
+// save stores the edited .env file and makes the repository's secrets the
+// names it sets.
+func (h *Handler) save(w http.ResponseWriter, r *http.Request) {
 	user, repoID, ok := h.identity(r)
 	if !ok {
 		http.NotFound(w, r)
@@ -108,159 +112,51 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid form.", http.StatusBadRequest)
 		return
 	}
-	form := readSecretsForm(r.PostForm)
-	defer form.wipe()
-	if form.view.Error != "" {
-		h.render(w, r, user, repoID, http.StatusUnprocessableEntity, form.view)
-		return
+	// Browsers submit textarea line breaks as CRLF; store \n line breaks.
+	text := []byte(strings.ReplaceAll(r.PostFormValue("env"), "\r\n", "\n"))
+	defer clear(text)
+	revision, err := strconv.ParseInt(r.PostFormValue("revision"), 10, 64)
+	if err != nil || revision < 0 {
+		revision = 0
 	}
-	created, err := h.service.PutMany(r.Context(), user, repoID, form.entries)
+	saved, err := h.service.SaveFile(r.Context(), user, repoID, text, revision, r.PostFormValue("confirm_removals") == "1")
 	if err != nil {
-		status, unexpected := form.explainSaveError(err)
-		if unexpected {
-			h.logger.ErrorContext(r.Context(), "save repository secrets failed", "repo_id", repoID)
-		}
-		h.render(w, r, user, repoID, status, form.view)
-		return
-	}
-	h.logger.InfoContext(r.Context(), "repository secrets saved", "repo_id", repoID, "count", len(form.entries), "created", created)
-	query := url.Values{}
-	if len(form.entries) == 1 {
-		query.Set("saved", form.entries[0].Name)
-	} else {
-		query.Set("saved_count", strconv.Itoa(len(form.entries)))
-		query.Set("created", strconv.Itoa(created))
-	}
-	http.Redirect(w, r, secretsURL(repoID, query), http.StatusSeeOther)
-}
-
-// secretsForm is a submitted secrets form: the page to show again (names and
-// reasons, never values) and the entries to save.
-type secretsForm struct {
-	view    pages.Page
-	entries []Entry
-	rowOf   []int // the editor line of each entry, or -1 for pasted text
-}
-
-// readSecretsForm reads every filled editor line and every NAME=value of the
-// pasted .env text. A line missing its name or value, or unreadable pasted
-// text, sets the page's error: nothing is saved then.
-func readSecretsForm(form url.Values) *secretsForm {
-	f := &secretsForm{}
-	names, values := form["name"], form["value"]
-	for i, raw := range names {
-		name := strings.TrimSpace(raw)
-		value := ""
-		if i < len(values) {
-			// Browsers submit textarea line breaks as CRLF; store \n line breaks.
-			value = strings.ReplaceAll(values[i], "\r\n", "\n")
-		}
-		if name == "" && value == "" {
-			continue // an unused line
-		}
-		row := pages.Row{Name: name}
+		view, status := pages.Page{Editing: true}, http.StatusUnprocessableEntity
+		again := &submitted{text: text, revision: revision}
+		var invalid *InvalidError
+		var removals *RemovalsError
 		switch {
-		case name == "":
-			row.Error = "Enter a name for this value."
-		case value == "":
-			row.Error = "Enter a value for " + name + "."
+		case errors.As(err, &removals):
+			view.Removals, status = removals.Names, http.StatusOK
+		case errors.As(err, &invalid):
+			view.Error = invalid.Message + " Nothing was saved."
+		case errors.Is(err, ErrLimit):
+			view.Error = fmt.Sprintf("A .env file can set at most %d names. Nothing was saved.", MaxSecretsPerRepository)
+		case errors.Is(err, ErrChanged):
+			view.Error, status = "Someone saved this file after you opened it. Your version is below: saving it replaces theirs, or open the file again to see their changes.", http.StatusConflict
+			again.revision = -1
+		case errors.Is(err, ErrNotConfigured):
+			view.Error, status = "Secrets are not configured on this server.", http.StatusServiceUnavailable
+		case errors.Is(err, ErrUnavailable):
+			// Saving needs the repository; new or changed values also need
+			// current GitHub access.
+			view.Error, status = "GitHub access to this repository was removed, so values cannot be added or changed. You can still remove variables or edit comments. Nothing was saved.", http.StatusConflict
 		default:
-			f.entries = append(f.entries, Entry{Name: name, Value: []byte(value)})
-			f.rowOf = append(f.rowOf, len(f.view.Rows))
+			h.logger.ErrorContext(r.Context(), "save repository .env file failed", "repo_id", repoID)
+			view.Error, status = "The .env file could not be saved. Please retry.", http.StatusServiceUnavailable
 		}
-		if row.Error != "" {
-			f.view.Error = "Some lines need a name or a value. Nothing was saved; enter the values again."
-		}
-		f.view.Rows = append(f.view.Rows, row)
-	}
-	pasted, err := ParseDotenv(form.Get("dotenv"))
-	if invalid := (*InvalidError)(nil); errors.As(err, &invalid) {
-		f.view.DotenvError = invalid.Message
-		if f.view.Error == "" {
-			f.view.Error = "The pasted text could not be read. Nothing was saved; paste it again after fixing it."
-		}
-	}
-	for _, e := range pasted {
-		f.entries = append(f.entries, e)
-		f.rowOf = append(f.rowOf, -1)
-	}
-	return f
-}
-
-// wipe clears the submitted values from memory.
-func (f *secretsForm) wipe() {
-	for _, e := range f.entries {
-		clear(e.Value)
-	}
-}
-
-// explainSaveError puts why saving failed on the page, at the offending line
-// when it is one, and returns the response status and whether the failure
-// was unexpected (and so worth logging).
-func (f *secretsForm) explainSaveError(err error) (status int, unexpected bool) {
-	var invalid *InvalidError
-	switch {
-	case errors.As(err, &invalid):
-		f.view.Error = invalid.Message + " Nothing was saved; enter the values again."
-		if invalid.Entry > 0 {
-			if line := f.rowOf[invalid.Entry-1]; line >= 0 {
-				f.view.Rows[line].Error = invalid.Message
-			} else {
-				f.view.DotenvError = "In the pasted text: " + invalid.Message
-			}
-		}
-		return http.StatusUnprocessableEntity, false
-	case errors.Is(err, ErrLimit):
-		f.view.Error = fmt.Sprintf("A repository holds at most %d secrets. Delete some, or save fewer new names. Nothing was saved.", MaxSecretsPerRepository)
-		return http.StatusUnprocessableEntity, false
-	case errors.Is(err, ErrNotConfigured):
-		f.view.Error = "Secrets are not configured on this server."
-		return http.StatusServiceUnavailable, false
-	case errors.Is(err, ErrUnavailable):
-		f.view.Error = "GitHub access to this repository was removed. You can delete secrets, but not add or replace them."
-		return http.StatusConflict, false
-	default:
-		f.view.Error = "The secrets could not be saved. Please retry."
-		return http.StatusServiceUnavailable, true
-	}
-}
-
-// delete removes one secret (a row's Delete) or every selected one.
-func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
-	user, repoID, ok := h.identity(r)
-	if !ok {
-		http.NotFound(w, r)
+		h.render(w, r, user, repoID, status, view, again)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Invalid form.", http.StatusBadRequest)
-		return
-	}
-	names := r.PostForm["name"]
-	deleted, err := h.service.DeleteMany(r.Context(), user, repoID, names)
-	var invalid *InvalidError
-	switch {
-	case errors.Is(err, ErrUnavailable):
-		http.NotFound(w, r)
-		return
-	case errors.As(err, &invalid):
-		http.Redirect(w, r, secretsURL(repoID, nil), http.StatusSeeOther)
-		return
-	case err != nil:
-		h.logger.ErrorContext(r.Context(), "delete repository secrets failed", "repo_id", repoID)
-		http.Error(w, "The secrets could not be deleted. Please retry.", http.StatusServiceUnavailable)
-		return
-	}
-	query := url.Values{}
-	if deleted > 0 {
-		h.logger.InfoContext(r.Context(), "repository secrets deleted", "repo_id", repoID, "count", deleted)
-		if len(names) == 1 {
-			query.Set("deleted", names[0])
-		} else {
-			query.Set("deleted_count", strconv.Itoa(deleted))
+	h.logger.InfoContext(r.Context(), "repository .env file saved", "repo_id", repoID,
+		"added", len(saved.Added), "changed", len(saved.Changed), "removed", len(saved.Removed))
+	query := url.Values{"saved": {"1"}}
+	for name, names := range map[string][]string{"added": saved.Added, "changed": saved.Changed, "removed": saved.Removed} {
+		if len(names) > 0 {
+			query.Set(name, strconv.Itoa(len(names)))
 		}
 	}
-	http.Redirect(w, r, secretsURL(repoID, query), http.StatusSeeOther)
+	publicid.Redirect(w, r, secretsURL(repoID, query), http.StatusSeeOther)
 }
 
 // setBuild lets Dockerfile steps of trusted builds read one secret, or stops
@@ -278,7 +174,7 @@ func (h *Handler) setBuild(w http.ResponseWriter, r *http.Request) {
 		case errors.As(err, &invalid):
 			http.Error(w, invalid.Message, http.StatusBadRequest)
 		case errors.Is(err, ErrUnavailable):
-			h.render(w, r, user, repoID, http.StatusConflict, pages.Page{Error: "GitHub access to this repository was removed, so builds cannot be given new secrets."})
+			h.render(w, r, user, repoID, http.StatusConflict, pages.Page{Error: "GitHub access to this repository was removed, so builds cannot be given new secrets."}, nil)
 		default:
 			h.logger.ErrorContext(r.Context(), "set build use of a secret failed", "repo_id", repoID)
 			http.Error(w, "Secrets are temporarily unavailable. Please retry.", http.StatusServiceUnavailable)
@@ -290,12 +186,12 @@ func (h *Handler) setBuild(w http.ResponseWriter, r *http.Request) {
 	if build {
 		key = "build_on"
 	}
-	http.Redirect(w, r, secretsURL(repoID, url.Values{key: {name}}), http.StatusSeeOther)
+	publicid.Redirect(w, r, secretsURL(repoID, url.Values{key: {name}}), http.StatusSeeOther)
 }
 
-// render loads the owned repository and its secret names. It never receives or
-// renders a value.
-func (h *Handler) render(w http.ResponseWriter, r *http.Request, user, repoID int64, status int, view pages.Page) {
+// render loads the owned repository, its names and its .env file. Values
+// reach the page only in the editor.
+func (h *Handler) render(w http.ResponseWriter, r *http.Request, user, repoID int64, status int, view pages.Page, again *submitted) {
 	repo, err := h.service.Repository(r.Context(), user, repoID)
 	if errors.Is(err, ErrUnavailable) {
 		http.NotFound(w, r)
@@ -313,13 +209,52 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, user, repoID in
 		return
 	}
 	view.RepoID, view.FullName, view.Available, view.Configured = repo.ID, repo.FullName, repo.Available, h.service.Configured()
-	view.Limit = MaxSecretsPerRepository
+	view.MaxKiB = MaxFileBytes / 1024
 	for _, s := range list {
 		view.Secrets = append(view.Secrets, pages.Secret{Name: s.Name, UpdatedAt: s.UpdatedAt, Build: s.Build})
 	}
-	if view.Replacing != "" && !view.Exists(view.Replacing) {
-		view.Replacing, view.Rows = "", nil
+	view.Editing = view.Editing && view.Configured
+	if view.Configured {
+		if err := h.loadFile(r.Context(), user, repoID, &view, again); err != nil {
+			h.logger.ErrorContext(r.Context(), "open repository .env file failed", "repo_id", repoID)
+			http.Error(w, "Secrets are temporarily unavailable. Please retry.", http.StatusServiceUnavailable)
+			return
+		}
+		if view.Editing {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 	}
 	username, _ := h.users.Username(r.Context())
-	templ.Handler(pages.Index(username, h.users.CSRFToken(r.Context()), view), templ.WithStatus(status)).ServeHTTP(w, r)
+	publicid.Handler(r, pages.Index(username, h.users.CSRFToken(r.Context()), view), view, templ.WithStatus(status)).ServeHTTP(w, r)
+}
+
+// loadFile puts the .env file on the page: its lines with values hidden, its
+// size and last save, and in the editor the file itself (or the text of a
+// refused save). An empty file has nothing to hide, so it opens the editor.
+func (h *Handler) loadFile(ctx context.Context, user, repoID int64, view *pages.Page, again *submitted) error {
+	file, err := h.service.File(ctx, user, repoID)
+	if err != nil {
+		return err
+	}
+	defer clear(file.Text)
+	lines, err := MaskDotenv(string(file.Text))
+	if err != nil {
+		return err
+	}
+	for _, line := range lines {
+		view.Lines = append(view.Lines, pages.Line{Comment: line.Comment, Name: line.Name, HasValue: line.HasValue})
+	}
+	view.UpdatedAt, view.UpdatedBy, view.Size = file.UpdatedAt, file.UpdatedBy, len(file.Text)
+	view.Editing = view.Editing || len(view.Lines) == 0
+	if !view.Editing {
+		return nil
+	}
+	view.Text, view.Revision = string(file.Text), file.Revision
+	if again != nil {
+		view.Text, view.Size = string(again.text), len(again.text)
+		if again.revision >= 0 {
+			view.Revision = again.revision
+		}
+	}
+	return nil
 }

@@ -15,7 +15,7 @@ RETURNING id, head_sha, state, generation;
 SELECT installation_id FROM repos WHERE id = $1;
 
 -- name: LockEventInstallation :one
-SELECT id FROM installations WHERE id = $1 AND status = 'active' AND owner_user_id IS NOT NULL FOR UPDATE;
+SELECT id FROM installations WHERE id = $1 AND status = 'active' AND workspace_id IS NOT NULL FOR UPDATE;
 
 -- name: LockEventRepository :one
 SELECT id FROM repos WHERE id = $1 AND installation_id = $2 AND accessible FOR UPDATE;

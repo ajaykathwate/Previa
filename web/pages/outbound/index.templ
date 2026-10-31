@@ -47,7 +47,9 @@ templ Index(username, csrf string, p Page) {
 									@components.SendIcon()
 								</span>
 								<h3>No destinations approved</h3>
-								<p>Approve an external database or message broker your previews need, such as a test database on a cloud provider.</p>
+								if p.CanAdd() {
+									<p>Approve an external database or message broker your previews need, such as a test database on a cloud provider.</p>
+								}
 							</div>
 						} else {
 							<div class="repository-table-scroll" tabindex="0" role="region" aria-label="Approved destinations">
@@ -69,7 +71,7 @@ templ Index(username, csrf string, p Page) {
 													@components.Time(d.CreatedISO(), d.CreatedLabel())
 												</td>
 												<td class="secret-actions">
-													<button type="button" class="text-link danger-link" commandfor={ "remove-destination-" + strconv.FormatInt(d.ID, 10) } command="show-modal" data-open-dialog={ "remove-destination-" + strconv.FormatInt(d.ID, 10) } aria-haspopup="dialog" aria-label={ "Remove " + d.Address() }>Remove</button>
+													<button type="button" class="text-link danger-link" commandfor={ "remove-destination-" + components.ResourceToken(ctx, "destination", d.ID) } command="show-modal" data-open-dialog={ "remove-destination-" + components.ResourceToken(ctx, "destination", d.ID) } aria-haspopup="dialog" aria-label={ "Remove " + d.Address() }>Remove</button>
 												</td>
 											</tr>
 										}
@@ -78,6 +80,7 @@ templ Index(username, csrf string, p Page) {
 							</div>
 						}
 					</section>
+					if p.CanAdd() {
 					<section id="add-destination" class="workspace-panel secrets-form" aria-labelledby="destination-form-title">
 						<header class="secrets-form-header">
 							<h2 id="destination-form-title">Approve a destination</h2>
@@ -94,9 +97,9 @@ templ Index(username, csrf string, p Page) {
 								{ p.Error }
 							</p>
 						}
-						<form method="post" action={ templ.SafeURL("/repositories/" + strconv.FormatInt(p.RepoID, 10) + "/outbound") } class="outbound-form" autocomplete="off" data-outbound-form>
+						<form method="post" action={ components.PublicURL(ctx, "/repositories/"+strconv.FormatInt(p.RepoID, 10)+"/outbound") } class="outbound-form" autocomplete="off" data-outbound-form>
 							<input type="hidden" name="csrf_token" value={ csrf }/>
-							<fieldset class="outbound-fields" disabled?={ !p.CanAdd() }>
+							<fieldset class="outbound-fields">
 								<legend class="sr-only">Destination to approve</legend>
 								<div class="outbound-field">
 									<label for="destination-host">Host</label>
@@ -140,18 +143,22 @@ templ Index(username, csrf string, p Page) {
 										<p class="field-error" id="destination-port-error">{ p.PortError }</p>
 									}
 								</div>
-								@button.Button(button.Props{Type: button.TypeSubmit, Disabled: !p.CanAdd(), Class: "outbound-submit"}) {
+								@button.Button(button.Props{Type: button.TypeSubmit, Class: "outbound-submit"}) {
 									@components.PlusIcon()
 									Approve
 								}
 							</fieldset>
 						</form>
-						if p.Enabled && len(p.Destinations) >= p.Limit {
-							<p class="field-help">The limit of { strconv.Itoa(p.Limit) } destinations is reached; remove one to approve another.</p>
-						} else if p.Enabled && p.Available && len(p.FreePorts()) == 0 {
-							<p class="field-help">Every allowed port already has a destination.</p>
-						}
 					</section>
+					} else if p.Enabled && p.Available {
+						<p class="field-help" id="add-destination">
+							if len(p.Destinations) >= p.Limit {
+								The limit of { strconv.Itoa(p.Limit) } destinations is reached; remove one to approve another.
+							} else {
+								Every allowed port already has a destination; remove one to approve another.
+							}
+						</p>
+					}
 				</div>
 				<aside class="section-aside" aria-labelledby="outbound-guidance-title">
 					<section class="workspace-panel guidance-card">
@@ -170,10 +177,10 @@ templ Index(username, csrf string, p Page) {
 				</aside>
 			</div>
 			for _, d := range p.Destinations {
-				@components.ConfirmationDialog("remove-destination-"+strconv.FormatInt(d.ID, 10), "Remove "+d.Address()+"?", "Running previews lose this connection within a minute, and previews started later never get it.") {
-					<form method="post" action={ templ.SafeURL("/repositories/" + strconv.FormatInt(p.RepoID, 10) + "/outbound/" + strconv.FormatInt(d.ID, 10) + "/remove") } class="dialog-actions">
+				@components.ConfirmationDialog("remove-destination-"+components.ResourceToken(ctx, "destination", d.ID), "Remove "+d.Address()+"?", "Running previews lose this connection within a minute, and previews started later never get it.") {
+					<form method="post" action={ components.PublicURL(ctx, "/repositories/"+strconv.FormatInt(p.RepoID, 10)+"/outbound/"+strconv.FormatInt(d.ID, 10)+"/remove") } class="dialog-actions">
 						<input type="hidden" name="csrf_token" value={ csrf }/>
-						@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "remove-destination-" + strconv.FormatInt(d.ID, 10), "command": "close", "data-close-dialog": true}}) {
+						@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": "remove-destination-" + components.ResourceToken(ctx, "destination", d.ID), "command": "close", "data-close-dialog": true}}) {
 							Cancel
 						}
 						@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantDestructive}) {

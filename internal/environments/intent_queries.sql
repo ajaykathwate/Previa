@@ -4,13 +4,13 @@ FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id WHERE pr.id = $1;
 
 -- name: LockIntentInstallation :one
 SELECT id FROM installations
-WHERE id = sqlc.arg(installation_id) AND owner_user_id = sqlc.arg(user_id)
+WHERE id = sqlc.arg(installation_id) AND workspace_installation_access(id,sqlc.narg(user_id)::bigint,'read')
     AND status = 'active'
 FOR UPDATE;
 
 -- name: LockIntentRepository :one
 SELECT id, build_mode, private_previews FROM repos
-WHERE id = sqlc.arg(repo_id) AND installation_id = sqlc.arg(installation_id) AND accessible
+WHERE id = sqlc.arg(repo_id) AND installation_id = sqlc.arg(installation_id) AND accessible AND workspace_repository_access(id,sqlc.narg(user_id)::bigint,'operate')
 FOR UPDATE;
 
 -- name: LockIntentPR :one
@@ -34,16 +34,18 @@ SELECT pr.id, pr.generation, pr.head_sha, pr.state AS pr_state, r.build_mode,
 FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
 JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = pr.id
-WHERE pr.id = sqlc.arg(pr_id) AND i.owner_user_id = sqlc.arg(user_id)
+WHERE pr.id = sqlc.arg(pr_id) AND workspace_repository_access(r.id,sqlc.narg(user_id)::bigint,'read')
     AND i.status = 'active' AND r.accessible;
 
 -- name: ReplaceBuildIntent :one
+-- start_source is a Reset test data request's chosen starting data
+-- (docs/32-persistent-test-data.md); NULL for every other request.
 INSERT INTO build_intents(pull_request_id, revision, base_revision, generation,
-    head_sha, source, request_action, requested_by, idempotency_key, state, available_at)
+    head_sha, source, request_action, requested_by, idempotency_key, state, available_at, start_source)
 SELECT pr.id, sqlc.arg(base_revision)::bigint + 1, sqlc.arg(base_revision)::bigint,
     pr.generation, pr.head_sha, sqlc.arg(source)::text, sqlc.arg(request_action)::text,
     sqlc.narg(requested_by)::bigint, sqlc.arg(idempotency_key)::text, 'pending',
-    COALESCE(sqlc.narg(available_at)::timestamptz, clock_timestamp())
+    COALESCE(sqlc.narg(available_at)::timestamptz, clock_timestamp()), sqlc.narg(start_source)::text
 FROM pull_requests pr
 WHERE pr.id = sqlc.arg(pr_id) AND pr.generation = sqlc.arg(generation)
     AND pr.head_sha = sqlc.arg(head_sha) AND pr.state = 'open'
@@ -52,9 +54,9 @@ SET revision = build_intents.revision + 1, base_revision = EXCLUDED.base_revisio
     generation = EXCLUDED.generation, head_sha = EXCLUDED.head_sha,
     source = EXCLUDED.source, request_action = EXCLUDED.request_action,
     requested_by = EXCLUDED.requested_by, idempotency_key = EXCLUDED.idempotency_key,
-    state = 'pending', available_at = EXCLUDED.available_at,
+    state = 'pending', available_at = EXCLUDED.available_at, start_source = EXCLUDED.start_source,
     requested_at = clock_timestamp(), updated_at = clock_timestamp(),
-    started_at = NULL, completed_at = NULL
+    started_at = NULL, completed_at = NULL, execution_job_id=NULL, execution_error_code=''
 WHERE build_intents.revision = sqlc.arg(base_revision)::bigint
 RETURNING *;
 

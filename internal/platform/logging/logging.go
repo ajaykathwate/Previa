@@ -2,6 +2,7 @@ package logging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,13 +15,59 @@ const Redacted = "[redacted]"
 
 // New returns the process logger: JSON lines on w at level ("debug", "info",
 // "warn" or "error"; empty means info). Every record carries the correlation
-// fields in its context (With) and passes through redaction.
-func New(w io.Writer, level string) (*slog.Logger, error) {
+// fields in its context (With) and passes through redaction. Each extra
+// handler (an error reporter) also receives the redacted records it is
+// enabled for, whatever level w logs at.
+func New(w io.Writer, level string, extra ...slog.Handler) (*slog.Logger, error) {
 	l, err := ParseLevel(level)
 	if err != nil {
 		return nil, err
 	}
-	return slog.New(NewHandler(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: l}))), nil
+	var inner slog.Handler = slog.NewJSONHandler(w, &slog.HandlerOptions{Level: l})
+	if len(extra) > 0 {
+		inner = fanout(append([]slog.Handler{inner}, extra...))
+	}
+	return slog.New(NewHandler(inner)), nil
+}
+
+// fanout hands each record to every handler enabled for its level.
+type fanout []slog.Handler
+
+func (f fanout) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, h := range f {
+		if h.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f fanout) Handle(ctx context.Context, r slog.Record) error {
+	var errs []error
+	for _, h := range f {
+		if h.Enabled(ctx, r.Level) {
+			if err := h.Handle(ctx, r.Clone()); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (f fanout) WithAttrs(attrs []slog.Attr) slog.Handler {
+	out := make(fanout, len(f))
+	for i, h := range f {
+		out[i] = h.WithAttrs(attrs)
+	}
+	return out
+}
+
+func (f fanout) WithGroup(name string) slog.Handler {
+	out := make(fanout, len(f))
+	for i, h := range f {
+		out[i] = h.WithGroup(name)
+	}
+	return out
 }
 
 // ParseLevel reads LOG_LEVEL.

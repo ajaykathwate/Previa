@@ -10,12 +10,14 @@ templ Index(username string, csrfToken string, page Page) {
 		<div class="repository-workspace repository-catalog">
 			<header class="page-header workspace-page-heading">
 				<div class="page-header-text">
-					<span class="eyebrow">Workspace</span>
-					<h1>Repositories</h1>
-					<p>Repositories your GitHub App installations can reach. Open one to browse its pull requests, previews and build policy.</p>
+					@components.PageTitle("Repositories", "Repositories your GitHub App installations can reach. Open one to browse its pull requests, previews and build policy.")
 				</div>
 				<div class="repository-action">
-					if page.Enabled {
+					if !components.CanManage(ctx) {
+						// Only managers connect code; others see their shared repositories.
+					} else if page.Enabled && page.AwaitingApproval {
+						<p class="availability-note">Connecting opens once this workspace's early access is approved. <a class="text-link" href="/early-access">See its status</a></p>
+					} else if page.Enabled {
 						<form method="post" action="/installations/start">
 							<input type="hidden" name="csrf_token" value={ csrfToken }/>
 							@button.Button(button.Props{Type: button.TypeSubmit}) {
@@ -31,17 +33,17 @@ templ Index(username string, csrfToken string, page Page) {
 							}
 						</form>
 					} else {
-						@button.Button(button.Props{Disabled: true, Attributes: templ.Attributes{"aria-describedby": "repository-availability"}}) {
-							Connect a repository
-						}
-						<p id="repository-availability" class="availability-note">Not configured. See the development setup instructions.</p>
+						<p class="availability-note">Connecting repositories is not configured on this server. See the development setup instructions.</p>
 					}
 				</div>
 			</header>
 			if page.Connected {
 				<p class="connection-notice tone-ok" role="status">
 					@components.CheckIcon()
-					GitHub connection verified. Your selected repositories are linked.
+					<span>
+						GitHub connection verified. Your selected repositories are linked.
+						Next, open one and choose its <strong>Setup</strong> tab: it checks a pull request's configuration and takes you to its first preview.
+					</span>
 				</p>
 			}
 			<div class="repository-directory-view">
@@ -110,8 +112,8 @@ templ Results(page Page) {
 						<li class="repository-row">
 							<a
 								class={ "repository-select", templ.KV("is-unavailable", !row.Accessible) }
-								href={ templ.SafeURL(page.SelectURL(row.ID)) }
-								data-repo-link={ strconv.FormatInt(row.ID, 10) }
+								href={ components.PublicURL(ctx, page.SelectURL(row.ID)) }
+								data-repo-link={ components.PublicValue(ctx, "repository", row.ID) }
 							>
 								<div class="repository-card-top">
 									<span class="repository-card-icon" aria-hidden="true">
@@ -174,28 +176,24 @@ templ Results(page Page) {
 					<nav aria-label="Repository pages">
 						{{ numbers := PageNumbers(page.Number, page.Pages) }}
 						if page.Number>1 {
-							<a hx-get={ templ.SafeURL(page.URL(page.Number - 1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Number - 1)) } rel="prev" aria-label="Previous page">
+							<a hx-get={ components.PublicURL(ctx, page.URL(page.Number-1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ components.PublicURL(ctx, page.URL(page.Number-1)) } rel="prev" aria-label="Previous page">
 								@components.ArrowLeft()
 							</a>
-						} else {
-							<span aria-disabled="true" aria-label="Previous page">
-								@components.ArrowLeft()
-							</span>
 						}
 						if numbers[0]>1 {
-							<a hx-get={ templ.SafeURL(page.URL(1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(1)) }>1</a>
+							<a hx-get={ components.PublicURL(ctx, page.URL(1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ components.PublicURL(ctx, page.URL(1)) }>1</a>
 							if numbers[0]>2 {
 								<span aria-hidden="true">…</span>
 							}
 						}
 						for _, number := range numbers {
 							<a
-								hx-get={ templ.SafeURL(page.URL(number)) }
+								hx-get={ components.PublicURL(ctx, page.URL(number)) }
 								hx-target="#repository-results"
 								hx-swap="innerHTML"
 								hx-sync="#repository-filters:replace"
 								hx-push-url="true"
-								href={ templ.SafeURL(page.URL(number)) }
+								href={ components.PublicURL(ctx, page.URL(number)) }
 								if number==page.Number {
 									aria-current="page"
 								}
@@ -205,16 +203,12 @@ templ Results(page Page) {
 							if numbers[len(numbers)-1]<page.Pages-1 {
 								<span aria-hidden="true">…</span>
 							}
-							<a hx-get={ templ.SafeURL(page.URL(page.Pages)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Pages)) }>{ strconv.FormatInt(page.Pages,10) }</a>
+							<a hx-get={ components.PublicURL(ctx, page.URL(page.Pages)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ components.PublicURL(ctx, page.URL(page.Pages)) }>{ strconv.FormatInt(page.Pages,10) }</a>
 						}
 						if page.Number<page.Pages {
-							<a hx-get={ templ.SafeURL(page.URL(page.Number + 1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ templ.SafeURL(page.URL(page.Number + 1)) } rel="next" aria-label="Next page">
+							<a hx-get={ components.PublicURL(ctx, page.URL(page.Number+1)) } hx-target="#repository-results" hx-swap="innerHTML" hx-sync="#repository-filters:replace" hx-push-url="true" href={ components.PublicURL(ctx, page.URL(page.Number+1)) } rel="next" aria-label="Next page">
 								@components.Arrow()
 							</a>
-						} else {
-							<span aria-disabled="true" aria-label="Next page">
-								@components.Arrow()
-							</span>
 						}
 					</nav>
 				</footer>
@@ -225,13 +219,23 @@ templ Results(page Page) {
 					<div class="empty-source-icon" aria-hidden="true">
 						@components.BranchIcon()
 					</div>
-					if page.Installations==0 && page.Search=="" {
+					if page.Search=="" && page.Access=="all" && !components.CanManage(ctx) {
+						<h2>No repositories are shared with you yet.</h2>
+						<p>Workspace administrators connect repositories and choose who can use them.</p>
+					} else if page.Search=="" && page.Access=="all" && !page.CanConnect() {
+						<h2>No repositories are connected yet.</h2>
+						if page.AwaitingApproval {
+							<p>You can connect your code once this workspace's early access is approved.</p>
+						} else {
+							<p>Connecting repositories is not configured on this server.</p>
+						}
+					} else if page.Installations==0 && page.Search=="" {
 						<h2>Connect your code.</h2>
 						<p>Use the connection button above to select repositories on GitHub. Connecting does not start a build.</p>
 					} else if page.Search!="" || page.Access!="all" {
 						<h2>No repositories match these filters.</h2>
 						<p>Try a different name or include all access states.</p>
-						<a href={ templ.SafeURL(WorkspaceURL(0, nil)) } data-clear-directory hx-get={ WorkspaceURL(0, nil) } hx-target="#repository-results" hx-sync="#repository-filters:replace" hx-push-url="true" class="text-link">
+						<a href={ components.PublicURL(ctx, WorkspaceURL(0, nil)) } data-clear-directory hx-get={ components.PublicURL(ctx, WorkspaceURL(0, nil)) } hx-target="#repository-results" hx-sync="#repository-filters:replace" hx-push-url="true" class="text-link">
 							Clear filters
 							@components.ArrowUpRight()
 						</a>

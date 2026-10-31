@@ -11,24 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const accountBuildSeconds = `-- name: AccountBuildSeconds :one
-SELECT coalesce((SELECT build_seconds FROM account_build_usage WHERE user_id = $1 AND day = $2), 0)::bigint
-`
-
-type AccountBuildSecondsParams struct {
-	UserID int64
-	Day    pgtype.Date
-}
-
-func (q *Queries) AccountBuildSeconds(ctx context.Context, arg AccountBuildSecondsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, accountBuildSeconds, arg.UserID, arg.Day)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const claimBuildIntent = `-- name: ClaimBuildIntent :execrows
-UPDATE build_intents b SET state = 'running', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp(),
+UPDATE build_intents b SET state = 'running', execution_error_code='', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp(),
     waiting_revision = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_revision END,
     waiting_reason = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_reason END,
     waiting_since = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_since END,
@@ -37,7 +21,7 @@ FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
 WHERE b.pull_request_id = pr.id AND pr.id = $1
     AND (b.source = 'manual' OR b.state = 'running'
          OR NOT (pr.is_fork OR pr.head_repo_id IS NULL OR pr.head_repo_id IS DISTINCT FROM r.github_repo_id))
-    AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = $2 AND pr.head_sha = $3
+    AND workspace_intent_authorized(pr.id) AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = $2 AND pr.head_sha = $3
     AND b.generation = pr.generation AND b.head_sha = pr.head_sha AND b.revision = $4
     AND b.state IN ('pending','queued','running') AND b.available_at <= $5
     AND (b.source = 'manual' OR $6::text = 'automatic' OR b.state = 'running')
@@ -117,57 +101,191 @@ func (q *Queries) CompleteTeardownRequest(ctx context.Context, arg CompleteTeard
 	return result.RowsAffected(), nil
 }
 
-const countAccountRunningBuilds = `-- name: CountAccountRunningBuilds :one
-SELECT count(*) FROM build_intents b
-JOIN pull_requests p ON p.id = b.pull_request_id
-JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
-WHERE b.state = 'running' AND b.pull_request_id <> $1 AND i.owner_user_id = $2::bigint
-`
-
-type CountAccountRunningBuildsParams struct {
-	PrID        int64
-	OwnerUserID int64
-}
-
-// Running builds of other PRs of one account (installation owner).
-func (q *Queries) CountAccountRunningBuilds(ctx context.Context, arg CountAccountRunningBuildsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countAccountRunningBuilds, arg.PrID, arg.OwnerUserID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countRunningBuilds = `-- name: CountRunningBuilds :one
-SELECT count(*) FROM build_intents WHERE state = 'running' AND pull_request_id <> $1
+SELECT ((SELECT count(*) FROM build_intents WHERE state = 'running' AND pull_request_id <> $1)
+     + (SELECT count(*) FROM baseline_refreshes WHERE state = 'running'))::bigint
 `
 
 // An admitted build holds its slot until its final attempt ends, including
 // between River retries; another attempt of the same PR's request reuses it.
+// A running repository baseline refresh (docs/32) holds a slot too.
 func (q *Queries) CountRunningBuilds(ctx context.Context, pullRequestID int64) (int64, error) {
 	row := q.db.QueryRow(ctx, countRunningBuilds, pullRequestID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countRunningBuildsBesidesBaseline = `-- name: CountRunningBuildsBesidesBaseline :one
+SELECT ((SELECT count(*) FROM build_intents WHERE state = 'running')
+     + (SELECT count(*) FROM baseline_refreshes WHERE state = 'running' AND id <> $1::bigint))::bigint
+`
+
+// Running builds and baseline refreshes other than one refresh, for its
+// admission (docs/32).
+func (q *Queries) CountRunningBuildsBesidesBaseline(ctx context.Context, refreshID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countRunningBuildsBesidesBaseline, refreshID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countWorkspaceRunningBesidesBaseline = `-- name: CountWorkspaceRunningBesidesBaseline :one
+SELECT ((SELECT count(*) FROM build_intents b
+        JOIN pull_requests p ON p.id = b.pull_request_id
+        JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE b.state = 'running' AND i.workspace_id = $1::bigint)
+     + (SELECT count(*) FROM baseline_refreshes br
+        JOIN repos r ON r.id = br.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE br.state = 'running' AND br.id <> $2::bigint AND i.workspace_id = $1::bigint))::bigint
+`
+
+type CountWorkspaceRunningBesidesBaselineParams struct {
+	WorkspaceID int64
+	RefreshID   int64
+}
+
+func (q *Queries) CountWorkspaceRunningBesidesBaseline(ctx context.Context, arg CountWorkspaceRunningBesidesBaselineParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkspaceRunningBesidesBaseline, arg.WorkspaceID, arg.RefreshID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countWorkspaceRunningBuilds = `-- name: CountWorkspaceRunningBuilds :one
+SELECT ((SELECT count(*) FROM build_intents b
+        JOIN pull_requests p ON p.id = b.pull_request_id
+        JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE b.state = 'running' AND b.pull_request_id <> $1 AND i.workspace_id = $2::bigint)
+     + (SELECT count(*) FROM baseline_refreshes br
+        JOIN repos r ON r.id = br.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE br.state = 'running' AND i.workspace_id = $2::bigint))::bigint
+`
+
+type CountWorkspaceRunningBuildsParams struct {
+	PrID        int64
+	WorkspaceID int64
+}
+
+// Running builds of other PRs, and running baseline refreshes, in one stable
+// workspace.
+func (q *Queries) CountWorkspaceRunningBuilds(ctx context.Context, arg CountWorkspaceRunningBuildsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkspaceRunningBuilds, arg.PrID, arg.WorkspaceID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const failAbandonedExecution = `-- name: FailAbandonedExecution :execrows
+UPDATE build_intents b SET state='failed', execution_error_code='worker_failed',
+ started_at=coalesce(b.started_at,clock_timestamp()),completed_at=clock_timestamp(),updated_at=clock_timestamp(),
+ waiting_revision=NULL,waiting_reason=NULL,waiting_since=NULL,waiting_checked_at=NULL
+FROM pull_requests p WHERE b.pull_request_id=p.id AND p.id=$1 AND b.revision=$2
+AND b.generation=$3 AND b.head_sha=$4 AND p.generation=b.generation AND p.head_sha=b.head_sha AND p.state='open'
+AND b.state IN ('queued','running')
+`
+
+type FailAbandonedExecutionParams struct {
+	ID         int64
+	Revision   int64
+	Generation int64
+	HeadSha    string
+}
+
+// Finalization is a failure-only fallback; it neither grants authorization nor
+// publishes resources, and it cannot replace a newer request or successful one.
+func (q *Queries) FailAbandonedExecution(ctx context.Context, arg FailAbandonedExecutionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failAbandonedExecution,
+		arg.ID,
+		arg.Revision,
+		arg.Generation,
+		arg.HeadSha,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const failPublicationBuild = `-- name: FailPublicationBuild :one
+WITH previous AS MATERIALIZED (
+ SELECT b.pull_request_id,b.state FROM build_intents b JOIN pull_requests p ON p.id=b.pull_request_id
+ WHERE p.id=$1 AND b.generation=$2 AND b.revision=$3 AND p.generation=b.generation AND p.head_sha=b.head_sha
+ AND p.state='open' AND b.state IN ('queued','running','succeeded') FOR UPDATE OF b
+)
+UPDATE build_intents b SET state='failed',execution_error_code='',started_at=coalesce(b.started_at,clock_timestamp()),
+ completed_at=coalesce(b.completed_at,clock_timestamp()),updated_at=clock_timestamp(),
+ waiting_revision=NULL,waiting_reason=NULL,waiting_since=NULL,waiting_checked_at=NULL
+FROM previous WHERE b.pull_request_id=previous.pull_request_id RETURNING previous.state AS previous_state
+`
+
+type FailPublicationBuildParams struct {
+	ID         int64
+	Generation int64
+	Revision   int64
+}
+
+// Publication is part of the requested preview. Fail only its captured revision;
+// preserve already-recorded build time if image execution finished earlier.
+func (q *Queries) FailPublicationBuild(ctx context.Context, arg FailPublicationBuildParams) (string, error) {
+	row := q.db.QueryRow(ctx, failPublicationBuild, arg.ID, arg.Generation, arg.Revision)
+	var previous_state string
+	err := row.Scan(&previous_state)
+	return previous_state, err
 }
 
 const findPROwner = `-- name: FindPROwner :one
-SELECT i.owner_user_id FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
-JOIN installations i ON i.id = r.installation_id WHERE pr.id = $1
+SELECT w.owner_user_id FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
+JOIN installations i ON i.id = r.installation_id JOIN workspaces w ON w.id=i.workspace_id WHERE pr.id = $1
 `
 
-func (q *Queries) FindPROwner(ctx context.Context, id int64) (pgtype.Int8, error) {
+func (q *Queries) FindPROwner(ctx context.Context, id int64) (int64, error) {
 	row := q.db.QueryRow(ctx, findPROwner, id)
-	var owner_user_id pgtype.Int8
+	var owner_user_id int64
 	err := row.Scan(&owner_user_id)
 	return owner_user_id, err
 }
 
+const findPRWorkspace = `-- name: FindPRWorkspace :one
+SELECT i.workspace_id FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id WHERE p.id=$1
+`
+
+func (q *Queries) FindPRWorkspace(ctx context.Context, id int64) (pgtype.Int8, error) {
+	row := q.db.QueryRow(ctx, findPRWorkspace, id)
+	var workspace_id pgtype.Int8
+	err := row.Scan(&workspace_id)
+	return workspace_id, err
+}
+
+const finishAbandonedStream = `-- name: FinishAbandonedStream :exec
+UPDATE build_log_streams s SET state='finished',finished_at=clock_timestamp(),updated_at=clock_timestamp()
+FROM environments e WHERE s.environment_id=e.id AND e.pull_request_id=$1
+AND s.generation=$2 AND s.revision=$3 AND s.head_sha=$4 AND s.state='open'
+`
+
+type FinishAbandonedStreamParams struct {
+	PullRequestID int64
+	Generation    int64
+	Revision      int64
+	HeadSha       string
+}
+
+func (q *Queries) FinishAbandonedStream(ctx context.Context, arg FinishAbandonedStreamParams) error {
+	_, err := q.db.Exec(ctx, finishAbandonedStream,
+		arg.PullRequestID,
+		arg.Generation,
+		arg.Revision,
+		arg.HeadSha,
+	)
+	return err
+}
+
 const finishBuildIntent = `-- name: FinishBuildIntent :execrows
-UPDATE build_intents b SET state = $1, completed_at = clock_timestamp(), updated_at = clock_timestamp(),
+UPDATE build_intents b SET state = $1, execution_error_code='', completed_at = clock_timestamp(), updated_at = clock_timestamp(),
     waiting_revision = NULL, waiting_reason = NULL, waiting_since = NULL, waiting_checked_at = NULL
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = $2
-    AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = $3
+    AND workspace_publication_authorized(pr.id) AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = $3
     AND b.generation = pr.generation AND b.revision = $4
     AND b.state IN ('queued','running')
 `
@@ -190,6 +308,22 @@ func (q *Queries) FinishBuildIntent(ctx context.Context, arg FinishBuildIntentPa
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const linkExecutionJob = `-- name: LinkExecutionJob :exec
+UPDATE build_intents SET execution_job_id=$3
+WHERE pull_request_id=$1 AND revision=$2 AND state IN ('pending','queued','running')
+`
+
+type LinkExecutionJobParams struct {
+	PullRequestID  int64
+	Revision       int64
+	ExecutionJobID pgtype.Int8
+}
+
+func (q *Queries) LinkExecutionJob(ctx context.Context, arg LinkExecutionJobParams) error {
+	_, err := q.db.Exec(ctx, linkExecutionJob, arg.PullRequestID, arg.Revision, arg.ExecutionJobID)
+	return err
 }
 
 const listSchedulingCandidates = `-- name: ListSchedulingCandidates :many
@@ -303,7 +437,7 @@ ORDER BY EXISTS (
     SELECT 1 FROM build_intents rb
     JOIN pull_requests rp ON rp.id = rb.pull_request_id
     JOIN repos rr ON rr.id = rp.repo_id JOIN installations ri ON ri.id = rr.installation_id
-    WHERE rb.state = 'running' AND ri.owner_user_id = i.owner_user_id), b.waiting_since, b.pull_request_id
+    WHERE rb.state = 'running' AND ri.workspace_id = i.workspace_id), b.waiting_since, b.pull_request_id
 LIMIT 1
 `
 
@@ -316,33 +450,59 @@ func (q *Queries) NextWaitingBuild(ctx context.Context, liveAfter pgtype.Timesta
 	return pull_request_id, err
 }
 
-const olderWaiterFromIdleAccount = `-- name: OlderWaiterFromIdleAccount :one
+const noteExecutionRetry = `-- name: NoteExecutionRetry :execrows
+UPDATE build_intents SET execution_error_code='worker_retrying', updated_at=clock_timestamp()
+WHERE pull_request_id=$1 AND revision=$2 AND generation=$3 AND head_sha=$4
+AND state IN ('queued','running') AND execution_error_code<>'worker_retrying'
+`
+
+type NoteExecutionRetryParams struct {
+	PullRequestID int64
+	Revision      int64
+	Generation    int64
+	HeadSha       string
+}
+
+func (q *Queries) NoteExecutionRetry(ctx context.Context, arg NoteExecutionRetryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, noteExecutionRetry,
+		arg.PullRequestID,
+		arg.Revision,
+		arg.Generation,
+		arg.HeadSha,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const olderWaiterFromIdleWorkspace = `-- name: OlderWaiterFromIdleWorkspace :one
 SELECT EXISTS (
     SELECT 1 FROM build_intents b
     JOIN pull_requests p ON p.id = b.pull_request_id
     JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
     WHERE b.state IN ('pending', 'queued') AND b.waiting_reason = 'capacity' AND b.waiting_revision = b.revision
       AND b.waiting_since < $1 AND b.waiting_checked_at > $2
-      AND i.owner_user_id IS DISTINCT FROM $3::bigint
+      AND i.workspace_id IS DISTINCT FROM $3::bigint
       AND NOT EXISTS (
           SELECT 1 FROM build_intents rb
           JOIN pull_requests rp ON rp.id = rb.pull_request_id
           JOIN repos rr ON rr.id = rp.repo_id JOIN installations ri ON ri.id = rr.installation_id
-          WHERE rb.state = 'running' AND ri.owner_user_id = i.owner_user_id)
+          WHERE rb.state = 'running' AND ri.workspace_id = i.workspace_id)
 )::boolean
 `
 
-type OlderWaiterFromIdleAccountParams struct {
+type OlderWaiterFromIdleWorkspaceParams struct {
 	Since       pgtype.Timestamptz
 	LiveAfter   pgtype.Timestamptz
-	OwnerUserID int64
+	WorkspaceID int64
 }
 
 // Whether another account with nothing building has waited longer for a
 // build slot: then the last free slot is its turn. Only waits that looked
 // again since live_after count, so an abandoned wait never holds a turn.
-func (q *Queries) OlderWaiterFromIdleAccount(ctx context.Context, arg OlderWaiterFromIdleAccountParams) (bool, error) {
-	row := q.db.QueryRow(ctx, olderWaiterFromIdleAccount, arg.Since, arg.LiveAfter, arg.OwnerUserID)
+func (q *Queries) OlderWaiterFromIdleWorkspace(ctx context.Context, arg OlderWaiterFromIdleWorkspaceParams) (bool, error) {
+	row := q.db.QueryRow(ctx, olderWaiterFromIdleWorkspace, arg.Since, arg.LiveAfter, arg.WorkspaceID)
 	var column_1 bool
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -382,17 +542,37 @@ func (q *Queries) ReadIntentWait(ctx context.Context, pullRequestID int64) (Read
 	return i, err
 }
 
+const recordBaselineUsage = `-- name: RecordBaselineUsage :exec
+INSERT INTO workspace_build_usage (workspace_id, day, build_seconds, builds)
+VALUES ($1::bigint, $2::date, $3::bigint, 1)
+ON CONFLICT (workspace_id, day) DO UPDATE SET build_seconds = workspace_build_usage.build_seconds + EXCLUDED.build_seconds,
+    builds = workspace_build_usage.builds + 1
+`
+
+type RecordBaselineUsageParams struct {
+	WorkspaceID int64
+	Day         pgtype.Date
+	Seconds     int64
+}
+
+// A baseline refresh's execution counts toward its workspace's daily build
+// time like a pull request build's.
+func (q *Queries) RecordBaselineUsage(ctx context.Context, arg RecordBaselineUsageParams) error {
+	_, err := q.db.Exec(ctx, recordBaselineUsage, arg.WorkspaceID, arg.Day, arg.Seconds)
+	return err
+}
+
 const recordFinishedBuildTime = `-- name: RecordFinishedBuildTime :exec
-INSERT INTO account_build_usage (user_id, day, build_seconds, builds)
-SELECT i.owner_user_id, (b.completed_at AT TIME ZONE 'UTC')::date,
+INSERT INTO workspace_build_usage (workspace_id, day, build_seconds, builds)
+SELECT b.workspace_id, (b.completed_at AT TIME ZONE 'UTC')::date,
        GREATEST(0, floor(extract(epoch FROM b.completed_at - b.started_at)))::bigint, 1
 FROM build_intents b
 JOIN pull_requests p ON p.id = b.pull_request_id
 JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 WHERE b.pull_request_id = $1 AND b.revision = $2
-  AND b.completed_at IS NOT NULL AND b.started_at IS NOT NULL AND i.owner_user_id IS NOT NULL
-ON CONFLICT (user_id, day) DO UPDATE SET build_seconds = account_build_usage.build_seconds + EXCLUDED.build_seconds,
-    builds = account_build_usage.builds + 1
+  AND b.completed_at IS NOT NULL AND b.started_at IS NOT NULL AND b.workspace_id IS NOT NULL
+ON CONFLICT (workspace_id, day) DO UPDATE SET build_seconds = workspace_build_usage.build_seconds + EXCLUDED.build_seconds,
+    builds = workspace_build_usage.builds + 1
 `
 
 type RecordFinishedBuildTimeParams struct {
@@ -460,4 +640,20 @@ type TouchIntentWaitingParams struct {
 func (q *Queries) TouchIntentWaiting(ctx context.Context, arg TouchIntentWaitingParams) error {
 	_, err := q.db.Exec(ctx, touchIntentWaiting, arg.PrID, arg.Revision)
 	return err
+}
+
+const workspaceBuildSeconds = `-- name: WorkspaceBuildSeconds :one
+SELECT coalesce((SELECT build_seconds FROM workspace_build_usage WHERE workspace_id = $1 AND day = $2), 0)::bigint
+`
+
+type WorkspaceBuildSecondsParams struct {
+	WorkspaceID int64
+	Day         pgtype.Date
+}
+
+func (q *Queries) WorkspaceBuildSeconds(ctx context.Context, arg WorkspaceBuildSecondsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, workspaceBuildSeconds, arg.WorkspaceID, arg.Day)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }

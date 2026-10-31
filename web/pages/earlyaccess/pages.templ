@@ -1,0 +1,62 @@
+package earlyaccess
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+	"strconv"
+)
+
+templ Status(p Page) {
+	@layouts.App("Early access", p.Name, p.CSRF, components.NavEarlyAccess) {
+		<div class="team-page customer-page">
+			@components.PageTitle("Early access", "Workspace approval before connecting code or running builds.")
+			<section class="workspace-panel field-card">
+				if p.Workspace.ID == "" {
+					<h2>Create or select a workspace</h2>
+					<p><a href="/workspaces">Choose a workspace</a> to see its approval status.</p>
+				} else if !p.Enabled || p.Workspace.State == "approved" {
+					<h2>{ p.Workspace.Name } is approved</h2>
+					<p>You can connect repositories and request builds, subject to workspace permissions and free limits.</p>
+					<p><a href="/repositories">Go to repositories</a></p>
+				} else {
+					<h2>{ p.Workspace.Name } is awaiting approval</h2>
+					<p>An operator must approve this workspace before anyone can connect repositories or run PR or baseline builds. Creating another workspace does not bypass approval.</p>
+					<p>Your request is already recorded. You can manage members and settings, contact support or delete the workspace while waiting. Approval does not start a build.</p>
+					<p>Workspace reference: <code>{ p.Workspace.ID }</code> @components.CopyButton(p.Workspace.ID, "Copy workspace reference")
+</p>
+					<p><a href="/help">Contact support</a> · <a href="">Refresh approval status</a></p>
+				}
+			</section>
+			if p.Operator {
+				<p><a href="/operator/early-access">Review workspace approvals</a></p>
+			}
+		</div>
+	}
+}
+
+templ Console(p Page) {
+	@layouts.App("Workspace approvals", p.Name, p.CSRF, components.NavEarlyAccess) {
+		<div class="team-page customer-page">
+			@components.PageTitle("Workspace approvals", "Only configured operators can approve access. Approvals are audited and never start builds.")
+			<p><a href="/operator/support">Support console</a> · <a href="/early-access">Your workspace status</a></p>
+			if len(p.Pending) == 0 {
+				<section class="workspace-panel field-card"><h2>No workspaces awaiting approval</h2></section>
+			}
+			for _, v := range p.Pending {
+				<section class="workspace-panel field-card">
+					<h2>{ v.Name }</h2>
+					<p>Owner: { v.Owner }</p>
+					<p>Reference: <code>{ v.ID }</code></p>
+					<form method="post" action={ templ.SafeURL("/operator/early-access/" + v.ID + "/approve") }>
+						<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+						<input type="hidden" name="revision" value={ strconv.FormatInt(v.Revision, 10) }/>
+						<button class="field-card-action" type="submit">Approve workspace</button>
+					</form>
+				</section>
+			}
+			if p.Next != "" {
+				<p><a href={ templ.SafeURL("/operator/early-access?offset=" + p.Next) }>Next approvals</a></p>
+			}
+		</div>
+	}
+}

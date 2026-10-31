@@ -79,17 +79,25 @@ Traefik, 2026-10-06, rerun on 2026-10-08) runs an HTTP API on managed PostgreSQL
 
 ## Outstanding inputs and pending gates
 
-1. A host (Debian 12 / Ubuntu 24.04) to run `setup.sh`, the production stack, the
-   backup timer with a real object-storage remote, and a restore and upgrade there.
-2. A dashboard domain and a preview domain with wildcard DNS, and a DNS provider
-   token, for Let's Encrypt staging and then production certificates.
+The final production setup is described in
+[25](25-production-deployment.md#the-final-deployment-at-a-glance) and its checklist
+in [MVP-TODO.md](../MVP-TODO.md) Part 3.
+
+1. The OVHcloud VPS-2 (Ubuntu 24.04) to run `setup.sh`, SSH over Tailscale, the
+   production stack built from a release tag, the backup timer with Cloudflare R2,
+   and a restore, upgrade and rollback there before launch.
+2. `previa.live` and the preview domain (to be bought) with wildcard DNS on
+   Cloudflare, and the DNS token, for Let's Encrypt staging and then production
+   certificates.
 3. Hosted GitHub: the OAuth App and GitHub App registered for the production host,
    webhook delivery, discovery, a real repository built end to end, and
    `make test-source` / `make test-reporting` on an authorized disposable PR.
-4. The repository on GitHub: the CI workflows running, a protected `release`
-   environment with reviewers, and a tag for the first published release.
-5. An Alertmanager and a receiver for alert delivery.
-6. Optional: gVisor (`PREVIEW_OCI_RUNTIME=runsc`) if the threat model requires it.
+4. The repository on GitHub: a passing CI run on `master` (the latest runs, 11–15
+   October 2026, failed), the deploy key, and the first version tag.
+5. Sentry: the project, `server sentry-test`, the uptime monitor and the backup's
+   cron monitor, with their alert emails received.
+6. gVisor (`PREVIEW_OCI_RUNTIME=runsc`) stays off for invited early-access users;
+   it is reconsidered before open sign-up.
 
 None of these was simulated or claimed. Repeat this report's commands on the
 target host and record the results before calling a release production-ready.

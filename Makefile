@@ -19,7 +19,7 @@ fi; \
 eval "$$previa_exports";
 endef
 
-.PHONY: generate templates watch-templates assets build test test-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status river-ui
+.PHONY: generate templates watch-templates assets build test test-browser test-workspace-browser test-setup-browser test-review-browser test-test-data-browser test-usage-browser browser-install test-github-app test-source test-reporting secrets-reencrypt egress-image test-builder test-runtime test-routing test-housekeeping test-e2e test-reference test-test-data router-up router-down route-sync housekeeping-dry-run lint vuln observability-check release-images prod-smoke run-server run-worker dev migrate-up migrate-down river-migrate-up river-status river-ui
 
 $(TAILWIND): deploy/install-tailwind.sh
 	sh deploy/install-tailwind.sh "$@"
@@ -59,8 +59,26 @@ browser-install:
 	npm ci --prefix web/tests/browser
 	npm exec --prefix web/tests/browser -- playwright install chromium
 
+test-accounts-browser: assets generate
+	RUN_ACCOUNTS_BROWSER_TESTS=1 $(GO) test ./internal/accounts -run '^TestAccountsBrowser$$' -count=1 -v -timeout=6m
+
 test-browser: assets generate
-	RUN_BROWSER_TESTS=1 $(GO) test -count=1 -v ./web/tests/browser
+	RUN_BROWSER_TESTS=1 $(GO) test -count=1 -v -timeout 12m ./web/tests/browser
+
+test-workspace-browser: assets generate
+	RUN_WORKSPACE_BROWSER_TESTS=1 $(GO) test -count=1 -v ./internal/workspaces -run TestWorkspaceBrowser
+
+test-setup-browser: assets generate
+	RUN_SETUP_BROWSER_TESTS=1 $(GO) test -count=1 -v ./internal/onboarding -run TestSetupBrowser
+
+test-review-browser: assets generate
+	RUN_REVIEW_BROWSER_TESTS=1 $(GO) test -count=1 -v ./internal/reviews -run TestReviewBrowser
+
+test-test-data-browser: assets generate
+	RUN_TEST_DATA_BROWSER_TESTS=1 $(GO) test -count=1 -v ./internal/sampledata -run TestTestDataBrowser
+
+test-usage-browser: assets generate
+	RUN_USAGE_BROWSER_TESTS=1 $(GO) test -count=1 -v ./internal/usage -run TestUsageBrowser
 
 # Opt-in real GitHub proof; reads credentials from .env, never CLI flags.
 test-github-app:
@@ -121,12 +139,26 @@ test-routing: egress-image
 
 # Opt-in real end-to-end proof of the worker's own pipeline on the local
 # Docker Engine: a fake GitHub (TLS), real BuildKit builds, hardened previews,
-# Traefik routing, PR reports, logs and teardown, and a backend preview with
+# Traefik routing, PR reports, logs and teardown, a backend preview with
 # managed PostgreSQL and Redis, setup, a worker process and approved outbound
-# connections, on a throwaway schema.
+# connections, the ready-to-test reference journeys (docs/31) and persistent
+# test data (docs/32), on a throwaway schema.
 test-e2e: egress-image
 	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
-	TEST_E2E=1 $(GO) test -count=1 -v -timeout 60m -run '^TestReal(EndToEnd|BackendEndToEnd)$$' ./internal/app
+	TEST_E2E=1 $(GO) test -count=1 -v -timeout 120m -run '^TestReal(EndToEnd|BackendEndToEnd|ReferenceJourneys|TestDataJourneys|RoleJourney)$$' ./internal/app
+
+# Only the reference journeys of docs/31-test-data.md: seeded data, Reset test
+# data, a failing seed, a test login from a repository secret and a fork.
+test-reference: egress-image
+	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
+	TEST_E2E=1 $(GO) test -count=1 -v -timeout 40m -run '^TestRealReferenceJourneys$$' ./internal/app
+
+# Only the persistent test data journeys of docs/32: a baseline built and
+# refreshed, data kept across commits and Rebuilds, Reset to the baseline or
+# empty, fallbacks, a broken migration, a fork and a merge.
+test-test-data: egress-image
+	@$(load_run_env) export TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}"; \
+	TEST_E2E=1 $(GO) test -count=1 -v -timeout 50m -run '^TestRealTestDataJourneys$$' ./internal/app
 
 # Opt-in real housekeeping on the local Docker Engine: grace periods, dry run,
 # orphans of known and unknown PRs, other instances left alone, and an
@@ -250,5 +282,11 @@ river-ui:
 
 # Signs a local fixture in memory; secret is never a command argument.
 .PHONY: test-webhook
+.PHONY: test-usage-browser
+.PHONY: test-accounts-browser
 test-webhook:
 	@$(load_run_env) python3 deploy/test-webhook.py
+
+.PHONY: test-google-browser
+test-google-browser: assets generate
+	RUN_GOOGLE_BROWSER_TESTS=1 $(GO) test ./internal/accounts -run '^TestGoogleReviewerBrowser$$' -count=1 -v -timeout=8m

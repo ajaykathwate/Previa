@@ -12,10 +12,14 @@ import (
 // claims is what a signed value grants: user may open host until Expires.
 // A token also carries the path to return to.
 type claims struct {
-	Host    string `json:"h"`
-	User    int64  `json:"u"`
-	Path    string `json:"p,omitempty"`
-	Expires int64  `json:"e"`
+	Session  string `json:"sid,omitempty"`
+	Epoch    int64  `json:"s,omitempty"`
+	Revision int64  `json:"r"`
+	Local    bool   `json:"l,omitempty"`
+	Host     string `json:"h"`
+	User     int64  `json:"u"`
+	Path     string `json:"p,omitempty"`
+	Expires  int64  `json:"e"`
 }
 
 // signer signs access tokens and cookies with a key derived from

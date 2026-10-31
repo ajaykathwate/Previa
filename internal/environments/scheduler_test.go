@@ -692,3 +692,70 @@ func TestSchedulingAtomicRevisionCheckAfterLockWait(t *testing.T) {
 		t.Fatalf("stale write changed environment: %+v %v", snapshot, err)
 	}
 }
+
+// resetLog records Reset test data requests, or refuses them.
+type resetLog struct {
+	requests []env.ResetRequest
+	fail     bool
+}
+
+func (l *resetLog) ResetRequestedTx(_ context.Context, _ pgx.Tx, r env.ResetRequest) error {
+	if l.fail {
+		return errors.New("timeline unavailable")
+	}
+	l.requests = append(l.requests, r)
+	return nil
+}
+
+func TestResetTestDataIsARebuildRecordedInItsTransaction(t *testing.T) {
+	f := newScheduleFixture(t)
+	ctx := t.Context()
+	log := &resetLog{}
+	f.broker.WithResets(log)
+	r := f.observe(t, "opened", "sha-A")
+	for _, action := range []env.IntentAction{env.BuildLatest, env.RetryBuild} {
+		command := f.command(r, "reset-invalid-key-0001", 0, action)
+		command.Reset = true
+		if _, err := f.broker.RequestBuild(ctx, command); !errors.Is(err, env.ErrIntentAction) {
+			t.Fatalf("Reset with %s: %v", action, err)
+		}
+	}
+	if _, err := f.broker.RequestBuild(ctx, f.command(r, "reset-first-build-0001", 0, env.BuildLatest)); err != nil {
+		t.Fatal(err)
+	}
+	succeed := func() {
+		t.Helper()
+		if _, err := f.pool.Exec(ctx, "UPDATE build_intents SET state='succeeded', started_at=now(), completed_at=now() WHERE pull_request_id=$1", r.PullRequestID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	succeed()
+	if _, err := f.broker.RequestBuild(ctx, f.command(r, "plain-rebuild-key-0001", 1, env.Rebuild)); err != nil || len(log.requests) != 0 {
+		t.Fatalf("a plain Rebuild is no reset: %v %+v", err, log.requests)
+	}
+	succeed()
+	reset := f.command(r, "reset-rebuild-key-0001", 2, env.Rebuild)
+	reset.Reset = true
+	outcome, err := f.broker.RequestBuild(ctx, reset)
+	if err != nil || outcome.Intent.Revision != 3 {
+		t.Fatalf("reset: %v %+v", err, outcome)
+	}
+	if len(log.requests) != 1 || log.requests[0] != (env.ResetRequest{PullRequestID: r.PullRequestID, ActorID: f.owner, Revision: 3, HeadSHA: "sha-A"}) {
+		t.Fatalf("recorded resets %+v", log.requests)
+	}
+	if _, err := f.broker.RequestBuild(ctx, reset); err != nil || len(log.requests) != 1 {
+		t.Fatalf("a repeated submission is one reset: %v %+v", err, log.requests)
+	}
+	// When the reset cannot be recorded, nothing is requested.
+	succeed()
+	log.fail = true
+	failing := f.command(r, "reset-rebuild-key-0002", 3, env.Rebuild)
+	failing.Reset = true
+	if _, err := f.broker.RequestBuild(ctx, failing); err == nil {
+		t.Fatal("a reset that could not be recorded was requested")
+	}
+	var revision int64
+	if err := f.pool.QueryRow(ctx, "SELECT revision FROM build_intents WHERE pull_request_id=$1", r.PullRequestID).Scan(&revision); err != nil || revision != 3 {
+		t.Fatalf("revision after a refused reset: %d %v", revision, err)
+	}
+}

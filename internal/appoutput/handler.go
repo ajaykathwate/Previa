@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
 	outputpages "github.com/ajaykathwatee/previa/web/pages/appoutput"
 	buildpages "github.com/ajaykathwatee/previa/web/pages/builds"
@@ -77,11 +77,14 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 }
 
 func (h *Handler) preview(r *http.Request) (Preview, int64, error) {
-	repoID, err := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+	if err := realtime.CheckSession(r.Context()); err != nil {
+		return Preview{}, 0, err
+	}
+	repoID, err := publicid.Param(r, "repoID", "repository")
 	if err != nil || repoID <= 0 {
 		return Preview{}, 0, ErrUnavailable
 	}
-	n, err := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
+	n, err := publicid.PRNumber(r, repoID)
 	if err != nil || n <= 0 {
 		return Preview{}, 0, ErrUnavailable
 	}
@@ -143,7 +146,7 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 	view.StatusLabel, view.StatusTone, view.Summary, view.Notices, view.Empty = st.Label, st.Tone, st.Summary, st.Notices, st.Empty
 	username, _ := h.users.Username(r.Context())
 	w.Header().Set("Cache-Control", "no-store")
-	templ.Handler(outputpages.Output(username, h.users.CSRFToken(r.Context()), view)).ServeHTTP(w, r)
+	publicid.Handler(r, outputpages.Output(username, h.users.CSRFToken(r.Context()), view), view).ServeHTTP(w, r)
 }
 
 // follow starts (or keeps) a follower for a live preview and fills the page
@@ -247,7 +250,7 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 	if err := sse.Retry(h.opts.Retry); err != nil {
 		return
 	}
-	state := &streamState{cursor: parseCursor(r)}
+	state := &streamState{cursor: parseCursor(r), authorize: func(ctx context.Context) error { _, _, err := h.preview(r.WithContext(ctx)); return err }}
 	if err := h.sync(r.Context(), sse, p, state); err != nil {
 		return
 	}
@@ -263,11 +266,17 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 		case <-deadline.C:
 			return // The browser reconnects with its cursor.
 		case <-heartbeat.C:
+			if err := state.authorize(r.Context()); err != nil {
+				return
+			}
 			if err := sse.Comment("keep-alive"); err != nil {
 				return
 			}
 			continue
 		case <-touch.C:
+			if err := state.authorize(r.Context()); err != nil {
+				return
+			}
 			if err := h.watch(r.Context(), p.EnvironmentID, true); err != nil {
 				return
 			}
@@ -284,8 +293,9 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 }
 
 type streamState struct {
-	cursor struct{ epoch, next int64 }
-	status string
+	authorize func(context.Context) error
+	cursor    struct{ epoch, next int64 }
+	status    string
 }
 
 func (s *streamState) id() string {
@@ -295,6 +305,11 @@ func (s *streamState) id() string {
 // sync sends what the browser is missing: a reset for a new follower, new
 // lines in bounded frames, and the status when it changed.
 func (h *Handler) sync(ctx context.Context, sse *realtime.SSE, p Preview, s *streamState) error {
+	if s.authorize != nil {
+		if err := s.authorize(ctx); err != nil {
+			return err
+		}
+	}
 	watch, err := h.store.Watch(ctx, p.EnvironmentID)
 	if err != nil {
 		return err
@@ -308,6 +323,11 @@ func (h *Handler) sync(ctx context.Context, sse *realtime.SSE, p Preview, s *str
 	// Lines beyond the kept window are gone; continue from the oldest kept.
 	s.cursor.next = max(s.cursor.next, watch.First)
 	for watch.Epoch > 0 && ctx.Err() == nil {
+		if s.authorize != nil {
+			if err := s.authorize(ctx); err != nil {
+				return err
+			}
+		}
 		lines, err := h.store.Lines(ctx, p.EnvironmentID, watch.Epoch, s.cursor.next, frameLines)
 		if err != nil {
 			return err

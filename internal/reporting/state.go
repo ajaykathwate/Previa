@@ -26,16 +26,17 @@ const (
 
 // Snapshot is the persisted truth a report is rendered from.
 type Snapshot struct {
-	PullRequestID int64
-	RepoID        int64 // Previa repository ID (dashboard URLs)
-	Number        int32
-	HeadSHA       string
-	State         string // open, closed, merged
-	Generation    int64
-	BuildStatus   string // open, checking, conflicts
-	NeedsRefresh  bool
-	Fork          bool
-	SecretCount   int64
+	PullRequestID            int64
+	RepoPublicID, PRPublicID string
+	RepoID                   int64 // Previa repository ID (dashboard URLs)
+	Number                   int32
+	HeadSHA                  string
+	State                    string // open, closed, merged
+	Generation               int64
+	BuildStatus              string // open, checking, conflicts
+	NeedsRefresh             bool
+	Fork                     bool
+	SecretCount              int64
 	// A local teardown requested at the current generation, and why.
 	TeardownRequested bool
 	TeardownReason    string
@@ -47,12 +48,13 @@ type Snapshot struct {
 
 // Intent is the PR's single build request.
 type Intent struct {
-	Generation  int64
-	Revision    int64
-	HeadSHA     string
-	State       string // pending, queued, running, succeeded, failed, cancelled, superseded
-	AvailableAt time.Time
-	Waiting     string // an environments.Wait* reason while this request waits; empty otherwise
+	ExecutionError string
+	Generation     int64
+	Revision       int64
+	HeadSHA        string
+	State          string // pending, queued, running, succeeded, failed, cancelled, superseded
+	AvailableAt    time.Time
+	Waiting        string // an environments.Wait* reason while this request waits; empty otherwise
 }
 
 // Environment is the PR's lifetime environment.
@@ -66,6 +68,10 @@ type Environment struct {
 	ExpiresAt         time.Time // zero: the preview does not expire
 	// Backend is what the deployed preview runs next to its app.
 	Backend environments.Backend
+	// Data is where its databases started; KeepsData, whether the
+	// repository keeps test data between builds (docs/32).
+	Data      environments.StartingData
+	KeepsData bool
 }
 
 // View is what the living comment and the check run say.
@@ -77,7 +83,10 @@ type View struct {
 	PreviewURL string    // only for a live, published preview
 	DocsURL    string    // the live preview's docs path, when it declares one
 	Backend    string    // what the live preview runs next to its app, one line
+	TestData   string    // where its databases started, such as "kept from previous build"
+	KeepsData  bool      // the repository keeps test data between builds
 	LogsURL    string    // only when a log page exists and the dashboard URL is known
+	ReviewURL  string    // the pull request's review page in Previa, when the dashboard URL is known
 	Failure    string    // safe sentence for a failed request
 	Blocked    string    // why a requested build cannot start
 	Waiting    string    // an environments.Wait* reason while the request waits
@@ -119,8 +128,17 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 	if live {
 		v.describePreview(env, settings)
 	}
-	if env != nil && settings.AppBaseURL != "" {
-		v.LogsURL = fmt.Sprintf("%s/repositories/%d/pull-requests/%d/logs", settings.AppBaseURL, s.RepoID, s.Number)
+	if settings.AppBaseURL != "" {
+		pr := fmt.Sprintf("%s/repositories/%d/pull-requests/%d", settings.AppBaseURL, s.RepoID, s.Number)
+		if s.RepoPublicID != "" && s.PRPublicID != "" {
+			pr = fmt.Sprintf("%s/repositories/%s/pull-requests/%s", settings.AppBaseURL, s.RepoPublicID, s.PRPublicID)
+		}
+		// Link only: review status, counts and feedback stay in Previa
+		// (docs/30-reviews.md).
+		v.ReviewURL = pr + "/review"
+		if env != nil {
+			v.LogsURL = pr + "/logs"
+		}
 	}
 	current := s.Intent
 	if current != nil && (current.Generation != s.Generation || current.HeadSHA != s.HeadSHA) {
@@ -132,7 +150,7 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 	switch {
 	case s.State != environments.StateOpen || s.TeardownRequested:
 		v.Phase = removalPhase(s, env)
-		v.Deployed, v.PreviewURL, v.ExpiresAt, v.DocsURL, v.Backend = "", "", time.Time{}, "", ""
+		v.Deployed, v.PreviewURL, v.ExpiresAt, v.DocsURL, v.Backend, v.TestData = "", "", time.Time{}, "", "", ""
 		if v.Phase == PhaseRemoving && live {
 			v.Deployed = env.DeployedSHA
 		}
@@ -158,8 +176,8 @@ func Derive(s Snapshot, settings Settings, hasComment bool, now time.Time) View 
 		}
 	case string(environments.IntentFailed):
 		v.Phase = PhaseFailed
-		code := ""
-		if env != nil && env.AppliedGeneration == current.Generation && env.AppliedRevision == current.Revision {
+		code := current.ExecutionError
+		if code == "" && env != nil && env.AppliedGeneration == current.Generation && env.AppliedRevision == current.Revision {
 			code = env.LastErrorCode
 		}
 		v.Failure = environments.FailureMessage(code)
@@ -191,6 +209,7 @@ func (v *View) describePreview(env *Environment, settings Settings) {
 		}
 	}
 	v.Backend = env.Backend.Summary()
+	v.TestData, v.KeepsData = env.Data.Comment(), env.KeepsData
 }
 
 // unfinishedPhase is the phase of a request that has not finished: building,

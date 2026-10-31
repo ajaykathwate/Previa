@@ -106,3 +106,16 @@ func TestProgressPlacesTheBuildRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerFailuresDoNotInventAnImageFailureOrKeepSpinning(t *testing.T) {
+	for _, pr := range []PR{{Build: "failed", FailureCode: "worker_failed", Failure: "Worker failed"}, {Build: "running", ExecutionRetrying: true}, {Build: "running", BuildWorkerMissing: true}, {Build: "succeeded", Environment: "publishing", PublicationRetrying: true}} {
+		progress, tracked := pr.Progress()
+		if tracked || progress.Active {
+			t.Fatal("interrupted execution still shows active stage progress")
+		}
+	}
+	diagnosis := Diagnose("worker_failed", nil)
+	if diagnosis.Title != "The build worker could not finish" || diagnosis.Stage != "" {
+		t.Fatal("worker finalization failure was blamed on repository code")
+	}
+}

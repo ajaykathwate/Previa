@@ -1,6 +1,7 @@
 package pullrequests
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -28,22 +29,28 @@ type PR struct {
 	// from GitHub (State is then "unknown").
 	MergeUnknown bool
 	// NoWorker: no running worker syncs pull requests or checks mergeability.
-	NoWorker bool
+	PublicationRetrying bool
+	ExecutionRetrying   bool
+	BuildWorkerMissing  bool
+	NoWorker            bool
 	// Detail only: display data the handler derives from persisted state.
-	Headline      Headline
-	Waiting       string // why the current request waits ("Waiting for capacity"), if it does
-	WaitingNote   string
-	Failure       string   // safe sentence for the latest failure of the current request
-	FailureCode   string   // its stored category, which Diagnosis explains in the owner's words
-	FailureLog    []string // the failed attempt's last output lines, already redacted
-	RequestSource string   // "manual" or "automatic"
-	RequestedBy   string   // login of the owner who asked, for manual requests
-	RequestedAt   string   // RFC 3339
-	StartedAt     string
-	CompletedAt   string
-	PreviewURL    string // only for a published preview on a configured domain
-	ExpiresAt     string // RFC 3339; empty when the preview does not expire
-	PublishedAt   string
+	Description string
+	// The head commit's message, author and time, when GitHub supplied them.
+	CommitMessage, CommitAuthor, CommitAt string
+	Headline                              Headline
+	Waiting                               string // why the current request waits ("Waiting for capacity"), if it does
+	WaitingNote                           string
+	Failure                               string   // safe sentence for the latest failure of the current request
+	FailureCode                           string   // its stored category, which Diagnosis explains in the owner's words
+	FailureLog                            []string // the failed attempt's last output lines, already redacted
+	RequestSource                         string   // "manual" or "automatic"
+	RequestedBy                           string   // login of the owner who asked, for manual requests
+	RequestedAt                           string   // RFC 3339
+	StartedAt                             string
+	CompletedAt                           string
+	PreviewURL                            string // only for a published preview on a configured domain
+	ExpiresAt                             string // RFC 3339; empty when the preview does not expire
+	PublishedAt                           string
 	// LastOpenedAt is when the router last passed the preview a request
 	// (RFC 3339, to the minute); Requests counts them. Empty when unknown.
 	LastOpenedAt string
@@ -58,10 +65,20 @@ type PR struct {
 	DocsURL          string
 	Outbound         int
 	OutboundWithheld bool
+	// Test data (docs/32-persistent-test-data.md): where the serving
+	// deployment's databases started, why earlier sources were not used,
+	// whether that was its previous build's data, and whether the repository
+	// keeps data between builds.
+	DataSource  string
+	DataReasons []string
+	DataKept    bool
+	KeepsData   bool
 	// ServicesOffered are the managed services a running worker offers
 	// ("postgres 17, 16"); ExecutionWorker says whether one runs at all.
 	ServicesOffered []string
 	ExecutionWorker bool
+	// OpenFindings counts the review's open findings, for the Review tab.
+	OpenFindings int64
 }
 
 // ServicesLabel says what managed services previews may request here.
@@ -89,7 +106,11 @@ func (pr PR) OutboundLabel() string {
 }
 
 // Headline answers "what is happening with this PR's preview?" in one line.
-type Headline struct{ Tone, Title, Detail string }
+type Headline struct {
+	Tone, Title, Detail string
+	// Until, when set, follows the title as a live countdown (RFC 3339).
+	Until string
+}
 
 // Actions are what the owner may do on a PR now, with the form values that
 // make each request idempotent and revision-checked.
@@ -103,10 +124,12 @@ type Actions struct {
 	// build, the repository is unavailable, mergeability, ...), and Hint what
 	// turns it back on.
 	Unavailable, Hint string
-	// Blocked is the label of the build action shown disabled next to
-	// Unavailable; empty when no build action applies (closed PRs).
+	// Blocked names the build action that would apply once Unavailable is
+	// fixed (it makes the notice a warning); empty when none applies (closed
+	// PRs). No disabled control is shown for it.
 	Blocked string
-	// InProgress labels a disabled action while this commit is queued or building.
+	// InProgress is the status shown instead of an action while this commit
+	// is queued or building.
 	InProgress string
 }
 
@@ -222,6 +245,9 @@ type Page struct {
 	Name, Mode, SyncState, SyncMessage, LastRefresh string
 	Fetched                                         int32
 	Available, DiscoveryEnabled                     bool
+	// SourceLocked: GitHub no longer lets this person read the code, so
+	// sync, builds, teardown and logs are not offered.
+	SourceLocked bool
 	// PrivatePreviews: only GitHub users who can see the repository may
 	// open its previews.
 	PrivatePreviews           bool
@@ -250,9 +276,10 @@ type Page struct {
 // Syncing reports whether a sync is requested and not finished.
 func (p Page) Syncing() bool { return p.SyncState == "queued" || p.SyncState == "syncing" }
 
-// SyncDisabled reports whether Sync Pull Requests would do nothing now.
-func (p Page) SyncDisabled() bool {
-	return !p.Available || !p.DiscoveryEnabled || p.Syncing() && !p.SyncStale
+// CanSync reports whether Sync Pull Requests is offered: it would run now and
+// GitHub lets this person read the code.
+func (p Page) CanSync() bool {
+	return p.Available && p.DiscoveryEnabled && !p.SourceLocked && (!p.Syncing() || p.SyncStale)
 }
 
 func RepoURL(id int64) string { return fmt.Sprintf("/repositories/%d", id) }
@@ -262,6 +289,20 @@ func PRURL(id int64, number int32) string {
 
 // LogsURL is a PR's current-build log page.
 func LogsURL(id int64, number int32) string { return PRURL(id, number) + "/logs" }
+
+// OpenURL is a PR's Open preview action: Previa records that the preview was
+// opened from its own pages (the Setup checklist's last step), then goes there.
+func OpenURL(id int64, number int32) string { return PRURL(id, number) + "/open" }
+
+// PreviewHref is where an Open preview action leads: through Previa for people
+// who can build, directly for Reviewers, whose navigation never opens
+// repository pages.
+func PreviewHref(ctx context.Context, id int64, number int32, preview string) string {
+	if components.CanOperate(ctx) {
+		return OpenURL(id, number)
+	}
+	return preview
+}
 
 // OutputURL is a PR's live app output page.
 func OutputURL(id int64, number int32) string { return PRURL(id, number) + "/output" }
@@ -372,6 +413,9 @@ type ActivityRow struct {
 	// highlighted), "older" or "dismissed" (quiet, with AttentionNote saying
 	// why), or "" for anything else.
 	Attention, AttentionNote string
+	// Locked: GitHub no longer lets this person read the code; its logs and
+	// actions are not offered.
+	Locked bool
 }
 
 // PreviewStatus is a Previews row's status, in what reviewers care about: a
@@ -439,6 +483,8 @@ type Activity struct {
 	DismissedNumber int32
 	// AttentionDays is how long a failure needs attention.
 	AttentionDays int
+	// Joined: a Reviewer arrived from accepting an invitation.
+	Joined bool
 }
 
 // FailureEmpty is what an empty failure view says.
@@ -530,6 +576,18 @@ func TimeLabel(value string) string {
 
 func (p Page) Selected() PR { return *p.SelectedPR }
 
+// CountingDown reports whether an Automatic build waits for its quiet period
+// to end at Deadline, still ahead.
+func (pr PR) CountingDown() bool {
+	return pr.Build == "pending" && pr.RequestSource == "automatic" && components.Upcoming(pr.Deadline, time.Now())
+}
+
+// CountingDown reports whether the row's Automatic build waits for its quiet
+// period to end at Deadline, still ahead.
+func (r ActivityRow) CountingDown() bool {
+	return r.State == "pending" && r.RequestSource == "automatic" && components.Upcoming(r.Deadline, time.Now())
+}
+
 func (p Page) Owner() string { owner, _, _ := strings.Cut(p.Name, "/"); return owner }
 func (p Page) RepositoryName() string {
 	_, name, found := strings.Cut(p.Name, "/")
@@ -598,3 +656,36 @@ func RequestCount(n int64) string {
 
 // Running reports whether the PR's preview runs now, so it has live output.
 func (pr PR) Running() bool { return pr.DeployedSHA != "" && pr.Environment == "running" }
+
+func (p Page) PublicReferences() []components.ResourceRef {
+	refs := components.ResourceRefs("repository", p.RepoID)
+	for _, pr := range p.Rows {
+		refs = append(refs, components.PRRefs(p.RepoID, pr.Number)...)
+	}
+	if p.SelectedPR != nil {
+		refs = append(refs, components.PRRefs(p.RepoID, p.SelectedPR.Number)...)
+	}
+	return refs
+}
+func (a Activity) PublicReferences() []components.ResourceRef {
+	refs := components.ResourceRefs("repository", a.RepoID)
+	for _, r := range a.Rows {
+		refs = append(refs, components.PRRefs(r.RepoID, r.Number)...)
+	}
+	if a.DismissedRepo > 0 {
+		refs = append(refs, components.PRRefs(a.DismissedRepo, a.DismissedNumber)...)
+	}
+	return refs
+}
+
+// CommitSubject is the first line of the head commit's message.
+func (pr PR) CommitSubject() string {
+	subject, _, _ := strings.Cut(pr.CommitMessage, "\n")
+	return strings.TrimSpace(subject)
+}
+
+// CommitBody is the rest of the head commit's message, after its subject line.
+func (pr PR) CommitBody() string {
+	_, body, _ := strings.Cut(pr.CommitMessage, "\n")
+	return strings.TrimSpace(body)
+}

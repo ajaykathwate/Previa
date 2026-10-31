@@ -2,8 +2,8 @@ package auth
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/sha256"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -24,7 +24,10 @@ type userRepository interface {
 type Handler struct {
 	sessions *scs.SessionManager
 	users    userRepository
+	audience AvatarAudience
+	activity ActivityFeed
 	provider identityProvider
+	google   googleProvider
 	logger   *slog.Logger
 	stateKey []byte
 	origin   string
@@ -38,22 +41,11 @@ func NewHandler(cfg config.ServerConfig, sessions *scs.SessionManager, users use
 }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
-	state := randomToken()
-	h.sessions.Put(r.Context(), "oauth_state", state)
-	h.sessions.Remove(r.Context(), "after_login")
-	if next := r.URL.Query().Get("next"); LocalPath(next) {
-		h.sessions.Put(r.Context(), "after_login", next)
-	}
-	http.SetCookie(w, h.stateCookie(h.signState(state), int(stateLifetime.Seconds())))
-	http.Redirect(w, r, h.provider.AuthCodeURL(state), http.StatusSeeOther)
+	h.beginOAuth(w, r, "github", 0)
 }
 
 func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, h.stateCookie("", -1))
-	state := r.URL.Query().Get("state")
-	expected := h.sessions.PopString(r.Context(), "oauth_state")
-	cookie, err := r.Cookie(h.stateCookieName())
-	if err != nil || !h.validState(cookie.Value, state) || expected == "" || !hmac.Equal([]byte(expected), []byte(state)) {
+	if !h.consumeState(w, r, "github") {
 		h.fail(w, r, http.StatusBadRequest, "Sign-in could not be verified. Please start again.")
 		return
 	}
@@ -73,24 +65,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusBadGateway, "GitHub sign-in is unavailable. Please try again.")
 		return
 	}
-	u, err := h.users.UpsertUser(r.Context(), identity)
-	if err != nil {
-		h.logger.ErrorContext(r.Context(), "save sign-in user", "error", err)
-		h.fail(w, r, http.StatusServiceUnavailable, "Your sign-in could not be saved. Please try again.")
-		return
-	}
-	if err := h.sessions.RenewToken(r.Context()); err != nil {
-		h.logger.ErrorContext(r.Context(), "rotate sign-in session", "error", err)
-		h.fail(w, r, http.StatusServiceUnavailable, "Your session could not be started. Please try again.")
-		return
-	}
-	h.sessions.Put(r.Context(), "user_id", u.ID)
-	h.sessions.Put(r.Context(), "csrf_token", randomToken())
-	next := h.sessions.PopString(r.Context(), "after_login")
-	if !LocalPath(next) {
-		next = "/dashboard"
-	}
-	http.Redirect(w, r, next, http.StatusSeeOther)
+	h.saveOAuthIdentity(w, r, "github", identity)
 }
 
 // LocalPath reports whether next is a path on this server to return to
@@ -110,7 +85,7 @@ func LocalPath(next string) bool {
 
 // logoutConfirmation preserves old links without rendering a separate screen.
 func (h *Handler) logoutConfirmation(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/dashboard?confirm=logout", http.StatusSeeOther)
+	publicid.Redirect(w, r, "/dashboard?confirm=logout", http.StatusSeeOther)
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +95,8 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, h.stateCookie("", -1))
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.SetCookie(w, h.signedOutCookie(int(signedOutLifetime.Seconds())))
+	publicid.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, status int, message string) {

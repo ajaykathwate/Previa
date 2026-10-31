@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"net/http"
 
 	"github.com/a-h/templ"
@@ -32,7 +33,7 @@ func (h *handler) home(w http.ResponseWriter, r *http.Request) {
 	templ.Handler(homepages.Index(loggedIn)).ServeHTTP(w, r)
 }
 
-// openSourceTests shows the public Open Source Tests to everyone, signed in or not.
+// openSourceTests shows the public Open Source Tested page to everyone, signed in or not.
 func (h *handler) openSourceTests(w http.ResponseWriter, r *http.Request) {
 	_, loggedIn := h.users.Username(r.Context())
 	templ.Handler(opensourcepages.Page(loggedIn)).ServeHTTP(w, r)
@@ -51,17 +52,24 @@ func (h *handler) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	summary.DeveloperTools = h.devTools
-	templ.Handler(dashboardpages.Index(username, h.users.CSRFToken(r.Context()), summary)).ServeHTTP(w, r)
+	summary.Joined = r.URL.Query().Get("saved") == "joined"
+	publicid.Handler(r, dashboardpages.Index(username, h.users.CSRFToken(r.Context()), summary), summary).ServeHTTP(w, r)
 }
 
 func (h *handler) protected(w http.ResponseWriter, r *http.Request) {
+	if profile, ok := h.users.(interface {
+		ServeProfile(http.ResponseWriter, *http.Request)
+	}); ok {
+		profile.ServeProfile(w, r)
+		return
+	}
 	username, _ := h.users.Username(r.Context())
-	templ.Handler(dashboardpages.Protected(username, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
+	publicid.Handler(r, dashboardpages.Protected(username, h.users.CSRFToken(r.Context())), nil).ServeHTTP(w, r)
 }
 
 func (h *handler) tools(w http.ResponseWriter, r *http.Request) {
 	username, _ := h.users.Username(r.Context())
-	templ.Handler(dashboardpages.Tools(username, h.users.CSRFToken(r.Context()), h.devTools)).ServeHTTP(w, r)
+	publicid.Handler(r, dashboardpages.Tools(username, h.users.CSRFToken(r.Context()), h.devTools), nil).ServeHTTP(w, r)
 }
 
 // faq shows the workspace FAQ. The answers are public, so a signed-out visitor
@@ -69,8 +77,8 @@ func (h *handler) tools(w http.ResponseWriter, r *http.Request) {
 func (h *handler) faq(w http.ResponseWriter, r *http.Request) {
 	username, ok := h.users.Username(r.Context())
 	if !ok {
-		http.Redirect(w, r, "/#faq", http.StatusSeeOther)
+		publicid.Redirect(w, r, "/#faq", http.StatusSeeOther)
 		return
 	}
-	templ.Handler(faqpages.Page(username, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
+	publicid.Handler(r, faqpages.Page(username, h.users.CSRFToken(r.Context())), nil).ServeHTTP(w, r)
 }

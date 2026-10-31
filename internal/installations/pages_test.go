@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -74,7 +75,7 @@ func TestRepositoryHTTPValidationScopeAndOptionalConfiguration(t *testing.T) {
 		t.Fatal("anonymous repository access allowed")
 	}
 	request("/fixture-login")
-	if code, _, body := request("/repositories?q=owner&access=available"); code != 200 || !strings.Contains(body, ">repo<") || !strings.Contains(body, ">owner<") || !strings.Contains(body, "Not configured") {
+	if code, _, body := request("/repositories?q=owner&access=available"); code != 200 || !strings.Contains(body, ">repo<") || !strings.Contains(body, ">owner<") || !strings.Contains(body, "not configured on this server") || regexp.MustCompile(`<(button|input|select|textarea|fieldset)\\b[^>]*\\sdisabled(\\s|=|/?>)`).MatchString(body) {
 		t.Fatal("stored repositories unavailable without App configuration")
 	}
 	if store.lastUser != 1 || store.lastFilter.Search != "owner" || store.lastFilter.Access != "available" {

@@ -47,8 +47,21 @@ type fakeGitHub struct {
 	// GitHub outage); rejected counts them.
 	reportsDown bool
 	rejected    int
-	// forks are further PRs whose head lives in another repository.
-	forks map[int]string // PR number -> head commit
+	// forks are further PRs whose head lives in another repository;
+	// branches are further PRs from this repository.
+	forks    map[int]string // PR number -> head commit
+	branches map[int]string // PR number -> head commit
+	// heads are the repository's branches (name -> head commit) and
+	// defaultBranch its GitHub default branch, for test-data baselines.
+	heads         map[string]string
+	defaultBranch string
+	// collaborators are further people's repository permissions, by login.
+	collaborators map[string]fakeCollaborator
+}
+
+type fakeCollaborator struct {
+	ID         int64
+	Permission string
 }
 
 type fakeRun struct {
@@ -125,6 +138,42 @@ func (f *fakeGitHub) pushFork(number int, commit string, files map[string]string
 	f.forks[number] = commit
 }
 
+// pushBranch makes commit the head of PR number, opened from a branch of
+// this repository, and serves files as its tarball.
+func (f *fakeGitHub) pushBranch(number int, commit string, files map[string]string) {
+	f.mu.Lock()
+	head := f.head
+	f.mu.Unlock()
+	f.push(commit, files)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.head = head // PR 7 keeps its own head
+	if f.branches == nil {
+		f.branches = map[int]string{}
+	}
+	f.branches[number] = commit
+}
+
+// pushToBranch makes commit the head of branch, which becomes the default
+// branch if there is none yet, and serves files as its tarball. Pull
+// requests keep their heads.
+func (f *fakeGitHub) pushToBranch(branch, commit string, files map[string]string) {
+	f.mu.Lock()
+	head := f.head
+	f.mu.Unlock()
+	f.push(commit, files)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.head = head
+	if f.heads == nil {
+		f.heads = map[string]string{}
+	}
+	f.heads[branch] = commit
+	if f.defaultBranch == "" {
+		f.defaultBranch = branch
+	}
+}
+
 // setReportsDown starts or ends an outage of GitHub's comment and check-run API.
 func (f *fakeGitHub) setReportsDown(down bool) {
 	f.mu.Lock()
@@ -167,7 +216,7 @@ func (f *fakeGitHub) commentPR(path, repoPath string) int {
 		return 0
 	}
 	number, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, prefix), "/comments"))
-	if err == nil && (number == e2ePRNumber || f.forks[number] != "") {
+	if err == nil && (number == e2ePRNumber || f.forks[number] != "" || f.branches[number] != "") {
 		return number
 	}
 	return 0
@@ -225,14 +274,45 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case path == repoPath+"/collaborators/owner/permission":
+		write(200, map[string]any{"permission": "admin", "user": map[string]any{"id": 1, "login": "owner"}})
+	case strings.HasPrefix(path, "/repos/"+e2eOwner+"/") && strings.Contains(path, "/collaborators/") && strings.HasSuffix(path, "/permission"):
+		_, login, _ := strings.Cut(strings.TrimSuffix(path, "/permission"), "/collaborators/")
+		c, ok := f.collaborators[login]
+		if login == "owner" {
+			c, ok = fakeCollaborator{ID: 1, Permission: "admin"}, true
+		}
+		if !ok {
+			write(http.StatusNotFound, map[string]any{"message": "Not Found"})
+			return
+		}
+		write(200, map[string]any{"permission": c.Permission, "user": map[string]any{"id": c.ID, "login": login}})
 	case strings.HasPrefix(path, repoPath+"/pulls/") && f.forks[atoi(strings.TrimPrefix(path, repoPath+"/pulls/"))] != "":
 		number := atoi(strings.TrimPrefix(path, repoPath+"/pulls/"))
 		write(200, map[string]any{"number": number, "state": "open", "title": "From a fork", "html_url": "https://github.com/octo/app/pull/" + strconv.Itoa(number),
 			"user": map[string]any{"login": "outsider"}, "mergeable": true, "mergeable_state": "clean", "updated_at": f.updated.Format(time.RFC3339),
 			"head": map[string]any{"sha": f.forks[number], "ref": "feature", "repo": map[string]any{"id": e2eRepoID + 1}},
 			"base": map[string]any{"ref": "main", "repo": map[string]any{"id": e2eRepoID}}})
+	case strings.HasPrefix(path, repoPath+"/pulls/") && f.branches[atoi(strings.TrimPrefix(path, repoPath+"/pulls/"))] != "":
+		number := atoi(strings.TrimPrefix(path, repoPath+"/pulls/"))
+		write(200, map[string]any{"number": number, "state": "open", "title": "Another change", "html_url": "https://github.com/octo/app/pull/" + strconv.Itoa(number),
+			"user": map[string]any{"login": "contributor"}, "mergeable": true, "mergeable_state": "clean", "updated_at": f.updated.Format(time.RFC3339),
+			"head": map[string]any{"sha": f.branches[number], "ref": "feature-" + strconv.Itoa(number), "repo": map[string]any{"id": e2eRepoID}},
+			"base": map[string]any{"ref": "main", "repo": map[string]any{"id": e2eRepoID}}})
 	case path == "/repositories/"+strconv.Itoa(e2eRepoID):
-		write(200, map[string]any{"id": e2eRepoID, "name": e2eRepo, "owner": map[string]any{"login": e2eOwner}})
+		repo := map[string]any{"id": e2eRepoID, "name": e2eRepo, "owner": map[string]any{"login": e2eOwner}}
+		if f.defaultBranch != "" {
+			repo["default_branch"] = f.defaultBranch
+		}
+		write(200, repo)
+	case strings.HasPrefix(path, repoPath+"/branches/"):
+		name, _ := url.PathUnescape(strings.TrimPrefix(path, repoPath+"/branches/"))
+		sha, ok := f.heads[name]
+		if !ok {
+			write(http.StatusNotFound, map[string]any{"message": "Branch not found"})
+			return
+		}
+		write(200, map[string]any{"name": name, "commit": map[string]any{"sha": sha}})
 	case path == repoPath+"/pulls/"+strconv.Itoa(e2ePRNumber):
 		write(200, map[string]any{"number": e2ePRNumber, "state": "open", "title": "Preview me", "html_url": "https://github.com/octo/app/pull/7",
 			"user": map[string]any{"login": "contributor"}, "mergeable": true, "mergeable_state": "clean", "updated_at": f.updated.Format(time.RFC3339),

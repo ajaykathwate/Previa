@@ -1,14 +1,15 @@
-// Package opensource renders the public Open Source Tests: well-known
-// open-source apps Previa is tested against, chosen to exercise it across
-// stacks, sizes and configurations. Each carries the .previewrc.yaml used, the
-// steps and the results that must hold, so the page is both the published test
-// method and, as results come in, the record of what has been verified. It is
+// Package opensource renders the public Open Source Tested page: ten
+// well-known open-source projects Previa is tested with, chosen to exercise
+// it across stacks, sizes and configurations. Each carries the
+// .previewrc.yaml used, the steps and the results that must hold. It is
 // static copy and reads no saved state.
 //
 // In text fields, `backticks` mark code; see inline in stacks.templ.
 package opensource
 
-// Repo is one app under test. Its anchor is #repo-<ID>.
+import "slices"
+
+// Repo is one project Previa is tested with. Its anchor is #repo-<ID>.
 type Repo struct {
 	ID   string
 	Name string // owner/name on GitHub
@@ -16,9 +17,6 @@ type Repo struct {
 	// Short labels the repository in compact lists when its GitHub name alone
 	// is unclear or long, such as miniflux/v2.
 	Short string
-	// Core apps are the first ten tested; between them they cover
-	// most of Capabilities across TypeScript, Go, Python, Ruby, Java and PHP.
-	Core  bool
 	Kind  string // Frontend, Backend API or Full-stack
 	Size  string // Small, Medium or Large
 	Level string // configuration effort: Basic, Intermediate or Advanced
@@ -28,26 +26,18 @@ type Repo struct {
 	// Why says what this repository proves about Previa.
 	Why    string
 	Covers []string // Capability IDs
-	// Config is the .previewrc.yaml used. It has not passed until Status says so.
+	// Config is the .previewrc.yaml used.
 	Config  string
 	Secrets []Secret
 	Changes []string // edits made to the project before its first build
 	Steps   []string
 	Expect  []string
 	Watch   []string // known risks and limits worth recording
-	Status  Status
 }
 
 // Secret is a value to add on the repository's Secrets tab.
 type Secret struct {
 	Name, Hint string
-}
-
-// Status records verification. Set Verified (YYYY-MM-DD) only after every
-// Expect has held on a real preview; until then the app shows "In testing".
-type Status struct {
-	Verified string
-	Note     string
 }
 
 // Capability is something Previa does that an app's test exercises.
@@ -64,7 +54,6 @@ func Capabilities() []Capability {
 		{ID: "static", Name: "Static sites", Group: "Build"},
 		{ID: "monorepo", Name: "Monorepos", Group: "Build"},
 		{ID: "path", Name: "Dockerfile in a subfolder", Group: "Build"},
-		{ID: "context", Name: "Build context folder", Group: "Build"},
 		{ID: "kits", Name: "Starter kits", Group: "Build"},
 		{ID: "limits", Name: "Heavy builds and limits", Group: "Build"},
 		{ID: "diagnosis", Name: "Submodule and LFS checks", Group: "Build"},
@@ -112,59 +101,23 @@ func CapabilityName(id string) string {
 	return id
 }
 
-// Covering returns the repositories whose tests exercise a capability, core
-// repositories first.
+// Covering returns the repositories whose tests exercise a capability.
 func Covering(id string) []Repo {
-	var core, more []Repo
-	for _, r := range Repos() {
-		for _, c := range r.Covers {
-			if c != id {
-				continue
-			}
-			if r.Core {
-				core = append(core, r)
-			} else {
-				more = append(more, r)
-			}
-			break
-		}
-	}
-	return append(core, more...)
-}
-
-// Core returns the first set to test; More returns the rest.
-func Core() []Repo { return filter(true) }
-
-// More returns the repositories outside the core set.
-func More() []Repo { return filter(false) }
-
-func filter(core bool) []Repo {
 	var repos []Repo
 	for _, r := range Repos() {
-		if r.Core == core {
+		if slices.Contains(r.Covers, id) {
 			repos = append(repos, r)
 		}
 	}
 	return repos
 }
 
-// VerifiedCount is how many apps have passed every check.
-func VerifiedCount() int {
-	n := 0
-	for _, r := range Repos() {
-		if r.Status.Verified != "" {
-			n++
-		}
-	}
-	return n
-}
-
-// Repos lists every repository in reading order: the core set, then the rest.
+// Repos lists the ten projects in reading order.
 func Repos() []Repo {
 	return []Repo{
 		{
 			ID: "mermaid-live-editor", Name: "mermaid-js/mermaid-live-editor", URL: "https://github.com/mermaid-js/mermaid-live-editor",
-			Core: true, Kind: "Frontend", Size: "Medium", Level: "Basic",
+			Kind: "Frontend", Size: "Medium", Level: "Basic",
 			Stack:        []string{"SvelteKit", "TypeScript", "pnpm", "Static build", "nginx"},
 			Architecture: "A single-page app built to static files in a multi-stage Dockerfile and served by nginx.",
 			Why:          "The quickest proof of the core loop: pull request, build, private link, living comment.",
@@ -194,7 +147,7 @@ resource_tier: small
 		},
 		{
 			ID: "umami", Name: "umami-software/umami", URL: "https://github.com/umami-software/umami",
-			Core: true, Kind: "Full-stack", Size: "Large", Level: "Intermediate",
+			Kind: "Full-stack", Size: "Large", Level: "Intermediate",
 			Stack:        []string{"Next.js", "React", "TypeScript", "Prisma", "PostgreSQL", "pnpm"},
 			Architecture: "A Next.js standalone server with API routes; Prisma migrations run each time the container starts.",
 			Why:          "A widely used analytics product: a heavy Next.js build, a managed database and migrations on boot.",
@@ -221,7 +174,7 @@ services:
 		{
 			ID: "miniflux", Name: "miniflux/v2", URL: "https://github.com/miniflux/v2",
 			Short: "miniflux",
-			Core:  true, Kind: "Full-stack", Size: "Medium", Level: "Intermediate",
+			Kind:  "Full-stack", Size: "Medium", Level: "Intermediate",
 			Stack:        []string{"Go", "PostgreSQL", "Server-rendered HTML", "Alpine"},
 			Architecture: "One Go binary serves the UI and API; its Dockerfile lives outside the repository root.",
 			Why:          "A compact Go app that proves custom Dockerfile paths, managed PostgreSQL and access to the public web.",
@@ -255,7 +208,7 @@ env:
 		{
 			ID: "full-stack-fastapi-template", Name: "fastapi/full-stack-fastapi-template", URL: "https://github.com/fastapi/full-stack-fastapi-template",
 			Short: "fastapi-template",
-			Core:  true, Kind: "Full-stack", Size: "Medium", Level: "Intermediate",
+			Kind:  "Full-stack", Size: "Medium", Level: "Intermediate",
 			Stack:        []string{"FastAPI", "Python 3.14", "SQLModel", "Alembic", "React", "Vite", "Bun", "PostgreSQL"},
 			Architecture: "A monorepo: Bun builds the React frontend, uv installs the API, and one image serves both.",
 			Why:          "A modern Python monorepo with a setup step, an API docs link and BuildKit cache mounts.",
@@ -291,7 +244,7 @@ docs_path: /docs
 		},
 		{
 			ID: "bakerydemo", Name: "wagtail/bakerydemo", URL: "https://github.com/wagtail/bakerydemo",
-			Core: true, Kind: "Full-stack", Size: "Medium", Level: "Advanced",
+			Kind: "Full-stack", Size: "Medium", Level: "Advanced",
 			Stack:        []string{"Django", "Wagtail CMS", "Python 3.12", "uWSGI", "PostgreSQL", "Redis"},
 			Architecture: "A server-rendered CMS with an editor; an entrypoint script waits for the database before uWSGI starts.",
 			Why:          "A content-heavy Django site where setup, sample data and a read-only file system meet.",
@@ -326,7 +279,7 @@ env:
 		},
 		{
 			ID: "saleor", Name: "saleor/saleor", URL: "https://github.com/saleor/saleor",
-			Core: true, Kind: "Backend API", Size: "Large", Level: "Advanced",
+			Kind: "Backend API", Size: "Large", Level: "Advanced",
 			Stack:        []string{"Django", "GraphQL", "Python 3.12", "Uvicorn", "Celery", "PostgreSQL", "Redis"},
 			Architecture: "A headless commerce API: one GraphQL endpoint, Celery for background jobs and no bundled storefront.",
 			Why:          "A large production API with hundreds of migrations, a worker process and the large preview size.",
@@ -371,7 +324,7 @@ docs_path: /graphql/
 		},
 		{
 			ID: "sure", Name: "we-promise/sure", URL: "https://github.com/we-promise/sure",
-			Core: true, Kind: "Full-stack", Size: "Large", Level: "Advanced",
+			Kind: "Full-stack", Size: "Large", Level: "Advanced",
 			Stack:        []string{"Ruby on Rails", "Ruby 3.4", "Hotwire", "PostgreSQL", "Redis", "Sidekiq"},
 			Architecture: "A server-rendered Rails app with Sidekiq jobs; the community-maintained successor of the Maybe finance app.",
 			Why:          "A real Rails product: database preparation, a Sidekiq worker and the read-only file system rules.",
@@ -411,7 +364,7 @@ env:
 		},
 		{
 			ID: "spring-petclinic", Name: "spring-projects/spring-petclinic", URL: "https://github.com/spring-projects/spring-petclinic",
-			Core: true, Kind: "Full-stack", Size: "Medium", Level: "Intermediate",
+			Kind: "Full-stack", Size: "Medium", Level: "Intermediate",
 			Stack:        []string{"Spring Boot", "Java 17", "Maven", "Thymeleaf", "MySQL 8.4"},
 			Architecture: "A classic layered Spring MVC app with no Dockerfile; the schema and sample data load on start.",
 			Why:          "The Starter kits path for a JVM app: Maven build, slow JVM start and a managed MySQL database.",
@@ -439,7 +392,7 @@ env:
 		},
 		{
 			ID: "bookstack", Name: "BookStackApp/BookStack", URL: "https://github.com/BookStackApp/BookStack",
-			Core: true, Kind: "Full-stack", Size: "Large", Level: "Advanced",
+			Kind: "Full-stack", Size: "Large", Level: "Advanced",
 			Stack:        []string{"Laravel 13", "PHP 8.4", "MySQL 8.4", "npm asset build"},
 			Architecture: "A server-rendered Laravel wiki; its front-end assets are compiled with npm and aren't committed.",
 			Why:          "Starter kits plus real-world edits: PHP extensions, an asset build and a MySQL-only app.",
@@ -473,7 +426,7 @@ setup: ["preview-env", "php", "artisan", "migrate", "--force"]
 		},
 		{
 			ID: "docmost", Name: "docmost/docmost", URL: "https://github.com/docmost/docmost",
-			Core: true, Kind: "Full-stack", Size: "Large", Level: "Advanced",
+			Kind: "Full-stack", Size: "Large", Level: "Advanced",
 			Stack:        []string{"NestJS", "React", "TypeScript", "pnpm workspaces", "Nx", "PostgreSQL", "Redis", "WebSockets"},
 			Architecture: "A monorepo with a NestJS server, a React client and shared editor packages; editing syncs live over WebSockets.",
 			Why:          "A big collaborative monorepo that also ships a Git submodule, so it tests Previa's checks before building.",
@@ -507,237 +460,6 @@ env:
 				"The LFS pull request stops with a similar explanation.",
 			},
 			Watch: []string{"Attachments are written to local storage, which is read-only in a preview; expect uploads to fail."},
-		},
-
-		{
-			ID: "excalidraw", Name: "excalidraw/excalidraw", URL: "https://github.com/excalidraw/excalidraw",
-			Kind: "Frontend", Size: "Large", Level: "Basic",
-			Stack:        []string{"React", "TypeScript", "Vite", "Yarn workspaces", "nginx"},
-			Architecture: "A large client-only drawing app in a Yarn workspaces monorepo, built to static files and served by nginx.",
-			Why:          "A big frontend build: thousands of modules compiled into one static site.",
-			Covers:       []string{"static", "monorepo", "readonly", "limits"},
-			Config: `port: 8080
-health_check_path: /
-resource_tier: small
-`,
-			Changes: []string{"Change the last `FROM` line to `nginxinc/nginx-unprivileged:stable-alpine`, which listens on 8080, and keep the `COPY` line."},
-			Steps: []string{
-				"Apply the change, open a pull request and build.",
-				"Draw shapes, add text and export a PNG.",
-			},
-			Expect: []string{
-				"The full monorepo builds and the editor works at the preview link.",
-				"Drawings are saved in the browser and survive a reload.",
-			},
-			Watch: []string{"Live collaboration needs Excalidraw's separate room server, which isn't in this repository; the share dialog is expected to fail."},
-		},
-		{
-			ID: "vuejs-docs", Name: "vuejs/docs", URL: "https://github.com/vuejs/docs",
-			Short: "vue-docs",
-			Kind:  "Frontend", Size: "Medium", Level: "Basic",
-			Stack:        []string{"VitePress", "Vue 3", "pnpm", "Markdown"},
-			Architecture: "A static documentation site of hundreds of Markdown pages, built by VitePress.",
-			Why:          "Starter kits adapted to a different package manager and output folder.",
-			Covers:       []string{"static", "kits"},
-			Config: `# From Starter kits: React + Vite.
-port: 8080
-health_check_path: /
-resource_tier: small
-`,
-			Changes: []string{
-				"In the kit's Dockerfile, run `corepack enable`, copy `pnpm-lock.yaml`, and use `pnpm install --frozen-lockfile` and `pnpm run build`: the repository refuses npm.",
-				"Copy `.vitepress/dist` instead of `dist`.",
-			},
-			Steps: []string{
-				"Generate the kit, apply the edits, open a pull request and build.",
-				"Browse the guide, then reload a deep page such as `/guide/introduction`.",
-			},
-			Expect: []string{
-				"The static site builds and serves at the preview link.",
-				"Deep links load their own page after a reload.",
-			},
-			Watch: []string{"If a reloaded deep link shows the home page, change the nginx `try_files` line to `$uri $uri.html $uri/ =404`."},
-		},
-		{
-			ID: "elk", Name: "elk-zone/elk", URL: "https://github.com/elk-zone/elk",
-			Kind: "Frontend", Size: "Medium", Level: "Intermediate",
-			Stack:        []string{"Nuxt", "Vue", "TypeScript", "pnpm", "Node.js"},
-			Architecture: "A server-rendered Nuxt client for Mastodon; its server talks to Mastodon instances on the reader's behalf.",
-			Why:          "A server-rendered frontend that depends on reaching other services on the public web.",
-			Covers:       []string{"ssr", "internet", "readonly"},
-			Config: `port: 5314
-health_check_path: /
-env:
-  - NUXT_STORAGE_FS_BASE=/tmp/elk
-`,
-			Steps: []string{
-				"Build and open the link.",
-				"Explore a public timeline on a large instance such as `mastodon.social`.",
-				"Sign in with a test Mastodon account.",
-			},
-			Expect: []string{
-				"Server-rendered pages load and public timelines appear.",
-				"Sign-in completes: Elk registers itself with the instance from the preview.",
-			},
-			Watch: []string{"Elk keeps its server data under `/tmp`, so it resets on every rebuild."},
-		},
-		{
-			ID: "livebook", Name: "livebook-dev/livebook", URL: "https://github.com/livebook-dev/livebook",
-			Kind: "Full-stack", Size: "Medium", Level: "Advanced",
-			Stack:        []string{"Elixir", "Phoenix LiveView", "Erlang/OTP", "WebSockets"},
-			Architecture: "A Phoenix LiveView app shipped as an Elixir release; the browser stays connected over WebSockets.",
-			Why:          "A new language family, a Dockerfile that expects build arguments and a live connection.",
-			Covers:       []string{"websockets", "secrets", "readonly"},
-			Config: `port: 8080
-health_check_path: /public/health
-env:
-  - LIVEBOOK_IP=0.0.0.0
-  - LIVEBOOK_HOME=/tmp/livebook
-  - LIVEBOOK_DATA_PATH=/tmp/livebook-data
-`,
-			Secrets: []Secret{{Name: "LIVEBOOK_PASSWORD", Hint: "12 or more characters"}},
-			Changes: []string{
-				"Give the build arguments defaults, since previews build without arguments: `ARG BASE_IMAGE=hexpm/elixir:<elixir>-erlang-<otp>-ubuntu-<ubuntu>` from the repository's `versions` file, and `ARG VARIANT=default`.",
-			},
-			Steps: []string{
-				"Apply the change, add the password, open a pull request and build.",
-				"Sign in, create a notebook and evaluate an Elixir cell.",
-			},
-			Expect: []string{
-				"The Elixir release compiles and the preview passes `/public/health`.",
-				"Cells evaluate and results stream back live.",
-			},
-			Watch: []string{"The image listens on `::` by default; previews need `LIVEBOOK_IP=0.0.0.0`."},
-		},
-		{
-			ID: "eshoponweb", Name: "NimblePros/eShopOnWeb", URL: "https://github.com/NimblePros/eShopOnWeb",
-			Kind: "Full-stack", Size: "Medium", Level: "Intermediate",
-			Stack:        []string{"ASP.NET Core", ".NET 10", "C#", "Razor Pages", "Entity Framework Core"},
-			Architecture: "A reference monolith: an MVC storefront with sign-in, built from the solution root by a Dockerfile in src/Web.",
-			Why:          "The .NET path: a full solution build and a Dockerfile away from the root.",
-			Covers:       []string{"path", "ssr"},
-			Config: `dockerfile: src/Web/Dockerfile
-port: 8080
-health_check_path: /
-env:
-  - UseOnlyInMemoryDatabase=true
-`,
-			Steps: []string{
-				"Open a pull request with the config and build.",
-				"Browse the catalog, add items to the basket and sign in as `demouser@microsoft.com` / `Pass@word1`.",
-				"Check out.",
-			},
-			Expect: []string{
-				"The .NET solution builds and the storefront is served on port 8080.",
-				"Sign-in and checkout work against the in-memory database, which resets on every restart.",
-			},
-			Watch: []string{"The admin pages call a separate API project that this preview doesn't run."},
-		},
-		{
-			ID: "microblog", Name: "miguelgrinberg/microblog", URL: "https://github.com/miguelgrinberg/microblog",
-			Kind: "Full-stack", Size: "Small", Level: "Intermediate",
-			Stack:        []string{"Flask", "Python", "SQLAlchemy", "Gunicorn", "PostgreSQL", "Redis", "RQ"},
-			Architecture: "A small server-rendered Flask app; its entrypoint migrates, then starts Gunicorn, and exports run in an RQ worker.",
-			Why:          "A small app with the full backend shape: database, queue and worker.",
-			Covers:       []string{"ssr", "postgres", "redis", "workers", "secrets"},
-			Config: `port: 5000
-health_check_path: /auth/login
-services:
-  postgres: 17
-  redis: 8
-processes:
-  - name: rq
-    command: ["sh", "-c", "exec rq worker -u $REDIS_URL microblog-tasks"]
-`,
-			Secrets: []Secret{{Name: "SECRET_KEY", Hint: "any long random string"}},
-			Steps: []string{
-				"Build, register two users, post and follow.",
-				"Choose Export your posts.",
-			},
-			Expect: []string{
-				"The entrypoint applies migrations, then serves the app.",
-				"The export job is picked up by the rq process.",
-			},
-			Watch: []string{"The export finishes by sending an email; without mail settings, expect the job to fail at that last step."},
-		},
-		{
-			ID: "realworld-express", Name: "gothinkster/node-express-realworld-example-app", URL: "https://github.com/gothinkster/node-express-realworld-example-app",
-			Short: "realworld-express",
-			Kind:  "Backend API", Size: "Small", Level: "Intermediate",
-			Stack:        []string{"Node.js", "Express", "TypeScript", "Prisma", "Nx", "PostgreSQL"},
-			Architecture: "A REST API (the RealWorld spec) with JWT sign-in; Nx builds the server bundle.",
-			Why:          "An API-only preview whose own Dockerfile expects files built by CI.",
-			Covers:       []string{"api", "kits", "postgres", "setup", "secrets"},
-			Config: `port: 3000
-health_check_path: /api/tags
-services:
-  postgres: 17
-setup: ["npx", "prisma", "migrate", "deploy", "--schema", "src/prisma/schema.prisma"]
-`,
-			Secrets: []Secret{{Name: "JWT_SECRET", Hint: "any long random string"}},
-			Changes: []string{
-				"The included Dockerfile copies a `dist/` folder built elsewhere. Replace it with Starter kits → Node.js API.",
-				"In the kit's Dockerfile, run `npx prisma generate --schema src/prisma/schema.prisma` before the build, and start with `[\"node\", \"dist/api/main.js\"]`.",
-			},
-			Steps: []string{
-				"Apply the changes, open a pull request and build.",
-				"Register with `POST /api/users`, create an article, then `GET /api/articles`.",
-			},
-			Expect: []string{
-				"Setup applies the Prisma migrations before the API starts.",
-				"The API answers JSON at the preview link.",
-			},
-		},
-		{
-			ID: "example-voting-app", Name: "dockersamples/example-voting-app", URL: "https://github.com/dockersamples/example-voting-app",
-			Short: "voting-app",
-			Kind:  "Full-stack", Size: "Small", Level: "Intermediate",
-			Stack:        []string{"Docker Compose", "Python", "Flask", "Gunicorn", "Redis"},
-			Architecture: "Five services wired together by Docker Compose; Previa previews one of them from its own folder.",
-			Why:          "Shows how a Compose project maps onto a preview: one service, built from a folder.",
-			Covers:       []string{"context", "redis"},
-			Config: `context: vote
-port: 80
-health_check_path: /
-services:
-  redis: 8
-`,
-			Changes: []string{"`vote/app.py` connects to a host named `redis` with no password. Read Previa's address instead: `Redis.from_url(os.environ[\"REDIS_URL\"], socket_timeout=5)`."},
-			Steps: []string{
-				"Build unchanged and try to vote.",
-				"Apply the change, build again and vote.",
-			},
-			Expect: []string{
-				"Only the `vote` folder is built, and the page is served on port 80.",
-				"Unchanged, voting fails; after the change, votes are stored in Redis.",
-			},
-			Watch: []string{"Previa doesn't run Compose files: the worker, results page and database services aren't part of the preview."},
-		},
-		{
-			ID: "vaultwarden", Name: "dani-garcia/vaultwarden", URL: "https://github.com/dani-garcia/vaultwarden",
-			Kind: "Full-stack", Size: "Large", Level: "Advanced",
-			Stack:        []string{"Rust", "Rocket", "Diesel", "SQLite", "Bitwarden web vault"},
-			Architecture: "One Rust server that also serves the prebuilt web vault; built with a fully optimized release profile.",
-			Why:          "The heaviest compile of the set, and an app whose browser crypto needs HTTPS.",
-			Covers:       []string{"path", "limits", "readonly", "secrets"},
-			Config: `dockerfile: docker/Dockerfile.debian
-port: 80
-health_check_path: /alive
-resource_tier: small
-env:
-  - DATA_FOLDER=/tmp/vaultwarden
-  - SIGNUPS_ALLOWED=true
-`,
-			Secrets: []Secret{{Name: "ADMIN_TOKEN", Hint: "optional: opens /admin"}},
-			Steps: []string{
-				"Open a pull request with the config, build and record the duration.",
-				"If it goes live, create an account and save a vault item.",
-			},
-			Expect: []string{
-				"Either the build finishes, or Previa stops it at the build time limit with a plain explanation. Both are valid results; record which.",
-				"Once live, the web vault works over the preview's HTTPS link.",
-			},
-			Watch: []string{"The data lives in `/tmp` and resets on every rebuild; use a throwaway account."},
 		},
 	}
 }

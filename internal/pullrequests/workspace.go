@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
@@ -25,6 +25,9 @@ func (h *Handler) ValidateSelection(ctx context.Context, userID, repoID int64, p
 }
 
 func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Values) (pages.Page, error) {
+	if err := publicid.Selection(ctx, repoID, params); err != nil {
+		return pages.Page{}, installations.ErrWorkspaceInput
+	}
 	f, number, err := workspaceQuery(params)
 	if err != nil {
 		return pages.Page{}, err
@@ -34,7 +37,7 @@ func (h *Handler) page(ctx context.Context, userID, repoID int64, params url.Val
 		return pages.Page{}, panelError(err)
 	}
 	page := pages.Page{RepoID: repoID, Name: data.Repo.FullName, Mode: data.Repo.BuildMode, PrivatePreviews: data.Repo.PrivatePreviews,
-		Available: data.Repo.Accessible && data.Repo.Status == "active", DiscoveryEnabled: h.enabled,
+		Available: data.Repo.Accessible && data.Repo.Status == "active", DiscoveryEnabled: h.enabled, SourceLocked: h.sourceDenied(ctx, repoID),
 		SyncState: data.Sync.State, SyncMessage: data.Sync.Message, LastRefresh: timestamp(data.Sync.LastSuccessAt),
 		Fetched: data.Sync.Fetched, Number: data.Page, Pages: data.Pages, Total: data.Total,
 		Search: f.Search, State: f.State, WorkspaceQuery: params.Encode(), CSRF: h.users.CSRFToken(ctx)}
@@ -102,7 +105,10 @@ func (h *Handler) listPR(row dbgen.ListPRsRow, noWorker bool) pages.PR {
 		Branch: row.HeadBranch, SHA: row.HeadSha, State: DisplayStatus(row.State, row.BuildStatus), Build: row.BuildState,
 		Fork: row.IsFork, NeedsRefresh: row.NeedsRefresh, RequestCurrent: row.RequestCurrent,
 		DeployedSHA: row.DeployedSha, Environment: row.EnvironmentStatus, NoWorker: noWorker,
-		URL: row.HtmlUrl, UpdatedAt: timestamp(row.SourceUpdatedAt)}
+		URL: row.HtmlUrl, UpdatedAt: timestamp(row.SourceUpdatedAt), RequestSource: row.RequestSource}
+	if row.RequestCurrent && row.BuildState == "pending" {
+		pr.Deadline = timestamp(row.BuildAvailableAt)
+	}
 	if url := h.previewURL(row.Hostname); url != "" && previewDeployed(row.DeployedSha, row.EnvironmentStatus) {
 		pr.PreviewURL, pr.OlderPreview = url, row.DeployedSha != row.HeadSha
 	}
@@ -125,9 +131,25 @@ func (h *Handler) finishMutation(w http.ResponseWriter, r *http.Request, userID,
 		http.Error(w, "Invalid workspace filters.", http.StatusBadRequest)
 		return
 	}
+	if location, ok := returnLocation(r, repoID); ok {
+		separator := "?"
+		if strings.Contains(location, "?") {
+			separator = "&"
+		}
+		switch {
+		case r.FormValue("return") == "review" && r.PostForm.Get("reset") == "true":
+			location += separator + "saved=reset"
+		case strings.HasSuffix(r.URL.Path, "/build"):
+			location += separator + "saved=build"
+		case strings.HasSuffix(r.URL.Path, "/refresh"):
+			location += separator + "saved=sync"
+		}
+		publicid.Redirect(w, r, location, http.StatusSeeOther)
+		return
+	}
 	location := repositorypages.WorkspaceURL(repoID, params)
 	if r.Header.Get("HX-Request") != "true" {
-		http.Redirect(w, r, location, http.StatusSeeOther)
+		publicid.Redirect(w, r, location, http.StatusSeeOther)
 		return
 	}
 	page, err := h.page(r.Context(), userID, repoID, params)
@@ -135,7 +157,55 @@ func (h *Handler) finishMutation(w http.ResponseWriter, r *http.Request, userID,
 		h.fail(w, r, err)
 		return
 	}
-	w.Header().Set("HX-Push-Url", location)
+	if err := publicid.SetHeader(w, r, "HX-Push-Url", location); err != nil {
+		http.Error(w, "Unable to prepare the page address.", http.StatusServiceUnavailable)
+		return
+	}
 	w.Header().Add("Vary", "HX-Request, HX-Target")
-	templ.Handler(pages.Panel(page, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
+	publicid.Handler(r, pages.Panel(page, h.users.CSRFToken(r.Context())), page).ServeHTTP(w, r)
+}
+
+// setupLocation is a repository's Setup tab, on the pull request the form
+// came from (a fixed path; only its pr selector comes from the form).
+func setupLocation(repoID int64, params url.Values) string {
+	location := "/repositories/" + strconv.FormatInt(repoID, 10) + "/setup"
+	if pr := params.Get("pr"); pr != "" {
+		location += "?pr=" + url.QueryEscape(pr)
+	}
+	return location
+}
+
+// returnLocation is where an action started on another page goes back to:
+// the Setup tab (return=setup) or the pull request's review page
+// (return=review, Reset test data). workspace_query names the pull request.
+func returnLocation(r *http.Request, repoID int64) (string, bool) {
+	params, err := url.ParseQuery(r.FormValue("workspace_query"))
+	if err != nil {
+		params = url.Values{}
+	}
+	switch r.FormValue("return") {
+	case "setup":
+		return setupLocation(repoID, params), true
+	case "review":
+		if pr := params.Get("pr"); pr != "" {
+			return "/repositories/" + strconv.FormatInt(repoID, 10) + "/pull-requests/" + url.PathEscape(pr) + "/review", true
+		}
+	}
+	return "", false
+}
+
+// refusedFromSetup sends a refused request from the Setup tab or the review
+// page back there with a fixed notice code, instead of a plain-text error
+// page.
+func refusedFromSetup(w http.ResponseWriter, r *http.Request, repoID int64, code string) bool {
+	location, ok := returnLocation(r, repoID)
+	if !ok {
+		return false
+	}
+	separator := "?"
+	if strings.Contains(location, "?") {
+		separator = "&"
+	}
+	publicid.Redirect(w, r, location+separator+"notice="+code, http.StatusSeeOther)
+	return true
 }

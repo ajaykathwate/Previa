@@ -1,0 +1,32 @@
+.customer-page { max-width: 1000px; margin-inline: auto; }
+.customer-page > p { color: var(--muted-foreground); line-height: 1.65; }
+.customer-page a:not(.nav-link):not(.field-card-action) { text-decoration: underline; text-underline-offset: 3px; }
+.customer-page .field-card { padding: 22px; margin-block: 18px; overflow-wrap: anywhere; }
+.customer-page h1 { font-size: 1.6rem; font-weight: 650; }
+.customer-page h2 { font-size: 1.05rem; font-weight: 650; margin-bottom: 12px; }
+.customer-page h3 { font-weight: 600; margin-block: 12px 6px; }
+.customer-page p { margin-block: 10px; line-height: 1.65; }
+.customer-page .repo-tabs { display: flex; flex-wrap: wrap; gap: 16px; padding-block: 14px; }
+.customer-form { display: grid; gap: 12px; }
+.customer-form label { display: grid; gap: 8px; font-weight: 550; }
+.customer-form input:not([type=hidden]), .customer-form textarea, .customer-form select {
+ width: 100%; min-width: 0; border: 1px solid var(--border); background: var(--background); color: var(--foreground);
+ border-radius: var(--radius); padding: 10px 12px; font-weight: 400; font-size: 14px;
+}
+.customer-form textarea { resize: vertical; }
+.customer-form :is(input,textarea,select):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.customer-form button[type=submit] { justify-self: start; }
+.support-message { white-space: pre-wrap; overflow-wrap: anywhere; }
+.customer-page .field-row { gap: 12px; }
+.customer-page .customer-resource { display: flex; flex-wrap: wrap; padding: 12px 0; gap: 12px; }
+.customer-resource > span { flex: 1 1 260px; min-width: 0; }
+.customer-resource + .customer-resource { border-top: 1px solid var(--line); }
+.customer-page .field-note, .customer-page .field-error { padding: 0; }
+.customer-page .field-card-action { align-self: flex-start; min-height: 32px; height: auto; padding: 6px 12px; }
+.customer-page .tone-error { color: var(--danger-ink); }
+.customer-page .repo-tabs { justify-content: flex-start; }
+@media(max-width: 640px) {
+ .customer-page .field-card { padding: 16px; }
+ .customer-page code { overflow-wrap: anywhere; }
+ .customer-page .field-row { grid-template-columns: 1fr; }
+}

@@ -26,11 +26,22 @@ rest explain how and why it works.
 | 20 | [Realtime updates](20-realtime-updates.md) | Live dashboard updates with triggers, LISTEN/NOTIFY and SSE. |
 | 21 | [UI architecture](21-ui-architecture.md) | Templ/HTMX structure, theme, navigation, progressive enhancement. |
 | 22 | [Operating the MVP](22-mvp-operations.md) | What server and worker do, the capability and configuration matrix, queues and draining, running the full pipeline, what is proven and the live proofs still required. |
-| 23 | [Observability and hardening](23-observability-and-hardening.md) | Logs, metrics, readiness, dashboards and alerts; ingress controls, production mode, the kill switch and dependency checks. |
-| 24 | [Incident runbook](24-incident-runbook.md) | What to do for each alert: outages, backlogs, failures, disk, backups, certificates, key rotation. |
-| 25 | [Production deployment](25-production-deployment.md) | Release images, host setup, GitHub and DNS, staged certificates, backups and restore, upgrades and rollback, CI and releases, the smoke test. |
+| 23 | [Observability and hardening](23-observability-and-hardening.md) | Logs, Sentry error reporting, metrics, readiness, the optional dashboards and alert rules; ingress controls, production mode, the kill switch and dependency checks. |
+| 24 | [Incident runbook](24-incident-runbook.md) | What to do for each Sentry signal or alert: outages, backlogs, failures, disk, backups, certificates, key rotation. |
+| 25 | [Production deployment](25-production-deployment.md) | The final setup at a glance (components, diagrams, cost, capacity), host setup with Tailscale, domains and DNS, images built from a release tag, Sentry monitoring, logs and day-to-day checks, backups and a pre-launch restore rehearsal, upgrades and rollback, CI and releases, the smoke test. |
 | 26 | [Release report](26-release-report.md) | Evidence for each release acceptance item: what passed, how, and what is still pending. |
-| 27 | [Roadmap](27-roadmap.md) | Prompts 1–13 (13: backend previews), the planned Prompt 14 (missed uninstall detection), and the release checklist. |
+| 27 | [Roadmap](27-roadmap.md) | Prompts 1–13 (13: backend previews), Prompt 14 (missed uninstall detection), and the release checklist. |
+| 28 | [Shared team workspaces](28-shared-workspaces.md) | Roles, repository grants, invitation consent, ownership handover, revocation, shared quotas and migration cutover. |
+| 29 | [Guided onboarding](29-guided-onboarding.md) | The repository Setup tab: five steps from a connected repository to an opened preview, bounded setup checks, and where new members start. |
+| 30 | [Native review and feedback](30-reviews.md) | The review page: testing instructions, findings recorded against deployments, moderation, version conflicts, access, limits and activity records. |
+| 31 | [Ready-to-test sample data](31-test-data.md) | Seeding with `setup`, setup facts on the review page, Reset test data, sealed test access for reviewers, and the two reference journeys with their customer copies. |
+| 32 | [Persistent test data](32-persistent-test-data.md) | The Test data tab, the `seed` key, repository baselines (build, storage, triggers, ordering), data kept between a pull request's builds, starting-data fallbacks, Reset sources, operation and verification. |
+| 33 | [Usage and the free plan](33-usage-and-free-plan.md) | Finite workspace allowances, measured execution, accounting recovery and role-scoped usage. |
+| 34 | [Accounts, support and deletion](34-accounts-support-and-deletion.md) | Session revocation, durable exits, support operators, status, policies and the independent encrypted restore journal. |
+
+| 35 | [Installation recovery and early access](35-installation-recovery-and-early-access.md) | Missed lifecycle delivery recovery, circuit breakers, operator workspace approval and verification. |
+
+| 36 | [Google sign-in and reviewer invitations](36-google-sign-in-and-reviewer-invitations.md) | Provider-independent roles, explicit login linking, verified-email Reviewer invitations, private previews and restore. |
 
 Related files outside this folder:
 

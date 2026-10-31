@@ -21,7 +21,7 @@ WHERE b.pull_request_id = pr.id AND pr.id = $2
     AND b.generation = pr.generation AND b.head_sha = pr.head_sha
     AND b.revision = $4 AND b.state = $5
     AND ($1::text <> 'running' OR b.available_at <= clock_timestamp())
-RETURNING b.pull_request_id, b.revision, b.base_revision, b.generation, b.head_sha, b.source, b.request_action, b.requested_by, b.idempotency_key, b.state, b.available_at, b.requested_at, b.started_at, b.completed_at, b.updated_at, b.waiting_revision, b.waiting_reason, b.waiting_since, b.waiting_checked_at
+RETURNING b.pull_request_id, b.revision, b.base_revision, b.generation, b.head_sha, b.source, b.request_action, b.requested_by, b.idempotency_key, b.state, b.available_at, b.requested_at, b.started_at, b.completed_at, b.updated_at, b.waiting_revision, b.waiting_reason, b.waiting_since, b.waiting_checked_at, b.workspace_id, b.authorization_stamp, b.execution_job_id, b.execution_error_code, b.start_source, b.usage_wait_until
 `
 
 type AdvanceBuildIntentParams struct {
@@ -61,6 +61,12 @@ func (q *Queries) AdvanceBuildIntent(ctx context.Context, arg AdvanceBuildIntent
 		&i.WaitingReason,
 		&i.WaitingSince,
 		&i.WaitingCheckedAt,
+		&i.WorkspaceID,
+		&i.AuthorizationStamp,
+		&i.ExecutionJobID,
+		&i.ExecutionErrorCode,
+		&i.StartSource,
+		&i.UsageWaitUntil,
 	)
 	return i, err
 }
@@ -96,7 +102,7 @@ func (q *Queries) FindIntentScope(ctx context.Context, id int64) (FindIntentScop
 }
 
 const lockBuildIntent = `-- name: LockBuildIntent :one
-SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at FROM build_intents WHERE pull_request_id = $1 FOR UPDATE
+SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at, workspace_id, authorization_stamp, execution_job_id, execution_error_code, start_source, usage_wait_until FROM build_intents WHERE pull_request_id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockBuildIntent(ctx context.Context, pullRequestID int64) (BuildIntent, error) {
@@ -122,13 +128,19 @@ func (q *Queries) LockBuildIntent(ctx context.Context, pullRequestID int64) (Bui
 		&i.WaitingReason,
 		&i.WaitingSince,
 		&i.WaitingCheckedAt,
+		&i.WorkspaceID,
+		&i.AuthorizationStamp,
+		&i.ExecutionJobID,
+		&i.ExecutionErrorCode,
+		&i.StartSource,
+		&i.UsageWaitUntil,
 	)
 	return i, err
 }
 
 const lockIntentInstallation = `-- name: LockIntentInstallation :one
 SELECT id FROM installations
-WHERE id = $1 AND owner_user_id = $2
+WHERE id = $1 AND workspace_installation_access(id,$2::bigint,'read')
     AND status = 'active'
 FOR UPDATE
 `
@@ -189,13 +201,14 @@ func (q *Queries) LockIntentPR(ctx context.Context, arg LockIntentPRParams) (Loc
 
 const lockIntentRepository = `-- name: LockIntentRepository :one
 SELECT id, build_mode, private_previews FROM repos
-WHERE id = $1 AND installation_id = $2 AND accessible
+WHERE id = $1 AND installation_id = $2 AND accessible AND workspace_repository_access(id,$3::bigint,'operate')
 FOR UPDATE
 `
 
 type LockIntentRepositoryParams struct {
 	RepoID         int64
 	InstallationID int64
+	UserID         pgtype.Int8
 }
 
 type LockIntentRepositoryRow struct {
@@ -205,14 +218,14 @@ type LockIntentRepositoryRow struct {
 }
 
 func (q *Queries) LockIntentRepository(ctx context.Context, arg LockIntentRepositoryParams) (LockIntentRepositoryRow, error) {
-	row := q.db.QueryRow(ctx, lockIntentRepository, arg.RepoID, arg.InstallationID)
+	row := q.db.QueryRow(ctx, lockIntentRepository, arg.RepoID, arg.InstallationID, arg.UserID)
 	var i LockIntentRepositoryRow
 	err := row.Scan(&i.ID, &i.BuildMode, &i.PrivatePreviews)
 	return i, err
 }
 
 const readBuildIntent = `-- name: ReadBuildIntent :one
-SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at FROM build_intents WHERE pull_request_id = $1
+SELECT pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at, workspace_id, authorization_stamp, execution_job_id, execution_error_code, start_source, usage_wait_until FROM build_intents WHERE pull_request_id = $1
 `
 
 func (q *Queries) ReadBuildIntent(ctx context.Context, pullRequestID int64) (BuildIntent, error) {
@@ -238,6 +251,12 @@ func (q *Queries) ReadBuildIntent(ctx context.Context, pullRequestID int64) (Bui
 		&i.WaitingReason,
 		&i.WaitingSince,
 		&i.WaitingCheckedAt,
+		&i.WorkspaceID,
+		&i.AuthorizationStamp,
+		&i.ExecutionJobID,
+		&i.ExecutionErrorCode,
+		&i.StartSource,
+		&i.UsageWaitUntil,
 	)
 	return i, err
 }
@@ -251,7 +270,7 @@ SELECT pr.id, pr.generation, pr.head_sha, pr.state AS pr_state, r.build_mode,
 FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
 JOIN installations i ON i.id = r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id = pr.id
-WHERE pr.id = $1 AND i.owner_user_id = $2
+WHERE pr.id = $1 AND workspace_repository_access(r.id,$2::bigint,'read')
     AND i.status = 'active' AND r.accessible
 `
 
@@ -309,24 +328,24 @@ func (q *Queries) ReadOwnedIntentView(ctx context.Context, arg ReadOwnedIntentVi
 
 const replaceBuildIntent = `-- name: ReplaceBuildIntent :one
 INSERT INTO build_intents(pull_request_id, revision, base_revision, generation,
-    head_sha, source, request_action, requested_by, idempotency_key, state, available_at)
+    head_sha, source, request_action, requested_by, idempotency_key, state, available_at, start_source)
 SELECT pr.id, $1::bigint + 1, $1::bigint,
     pr.generation, pr.head_sha, $2::text, $3::text,
     $4::bigint, $5::text, 'pending',
-    COALESCE($6::timestamptz, clock_timestamp())
+    COALESCE($6::timestamptz, clock_timestamp()), $7::text
 FROM pull_requests pr
-WHERE pr.id = $7 AND pr.generation = $8
-    AND pr.head_sha = $9 AND pr.state = 'open'
+WHERE pr.id = $8 AND pr.generation = $9
+    AND pr.head_sha = $10 AND pr.state = 'open'
 ON CONFLICT (pull_request_id) DO UPDATE
 SET revision = build_intents.revision + 1, base_revision = EXCLUDED.base_revision,
     generation = EXCLUDED.generation, head_sha = EXCLUDED.head_sha,
     source = EXCLUDED.source, request_action = EXCLUDED.request_action,
     requested_by = EXCLUDED.requested_by, idempotency_key = EXCLUDED.idempotency_key,
-    state = 'pending', available_at = EXCLUDED.available_at,
+    state = 'pending', available_at = EXCLUDED.available_at, start_source = EXCLUDED.start_source,
     requested_at = clock_timestamp(), updated_at = clock_timestamp(),
-    started_at = NULL, completed_at = NULL
+    started_at = NULL, completed_at = NULL, execution_job_id=NULL, execution_error_code=''
 WHERE build_intents.revision = $1::bigint
-RETURNING pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at
+RETURNING pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, requested_at, started_at, completed_at, updated_at, waiting_revision, waiting_reason, waiting_since, waiting_checked_at, workspace_id, authorization_stamp, execution_job_id, execution_error_code, start_source, usage_wait_until
 `
 
 type ReplaceBuildIntentParams struct {
@@ -336,11 +355,14 @@ type ReplaceBuildIntentParams struct {
 	RequestedBy    pgtype.Int8
 	IdempotencyKey string
 	AvailableAt    pgtype.Timestamptz
+	StartSource    pgtype.Text
 	PrID           int64
 	Generation     int64
 	HeadSha        string
 }
 
+// start_source is a Reset test data request's chosen starting data
+// (docs/32-persistent-test-data.md); NULL for every other request.
 func (q *Queries) ReplaceBuildIntent(ctx context.Context, arg ReplaceBuildIntentParams) (BuildIntent, error) {
 	row := q.db.QueryRow(ctx, replaceBuildIntent,
 		arg.BaseRevision,
@@ -349,6 +371,7 @@ func (q *Queries) ReplaceBuildIntent(ctx context.Context, arg ReplaceBuildIntent
 		arg.RequestedBy,
 		arg.IdempotencyKey,
 		arg.AvailableAt,
+		arg.StartSource,
 		arg.PrID,
 		arg.Generation,
 		arg.HeadSha,
@@ -374,6 +397,12 @@ func (q *Queries) ReplaceBuildIntent(ctx context.Context, arg ReplaceBuildIntent
 		&i.WaitingReason,
 		&i.WaitingSince,
 		&i.WaitingCheckedAt,
+		&i.WorkspaceID,
+		&i.AuthorizationStamp,
+		&i.ExecutionJobID,
+		&i.ExecutionErrorCode,
+		&i.StartSource,
+		&i.UsageWaitUntil,
 	)
 	return i, err
 }

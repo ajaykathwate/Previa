@@ -23,7 +23,7 @@ func (f failing) Permanent() bool     { return f.permanent }
 
 // runBuildJob works one build job for request through a real River client and
 // returns the job's state and attempt once River has recorded the outcome.
-func runBuildJob(t *testing.T, f *fixture, s *env.Service, request env.Request) (string, int) {
+func runBuildJob(t *testing.T, f *fixture, s *env.Service, request env.Request, maxAttempts ...int) (string, int) {
 	t.Helper()
 	workers := river.NewWorkers()
 	env.RegisterWorkers(workers, s, f.broker)
@@ -32,7 +32,11 @@ func runBuildJob(t *testing.T, f *fixture, s *env.Service, request env.Request) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	inserted, err := client.Insert(t.Context(), env.BuildArgs(request), nil)
+	var opts *river.InsertOpts
+	if len(maxAttempts) > 0 {
+		opts = &river.InsertOpts{MaxAttempts: maxAttempts[0]}
+	}
+	inserted, err := client.Insert(t.Context(), env.BuildArgs(request), opts)
 	if err != nil {
 		t.Fatal(err)
 	}

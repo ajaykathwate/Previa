@@ -127,7 +127,7 @@ func TestAdmitEnforcesRepositoryCountAndHostBudget(t *testing.T) {
 	if err := admit(usage{accountPRs: prs("5", "7")}, accounts, 7, 1000, 2<<30); err != nil {
 		t.Fatalf("a swap at the account limit: %v", err)
 	}
-	if err := admit(usage{accountPRs: prs("5", "6")}, accounts, 7, 1000, 2<<30); CodeOf(err) != CodeCapacity || !strings.Contains(err.Error(), "Your account already has 2 previews") {
+	if err := admit(usage{accountPRs: prs("5", "6")}, accounts, 7, 1000, 2<<30); CodeOf(err) != CodeCapacity || !strings.Contains(err.Error(), "This workspace already has 2 previews") {
 		t.Fatalf("the account limit must refuse, retryably: %v", err)
 	}
 	for name, u := range map[string]usage{
@@ -147,7 +147,7 @@ func row() dbgen.ExecutionTargetRow {
 	return dbgen.ExecutionTargetRow{
 		PullRequestID: 3, RepoID: 2, Number: 7, HeadSha: "sha-1", State: "open", Generation: 4,
 		HeadRepoID: pgtype.Int8{Int64: 100, Valid: true}, GithubRepoID: pgtype.Int8{Int64: 100, Valid: true}, Accessible: true,
-		GithubInstallationID: 99, InstallationStatus: "active",
+		GithubInstallationID: 99, InstallationStatus: "active", WorkspaceAuthorized: true, WorkspaceID: pgtype.Int8{Int64: 1, Valid: true},
 		IntentGeneration: pgtype.Int8{Int64: 4, Valid: true}, IntentRevision: pgtype.Int8{Int64: 2, Valid: true},
 		IntentHeadSha: pgtype.Text{String: "sha-1", Valid: true}, IntentState: pgtype.Text{String: "running", Valid: true},
 	}
@@ -163,14 +163,15 @@ func TestCurrentTargetRefusesAnythingStaleOrRevoked(t *testing.T) {
 		change func(*dbgen.ExecutionTargetRow)
 		code   string
 	}{
-		"closed":           {func(r *dbgen.ExecutionTargetRow) { r.State = "closed" }, CodeNotCurrent},
-		"newer generation": {func(r *dbgen.ExecutionTargetRow) { r.Generation = 5 }, CodeNotCurrent},
-		"moved head":       {func(r *dbgen.ExecutionTargetRow) { r.HeadSha = "sha-2" }, CodeNotCurrent},
-		"newer revision":   {func(r *dbgen.ExecutionTargetRow) { r.IntentRevision.Int64 = 3 }, CodeNotCurrent},
-		"not running":      {func(r *dbgen.ExecutionTargetRow) { r.IntentState.String = "succeeded" }, CodeNotCurrent},
-		"no intent":        {func(r *dbgen.ExecutionTargetRow) { r.IntentState = pgtype.Text{} }, CodeNotCurrent},
-		"access revoked":   {func(r *dbgen.ExecutionTargetRow) { r.Accessible = false }, CodeInaccessible},
-		"suspended":        {func(r *dbgen.ExecutionTargetRow) { r.InstallationStatus = "suspended" }, CodeInaccessible},
+		"workspace revoked": {func(r *dbgen.ExecutionTargetRow) { r.WorkspaceAuthorized = false }, CodeNotCurrent},
+		"closed":            {func(r *dbgen.ExecutionTargetRow) { r.State = "closed" }, CodeNotCurrent},
+		"newer generation":  {func(r *dbgen.ExecutionTargetRow) { r.Generation = 5 }, CodeNotCurrent},
+		"moved head":        {func(r *dbgen.ExecutionTargetRow) { r.HeadSha = "sha-2" }, CodeNotCurrent},
+		"newer revision":    {func(r *dbgen.ExecutionTargetRow) { r.IntentRevision.Int64 = 3 }, CodeNotCurrent},
+		"not running":       {func(r *dbgen.ExecutionTargetRow) { r.IntentState.String = "succeeded" }, CodeNotCurrent},
+		"no intent":         {func(r *dbgen.ExecutionTargetRow) { r.IntentState = pgtype.Text{} }, CodeNotCurrent},
+		"access revoked":    {func(r *dbgen.ExecutionTargetRow) { r.Accessible = false }, CodeInaccessible},
+		"suspended":         {func(r *dbgen.ExecutionTargetRow) { r.InstallationStatus = "suspended" }, CodeInaccessible},
 	} {
 		r := row()
 		tt.change(&r)

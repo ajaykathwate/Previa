@@ -10,6 +10,7 @@ import (
 	"github.com/ajaykathwatee/previa/internal/environments/dbgen"
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -66,7 +67,7 @@ func (b *Broker) ObserveTx(ctx context.Context, tx pgx.Tx, request Request) (Req
 	if err != nil {
 		return Request{}, fmt.Errorf("find PR owner: %w", err)
 	}
-	outcome, err := NewIntentRepository(b.pool).ObserveIntentTx(ctx, tx, owner.Int64, request.PullRequestID, b.now().Add(QuietPeriod))
+	outcome, err := NewIntentRepository(b.pool).ObserveIntentTx(ctx, tx, owner, request.PullRequestID, b.now().Add(QuietPeriod))
 	if err != nil {
 		return Request{}, err
 	}
@@ -126,6 +127,11 @@ func (b *Broker) RequestBuild(ctx context.Context, command IntentCommand) (outco
 		if outcome.Coalesced {
 			return nil
 		}
+		if command.Reset && b.resets != nil {
+			if err := b.resets.ResetRequestedTx(ctx, tx, ResetRequest{PullRequestID: i.PullRequestID, ActorID: command.UserID, Revision: i.Revision, HeadSHA: i.HeadSHA, Source: command.StartSource}); err != nil {
+				return err
+			}
+		}
 		return b.reportTx(ctx, tx, i.PullRequestID)
 	})
 	if err != nil {
@@ -175,6 +181,10 @@ func (b *Broker) dispatchLockedTx(ctx context.Context, tx pgx.Tx, scope intentSc
 	if r.State == StateOpen {
 		ready, err := b.buildReady(scope, i)
 		if err != nil || !ready {
+			return 0, err
+		}
+		ended, err := b.reconcileExecutionTx(ctx, tx, i)
+		if err != nil || ended {
 			return 0, err
 		}
 		r.Revision = i.Revision
@@ -236,6 +246,9 @@ func (b *Broker) insertJobTx(ctx context.Context, tx pgx.Tx, r Request) (int64, 
 	}
 	if captured.Generation != r.Generation || captured.Revision != r.Revision || captured.State != r.State || r.State != StateOpen {
 		return result.Job.ID, nil
+	}
+	if err := dbgen.New(tx).LinkExecutionJob(ctx, dbgen.LinkExecutionJobParams{PullRequestID: r.PullRequestID, Revision: r.Revision, ExecutionJobID: pgtype.Int8{Int64: result.Job.ID, Valid: true}}); err != nil {
+		return 0, fmt.Errorf("link execution job: %w", err)
 	}
 	queued, err := dbgen.New(tx).QueueCurrentIntent(ctx, dbgen.QueueCurrentIntentParams{PullRequestID: r.PullRequestID, Revision: r.Revision})
 	if err != nil {

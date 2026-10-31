@@ -163,24 +163,38 @@ disk refusal after it keeps the running request and its slot while it waits
 
 ## Fair sharing between accounts
 
-On a server shared by several accounts (an account is the GitHub account that
-installed the App), admission under the same build-slot lock also checks, in order:
+An account is a stable workspace shared by its members. Since migration 0042,
+`Repository.WithUsage` reserves physical execution under the global build-slot and
+workspace entitlement locks. The production pipeline always supplies it; the old
+elapsed-time path remains only as legacy technical accounting.
 
 | Check | Setting | Wait |
 | --- | --- | --- |
 | Every slot is taken | `MAX_CONCURRENT_BUILDS` | `capacity`: **Waiting for capacity** |
-| The account already runs its share | `BUILDS_PER_ACCOUNT` (0 = no limit) | `account`: **Waiting for your other build** |
-| The account used today's minutes (UTC) | `BUILD_MINUTES_PER_ACCOUNT_DAY` (0 = no limit) | `quota`: **Daily build minutes used**, snoozed until just after midnight UTC |
+| Workspace concurrency is full | Free plan: one; a positive `BUILDS_PER_ACCOUNT` is an extra ceiling | `workspace_builds`: **Waiting for a workspace build slot** |
+| Included minutes are consumed or reserved | Free plan: 300 minutes per UTC calendar month | `workspace_minutes`: **Workspace build minutes unavailable**, until reset or a held reservation can free |
+| Additional daily safety ceiling is reached | `BUILD_MINUTES_PER_ACCOUNT_DAY` (0 = no extra ceiling) | `workspace_daily`: **Daily safety ceiling reached**, next UTC midnight or reservation release |
+| A new PR needs a preview slot | Free plan: two; same-PR replacement reuses one | `workspace_previews`: **Workspace preview slots in use**, until teardown/expiry frees one |
+| A reservation cannot be renewed | Database accounting unavailable | `workspace_accounting`: execution stops by its reserved deadline and retries |
 | The last free slot, and another account with nothing building has waited longer | always | `capacity` |
 
 Turns: a waiting request records when it started waiting (`waiting_since`, kept
 while the same revision keeps waiting) and when it last looked again
 (`waiting_checked_at`). Only waits that looked again within 10 minutes hold a turn,
-so an abandoned wait never blocks anyone. When a build finishes, its time is added
-to its account's day (`account_build_usage`), and the next request in turn is woken
+so an abandoned wait never blocks anyone. When a build finishes, the next request in turn is woken
 at once: accounts with nothing building first, then the longest wait. Its snoozed
 River job is made due now instead of waiting out its backoff. Accounts never see
 each other's builds; the wait text says only what applies to their own.
+
+New consumed time comes from idempotent execution segments, never the intent's
+elapsed start/completion interval. Reservations total at most 60 seconds and split
+at UTC day/month boundaries. Waiting costs no minutes; failure/supersession and
+baseline builds do. Expired running reservations are recovered provisionally
+within their last bound; unstarted admissions cost zero. `workspace_build_usage`
+and `account_build_usage` remain labelled legacy and are never imported or billed.
+Quota/accounting waits release the executing request's slot while keeping its
+intent queued and the serving preview intact. Reads, feedback, account access,
+cancellation and teardown have no usage gate. See [33](33-usage-and-free-plan.md).
 
 Migration 9 adds unconditional environment uniqueness by PR. The existing row and
 subdomain survive rebuild, teardown and reopen; fixture tests exercise this lifecycle.
@@ -275,3 +289,7 @@ permanent failures ending after one attempt (`TestPermanentFailuresEndAfterOneAt
 and a shutdown mid-build that is no failure (`TestAWorkerShutdownMidBuildIsNoFailure`).
 `make test-e2e` runs these workers with the real source, build, runtime, routing and
 reporting adapters ([22](22-mvp-operations.md)).
+
+Shared workspace authorization, cancellation and handover are detailed in
+[28 · Shared team workspaces](28-shared-workspaces.md). Existing ACCOUNT configuration
+names are retained; their quota identity is workspace, not requesting user.

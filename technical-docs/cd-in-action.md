@@ -1,17 +1,19 @@
 # CD in action: how Previa becomes a production release
 
-Previa currently has **automated release publishing and manual production
-deployment**. GitHub Actions builds versioned binaries and Docker images.
-An operator then installs the selected version on the production host, one
-OVHcloud VPS.
+Previa has **tag-based, manual production deployment**. A version tag on a
+`master` commit whose CI passed names a release; the operator checks that tag out
+on the production host, one OVHcloud VPS, and builds the three Docker images there
+from the [Dockerfile](../Dockerfile). Nothing is published to a registry first.
 There is no checked-in workflow that SSHes into that host, deploys on every
 commit, or automatically rolls back a failed deployment.
 
-This guide explains [release.yml](../.github/workflows/release.yml),
-[.goreleaser.yaml](../.goreleaser.yaml), the [Dockerfile](../Dockerfile), and the
-connection to the existing deployment scripts. It describes the checked-in
-behavior reviewed on **2026-10-06**, not proof that a particular GitHub Release
-or live server has been verified.
+The [Release workflow](../.github/workflows/release.yml) and
+[.goreleaser.yaml](../.goreleaser.yaml) remain as an **optional, manual** way to
+publish binaries and GHCR images (for a second host later, or downloads); a
+pushed tag no longer starts it. This guide explains both, the Dockerfile, and the
+connection to the deployment scripts. It describes the checked-in behavior
+reviewed on **2026-10-18**, not proof that a particular GitHub Release or live
+server has been verified.
 
 Read [CI in action](ci-in-action.md) for the checks before publishing.
 Use [25 · Production deployment](../docs/25-production-deployment.md) for the full
@@ -28,7 +30,7 @@ anything by being documented.
 - [GoReleaser configuration](#5-goreleaseryaml-block-by-block)
 - [The images job](#6-the-images-job)
 - [Dockerfile and build context](#7-the-dockerfile-and-dockerignore)
-- [Publish a release, step by step](#8-how-to-publish-a-release)
+- [Make a release, step by step](#8-how-to-make-a-release)
 - [How a release reaches the host](#9-how-a-release-reaches-the-host)
 - [Backups and rollback](#10-backups-failures-and-rollback)
 - [Secrets and configuration locations](#11-which-credentials-go-where)
@@ -38,43 +40,40 @@ anything by being documented.
 
 | Activity | Meaning | Current implementation |
 | --- | --- | --- |
-| Continuous integration | Validate a proposed change | `ci.yml` runs generation, build, lint, vulnerability and test jobs |
-| Release delivery | Produce and publish a named installable version | `release.yml` publishes binaries and container images from a version tag |
-| Production deployment | Change the version running for users | Operator performs the production runbook and verification on the server |
+| Continuous integration | Validate a proposed change | `ci.yml` runs generation, build, lint, vulnerability and test jobs on pull requests into `master` |
+| Release | Name an installable version | A version tag on a `master` commit whose CI passed; optionally, `release.yml` run by hand publishes binaries and GHCR images for it |
+| Production deployment | Change the version running for users | The operator checks out the tag on the server, builds the images there and follows the production runbook |
 | PR preview deployment | Build/run an app from a connected repository | The deployed Previa worker manages Docker previews on that server |
 
-CD can mean continuous delivery or continuous deployment. This project's current
-automation covers artifact delivery. It does not implement automatic production
-deployment. A successful release job says the publication steps succeeded;
-production remains at its previously selected version until the operator deploys.
+CD can mean continuous delivery or continuous deployment. This project automates
+neither: CI checks changes, a tag names a version, and production stays at its
+previously selected version until the operator deploys it.
 
 ```mermaid
 flowchart TD
-    Commit["Commit / PR"] --> CI["GitHub Actions CI"]
+    Commit["Push to main"] --> PR["Pull request main → master"]
+    PR --> CI["GitHub Actions CI"]
     CI --> Review["Operator confirms exact commit passed"]
-    Review --> Tag["Push version tag"]
-    Tag --> Binary["Release: binaries"]
-    Binary --> Draft["Draft GitHub Release"]
-    Binary --> Images["Release: server / worker / egress image jobs"]
-    Images --> Registry["GHCR versioned images"]
-    Draft --> Publish["Maintainer publishes release page"]
-    Registry --> Deploy["Operator backs up and deploys"]
-    Publish --> Deploy
-    Deploy --> Host["OVHcloud VPS"]
+    Review --> Tag["Push version tag vX.Y.Z"]
+    Tag --> Checkout["On the VPS: git fetch, check out the tag"]
+    Checkout --> Build["Build server / worker / egress images on the VPS"]
+    Build --> Deploy["Back up, migrate, start, verify (U1–U5)"]
+    Deploy --> Host["OVHcloud VPS runs the release"]
+    Tag -.->|optional, by hand| Release["Release workflow: draft GitHub Release + GHCR images"]
 ```
 
 The review-to-tag arrow is an **operator responsibility**, not an implemented
-dependency between the CI and Release workflows. The separate `Release`
-workflow has no `needs` relationship to CI, and does not rerun the full CI suite.
+dependency between CI and the tag. Nothing checks that a tagged commit passed CI;
+tag only a `master` commit whose run is green.
 
 ## 2. Where everything lives
 
 | Resource | Location | Responsibility |
 | --- | --- | --- |
-| Release build jobs | GitHub-hosted `ubuntu-24.04` runners | Compile/package/publish, then finish |
-| Release archives and checksums | GitHub Releases | Downloadable executables and selected deployment documentation/files |
-| Platform Docker images | GitHub Container Registry, `ghcr.io` | Stores images for the host to pull |
-| Production platform | One OVHcloud VPS (VPS-2), Ubuntu + Docker Compose | Runs server, worker, Traefik, PostgreSQL and optional monitoring |
+| CI jobs | GitHub-hosted `ubuntu-24.04` runners | Check pull requests into `master`, then finish |
+| Platform Docker images | The VPS's own Docker image store, built from the tagged checkout at `/opt/previa` | `previa-server`, `previa-worker`, `previa-egress`, one set per version; the previous set is the rollback path |
+| Optional release archives and images | GitHub Releases and GitHub Container Registry, `ghcr.io` | Only when the Release workflow is run by hand |
+| Production platform | One OVHcloud VPS (VPS-2), Ubuntu + Docker Compose | Runs server, worker, Traefik and PostgreSQL |
 | Production database | Docker `postgres` service, volume `previa_postgres` on the host | Application state, sessions, repository secrets and River jobs |
 | Live app previews/builders | Docker containers created by the worker on the same host | PR runtime and temporary app builds |
 | Encrypted backup archives | A private Cloudflare R2 bucket | Off-host DB/config/certificate recovery |
@@ -82,12 +81,13 @@ workflow has no `needs` relationship to CI, and does not rerun the full CI suite
 
 GitHub's runner VMs are temporary build machines. You do not configure them
 through OVHcloud. [Runner infrastructure](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners).
-The workflow has no provider container registry, hosting-platform integration or
-OVHcloud API provisioning call. GHCR is image storage; it does not run the app.
+The workflows have no hosting-platform integration or OVHcloud API provisioning
+call.
 
-The host pulls **Previa platform images** from GHCR. The worker builds **users'
-PR images** locally on the host. Those PR images are not published by this
-release workflow, and each PR does not create another server.
+The host builds **Previa platform images** from the tagged checkout, which it
+pulls from GitHub with a read-only deploy key. The worker builds **users' PR
+images** locally on the host too. Neither is published anywhere, and each PR does
+not create another server.
 
 ## 3. The Release workflow-level blocks
 
@@ -98,34 +98,33 @@ name: Release
 ```
 
 This gives the workflow its Actions sidebar label. The file's comments describe
-release publishing and an intended protected environment. Comments do not
-configure GitHub settings or approval rules; the actual environment setup is
-explained below.
+optional release publishing and its environment. Comments do not configure GitHub
+settings or approval rules; the actual environment setup is explained below.
 
-### 3.2 Tag event
+### 3.2 Manual start only
 
 ```yaml
 on:
-  push:
-    tags: ["v*.*.*"]
+  workflow_dispatch:
 ```
 
-A pushed tag matching this pattern requests the Release workflow. A local
-`git tag` alone does not send an event to GitHub; it must be pushed.
+Production builds its images on the server, so pushing a version tag no longer
+starts this workflow: the tag only names the version. To publish artifacts for a
+tag, open **Actions → Release → Run workflow** and pick that tag under **Use
+workflow from → Tags**.
 
 | Example event | Starts this workflow? |
 | --- | --- |
-| Push `v0.2.0` | Yes |
-| Push `v0.2.0-rc.1` | Matches the pattern; GoReleaser handles prerelease status |
+| Push `v0.2.0` | No |
+| Run workflow from tag `v0.2.0` | Yes |
+| Run workflow from a branch | Starts, then the first step stops it before anything is built ([4.2](#42-checkout-with-history)) |
 | Push a commit to `master`, `main` or another branch | No |
 | Open/update a PR | No |
 | Publish the draft release page | No new run; there is no `release: published` trigger |
-| Select a manual workflow dispatch | Not available in this YAML; no `workflow_dispatch` |
 
-The pattern is a glob, not complete semantic-version validation. Use a new,
-valid version and let packaging validate it. The `binaries` job refuses a tag
-whose commit is not on `master` ([4.2](#42-checkout-with-history)); nothing checks
-that the commit passed CI, so tag only a commit whose `master` run is green.
+The `binaries` job refuses anything but a `v…` tag whose commit is on `master`
+([4.2](#42-checkout-with-history)); nothing checks that the commit passed CI, so
+tag only a commit whose `master` run is green.
 
 ### 3.3 Default permissions and Go selection
 
@@ -141,7 +140,7 @@ Read-only repository contents access is the workflow default. Publication jobs
 explicitly request their write permissions below.
 
 `GOTOOLCHAIN=local` uses the job's installed Go toolchain. `setup-go` reads the
-required version from `go.mod`, currently **1.26.9**. It is unrelated to the
+required version from `go.mod`, currently **1.26.10**. It is unrelated to the
 application's version tag such as `v0.2.0`.
 
 There is no workflow `concurrency` block. Multiple tags can request separate
@@ -192,17 +191,22 @@ default, whereas this binary release checkout explicitly requests history.
 [Checkout inputs](https://github.com/actions/checkout/tree/v4).
 
 ```yaml
-- name: Release only commits on master
+- name: Release only version tags on master
   run: |
+    [[ $GITHUB_REF == refs/tags/v* ]] || {
+      echo "::error::Run this workflow from a version tag (Use workflow from → Tags), not $GITHUB_REF_NAME."
+      exit 1
+    }
     git merge-base --is-ancestor "$GITHUB_SHA" origin/master || {
       echo "::error::$GITHUB_REF_NAME points to a commit that is not on master; tag a commit on master."
       exit 1
     }
 ```
 
-The full history also lets this step check that the tagged commit is on `master`,
-the release branch. A tag on any other commit fails here, before GoReleaser runs,
-and the images job (which needs this job) never starts.
+A manual run started from a branch fails at the first check. The full history
+also lets the second check confirm that the tagged commit is on `master`, the
+release branch. Either failure stops the job before GoReleaser runs, and the
+images job (which needs this job) never starts.
 
 ### 4.3 Install Go and the SBOM tool
 
@@ -559,7 +563,7 @@ production commands do not enforce automatic attestation verification.
 ### 7.1 Pinned image arguments
 
 The Dockerfile declares `GO_IMAGE` and `RUNTIME_IMAGE` with digest-pinned
-defaults: Go 1.26.9 on Debian Bookworm for compilation, and nonroot distroless
+defaults: Go 1.26.10 on Debian Bookworm for compilation, and nonroot distroless
 static Debian 12 for server/worker runtime. A digest identifies image content;
 the descriptive version tag alone is not the same pin.
 
@@ -655,21 +659,23 @@ do not enable that profile on normal `up` commands.
 The runtime still needs protected host configuration and credentials.
 An image is not a backup of the production database.
 
-## 8. How to publish a release
+## 8. How to make a release
 
 ### 8.1 Prepare GitHub once
 
 1. Enable Actions and allow the referenced Actions under repository policy.
-2. Keep workflows/supporting files committed on the default branch.
-3. Configure branch rules requiring the intended CI checks.
-4. Configure environment `release` with allowed tags and desired reviewers
-   where your plan supports them.
-5. Ensure jobs can use their declared publication permissions.
-6. After publication, review GHCR visibility/repository access. Public source
-   alone does not establish that packages are public.
+2. Make `master` the default branch. Branch rules requiring CI are enforced on a
+   private repository only on a paid plan; on the free plan, merging only green
+   pull requests is a habit.
+3. Add the production server's read-only **deploy key** (repository **Settings →
+   Deploy keys**; [docs/25 Step 3](../docs/25-production-deployment.md#step-3--install-the-checkout-and-prepare-the-host)).
+4. Only for the optional Release workflow: configure environment `release` with
+   desired reviewers where your plan supports them, and review GHCR package
+   visibility after its first run.
 
-No production SSH key, OAuth secret, App PEM, R2 token or OVHcloud credential
-is consumed by these publication jobs. `GITHUB_TOKEN` is supplied automatically.
+No production SSH key, OAuth secret, App PEM, R2 token, Sentry DSN or OVHcloud
+credential is consumed by these workflows. `GITHUB_TOKEN` is supplied
+automatically.
 
 ### 8.2 Select and tag the exact candidate
 
@@ -682,10 +688,10 @@ git status
 git rev-parse HEAD
 ```
 
-Confirm the exact commit passed CI/staging. A PR run tested a temporary merge
-SHA; inspect the merge's own `master` run. Review migration/rollback
-compatibility and the smoke-test coverage in
-[CI in action](ci-in-action.md#75-production-stack-smoke-test).
+Confirm the exact commit passed CI. A PR run tested a temporary merge SHA;
+inspect the merge's own `master` run. Review migration/rollback compatibility and
+run the smoke test against it
+([CI in action](ci-in-action.md#75-production-stack-smoke-test)).
 
 Then create/push a new unused version. Example only:
 
@@ -695,38 +701,39 @@ git tag -a "$PREVIA_RELEASE" -m "Previa $PREVIA_RELEASE"
 git push origin "$PREVIA_RELEASE"
 ```
 
-Creating the tag labels the local commit. Pushing starts Release on GitHub,
-without changing the production server.
+Pushing the tag starts nothing on GitHub and changes nothing on the server: the
+operator deploys it next ([9](#9-how-a-release-reaches-the-host)). Do not move or
+reuse a tag a server has built; select a new version if the contents must change.
 
-### 8.3 Inspect publication and publish the draft
+### 8.3 Optional: publish binaries and images for the tag
 
-1. Open **Actions → Release** and verify tag/commit.
+Only when published artifacts are wanted:
+
+1. Open **Actions → Release → Run workflow**, choose the tag under **Use workflow
+   from → Tags**, and run it.
 2. Approve environment jobs if configured protection requests it.
 3. Inspect the binary job and all three image matrix jobs.
 4. Verify archives, checksums, SBOMs and all image tags/platforms.
 5. Open **Releases**, review the draft's notes/assets and publish it deliberately.
-6. Record source commit, tag and image digests for deployment.
 
-Do not move/reuse a published tag to quietly replace a version. Inspect partial
-publication before retrying; select a new version if source/release contents
-must change. Nothing here makes partial publication atomic.
+Inspect partial publication before retrying; nothing here makes it atomic. A run
+uses runner minutes from the same 2,000-minute monthly allowance as CI.
 
 ## 9. How a release reaches the host
 
-Nothing in this workflow deploys. An operator moves the host to a published
+Nothing in GitHub Actions deploys. An operator moves the host to a tagged
 release by hand, following the production guide; this is the shape of it:
 
 | Step | What happens | Production guide |
 | --- | --- | --- |
-| First deployment | Rent and prepare the host, register GitHub, install credentials, DNS, backups and staged certificates. An image pull alone creates none of this. | [Steps 0–10](../docs/25-production-deployment.md#fresh-host-setup) |
+| First deployment | Rent and prepare the host, add the deploy key, move SSH to Tailscale, register GitHub, install credentials, DNS, backups, Sentry and staged certificates. Building images alone creates none of this. | [Steps 0–10](../docs/25-production-deployment.md#fresh-host-setup) |
 | Record and pause | Record the running tag, schema and image digests; set `BUILDS_PAUSED=true` and let builds drain. | [U1, U2](../docs/25-production-deployment.md#step-u1--prepare-and-record-the-previous-release) |
 | Back up | Run the backup service and confirm all three encrypted archives arrived. | [U2](../docs/25-production-deployment.md#step-u2--pause-new-builds-drain-and-make-a-fresh-backup) |
-| Select and validate | Check out the same tag, set `PREVIA_VERSION` and the GHCR image names, pull (log in first if the packages are private), run `check-config`. | [U3](../docs/25-production-deployment.md#step-u3--select-validate-and-start-the-candidate) |
+| Select, build and validate | `git fetch` and check out the tag, set `PREVIA_VERSION` to it, build the three images (`dc --profile images build server worker egress`), run `check-config`. | [U3](../docs/25-production-deployment.md#step-u3--select-validate-and-start-the-candidate) |
 | Migrate and start | Run the forward migrations, then `up -d --wait`. The worker replaces the egress proxy itself; rebuild live previews that call external services. Keep Traefik's preview networks if the router is recreated. | [U3, U4](../docs/25-production-deployment.md#step-u4--check-the-egress-proxy-after-the-upgrade) |
-| Verify and resume | Check HTTPS, sign-in, webhooks, a disposable preview and PR feedback, then unpause and take a fresh backup. | [U5](../docs/25-production-deployment.md#step-u5--resume-only-after-live-checks-pass) |
+| Verify and resume | Check HTTPS, sign-in, webhooks, a disposable preview, PR feedback and that Sentry shows no new issues, then unpause and take a fresh backup. | [U5](../docs/25-production-deployment.md#step-u5--resume-only-after-live-checks-pass) |
 
-The source checkout matters even when pulling images: it selects the matching
-Compose file, scripts and monitoring configuration. The host keeps running after
+The checkout is both the image source and the matching Compose file and scripts. The host keeps running after
 SSH ends; an automatic restart never fetches a newer commit.
 
 ## 10. Backups, failures and rollback
@@ -737,7 +744,7 @@ while the operator picks the recovery that fits what failed:
 
 | Failure | Recovery | Production guide |
 | --- | --- | --- |
-| Configuration or a new executable, with a compatible schema | Return to the recorded checkout, `PREVIA_VERSION` and images; no data changes. | [Application/image rollback](../docs/25-production-deployment.md#applicationimage-rollback-preserving-the-database) |
+| Configuration or a new executable, with a compatible schema | Return to the recorded checkout and `PREVIA_VERSION`; the previous images are still on the host; no data changes. | [Application/image rollback](../docs/25-production-deployment.md#applicationimage-rollback-preserving-the-database) |
 | Schema or data | Restore the pre-upgrade encrypted dump with the older release; writes after it are lost. | [Schema/data rollback](../docs/25-production-deployment.md#schemadata-rollback-using-the-pre-upgrade-backup) |
 | The host itself | Prepare a replacement host, recover configuration, certificates and the database from the off-host backups and offline keys, then move DNS. | [Backups and restore](../docs/25-production-deployment.md#backups-and-restore) |
 
@@ -747,13 +754,13 @@ data recovery path, and provider snapshots are an optional extra.
 
 ## 11. Which credentials go where?
 
-The release pipeline needs only what GitHub supplies:
+The workflows need only what GitHub supplies; the server needs one read-only key:
 
 | Credential | Where | Used by |
 | --- | --- | --- |
-| `GITHUB_TOKEN` | Supplied to each workflow job | The GitHub Release, GHCR login and attestations |
-| `release` environment rules | Repository **Settings → Environments** | Approval and tag protection |
-| GHCR pull credential (private packages only) | Root's Docker login on the host | Image pulls during a deployment; not the runner's token |
+| `GITHUB_TOKEN` | Supplied to each workflow job | CI checkouts; the optional GitHub Release, GHCR login and attestations |
+| `release` environment rules | Repository **Settings → Environments** | Approval for the optional Release workflow |
+| Deploy key | Repository **Settings → Deploy keys** (public half); `/root/.ssh/previa_deploy` on the host | `git clone`/`git fetch` of the private repository during a deployment; read-only |
 
 Production settings and secrets never enter GitHub Actions: they live only on the
 host, in `/etc/previa/previa.env` and the credential files beside it. Where each
@@ -767,12 +774,12 @@ one comes from and its file mode are in the
 
 | Event/action | Result |
 | --- | --- |
-| Qualifying commit/PR | CI validates the change on GitHub runners |
-| Push version tag | Release packages/publishes artifacts, subject to configured environment rules |
-| Publish draft page | Makes the release page/assets available according to GitHub release behavior |
-| Operator pulls + migrates + `dc up` | Changes production deliberately |
+| Qualifying commit/PR (not documentation only) | CI validates the change on GitHub runners |
+| Push version tag | Nothing; it names the version |
+| Run the Release workflow by hand from a tag | Packages/publishes artifacts, subject to configured environment rules |
+| Operator checks out the tag + builds + migrates + `dc up` | Changes production deliberately |
 | Connected repository's preview request | Previa worker builds/runs Docker app previews according to policy |
-| Host backup timer | Writes encrypted recovery archives to Cloudflare R2 |
+| Host backup timer | Writes encrypted recovery archives to Cloudflare R2 and checks in with Sentry |
 
 There is no automatic production deployment on `main` or tags and no automatic
 production rollback. Repository preview automation still follows Manual versus
@@ -786,7 +793,8 @@ would need to:
 
 1. Select a verified exact release and serialize deployments to this host.
 2. Apply the intended approval gate and verify host identity.
-3. Authenticate with a dedicated deployment account, SSH key and registry access.
+3. Authenticate with a dedicated deployment account and SSH key, reaching the
+   host over Tailscale.
 4. Take/verify a fresh R2 backup and preserve previous artifacts.
 5. Apply version/config, validate, migrate, replace and verify.
 6. Preserve/reconcile egress and router network lifecycle.
@@ -795,8 +803,9 @@ would need to:
 
 Those future deployment credentials would belong in a protected deployment
 environment/secret store. They are not the current publication token.
-An SSH firewall limited to your workstation will not automatically admit hosted
-runner traffic; authorized connectivity must be designed. OVHcloud API
+SSH is reachable only over Tailscale, so a hosted runner would have to join the
+tailnet with its own scoped, expiring credential; that connectivity must be
+designed. OVHcloud API
 credentials are only needed if automation actually manages provider resources.
 
 Do not install a self-hosted runner on the production server merely to follow
@@ -807,17 +816,19 @@ That would be a separate operational/privilege design.
 
 | Symptom | What to inspect |
 | --- | --- |
-| No Release run after a tag | Was the tag pushed, does it match, and are Actions/workflow permissions enabled? |
+| No Release run after a tag | Expected: a tag starts nothing. Run the workflow by hand from the tag if artifacts are wanted |
+| Release run stops at its first step | It was started from a branch, or the tag's commit is not on `master` |
 | Job waiting for approval | The actual `release` environment protection, reviewer and tag rules |
 | GoReleaser fails | Tag/version, generated assets, compilation, repository destination and token permissions |
 | One image missing | All matrix results and partial publication; do not deploy an incomplete set |
 | GHCR push denied | `packages: write` and package/repository authorization |
-| Host pull denied | Package visibility and the host's separate registry read credential |
+| Host `git fetch` denied | The deploy key in repository settings and `/root/.ssh/config` on the host (`ssh -T git@github.com`) |
+| Image build fails on the host | The build output; free disk (`docker system df`); network to the Go module proxy and base image registries |
 | New release published but old server still runs | No deploy step has run, or running containers were not reconciled |
 | Migration/startup fails on host | First migration/config/health error; pause and choose a tested recovery path |
 | Router healthy but preview fails | Dynamic network attachments and accepted route/backend state |
-| Egress still reports old image | The worker has not restarted since the upgrade, or the new egress image is missing on the host; check the worker log, pull it and recreate the worker ([U4](../docs/25-production-deployment.md#step-u4--check-the-egress-proxy-after-the-upgrade)) |
-| Backup fails | Root's rclone config, bucket scope/endpoint, age recipient, dump/archive and retention logs |
+| Egress still reports old image | The worker has not restarted since the upgrade, or the new egress image is missing on the host; check the worker log, build it and recreate the worker ([U4](../docs/25-production-deployment.md#step-u4--check-the-egress-proxy-after-the-upgrade)) |
+| Backup fails (Sentry's `previa-backup` monitor emails) | Root's rclone config, bucket scope/endpoint, age recipient, dump/archive and retention logs |
 
 ### 12.4 Files to open when behavior changes
 

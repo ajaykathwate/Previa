@@ -204,22 +204,31 @@ func (r *Runtime) serviceAnswers(ctx context.Context, s serviceRun, containerID 
 	return result.Stdout == "PONG" || strings.HasPrefix(result.Stdout, "NOAUTH"), "it does not answer PING", nil
 }
 
-// runSetup runs the setup container to completion within the setup timeout,
-// streaming its output into the build log. A non-zero exit or the timeout
-// fails the candidate (setup_failed). The container is removed afterwards.
-func (r *Runtime) runSetup(ctx context.Context, containerID string, argv []string, logs LogSink) error {
-	logs.System(fmt.Sprintf("Running the setup command (%d argument%s) with up to %s.", len(argv), plural(len(argv)), r.policy.SetupTimeout))
+// runOneOff runs a setup or seed container to completion within the setup
+// timeout, streaming its output into the build log. A non-zero exit or the
+// timeout fails the candidate with code (setup_failed or seed_failed). The
+// container is removed once it succeeds; a failed one may run again (a
+// fallback to other starting data), and only the new run's output is
+// streamed.
+func (r *Runtime) runOneOff(ctx context.Context, containerID string, argv []string, logs LogSink, name, code string) error {
+	logs.System(fmt.Sprintf("Running the %s command (%d argument%s) with up to %s.", name, len(argv), plural(len(argv)), r.policy.SetupTimeout))
+	since := ""
+	if inspected, err := r.docker.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{}); err == nil && inspected.Container.State != nil {
+		if finished, err := time.Parse(time.RFC3339Nano, inspected.Container.State.FinishedAt); err == nil && finished.Year() > 1 {
+			since = strconv.FormatFloat(float64(finished.Add(time.Microsecond).UnixNano())/1e9, 'f', 6, 64)
+		}
+	}
 	runCtx, cancel := context.WithTimeout(ctx, r.policy.SetupTimeout)
 	defer cancel()
 	waited := r.docker.ContainerWait(runCtx, containerID, client.ContainerWaitOptions{Condition: container.WaitConditionNextExit})
 	if _, err := r.docker.ContainerStart(ctx, containerID, client.ContainerStartOptions{}); err != nil {
-		r.logger.WarnContext(ctx, "start setup container", "container_id", containerID, "error", err)
-		return r.interrupted(ctx, failure(CodeUnavailable, "The setup container could not be started.", true, err))
+		r.logger.WarnContext(ctx, "start "+name+" container", "container_id", containerID, "error", err)
+		return r.interrupted(ctx, failure(CodeUnavailable, "The "+name+" container could not be started.", true, err))
 	}
 	streamed := make(chan struct{})
 	go func() {
 		defer close(streamed)
-		reader, err := r.docker.ContainerLogs(runCtx, containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Follow: true})
+		reader, err := r.docker.ContainerLogs(runCtx, containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Follow: true, Since: since})
 		if err != nil {
 			return
 		}
@@ -231,18 +240,18 @@ func (r *Runtime) runSetup(ctx context.Context, containerID string, argv []strin
 	case result := <-waited.Result:
 		switch {
 		case result.Error != nil:
-			outcome = failure(CodeUnavailable, "The setup command's result could not be read.", true, errors.New(result.Error.Message))
+			outcome = failure(CodeUnavailable, "The "+name+" command's result could not be read.", true, errors.New(result.Error.Message))
 		case result.StatusCode != 0:
-			outcome = failure(CodeSetupFailed, fmt.Sprintf("The setup command exited with code %d.", result.StatusCode), false, nil)
+			outcome = failure(code, fmt.Sprintf("The %s command exited with code %d.", name, result.StatusCode), false, nil)
 		}
 	case err := <-waited.Error:
 		switch {
 		case ctx.Err() != nil:
-			outcome = r.interrupted(ctx, failure(CodeCancelled, "The build was cancelled during setup.", false, err))
+			outcome = r.interrupted(ctx, failure(CodeCancelled, "The build was cancelled during "+name+".", false, err))
 		case runCtx.Err() != nil:
-			outcome = failure(CodeSetupFailed, fmt.Sprintf("The setup command did not finish within %s.", r.policy.SetupTimeout), false, nil)
+			outcome = failure(code, fmt.Sprintf("The %s command did not finish within %s.", name, r.policy.SetupTimeout), false, nil)
 		default:
-			outcome = failure(CodeUnavailable, "The setup command could not be watched.", true, err)
+			outcome = failure(CodeUnavailable, "The "+name+" command could not be watched.", true, err)
 		}
 	}
 	select {
@@ -252,7 +261,7 @@ func (r *Runtime) runSetup(ctx context.Context, containerID string, argv []strin
 	if outcome != nil {
 		return outcome
 	}
-	logs.System("The setup command finished.")
+	logs.System("The " + name + " command finished.")
 	r.discard(ctx, containerID)
 	return nil
 }

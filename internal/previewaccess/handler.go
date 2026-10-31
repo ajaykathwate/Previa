@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
+
 	"github.com/ajaykathwatee/previa/internal/platform/database"
 	"github.com/ajaykathwatee/previa/internal/platform/workers"
 	"github.com/ajaykathwatee/previa/internal/previewaccess/dbgen"
@@ -25,6 +27,7 @@ import (
 	accesspages "github.com/ajaykathwatee/previa/web/pages/previewaccess"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -53,10 +56,17 @@ type UserSession interface {
 	Username(context.Context) (string, bool)
 }
 
+// SessionAuthority binds preview grants to the dashboard session that issued
+// them. Only a one-way store-token digest crosses the preview boundary.
+type SessionAuthority interface {
+	PreviewSessionID(context.Context) string
+	PreviewSessionValid(context.Context, string) (bool, error)
+}
+
 // Permissions reads a user's role on a repository as the GitHub App sees it
 // ("read", "write", ... or "none").
 type Permissions interface {
-	RepositoryPermission(ctx context.Context, installationID int64, fullName, login string) (string, error)
+	RepositoryUserPermission(ctx context.Context, installationID int64, fullName, login string, userID int64) (string, error)
 }
 
 // Enqueuer asks a worker to rewrite the router's file.
@@ -72,6 +82,7 @@ type Capabilities interface {
 type Handler struct {
 	pool         *pgxpool.Pool
 	users        UserSession
+	sessions     SessionAuthority
 	permissions  Permissions // nil without the GitHub App: only owners get in
 	jobs         Enqueuer
 	capabilities Capabilities
@@ -83,7 +94,8 @@ type Handler struct {
 }
 
 func NewHandler(pool *pgxpool.Pool, users UserSession, permissions Permissions, jobs Enqueuer, sessionSecret, baseDomain, appBaseURL string, logger *slog.Logger) *Handler {
-	return &Handler{pool: pool, users: users, permissions: permissions, jobs: jobs, signer: newSigner(sessionSecret),
+	sessions, _ := users.(SessionAuthority)
+	return &Handler{pool: pool, users: users, sessions: sessions, permissions: permissions, jobs: jobs, signer: newSigner(sessionSecret),
 		baseDomain: baseDomain, appBaseURL: strings.TrimSuffix(appBaseURL, "/"), logger: logger, now: time.Now}
 }
 
@@ -130,26 +142,26 @@ func (h *Handler) check(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	if forwarded.Path == returnPath {
 		token, ok := h.signer.verify("token", forwarded.Query().Get("t"), host, now)
-		if !ok {
+		if !ok || !h.validGrant(r.Context(), token) {
 			http.Error(w, "This access link expired. Open the preview again.", http.StatusForbidden)
 			return
 		}
 		expires := now.Add(cookieLifetime)
 		http.SetCookie(w, &http.Cookie{
-			Name: cookieName, Value: h.signer.sign("cookie", claims{Host: host, User: token.User, Expires: expires.Unix()}),
+			Name: cookieName, Value: h.signer.sign("cookie", claims{Host: host, User: token.User, Epoch: token.Epoch, Session: token.Session, Revision: token.Revision, Local: token.Local, Expires: expires.Unix()}),
 			Path: "/", Expires: expires, MaxAge: int(cookieLifetime.Seconds()), Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		})
-		http.Redirect(w, r, token.Path, http.StatusFound)
+		publicid.Redirect(w, r, token.Path, http.StatusFound)
 		return
 	}
 	if cookie, err := r.Cookie(cookieName); err == nil {
-		if _, ok := h.signer.verify("cookie", cookie.Value, host, now); ok {
+		if grant, ok := h.signer.verify("cookie", cookie.Value, host, now); ok && h.validGrant(r.Context(), grant) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 	}
 	next := url.Values{"host": {host}, "path": {forwarded.RequestURI()}}
-	http.Redirect(w, r, h.appBaseURL+accessPage+"?"+next.Encode(), http.StatusFound)
+	publicid.Redirect(w, r, h.appBaseURL+accessPage+"?"+next.Encode(), http.StatusFound)
 }
 
 // access signs the visitor in, checks they can see the repository and sends
@@ -157,7 +169,11 @@ func (h *Handler) check(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) access(w http.ResponseWriter, r *http.Request) {
 	user, _, signedIn := h.users.UserIDs(r.Context())
 	if !signedIn {
-		http.Redirect(w, r, "/auth/github/login?"+url.Values{"next": {r.URL.RequestURI()}}.Encode(), http.StatusSeeOther)
+		login := "/auth/github/login"
+		if options, ok := h.users.(interface{ SignInPath() string }); ok {
+			login = options.SignInPath()
+		}
+		publicid.Redirect(w, r, login+"?"+url.Values{"next": {r.URL.RequestURI()}}.Encode(), http.StatusSeeOther)
 		return
 	}
 	host := strings.ToLower(r.URL.Query().Get("host"))
@@ -181,10 +197,10 @@ func (h *Handler) access(w http.ResponseWriter, r *http.Request) {
 	}
 	target := "https://" + host + path
 	if !preview.PrivatePreviews {
-		http.Redirect(w, r, target, http.StatusSeeOther)
+		publicid.Redirect(w, r, target, http.StatusSeeOther)
 		return
 	}
-	allowed, err := h.allowed(r.Context(), user, preview)
+	allowed, local, err := h.allowed(r.Context(), user, label, preview)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -196,34 +212,83 @@ func (h *Handler) access(w http.ResponseWriter, r *http.Request) {
 		_ = accesspages.Denied(username).Render(r.Context(), w)
 		return
 	}
-	token := h.signer.sign("token", claims{Host: host, User: user, Path: path, Expires: h.now().Add(tokenLifetime).Unix()})
-	http.Redirect(w, r, "https://"+host+returnPath+"?"+url.Values{"t": {token}}.Encode(), http.StatusSeeOther)
+	var epoch int64
+	if err := h.pool.QueryRow(r.Context(), `SELECT session_epoch FROM users WHERE id=$1 AND deleted_at IS NULL`, user).Scan(&epoch); err != nil {
+		h.fail(w, r, fmt.Errorf("read preview session authority: %w", err))
+		return
+	}
+	session := ""
+	if h.sessions != nil {
+		session = h.sessions.PreviewSessionID(r.Context())
+	}
+	token := h.signer.sign("token", claims{Host: host, User: user, Epoch: epoch, Session: session, Revision: preview.AuthorizationRevision, Local: local, Path: path, Expires: h.now().Add(tokenLifetime).Unix()})
+	publicid.Redirect(w, r, "https://"+host+returnPath+"?"+url.Values{"t": {token}}.Encode(), http.StatusSeeOther)
 }
 
-// allowed: the repository's Previa owner, or a GitHub user who can see it.
-func (h *Handler) allowed(ctx context.Context, user int64, p dbgen.PreviewForHostRow) (bool, error) {
-	if p.OwnerUserID == user {
-		return true, nil
+// validGrant checks current local authority for every protected preview request.
+// A removed member cannot fall back to GitHub outsider access.
+func (h *Handler) validGrant(ctx context.Context, c claims) bool {
+	if h.sessions != nil {
+		valid, err := h.sessions.PreviewSessionValid(ctx, c.Session)
+		if err != nil {
+			h.logger.ErrorContext(ctx, "check preview session", "error", err)
+			return false
+		}
+		if !valid {
+			return false
+		}
+	}
+	var epoch int64
+	if err := h.pool.QueryRow(ctx, `SELECT session_epoch FROM users WHERE id=$1 AND deleted_at IS NULL`, c.User).Scan(&epoch); err != nil || epoch != c.Epoch {
+		return false
+	}
+	label, ok := h.previewHost(c.Host)
+	if !ok || c.Revision <= 0 {
+		return false
+	}
+	v, err := dbgen.New(h.pool).PreviewAuthorization(ctx, dbgen.PreviewAuthorizationParams{Subdomain: label, UserID: c.User})
+	if err != nil || v.AuthorizationRevision != c.Revision {
+		return false
+	}
+	if c.Local {
+		return v.Allowed
+	}
+	return !v.MembershipExists
+}
+
+func (h *Handler) allowed(ctx context.Context, user int64, label string, p dbgen.PreviewForHostRow) (bool, bool, error) {
+	v, err := dbgen.New(h.pool).PreviewAuthorization(ctx, dbgen.PreviewAuthorizationParams{Subdomain: label, UserID: user})
+	if err != nil {
+		return false, false, fmt.Errorf("read preview grant: %w", err)
+	}
+	if v.MembershipExists {
+		return v.Allowed, true, nil
 	}
 	if h.permissions == nil {
-		return false, nil
+		return false, false, nil
 	}
 	login, ok := h.users.Username(ctx)
-	if !ok || login == "" {
-		return false, nil
+	if provider, exists := h.users.(interface {
+		GitHubUsername(context.Context) (string, bool)
+	}); exists {
+		login, ok = provider.GitHubUsername(ctx)
 	}
-	permission, err := h.permissions.RepositoryPermission(ctx, p.GithubInstallationID, p.FullName, login)
+	_, githubID, signedIn := h.users.UserIDs(ctx)
+	if !ok || !signedIn || githubID <= 0 || login == "" {
+		return false, false, nil
+	}
+	permission, err := h.permissions.RepositoryUserPermission(ctx, p.GithubInstallationID, p.FullName, login, githubID)
 	if err != nil {
-		return false, fmt.Errorf("read repository permission: %w", err)
+		return false, false, fmt.Errorf("read repository permission: %w", err)
 	}
-	return readable[permission], nil
+	return readable[permission], false, nil
 }
 
 // set makes the owner's repository's previews private or public, and asks
 // a worker to route them that way.
 func (h *Handler) set(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := h.users.UserIDs(r.Context())
-	repoID, err := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+	repoID, err := publicid.Param(r, "repoID", "repository")
 	if !ok || err != nil || repoID <= 0 {
 		http.NotFound(w, r)
 		return
@@ -238,14 +303,19 @@ func (h *Handler) set(w http.ResponseWriter, r *http.Request) {
 	changed := false
 	err = database.InTransaction(r.Context(), h.pool, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
-		owns, err := q.OwnsRepository(r.Context(), dbgen.OwnsRepositoryParams{RepoID: repoID, OwnerUserID: user})
+		if _, err := q.LockPreviewInstallation(r.Context(), repoID); errors.Is(err, pgx.ErrNoRows) {
+			return errNotOwned
+		} else if err != nil {
+			return fmt.Errorf("lock preview installation: %w", err)
+		}
+		owns, err := q.OwnsRepository(r.Context(), dbgen.OwnsRepositoryParams{RepoID: repoID, OwnerUserID: pgtype.Int8{Int64: user, Valid: user > 0}})
 		if err != nil || !owns {
 			return errors.Join(err, errNotOwned)
 		}
 		if capabilityErr != nil {
 			return capabilityErr
 		}
-		n, err := q.SetPrivatePreviews(r.Context(), dbgen.SetPrivatePreviewsParams{RepoID: repoID, OwnerUserID: user, Private: private})
+		n, err := q.SetPrivatePreviews(r.Context(), dbgen.SetPrivatePreviewsParams{RepoID: repoID, OwnerUserID: pgtype.Int8{Int64: user, Valid: user > 0}, Private: private})
 		if err != nil || n == 0 {
 			return err
 		}
@@ -266,7 +336,7 @@ func (h *Handler) set(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if errors.Is(err, errPrivateUnavailable) {
-		http.Redirect(w, r, "/repositories/"+strconv.FormatInt(repoID, 10)+"?preview_access=unavailable", http.StatusSeeOther)
+		publicid.Redirect(w, r, "/repositories/"+strconv.FormatInt(repoID, 10)+"?preview_access=unavailable", http.StatusSeeOther)
 		return
 	}
 	if err != nil {
@@ -276,7 +346,7 @@ func (h *Handler) set(w http.ResponseWriter, r *http.Request) {
 	if changed {
 		h.logger.InfoContext(r.Context(), "preview access changed", "repo_id", repoID, "private", private)
 	}
-	http.Redirect(w, r, "/repositories/"+strconv.FormatInt(repoID, 10), http.StatusSeeOther)
+	publicid.Redirect(w, r, "/repositories/"+strconv.FormatInt(repoID, 10), http.StatusSeeOther)
 }
 
 var errNotOwned = errors.New("repository not owned")

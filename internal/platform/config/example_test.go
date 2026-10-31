@@ -5,6 +5,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -38,6 +39,13 @@ func readExample(t *testing.T) []exampleSetting {
 		name, value, found := strings.Cut(line, "=")
 		if !found {
 			continue
+		}
+		if strings.HasPrefix(value, `"`) {
+			unquoted, err := strconv.Unquote(value)
+			if err != nil {
+				t.Fatalf("invalid quoted example value for %s", name)
+			}
+			value = unquoted
 		}
 		if label == "" {
 			t.Fatalf(".env.example: %s has no one-line [Required]/[Optional, default …] comment above it", name)

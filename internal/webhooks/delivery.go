@@ -33,6 +33,13 @@ type lifecycleApplier interface {
 	ApplyEventTx(ctx context.Context, tx pgx.Tx, change installations.LifecycleChange) error
 }
 
+// mergeFollower follows a pull request merged into a repository's branch,
+// inside the delivery transaction: a test-data baseline refresh
+// (docs/32-persistent-test-data.md). *sampledata.Store implements it.
+type mergeFollower interface {
+	MergedTx(ctx context.Context, tx pgx.Tx, installationID, githubRepoID int64, base, defaultBranch string) error
+}
+
 type DeliveryService struct {
 	pool          *pgxpool.Pool
 	observer      pullrequests.Observer
@@ -40,6 +47,7 @@ type DeliveryService struct {
 	installations lifecycleApplier
 	invalidate    func(int64)
 	refresher     pullrequests.MergeabilityRefresher
+	merges        mergeFollower
 }
 
 func NewDeliveryService(pool *pgxpool.Pool, observer pullrequests.Observer, invalidate func(int64), syncs ...metadataScheduler) *DeliveryService {
@@ -52,6 +60,13 @@ func NewDeliveryService(pool *pgxpool.Pool, observer pullrequests.Observer, inva
 		s.refresher = syncs[0]
 		s.installations = installations.NewRepository(pool, syncs[0])
 	}
+	return s
+}
+
+// WithMerges follows merged pull requests in the same transaction as their
+// state change.
+func (s *DeliveryService) WithMerges(m mergeFollower) *DeliveryService {
+	s.merges = m
 	return s
 }
 
@@ -116,13 +131,13 @@ func recordDelivery(ctx context.Context, q *dbgen.Queries, id, kind, hash string
 	return false, nil
 }
 
-// pullRequest applies an opened, reopened, synchronized or closed PR.
+// pullRequest applies an opened, reopened, synchronized, edited or closed PR.
 func (s *DeliveryService) pullRequest(ctx context.Context, tx pgx.Tx, e *github.PullRequestEvent) error {
 	if e.GetAction() == "" {
 		return ErrInvalidEvent
 	}
 	switch e.GetAction() {
-	case "opened", "reopened", "synchronize", "closed":
+	case "opened", "reopened", "synchronize", "closed", "edited":
 	default:
 		return nil
 	}
@@ -133,11 +148,20 @@ func (s *DeliveryService) pullRequest(ctx context.Context, tx pgx.Tx, e *github.
 	if err != nil {
 		return fmt.Errorf("%w: incomplete PR", ErrInvalidEvent)
 	}
+	if e.GetAction() == "edited" {
+		return pullrequests.ProcessMetadataWebhookTx(ctx, tx, e.GetRepo().GetID(), e.GetInstallation().GetID(), o)
+	}
 	closing := e.GetAction() == "closed"
 	if closing == (o.State == environments.StateOpen) {
 		return ErrInvalidEvent // a close must report a closed PR, every other action an open one
 	}
-	return pullrequests.ProcessWebhookTx(ctx, tx, e.GetRepo().GetID(), e.GetInstallation().GetID(), o, s.observer, s.refresher)
+	if err := pullrequests.ProcessWebhookTx(ctx, tx, e.GetRepo().GetID(), e.GetInstallation().GetID(), o, s.observer, s.refresher); err != nil {
+		return err
+	}
+	if closing && e.GetPullRequest().GetMerged() && s.merges != nil {
+		return s.merges.MergedTx(ctx, tx, e.GetInstallation().GetID(), e.GetRepo().GetID(), e.GetPullRequest().GetBase().GetRef(), e.GetRepo().GetDefaultBranch())
+	}
+	return nil
 }
 
 // lifecycle applies an installation or repository-selection change unless
@@ -156,10 +180,20 @@ func (s *DeliveryService) lifecycle(ctx context.Context, tx pgx.Tx, event any, s
 	if err != nil {
 		return err
 	}
+	var current string
+	if err := tx.QueryRow(ctx, `SELECT status FROM installations WHERE github_installation_id=$1`, change.ID).Scan(&current); err != nil {
+		return fmt.Errorf("read locked installation status: %w", err)
+	}
+	if current == "inactive" {
+		return nil
+	}
 	revoke := change.Cleanup || len(change.Removed) > 0
 	if _, repositoryEvent := event.(*github.InstallationRepositoriesEvent); repositoryEvent {
 		if err := acceptRepositoryChanges(ctx, q, &change, stamp); err != nil {
 			return err
+		}
+		if len(change.Added) == 0 && len(change.Removed) == 0 {
+			return nil
 		}
 		revoke = len(change.Removed) > 0
 	} else if change.Status != "inactive" && source.Valid && (stamp.Before(source.Time) || stamp.Equal(source.Time) && !revoke) {

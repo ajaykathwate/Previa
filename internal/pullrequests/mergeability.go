@@ -60,7 +60,7 @@ func (s *SyncService) DiscoverInstallationTx(ctx context.Context, tx pgx.Tx, ins
 		if err != nil {
 			return err
 		}
-		if _, err := s.jobs.InsertTx(ctx, tx, SyncArgs{id, row.Revision, 1}, nil); err != nil {
+		if _, err := s.jobs.InsertTx(ctx, tx, SyncArgs{RepoID: id, Revision: row.Revision, Page: 1}, nil); err != nil {
 			return err
 		}
 	}
@@ -143,7 +143,7 @@ func (s *SyncService) recordMergeabilityTx(ctx context.Context, tx pgx.Tx, args 
 	if err != nil {
 		return fmt.Errorf("check existing mergeability authorization: %w", err)
 	}
-	applied, err := ObserveTx(ctx, tx, args.RepoID, o, false, s.observer)
+	applied, err := ObserveTx(ctx, tx, args.RepoID, o, Discovered, s.observer)
 	if err != nil || !applied {
 		return err
 	}

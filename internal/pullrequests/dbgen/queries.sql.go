@@ -13,7 +13,7 @@ import (
 
 const activity = `-- name: Activity :many
 SELECT p.repo_id,p.number,p.head_sha,p.title,r.full_name,r.accessible,i.status AS installation_status,
- coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,b.available_at,
+ coalesce(b.state,'Not requested') AS build_state,coalesce(b.execution_error_code,'')::text AS execution_error_code,coalesce(b.head_sha,'') AS requested_sha,b.available_at,
  b.started_at, b.completed_at, coalesce(b.source,'')::text AS request_source,
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
  coalesce(b.revision, 0)::bigint AS request_revision,
@@ -28,18 +28,19 @@ FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
 LEFT JOIN build_failure_dismissals d ON d.pull_request_id=p.id AND d.user_id=$1 AND d.revision=b.revision
-WHERE i.owner_user_id=$1 AND ($2::bigint=0 OR r.id=$2)
-AND (($3::boolean AND e.head_sha IS NOT NULL) OR (NOT $3::boolean AND b.pull_request_id IS NOT NULL))
-AND ($4::text = '' OR (b.state = 'failed' AND (
- ($4 = 'attention' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= $5)
- OR ($4 = 'older' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at < $5)
- OR ($4 = 'dismissed' AND d.pull_request_id IS NOT NULL))))
-ORDER BY (CASE WHEN $3::boolean THEN e.last_active_at ELSE b.updated_at END) DESC NULLS LAST, p.id DESC
-LIMIT 10 OFFSET $6
+WHERE ($2::bigint=0 OR i.workspace_id=$2::bigint) AND workspace_repository_access(r.id,$1::bigint,'read') AND ($3::bigint=0 OR r.id=$3)
+AND (($4::boolean AND e.head_sha IS NOT NULL) OR (NOT $4::boolean AND b.pull_request_id IS NOT NULL))
+AND ($5::text = '' OR (b.state = 'failed' AND (
+ ($5 = 'attention' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= $6)
+ OR ($5 = 'older' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at < $6)
+ OR ($5 = 'dismissed' AND d.pull_request_id IS NOT NULL))))
+ORDER BY (CASE WHEN $4::boolean THEN e.last_active_at ELSE b.updated_at END) DESC NULLS LAST, p.id DESC
+LIMIT 10 OFFSET $7
 `
 
 type ActivityParams struct {
 	OwnerUserID    int64
+	WorkspaceID    int64
 	RepoID         int64
 	Previews       bool
 	Failures       string
@@ -56,6 +57,7 @@ type ActivityRow struct {
 	Accessible         bool
 	InstallationStatus string
 	BuildState         string
+	ExecutionErrorCode string
 	RequestedSha       string
 	AvailableAt        pgtype.Timestamptz
 	StartedAt          pgtype.Timestamptz
@@ -85,6 +87,7 @@ type ActivityRow struct {
 func (q *Queries) Activity(ctx context.Context, arg ActivityParams) ([]ActivityRow, error) {
 	rows, err := q.db.Query(ctx, activity,
 		arg.OwnerUserID,
+		arg.WorkspaceID,
 		arg.RepoID,
 		arg.Previews,
 		arg.Failures,
@@ -107,6 +110,7 @@ func (q *Queries) Activity(ctx context.Context, arg ActivityParams) ([]ActivityR
 			&i.Accessible,
 			&i.InstallationStatus,
 			&i.BuildState,
+			&i.ExecutionErrorCode,
 			&i.RequestedSha,
 			&i.AvailableAt,
 			&i.StartedAt,
@@ -146,6 +150,22 @@ func (q *Queries) BumpObservation(ctx context.Context, id int64) error {
 	return err
 }
 
+const canOperateRepository = `-- name: CanOperateRepository :one
+SELECT workspace_repository_access($1::bigint,$2::bigint,'operate')::boolean
+`
+
+type CanOperateRepositoryParams struct {
+	Column1 int64
+	Column2 int64
+}
+
+func (q *Queries) CanOperateRepository(ctx context.Context, arg CanOperateRepositoryParams) (bool, error) {
+	row := q.db.QueryRow(ctx, canOperateRepository, arg.Column1, arg.Column2)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const clearMergeabilityUnresolved = `-- name: ClearMergeabilityUnresolved :exec
 UPDATE pull_requests SET mergeability_unresolved_at=NULL WHERE id=$1 AND mergeability_unresolved_at IS NOT NULL
 `
@@ -160,16 +180,17 @@ SELECT count(*) FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN install
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id AND e.status<>'torn_down'
 LEFT JOIN build_failure_dismissals d ON d.pull_request_id=p.id AND d.user_id=$1 AND d.revision=b.revision
-WHERE i.owner_user_id=$1 AND ($2::bigint=0 OR r.id=$2)
-AND (($3::boolean AND e.head_sha IS NOT NULL) OR (NOT $3::boolean AND b.pull_request_id IS NOT NULL))
-AND ($4::text = '' OR (b.state = 'failed' AND (
- ($4 = 'attention' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= $5)
- OR ($4 = 'older' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at < $5)
- OR ($4 = 'dismissed' AND d.pull_request_id IS NOT NULL))))
+WHERE ($2::bigint=0 OR i.workspace_id=$2::bigint) AND workspace_repository_access(r.id,$1::bigint,'read') AND ($3::bigint=0 OR r.id=$3)
+AND (($4::boolean AND e.head_sha IS NOT NULL) OR (NOT $4::boolean AND b.pull_request_id IS NOT NULL))
+AND ($5::text = '' OR (b.state = 'failed' AND (
+ ($5 = 'attention' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at >= $6)
+ OR ($5 = 'older' AND p.state = 'open' AND b.generation = p.generation AND d.pull_request_id IS NULL AND b.completed_at < $6)
+ OR ($5 = 'dismissed' AND d.pull_request_id IS NOT NULL))))
 `
 
 type CountActivityParams struct {
 	OwnerUserID    int64
+	WorkspaceID    int64
 	RepoID         int64
 	Previews       bool
 	Failures       string
@@ -179,6 +200,7 @@ type CountActivityParams struct {
 func (q *Queries) CountActivity(ctx context.Context, arg CountActivityParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countActivity,
 		arg.OwnerUserID,
+		arg.WorkspaceID,
 		arg.RepoID,
 		arg.Previews,
 		arg.Failures,
@@ -191,8 +213,8 @@ func (q *Queries) CountActivity(ctx context.Context, arg CountActivityParams) (i
 
 const countPRs = `-- name: CountPRs :one
 SELECT count(*) FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
-WHERE r.id=$1 AND i.owner_user_id=$2 AND ($3::text='all' OR p.state=$3)
-AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower($4))>0
+WHERE r.id=$1::bigint AND workspace_repository_access(r.id,$2::bigint,'read') AND ($3::text::text='all' OR p.state=$3::text)
+AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower($4::text))>0
 `
 
 type CountPRsParams struct {
@@ -226,12 +248,13 @@ FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id
 LEFT JOIN build_failure_dismissals d ON d.pull_request_id=p.id AND d.user_id=$2 AND d.revision=b.revision
-WHERE i.owner_user_id=$2 AND p.state='open'
+WHERE ($3::bigint=0 OR i.workspace_id=$3::bigint) AND workspace_repository_access(r.id,$2::bigint,'read') AND p.state='open'
 `
 
 type DeliverySummaryParams struct {
 	AttentionSince pgtype.Timestamptz
 	OwnerUserID    int64
+	WorkspaceID    int64
 }
 
 type DeliverySummaryRow struct {
@@ -248,7 +271,7 @@ type DeliverySummaryRow struct {
 // finished at or after attention_since and the owner has not dismissed it;
 // earlier undismissed ones are counted as older.
 func (q *Queries) DeliverySummary(ctx context.Context, arg DeliverySummaryParams) (DeliverySummaryRow, error) {
-	row := q.db.QueryRow(ctx, deliverySummary, arg.AttentionSince, arg.OwnerUserID)
+	row := q.db.QueryRow(ctx, deliverySummary, arg.AttentionSince, arg.OwnerUserID, arg.WorkspaceID)
 	var i DeliverySummaryRow
 	err := row.Scan(
 		&i.OpenPrs,
@@ -394,7 +417,7 @@ func (q *Queries) HasAutomaticIntent(ctx context.Context, arg HasAutomaticIntent
 
 const initialDiscoveryRepositories = `-- name: InitialDiscoveryRepositories :many
 SELECT r.id FROM repos r JOIN installations i ON i.id=r.installation_id
-WHERE i.github_installation_id=$1 AND i.owner_user_id IS NOT NULL AND i.status='active'
+WHERE i.github_installation_id=$1 AND i.workspace_id IS NOT NULL AND i.status='active'
  AND r.accessible AND NOT EXISTS(SELECT 1 FROM pr_syncs s WHERE s.repo_id=r.id)
 ORDER BY r.id FOR UPDATE OF r
 `
@@ -435,16 +458,17 @@ func (q *Queries) InvalidateObservedIntent(ctx context.Context, arg InvalidateOb
 }
 
 const listPRs = `-- name: ListPRs :many
-SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason, p.mergeability_unresolved_at,coalesce(b.state,'Not requested') AS build_state,
+SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason, p.mergeability_unresolved_at, p.public_id, p.description, p.description_updated_at, p.head_commit_sha, p.head_commit_message, p.head_commit_author, p.head_commit_at, p.head_commit_checked_at,coalesce(b.state,'Not requested') AS build_state,
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
  coalesce(e.status,'Not deployed') AS environment_status, coalesce(e.head_sha,'') AS deployed_sha,
- coalesce(e.subdomain,'')::text AS hostname
+ coalesce(e.subdomain,'')::text AS hostname,
+ b.available_at AS build_available_at, coalesce(b.source,'')::text AS request_source
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN environments e ON e.pull_request_id=p.id
-WHERE r.id=$1 AND i.owner_user_id=$2 AND ($3::text='all' OR p.state=$3)
-AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower($4))>0
-ORDER BY p.number DESC LIMIT 10 OFFSET $5
+WHERE r.id=$1::bigint AND workspace_repository_access(r.id,$2::bigint,'read') AND ($3::text::text='all' OR p.state=$3::text)
+AND strpos(lower(p.title || ' ' || p.number::text || ' ' || p.author || ' ' || p.head_branch),lower($4::text))>0
+ORDER BY p.number DESC LIMIT 10 OFFSET $5::integer
 `
 
 type ListPRsParams struct {
@@ -452,7 +476,7 @@ type ListPRsParams struct {
 	OwnerUserID pgtype.Int8
 	Column3     string
 	Lower       string
-	Offset      int32
+	RowOffset   int32
 }
 
 type ListPRsRow struct {
@@ -479,11 +503,21 @@ type ListPRsRow struct {
 	TeardownRequestedGeneration int64
 	TeardownReason              pgtype.Text
 	MergeabilityUnresolvedAt    pgtype.Timestamptz
+	PublicID                    pgtype.UUID
+	Description                 string
+	DescriptionUpdatedAt        pgtype.Timestamptz
+	HeadCommitSha               string
+	HeadCommitMessage           string
+	HeadCommitAuthor            string
+	HeadCommitAt                pgtype.Timestamptz
+	HeadCommitCheckedAt         pgtype.Timestamptz
 	BuildState                  string
 	RequestCurrent              bool
 	EnvironmentStatus           string
 	DeployedSha                 string
 	Hostname                    string
+	BuildAvailableAt            pgtype.Timestamptz
+	RequestSource               string
 }
 
 // One page of a repository's PRs with their current request and preview, so
@@ -495,7 +529,7 @@ func (q *Queries) ListPRs(ctx context.Context, arg ListPRsParams) ([]ListPRsRow,
 		arg.OwnerUserID,
 		arg.Column3,
 		arg.Lower,
-		arg.Offset,
+		arg.RowOffset,
 	)
 	if err != nil {
 		return nil, err
@@ -528,11 +562,21 @@ func (q *Queries) ListPRs(ctx context.Context, arg ListPRsParams) ([]ListPRsRow,
 			&i.TeardownRequestedGeneration,
 			&i.TeardownReason,
 			&i.MergeabilityUnresolvedAt,
+			&i.PublicID,
+			&i.Description,
+			&i.DescriptionUpdatedAt,
+			&i.HeadCommitSha,
+			&i.HeadCommitMessage,
+			&i.HeadCommitAuthor,
+			&i.HeadCommitAt,
+			&i.HeadCommitCheckedAt,
 			&i.BuildState,
 			&i.RequestCurrent,
 			&i.EnvironmentStatus,
 			&i.DeployedSha,
 			&i.Hostname,
+			&i.BuildAvailableAt,
+			&i.RequestSource,
 		); err != nil {
 			return nil, err
 		}
@@ -545,7 +589,7 @@ func (q *Queries) ListPRs(ctx context.Context, arg ListPRsParams) ([]ListPRsRow,
 }
 
 const lockInstallation = `-- name: LockInstallation :one
-SELECT id, github_installation_id, revision, status, owner_user_id FROM installations WHERE id=$1 FOR UPDATE
+SELECT id, github_installation_id, revision, status, owner_user_id, workspace_id FROM installations WHERE id=$1 FOR UPDATE
 `
 
 type LockInstallationRow struct {
@@ -554,6 +598,7 @@ type LockInstallationRow struct {
 	Revision             int64
 	Status               string
 	OwnerUserID          pgtype.Int8
+	WorkspaceID          pgtype.Int8
 }
 
 func (q *Queries) LockInstallation(ctx context.Context, id int64) (LockInstallationRow, error) {
@@ -565,12 +610,13 @@ func (q *Queries) LockInstallation(ctx context.Context, id int64) (LockInstallat
 		&i.Revision,
 		&i.Status,
 		&i.OwnerUserID,
+		&i.WorkspaceID,
 	)
 	return i, err
 }
 
 const lockPR = `-- name: LockPR :one
-SELECT id, repo_id, number, head_sha, state, github_comment_id, created_at, generation, teardown_completed_generation, title, author, head_branch, html_url, head_repo_id, is_fork, source_updated_at, needs_refresh, mergeable, mergeable_state, build_status, teardown_requested_generation, teardown_reason, mergeability_unresolved_at FROM pull_requests WHERE repo_id=$1 AND number=$2 FOR UPDATE
+SELECT id, repo_id, number, head_sha, state, github_comment_id, created_at, generation, teardown_completed_generation, title, author, head_branch, html_url, head_repo_id, is_fork, source_updated_at, needs_refresh, mergeable, mergeable_state, build_status, teardown_requested_generation, teardown_reason, mergeability_unresolved_at, public_id, description, description_updated_at, head_commit_sha, head_commit_message, head_commit_author, head_commit_at, head_commit_checked_at FROM pull_requests WHERE repo_id=$1 AND number=$2 FOR UPDATE
 `
 
 type LockPRParams struct {
@@ -605,6 +651,14 @@ func (q *Queries) LockPR(ctx context.Context, arg LockPRParams) (PullRequest, er
 		&i.TeardownRequestedGeneration,
 		&i.TeardownReason,
 		&i.MergeabilityUnresolvedAt,
+		&i.PublicID,
+		&i.Description,
+		&i.DescriptionUpdatedAt,
+		&i.HeadCommitSha,
+		&i.HeadCommitMessage,
+		&i.HeadCommitAuthor,
+		&i.HeadCommitAt,
+		&i.HeadCommitCheckedAt,
 	)
 	return i, err
 }
@@ -700,11 +754,13 @@ func (q *Queries) MarkSyncing(ctx context.Context, arg MarkSyncingParams) error 
 }
 
 const ownedPR = `-- name: OwnedPR :one
-SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason, p.mergeability_unresolved_at,(r.accessible AND i.status='active') AS available,coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
- b.available_at,b.revision AS request_revision,
+SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.created_at, p.generation, p.teardown_completed_generation, p.title, p.author, p.head_branch, p.html_url, p.head_repo_id, p.is_fork, p.source_updated_at, p.needs_refresh, p.mergeable, p.mergeable_state, p.build_status, p.teardown_requested_generation, p.teardown_reason, p.mergeability_unresolved_at, p.public_id, p.description, p.description_updated_at, p.head_commit_sha, p.head_commit_message, p.head_commit_author, p.head_commit_at, p.head_commit_checked_at,(r.accessible AND i.status='active') AS available,i.github_installation_id,coalesce(r.github_repo_id,0)::bigint AS github_repo_number,
+ coalesce(b.state,'Not requested') AS build_state,coalesce(b.head_sha,'') AS requested_sha,
+ coalesce((SELECT op.last_error_code FROM environment_operations op WHERE op.pull_request_id=p.id AND op.generation=b.generation AND op.revision=b.revision AND op.kind='activate_route' AND op.state='retryable' ORDER BY op.id DESC LIMIT 1),'')::text AS publication_error_code,
+ b.available_at,b.revision AS request_revision, coalesce(b.execution_error_code,'')::text AS execution_error_code,
  coalesce(b.generation = p.generation AND b.head_sha = p.head_sha, false)::boolean AS request_current,
  coalesce(b.source,'')::text AS request_source,
- b.requested_at, b.started_at, b.completed_at, coalesce(u.username,'')::text AS requested_by_login,
+ b.requested_at, b.started_at, b.completed_at, coalesce(nullif(trim(u.first_name||' '||u.last_name),''),u.username,'')::text AS requested_by_login,
  coalesce(CASE WHEN b.waiting_revision = b.revision THEN b.waiting_reason END,'')::text AS waiting_reason,
  coalesce(e.id,0)::bigint AS environment_id,
  coalesce(e.status,'Not deployed') AS environment_status,
@@ -715,13 +771,19 @@ SELECT p.id, p.repo_id, p.number, p.head_sha, p.state, p.github_comment_id, p.cr
  (p.teardown_requested_generation = p.generation)::boolean AS teardown_requested,
  pc.services AS backend_services, coalesce(pc.setup, false)::boolean AS backend_setup, pc.processes AS backend_processes,
  coalesce(pc.docs_path, '')::text AS backend_docs_path, coalesce(pc.outbound, 0)::integer AS backend_outbound,
- coalesce(pc.outbound_withheld, false)::boolean AS backend_outbound_withheld
+ coalesce(pc.outbound_withheld, false)::boolean AS backend_outbound_withheld,
+ coalesce(pc.data_source, '')::text AS backend_data_source, coalesce(pc.data_detail, '{}'::jsonb) AS backend_data_detail,
+ (pc.seed_ms IS NOT NULL)::boolean AS backend_seeded,
+ coalesce(tds.enabled AND tds.keep_data, false)::boolean AS keeps_test_data,
+ (SELECT count(*) FROM preview_feedback_threads t WHERE t.pull_request_id=p.id AND t.state='open')::bigint AS open_findings
 FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id
 LEFT JOIN build_intents b ON b.pull_request_id=p.id
 LEFT JOIN users u ON u.id=b.requested_by
 LEFT JOIN environments e ON e.pull_request_id=p.id
-LEFT JOIN preview_components pc ON pc.pull_request_id=p.id AND pc.generation=e.applied_generation AND pc.revision=e.applied_revision
-WHERE r.id=$1 AND i.owner_user_id=$2 AND p.number=$3
+LEFT JOIN repository_sampledata_settings tds ON tds.repo_id=r.id
+LEFT JOIN LATERAL (SELECT x.generation, x.revision FROM preview_publications x WHERE x.pull_request_id=p.id ORDER BY x.sequence DESC LIMIT 1) pub ON true
+LEFT JOIN preview_components pc ON pc.pull_request_id=p.id AND pc.generation=pub.generation AND pc.revision=pub.revision
+WHERE r.id=$1::bigint AND workspace_repository_access(r.id,$2::bigint,'read') AND p.number=$3::integer
 `
 
 type OwnedPRParams struct {
@@ -754,11 +816,23 @@ type OwnedPRRow struct {
 	TeardownRequestedGeneration int64
 	TeardownReason              pgtype.Text
 	MergeabilityUnresolvedAt    pgtype.Timestamptz
+	PublicID                    pgtype.UUID
+	Description                 string
+	DescriptionUpdatedAt        pgtype.Timestamptz
+	HeadCommitSha               string
+	HeadCommitMessage           string
+	HeadCommitAuthor            string
+	HeadCommitAt                pgtype.Timestamptz
+	HeadCommitCheckedAt         pgtype.Timestamptz
 	Available                   pgtype.Bool
+	GithubInstallationID        int64
+	GithubRepoNumber            int64
 	BuildState                  string
 	RequestedSha                string
+	PublicationErrorCode        string
 	AvailableAt                 pgtype.Timestamptz
 	RequestRevision             pgtype.Int8
+	ExecutionErrorCode          string
 	RequestCurrent              bool
 	RequestSource               string
 	RequestedAt                 pgtype.Timestamptz
@@ -784,10 +858,17 @@ type OwnedPRRow struct {
 	BackendDocsPath             string
 	BackendOutbound             int32
 	BackendOutboundWithheld     bool
+	BackendDataSource           string
+	BackendDataDetail           []byte
+	BackendSeeded               bool
+	KeepsTestData               bool
+	OpenFindings                int64
 }
 
 // The PR's three lifecycle columns (observed, requested, deployed) and what
 // the owner may do next. A torn-down environment is shown as removed.
+// What the serving deployment runs: the newest publication's candidate. After a
+// failed update the environment's applied revision names the failed attempt.
 func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, error) {
 	row := q.db.QueryRow(ctx, ownedPR, arg.ID, arg.OwnerUserID, arg.Number)
 	var i OwnedPRRow
@@ -815,11 +896,23 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 		&i.TeardownRequestedGeneration,
 		&i.TeardownReason,
 		&i.MergeabilityUnresolvedAt,
+		&i.PublicID,
+		&i.Description,
+		&i.DescriptionUpdatedAt,
+		&i.HeadCommitSha,
+		&i.HeadCommitMessage,
+		&i.HeadCommitAuthor,
+		&i.HeadCommitAt,
+		&i.HeadCommitCheckedAt,
 		&i.Available,
+		&i.GithubInstallationID,
+		&i.GithubRepoNumber,
 		&i.BuildState,
 		&i.RequestedSha,
+		&i.PublicationErrorCode,
 		&i.AvailableAt,
 		&i.RequestRevision,
+		&i.ExecutionErrorCode,
 		&i.RequestCurrent,
 		&i.RequestSource,
 		&i.RequestedAt,
@@ -845,6 +938,11 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 		&i.BackendDocsPath,
 		&i.BackendOutbound,
 		&i.BackendOutboundWithheld,
+		&i.BackendDataSource,
+		&i.BackendDataDetail,
+		&i.BackendSeeded,
+		&i.KeepsTestData,
+		&i.OpenFindings,
 	)
 	return i, err
 }
@@ -852,7 +950,7 @@ func (q *Queries) OwnedPR(ctx context.Context, arg OwnedPRParams) (OwnedPRRow, e
 const ownedRepository = `-- name: OwnedRepository :one
 SELECT r.id,r.full_name,r.accessible,r.build_mode,r.private_previews,i.status,i.github_installation_id
 FROM repos r JOIN installations i ON i.id=r.installation_id
-WHERE r.id=$1 AND i.owner_user_id=$2
+WHERE r.id=$1 AND workspace_repository_access(r.id,$2::bigint,'read')
 `
 
 type OwnedRepositoryParams struct {
@@ -929,11 +1027,39 @@ func (q *Queries) RestoreFailure(ctx context.Context, arg RestoreFailureParams) 
 	return err
 }
 
+const saveHeadCommit = `-- name: SaveHeadCommit :exec
+UPDATE pull_requests SET head_commit_sha=$1,head_commit_message=$2,head_commit_author=$3,
+ head_commit_at=$4,head_commit_checked_at=clock_timestamp()
+WHERE id=$5 AND head_sha=$1
+`
+
+type SaveHeadCommitParams struct {
+	Sha         string
+	Message     string
+	Author      string
+	CommittedAt pgtype.Timestamptz
+	ID          int64
+}
+
+// Only the still-current head is cached; a newer push leaves the row for the next view.
+func (q *Queries) SaveHeadCommit(ctx context.Context, arg SaveHeadCommitParams) error {
+	_, err := q.db.Exec(ctx, saveHeadCommit,
+		arg.Sha,
+		arg.Message,
+		arg.Author,
+		arg.CommittedAt,
+		arg.ID,
+	)
+	return err
+}
+
 const saveObservation = `-- name: SaveObservation :one
-INSERT INTO pull_requests (repo_id,number,head_sha,state,generation,title,author,head_branch,html_url,head_repo_id,is_fork,source_updated_at,mergeable,mergeable_state,build_status)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+INSERT INTO pull_requests (repo_id,number,head_sha,state,generation,title,author,head_branch,html_url,head_repo_id,is_fork,source_updated_at,mergeable,mergeable_state,build_status,description,description_updated_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$12)
 ON CONFLICT (repo_id,number) DO UPDATE SET head_sha=EXCLUDED.head_sha,state=EXCLUDED.state,
- generation=EXCLUDED.generation,title=EXCLUDED.title,author=EXCLUDED.author,
+ generation=EXCLUDED.generation,title=CASE WHEN EXCLUDED.source_updated_at >= coalesce(pull_requests.description_updated_at,'-infinity'::timestamptz) THEN EXCLUDED.title ELSE pull_requests.title END,
+ description=CASE WHEN EXCLUDED.source_updated_at >= coalesce(pull_requests.description_updated_at,'-infinity'::timestamptz) THEN EXCLUDED.description ELSE pull_requests.description END,
+ description_updated_at=greatest(EXCLUDED.source_updated_at,pull_requests.description_updated_at),author=EXCLUDED.author,
  head_branch=EXCLUDED.head_branch,html_url=EXCLUDED.html_url,head_repo_id=EXCLUDED.head_repo_id,
  is_fork=EXCLUDED.is_fork,source_updated_at=EXCLUDED.source_updated_at,needs_refresh=false,mergeable=EXCLUDED.mergeable,mergeable_state=EXCLUDED.mergeable_state,build_status=EXCLUDED.build_status,
  mergeability_unresolved_at=NULL
@@ -956,6 +1082,7 @@ type SaveObservationParams struct {
 	Mergeable       pgtype.Bool
 	MergeableState  string
 	BuildStatus     string
+	Description     string
 }
 
 func (q *Queries) SaveObservation(ctx context.Context, arg SaveObservationParams) (int64, error) {
@@ -975,6 +1102,7 @@ func (q *Queries) SaveObservation(ctx context.Context, arg SaveObservationParams
 		arg.Mergeable,
 		arg.MergeableState,
 		arg.BuildStatus,
+		arg.Description,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -1003,4 +1131,28 @@ func (q *Queries) StartSync(ctx context.Context, repoID int64) (PrSync, error) {
 		&i.Message,
 	)
 	return i, err
+}
+
+const updatePRMetadata = `-- name: UpdatePRMetadata :exec
+UPDATE pull_requests SET title=$3,description=$4,description_updated_at=$5
+WHERE repo_id=$1 AND number=$2 AND (description_updated_at IS NULL OR description_updated_at<=$5)
+`
+
+type UpdatePRMetadataParams struct {
+	RepoID               int64
+	Number               int32
+	Title                string
+	Description          string
+	DescriptionUpdatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) UpdatePRMetadata(ctx context.Context, arg UpdatePRMetadataParams) error {
+	_, err := q.db.Exec(ctx, updatePRMetadata,
+		arg.RepoID,
+		arg.Number,
+		arg.Title,
+		arg.Description,
+		arg.DescriptionUpdatedAt,
+	)
+	return err
 }

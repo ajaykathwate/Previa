@@ -4,10 +4,12 @@ import "strconv"
 
 // RepositoryTabs switches between a repository's sections. Each is a full page,
 // so the switch works without JavaScript; view transitions keep it smooth.
+// Setup and Test data are for people who can build; Secrets and Outbound
+// for managers.
 templ RepositoryTabs(repoID int64, active string) {
 	<nav class="repo-tabs" aria-label="Repository sections">
 		<a
-			href={ templ.SafeURL("/repositories/" + strconv.FormatInt(repoID, 10)) }
+			href={ PublicURL(ctx, "/repositories/"+strconv.FormatInt(repoID, 10)) }
 			if active == "pull-requests" {
 				aria-current="page"
 			}
@@ -15,23 +17,45 @@ templ RepositoryTabs(repoID int64, active string) {
 			@PullRequestIcon()
 			<span>Pull requests</span>
 		</a>
-		<a
-			href={ templ.SafeURL("/repositories/" + strconv.FormatInt(repoID, 10) + "/secrets") }
-			if active == "secrets" {
-				aria-current="page"
-			}
-		>
-			@KeyIcon()
-			<span>Secrets</span>
-		</a>
-		<a
-			href={ templ.SafeURL("/repositories/" + strconv.FormatInt(repoID, 10) + "/outbound") }
-			if active == "outbound" {
-				aria-current="page"
-			}
-		>
-			@SendIcon()
-			<span>Outbound</span>
-		</a>
+		if CanOperate(ctx) {
+			<a
+				href={ PublicURL(ctx, "/repositories/"+strconv.FormatInt(repoID, 10)+"/setup") }
+				if active == "setup" {
+					aria-current="page"
+				}
+			>
+				@ChecklistIcon()
+				<span>Setup</span>
+			</a>
+			<a
+				href={ PublicURL(ctx, "/repositories/"+strconv.FormatInt(repoID, 10)+"/test-data") }
+				if active == "test-data" {
+					aria-current="page"
+				}
+			>
+				@DatabaseIcon()
+				<span>Test data</span>
+			</a>
+		}
+		if CanManage(ctx) {
+			<a
+				href={ PublicURL(ctx, "/repositories/"+strconv.FormatInt(repoID, 10)+"/secrets") }
+				if active == "secrets" {
+					aria-current="page"
+				}
+			>
+				@KeyIcon()
+				<span>Secrets</span>
+			</a>
+			<a
+				href={ PublicURL(ctx, "/repositories/"+strconv.FormatInt(repoID, 10)+"/outbound") }
+				if active == "outbound" {
+					aria-current="page"
+				}
+			>
+				@SendIcon()
+				<span>Outbound</span>
+			</a>
+		}
 	</nav>
 }

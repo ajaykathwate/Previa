@@ -36,13 +36,14 @@ type actionsHarness struct {
 	cookies  []*http.Cookie
 	caps     *fixedCapabilities
 	upstream *upstreamFake
+	commits  *commitFake
 	prID     int64
 }
 
 func newActionsHarness(t *testing.T) *actionsHarness {
 	t.Helper()
 	f := setup(t)
-	h := &actionsHarness{fixture: f, caps: &fixedCapabilities{execution: true, discovery: true}}
+	h := &actionsHarness{fixture: f, caps: &fixedCapabilities{execution: true, discovery: true}, commits: &commitFake{}}
 	h.prID = seedPR(t, f, `"mergeable":true,"mergeable_state":"clean",`)
 	h.upstream = &upstreamFake{inspect: func(context.Context, int64, int64, int32) (pr.Upstream, error) {
 		return upstreamPR("sha-a", "open", yes(), "clean", verifyBase), nil
@@ -61,7 +62,8 @@ func newActionsHarness(t *testing.T) *actionsHarness {
 		t.Fatal(err)
 	}
 	handler := pr.NewHandler(pr.NewRepository(f.pool), sync, policy, authHandler, f.log, true).
-		WithActions(pr.Actions{Builds: broker, Verifier: sync, Teardowns: repo, Capabilities: h.caps, PreviewBaseDomain: "preview.example.com"})
+		WithActions(pr.Actions{Builds: broker, Verifier: sync, Teardowns: repo, Capabilities: h.caps, PreviewBaseDomain: "preview.example.com"}).
+		WithCommits(h.commits)
 	router := chi.NewRouter()
 	router.Use(sessions.LoadAndSave, authHandler.LoadUser, authHandler.CSRF)
 	authHandler.Mount(router)
@@ -170,10 +172,10 @@ func TestBuildIsUnavailableWithoutAWorkerThatCanBuild(t *testing.T) {
 	if values != nil {
 		t.Fatal("a build control was offered with no worker able to build")
 	}
-	// The action stays visible but disabled, with the reason and the fix.
-	disabled := regexp.MustCompile(`(?s)<button[^>]*disabled[^>]*aria-describedby="build-unavailable"[^>]*>.*?Build latest commit`)
-	if !disabled.MatchString(body) || !strings.Contains(body, "it has no preview domain") || !strings.Contains(body, "PREVIEW_BASE_DOMAIN") {
-		t.Fatal("the blocked build was not shown disabled with its reason and fix")
+	// No dead control: the page says why it cannot build and what fixes it.
+	if strings.Contains(body, "Build latest commit</") || regexp.MustCompile(`<(button|input|select|textarea|fieldset)\\b[^>]*\\sdisabled(\\s|=|/?>)`).MatchString(body) ||
+		!strings.Contains(body, "it has no preview domain") || !strings.Contains(body, "PREVIEW_BASE_DOMAIN") {
+		t.Fatal("a blocked build must be explained, without a disabled Build button")
 	}
 	h.caps.discovery = false
 	if _, body := h.form(t); !strings.Contains(body, "No worker that can build previews is running") {
@@ -403,6 +405,58 @@ func TestActionsRefuseAnotherOwnersPullRequest(t *testing.T) {
 	}
 }
 
+// After a failed update the previous deployment keeps serving: the pull
+// request page still says what it runs and links its docs, from the newest
+// publication rather than the failed attempt.
+func TestThePullRequestPageDescribesTheServingDeploymentAfterAFailedUpdate(t *testing.T) {
+	h := newActionsHarness(t)
+	h.exec(t, `INSERT INTO build_intents(pull_request_id, revision, base_revision, generation, head_sha, source, request_action, requested_by, idempotency_key, state, available_at, started_at, completed_at)
+		SELECT id, 2, 1, generation, head_sha, 'manual', 'build', $2, 'key-failed-setup-0001', 'failed', now(), now(), now() FROM pull_requests WHERE id=$1`, h.prID, h.userID)
+	h.exec(t, `INSERT INTO environments(pull_request_id, subdomain, status, container_id, image_tag, head_sha, applied_generation, applied_revision, last_error_code, expires_at)
+		SELECT id, 'pr-7-2s-abcdefgh', 'failed', 'container-1', 'image-1', 'sha-old', generation, 2, 'setup_failed', now() + interval '2 days' FROM pull_requests WHERE id=$1`, h.prID)
+	h.exec(t, `INSERT INTO preview_publications(pull_request_id, repo_id, workspace_id, sequence, head_sha, generation, revision, container_id, image_tag)
+		SELECT p.id, p.repo_id, i.workspace_id, 1, 'sha-old', p.generation, 1, 'container-1', 'image-1' FROM pull_requests p
+		JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id WHERE p.id = $1`, h.prID)
+	h.exec(t, `INSERT INTO preview_components(pull_request_id, generation, revision, services, setup, docs_path)
+		SELECT id, generation, 1, '[{"kind":"postgres","version":"17"}]', true, '/docs' FROM pull_requests WHERE id=$1`, h.prID)
+	body := h.request(t, "GET", detailPath, "").Body.String()
+	for _, want := range []string{"PostgreSQL 17 · setup ran", "https://pr-7-2s-abcdefgh.preview.example.com/docs"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the PR page lacks %q", want)
+		}
+	}
+}
+
+// With persistent test data the PR page says where the serving deployment's
+// databases started and why earlier sources were skipped, and that data is
+// kept between builds (docs/32).
+func TestThePullRequestPageNamesWhereTestDataStarted(t *testing.T) {
+	h := newActionsHarness(t)
+	h.exec(t, `INSERT INTO environments(pull_request_id, subdomain, status, container_id, image_tag, head_sha, applied_generation, applied_revision, expires_at)
+		SELECT id, 'pr-7-2s-abcdefgh', 'running', 'container-1', 'image-1', 'sha-old', generation, 1, now() + interval '2 days' FROM pull_requests WHERE id=$1`, h.prID)
+	h.exec(t, `INSERT INTO preview_publications(pull_request_id, repo_id, workspace_id, sequence, head_sha, generation, revision, container_id, image_tag)
+		SELECT p.id, p.repo_id, i.workspace_id, 1, 'sha-old', p.generation, 1, 'container-1', 'image-1' FROM pull_requests p
+		JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id WHERE p.id = $1`, h.prID)
+	h.exec(t, `INSERT INTO preview_components(pull_request_id, generation, revision, services, setup, seed, data_source, data_detail)
+		SELECT id, generation, 1, '[{"kind":"postgres","version":"17"}]', true, true, 'baseline',
+		       '{"baseline":{"branch":"main","sha":"a1b2c3d4e5f6","built_at":"2026-10-16T08:00:00Z"},"fallbacks":[{"source":"kept","reason":"setup_failed"}]}'
+		FROM pull_requests WHERE id=$1`, h.prID)
+	body := h.request(t, "GET", detailPath, "").Body.String()
+	for _, want := range []string{"Started from: Repository baseline (main@a1b2c3d).", "The previous build&#39;s data did not work with this branch (setup failed).", "Data does not survive a rebuild."} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the PR page lacks %q", want)
+		}
+	}
+	h.exec(t, `INSERT INTO repository_sampledata_settings(repo_id, enabled, updated_by) SELECT repo_id, true, $2 FROM pull_requests WHERE id=$1`, h.prID, h.userID)
+	h.exec(t, `UPDATE preview_components SET data_source='kept', data_detail='{"kept":{"sha":"d4e5f6a7b8c9","deployment":2}}', seed_ms=NULL WHERE pull_request_id=$1`, h.prID)
+	body = h.request(t, "GET", detailPath, "").Body.String()
+	for _, want := range []string{"Started from: Previous build (d4e5f6a).", "Data is kept between builds", "not included"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the PR page lacks %q", want)
+		}
+	}
+}
+
 func TestPreviewsAndBuildsShowRealDeliveryState(t *testing.T) {
 	h := newActionsHarness(t)
 	h.exec(t, `INSERT INTO environments(pull_request_id, subdomain, status, container_id, image_tag, head_sha, applied_generation, applied_revision, expires_at)
@@ -440,9 +494,9 @@ func TestRepositoryPageSaysWhenSyncsWaitStallOrNeverResolve(t *testing.T) {
 		return w.Body.String()
 	}
 	syncButton := regexp.MustCompile(`(?s)<button[^>]*class="[^"]*sync-button[^"]*"[^>]*>`)
-	disabled := func(button string) bool { return regexp.MustCompile(`\sdisabled(\s|>|=)`).MatchString(button) }
 	h.exec(t, "INSERT INTO pr_syncs(repo_id,state) VALUES(1,'queued') ON CONFLICT (repo_id) DO UPDATE SET state='queued', requested_at=clock_timestamp()")
-	if body := list(); !strings.Contains(body, "is-syncing") || !strings.Contains(body, "data-refresh-at=") || !disabled(syncButton.FindString(body)) {
+	// While it runs, Sync is not offered (no dead control); the status says so.
+	if body := list(); !strings.Contains(body, "is-syncing") || !strings.Contains(body, "data-refresh-at=") || syncButton.MatchString(body) {
 		t.Fatal("a fresh sync spins, refreshes when it would stall, and is not requested twice")
 	}
 	// No worker: no spinner, an explanation and how to start one.
@@ -453,7 +507,7 @@ func TestRepositoryPageSaysWhenSyncsWaitStallOrNeverResolve(t *testing.T) {
 	h.caps.discovery = true
 	// Older than SyncStaleAfter: stalled, and Sync works again.
 	h.exec(t, "UPDATE pr_syncs SET requested_at = now() - interval '6 minutes'")
-	if body := list(); !strings.Contains(body, "Sync stalled") || !strings.Contains(body, "data-sync-stalled") || disabled(syncButton.FindString(body)) {
+	if body := list(); !strings.Contains(body, "Sync stalled") || !strings.Contains(body, "data-sync-stalled") || !syncButton.MatchString(body) {
 		t.Fatal("a stalled sync must say so and let the owner sync again")
 	}
 	// A mergeability check that gave up reads Unknown, with Sync as the way on.
@@ -501,5 +555,127 @@ func TestPreviewsListOnlyWhatServes(t *testing.T) {
 	}
 	if w := h.request(t, "GET", "/environments?page=2", ""); w.Code != http.StatusMovedPermanently || w.Header().Get("Location") != "/previews?page=2" {
 		t.Fatalf("old links to Environments move to Previews: %d %q", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// The review page's Reset test data posts a Rebuild with reset=true and
+// return=review: it comes back to the review page with what happened.
+func TestResetFromTheReviewPageReturnsThere(t *testing.T) {
+	h := newActionsHarness(t)
+	values, _ := h.form(t)
+	if w := h.request(t, "POST", detailPath+"/build", values.Encode()); w.Code != http.StatusSeeOther {
+		t.Fatalf("first build: %d", w.Code)
+	}
+	h.exec(t, "UPDATE build_intents SET state='succeeded', started_at=now(), completed_at=now() WHERE pull_request_id=$1", h.prID)
+	reset := url.Values{"csrf_token": {values.Get("csrf_token")}, "action": {"rebuild"}, "reset": {"true"}, "return": {"review"},
+		"workspace_query": {"pr=7"}, "expected_revision": {"1"}, "request_key": {"review-reset-key-0000001"}}
+	w := h.request(t, "POST", detailPath+"/build", reset.Encode())
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/pull-requests/7/review?saved=reset" {
+		t.Fatalf("reset: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	if revision, _, _, _ := h.intent(t); revision != 2 {
+		t.Fatalf("the Rebuild was not requested: revision %d", revision)
+	}
+	// A Reset never keeps data: without a choice it starts empty (docs/32).
+	var source string
+	if err := h.pool.QueryRow(t.Context(), "SELECT coalesce(start_source,'') FROM build_intents WHERE pull_request_id=$1", h.prID).Scan(&source); err != nil || source != "empty" {
+		t.Fatalf("a Reset starts from empty databases: %q %v", source, err)
+	}
+	h.exec(t, "UPDATE build_intents SET state='succeeded', started_at=now(), completed_at=now() WHERE pull_request_id=$1", h.prID)
+	baseline := url.Values{"csrf_token": {values.Get("csrf_token")}, "action": {"rebuild"}, "reset": {"true"}, "return": {"review"},
+		"workspace_query": {"pr=7"}, "expected_revision": {"2"}, "request_key": {"review-reset-key-0000003"}, "start_source": {"baseline"}}
+	if w := h.request(t, "POST", detailPath+"/build", baseline.Encode()); w.Code != http.StatusSeeOther {
+		t.Fatalf("reset to the baseline: %d", w.Code)
+	}
+	if err := h.pool.QueryRow(t.Context(), "SELECT coalesce(start_source,'') FROM build_intents WHERE pull_request_id=$1", h.prID).Scan(&source); err != nil || source != "baseline" {
+		t.Fatalf("the chosen source is recorded: %q %v", source, err)
+	}
+	h.exec(t, "UPDATE build_intents SET state='succeeded', started_at=now(), completed_at=now() WHERE pull_request_id=$1", h.prID)
+	baseline.Set("expected_revision", "3")
+	baseline.Set("request_key", "review-reset-key-0000004")
+	baseline.Set("start_source", "kept")
+	if w := h.request(t, "POST", detailPath+"/build", baseline.Encode()); w.Code == http.StatusSeeOther && w.Header().Get("Location") == "/repositories/1/pull-requests/7/review?saved=reset" {
+		t.Fatal("a Reset cannot ask to keep data")
+	}
+	// A reset from a page that is out of date explains itself there.
+	reset.Set("request_key", "review-reset-key-0000002")
+	w = h.request(t, "POST", detailPath+"/build", reset.Encode())
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/pull-requests/7/review?notice=build-changed" {
+		t.Fatalf("a stale reset: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	h.exec(t, "UPDATE pull_requests SET state='closed' WHERE id=$1", h.prID)
+	w = h.request(t, "POST", detailPath+"/build", reset.Encode())
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/pull-requests/7/review?notice=build-closed" {
+		t.Fatalf("a reset of a closed pull request: %d %s", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// The Setup tab posts to the same Build and Sync actions with return=setup:
+// each comes back to the checklist, on the pull request it showed, with what
+// happened, never to a plain-text error page.
+func TestSetupTabActionsReturnToTheChecklist(t *testing.T) {
+	h := newActionsHarness(t)
+	values, _ := h.form(t)
+	values.Set("return", "setup")
+	values.Set("workspace_query", "pr=7")
+	w := h.request(t, "POST", detailPath+"/build", values.Encode())
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/setup?pr=7&saved=build" {
+		t.Fatalf("build from setup: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	if revision, _, _, _ := h.intent(t); revision != 1 {
+		t.Fatalf("the build was not requested: revision %d", revision)
+	}
+	h.exec(t, "UPDATE build_intents SET state='failed', started_at=now(), completed_at=now() WHERE pull_request_id=$1", h.prID)
+	values, _ = h.form(t)
+	values.Set("return", "setup")
+	values.Set("workspace_query", "pr=7")
+	values.Set("expected_revision", "0")
+	values.Set("request_key", "a-key-from-an-old-setup-tab")
+	w = h.request(t, "POST", detailPath+"/build", values.Encode())
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/setup?pr=7&notice=build-changed" {
+		t.Fatalf("a stale build from setup: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	w = h.request(t, "POST", "/repositories/1/refresh", url.Values{"csrf_token": {values.Get("csrf_token")}, "return": {"setup"}}.Encode())
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/repositories/1/setup?saved=sync" {
+		t.Fatalf("sync from setup: %d %s", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// In Automatic mode a pushed commit waits five quiet minutes. The PR page, its
+// row in the list and Builds count down to the deadline and say that another
+// push restarts the wait; another push moves the deadline later.
+func TestAutomaticBuildCountsDownAndRestartsOnNewCommits(t *testing.T) {
+	h := newActionsHarness(t)
+	h.exec(t, "UPDATE repos SET build_mode='automatic'")
+	push := func(sha string, at time.Time) {
+		t.Helper()
+		body := fmt.Sprintf(`{"action":"synchronize","installation":{"id":99},"repository":{"id":100},"pull_request":{"number":7,"title":"Improve preview","state":"open","mergeable":true,"mergeable_state":"clean","updated_at":%q,"user":{"login":"contributor"},"html_url":"https://github.com/owner/repo/pull/7","head":{"sha":%q,"ref":"feature","repo":{"id":100}}}}`, at.Format(time.RFC3339), sha)
+		if code := send(h.hook, fmt.Sprintf("push-%s-%d", sha, time.Now().UnixNano()), "pull_request", body); code != http.StatusNoContent {
+			t.Fatalf("push %s: %d", sha, code)
+		}
+	}
+	countdown := regexp.MustCompile(`<time datetime="([^"]+)" title="[^"]*" role="timer" data-countdown>(\d+:\d\d)</time>`)
+	push("sha-b", verifyBase.Add(time.Minute))
+	_, body := h.form(t)
+	first := countdown.FindStringSubmatch(body)
+	if first == nil || !strings.Contains(body, "Commit sha-b builds in") || !strings.Contains(body, "another push restarts the wait") ||
+		!strings.Contains(body, "Build now") || !strings.Contains(body, "unless another commit arrives") {
+		t.Fatalf("the PR page must count down to the Automatic build:\n%s", body)
+	}
+	if left := first[2]; left != "5:00" && !strings.HasPrefix(left, "4:") {
+		t.Fatalf("five quiet minutes, counting down: %s", left)
+	}
+	if list := h.request(t, "GET", "/repositories/1", "").Body.String(); !strings.Contains(list, "Builds in") || !countdown.MatchString(list) {
+		t.Fatal("the PR list must count down too")
+	}
+	if builds := h.request(t, "GET", "/builds", "").Body.String(); !strings.Contains(builds, "Starts in") || !countdown.MatchString(builds) {
+		t.Fatal("Builds must count down too")
+	}
+	time.Sleep(1100 * time.Millisecond) // deadlines are shown to the second
+	push("sha-c", verifyBase.Add(2*time.Minute))
+	_, body = h.form(t)
+	second := countdown.FindStringSubmatch(body)
+	if second == nil || second[1] <= first[1] || !strings.Contains(body, "Commit sha-c builds in") {
+		t.Fatalf("another push must restart the wait: %v then %v", first, second)
 	}
 }

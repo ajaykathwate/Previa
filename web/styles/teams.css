@@ -1,0 +1,267 @@
+/* Shared workspace controls use the signal theme and the standard shell.
+   Pages stay compact: short headings, dense rows, actions beside content. */
+.team-page { display: grid; gap: 16px; }
+.team-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 36px; }
+.team-heading-copy { min-width: 0; }
+.team-heading h1 { margin: 0; color: var(--ink); font-size: 22px; font-weight: 680; letter-spacing: -.025em; line-height: 1.25; }
+.team-heading p { margin-top: 3px; color: var(--text-muted); font-size: 13.5px; line-height: 1.5; }
+.team-settings-panel > p { color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+.team-heading-actions,.team-inline,.team-card-identity,.team-row-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.team-heading-actions { flex-shrink: 0; justify-content: flex-end; }
+.workspace-avatar { position: relative; display: inline-grid; place-items: center; flex: 0 0 auto; overflow: hidden; width: 38px; height: 38px; border-radius: 11px; background: var(--signal-soft); border: 1px solid var(--signal-line); color: var(--signal-ink); font-weight: 700; text-transform: uppercase; }
+.workspace-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--surface); }
+.team-role { font-size: .7rem; height: 22px; font-weight: 600; text-transform: none; }
+.team-role-owner { color: var(--signal-ink); background: var(--signal-soft); border-color: var(--signal-line); }
+.team-you { margin-left: 6px; height: 18px; padding: 0 6px; font-size: .64rem; vertical-align: 1px; }
+
+/* Members and invitations */
+.team-members-panel { overflow: hidden; }
+.team-people-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.team-segmented { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); }
+.team-segmented a { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border-radius: 6px; color: var(--text-muted); font-size: 12.5px; font-weight: 580; }
+.team-segmented a[aria-current=page] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
+.team-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--surface-hover); color: var(--ink-soft); font-size: 11px; }
+.team-search { display: flex; align-items: stretch; gap: 6px; max-width: 300px; }
+.team-search input { width: 240px; min-width: 0; height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 12.5px; }
+.team-page .team-search .secondary-action { width: 32px; min-height: 32px; padding: 0; }
+.team-table-heading,.team-member-row { display: grid; grid-template-columns: minmax(0,1.25fr) 96px minmax(0,1.15fr) minmax(170px,auto); gap: 16px; align-items: center; padding: 8px 16px; }
+.team-table-heading { padding-top: 7px; padding-bottom: 7px; border-bottom: 1px solid var(--line); background: var(--surface-muted); color: var(--text-muted); font-size: 11.5px; font-weight: 560; }
+.team-member-row { min-height: 56px; border-bottom: 1px solid var(--line); }
+.team-member-row:last-child { border-bottom: 0; }
+.team-member-row:hover,.team-invitation-row:hover { background: var(--surface-muted); }
+.team-person { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.team-person > div { min-width: 0; }
+.team-person strong { font-size: 13.5px; font-weight: 620; overflow-wrap: anywhere; }
+.team-person p { margin-top: 1px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+.team-member-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+.team-repository-chip { display: inline-block; max-width: 100%; padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-muted); color: var(--ink-soft); font-size: 11.5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.team-row-actions { justify-content: flex-end; flex-wrap: nowrap; gap: 6px; }
+.team-page .team-row-actions :is(.secondary-action,.primary-action) { min-height: 30px; padding: 5px 10px; font-size: 12.5px; }
+.team-panel-footer { padding: 9px 16px; border-top: 1px solid var(--line); background: var(--surface-muted); color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.team-empty { display: grid; justify-items: center; gap: 8px; padding: 28px 24px; color: var(--text-muted); text-align: center; }
+.team-empty h2 { color: var(--ink); font-size: 14px; font-weight: 620; }
+.team-empty p { max-width: 470px; font-size: 13px; line-height: 1.6; }
+.team-empty-icon { display: grid; place-items: center; flex: 0 0 auto; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); color: var(--ink-soft); }
+.team-empty-icon svg { width: 18px; height: 18px; }
+.team-invitation-row,.team-preview-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+.team-invitation-row:last-child,.team-preview-row:last-child { border-bottom: 0; }
+.team-invitation-row .team-inline { gap: 6px; }
+
+/* Forms (dialogs, invitation recovery, workspace creation) */
+.team-form { display: grid; gap: 8px; max-width: 640px; margin-top: 16px; }
+.team-form > label,.team-repository-choices legend { color: var(--ink-soft); font-size: 12.5px; font-weight: 600; }
+.team-form input:not([type=hidden]):not([type=checkbox]),.team-form select,.team-form textarea,.team-link-notice input { width: 100%; min-height: 36px; padding: 7px 11px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 13.5px; }
+.team-form textarea { min-height: 80px; line-height: 1.6; resize: vertical; }
+.team-form > button { justify-self: start; }
+.team-form label:not(:first-child) { margin-top: 6px; }
+.team-form .dialog-actions { margin-top: 10px; }
+.team-field-hint { color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+.team-repository-choices { display: grid; gap: 8px; margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+.team-repository-choices[hidden] { display: none; }
+.team-repository-choices > p { color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+.team-repository-choices label { display: flex; align-items: flex-start; gap: 10px; padding: 7px 8px; border-radius: 6px; background: var(--surface-muted); font-size: 12.5px; }
+.team-repository-choices input { margin-top: 3px; accent-color: var(--signal-strong); }
+.team-repository-choices code { overflow-wrap: anywhere; }
+.team-settings-panel { padding: 20px; }
+.team-settings-panel h2,.team-link-notice h2 { color: var(--ink); font-size: 14px; font-weight: 650; }
+.team-settings-panel h3 { margin: 16px 0 6px; font-size: 13.5px; font-weight: 620; }
+.team-settings-panel > .secondary-action { margin-top: 14px; }
+.team-form input[type=file] { padding: 6px; font-size: 12px; }
+.team-form input[type=file]::file-selector-button { margin-right: 10px; padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface-muted); color: var(--ink); cursor: pointer; }
+.team-inline-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
+.team-inline-notice p,.team-inline-notice strong { font-size: 13px; line-height: 1.55; }
+
+/* Settings ownership row */
+.ownership-row { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; padding: 12px 18px; }
+.ownership-row > p { min-width: 0; flex: 1 1 360px; color: var(--ink-soft); font-size: 13.5px; line-height: 1.55; }
+.ownership-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* Workspace directory */
+.team-workspace-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(280px,1fr)); gap: 14px; }
+.team-workspace-card { display: grid; align-content: start; gap: 12px; padding: 16px; }
+.team-card-identity { justify-content: space-between; }
+.team-workspace-card h2 { font-size: 15px; font-weight: 640; overflow-wrap: anywhere; }
+.team-description { margin-top: 4px; color: var(--text-muted); font-size: 12.5px; line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; }
+.team-card-links { display: flex; gap: 16px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12.5px; }
+.team-card-links a { color: var(--ink-soft); }
+.team-card-links a:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+
+/* One-time invitation link */
+.team-link-notice { display: grid; grid-template-columns: minmax(0,auto) minmax(280px,1fr); align-items: center; gap: 10px 20px; padding: 12px 16px; border-color: var(--signal-line); background: var(--signal-soft); }
+.team-link-notice h2 { display: flex; align-items: center; gap: 6px; }
+.team-link-notice p { margin-top: 2px; color: var(--ink-soft); font-size: 12.5px; line-height: 1.5; }
+.team-success-icon { display: inline-flex; color: var(--signal-ink); }
+.team-success-icon svg { width: 15px; height: 15px; }
+.team-copy-row { display: flex; align-items: stretch; gap: 8px; min-width: 0; }
+.team-copy-row input { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12px; }
+.team-copy-row button { flex-shrink: 0; }
+.team-invitation-page { max-width: 640px; }
+.team-invitation-page h1 { margin: 10px 0; font-size: 22px; font-weight: 680; }
+.team-preview-row h2 { margin: 8px 0; font-size: 14.5px; font-weight: 620; }
+.team-preview-row p { margin-top: 6px; font-size: 12px; }
+.team-preview-row > div:first-child { min-width: 0; }
+.team-preview-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; flex-shrink: 0; gap: 8px; }
+.team-preview-commits { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-muted); }
+.team-repository-label { font-size: 12px; overflow-wrap: anywhere; }
+.team-danger { color: var(--danger-ink); }
+
+/* Buttons */
+.team-page :is(.primary-action,.secondary-action) { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 6px 12px; border: 1px solid transparent; border-radius: 8px; font-size: 13px; font-weight: 600; line-height: 1.35; text-decoration: none; cursor: pointer; }
+.team-page .primary-action { color: var(--action-ink); background: var(--action); }
+.team-page .primary-action:hover { background: var(--action-hover); }
+.team-page .secondary-action { color: var(--ink); background: var(--surface); border-color: var(--line-strong); }
+.team-page .secondary-action:hover { background: var(--surface-hover); }
+.team-page :is(.primary-action,.secondary-action):disabled { opacity: .45; cursor: default; }
+.team-page :is(.primary-action,.secondary-action) svg,.team-icon-button svg { width: 14px; height: 14px; flex-shrink: 0; }
+.team-icon-button { display: inline-grid; place-items: center; flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); cursor: pointer; }
+.team-icon-button:hover { background: var(--danger-soft); border-color: var(--danger-line); }
+.team-page .team-text-action { color: var(--ink-soft); font-size: 12.5px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.team-page .pagination { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 4px; color: var(--text-muted); font-size: 12.5px; }
+.team-page :is(button,a,input,select,textarea,summary):focus-visible { outline: 2px solid var(--signal-strong); outline-offset: 2px; }
+.team-page .inline-input:focus-visible { outline: none; }
+/* Workspace switcher: a compact control under the brand; its menu opens beneath it. */
+.workspace-switcher { position: relative; }
+.workspace-switcher > summary,.workspace-switcher-empty { display: flex; align-items: center; gap: 9px; min-height: 46px; padding: 0 9px 0 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-sm); color: var(--ink); cursor: pointer; list-style: none; transition: border-color .15s,background-color .15s; }
+.workspace-switcher-empty { text-decoration: none; }
+.workspace-switcher > summary:hover,.workspace-switcher[open] > summary,.workspace-switcher-empty:hover { border-color: var(--line-strong); }
+.workspace-switcher > summary::-webkit-details-marker { display: none; }
+.workspace-switcher > summary .workspace-avatar,.workspace-switcher-empty .workspace-avatar { width: 28px; height: 28px; border-radius: 8px; font-size: 12px; }
+.workspace-switcher-empty .workspace-avatar svg { width: 14px; height: 14px; }
+.workspace-switcher-label { display: grid; flex: 1; gap: 1px; min-width: 0; }
+.workspace-switcher-label strong { overflow: hidden; font-size: 13px; font-weight: 650; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-switcher-role { overflow: hidden; color: var(--text-muted); font-size: 11.5px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.switcher-badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--signal); color: var(--on-signal); font-size: 10.5px; font-weight: 700; }
+.workspace-switcher-chevron { display: grid; place-items: center; width: 14px; height: 14px; color: var(--text-muted); transition: transform .16s; }
+.workspace-switcher-chevron svg { width: 14px; height: 14px; }
+.workspace-switcher[open] .workspace-switcher-chevron { transform: rotate(180deg); }
+.workspace-switcher-menu { position: absolute; z-index: 60; top: calc(100% + 6px); left: 0; width: max(100%,260px); max-height: min(440px,calc(100dvh - 140px)); padding: 6px; overflow-y: auto; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--surface-raised); box-shadow: var(--shadow-lg); }
+.switcher-menu-label { padding: 6px 8px 4px; color: var(--text-faint); font-family: var(--font-code); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.workspace-switcher-menu { display: grid; gap: 2px; }
+.switcher-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 8px; border-radius: 7px; text-align: left; cursor: pointer; }
+.switcher-item[aria-current=true] { cursor: default; }
+.switcher-item .workspace-avatar { width: 24px; height: 24px; border-radius: 7px; font-size: 11px; }
+.switcher-item > span:nth-child(2) { display: grid; flex: 1; min-width: 0; }
+.switcher-item strong { overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.switcher-item small { color: var(--text-muted); font-size: 11px; }
+.switcher-item > svg { width: 14px; height: 14px; color: var(--signal-ink); flex-shrink: 0; }
+.switcher-item:hover,.switcher-item[aria-current=true] { background: var(--surface-hover); }
+.workspace-switcher-shortcuts { display: grid; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+.workspace-switcher-shortcuts :is(a,button) { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 8px; border-radius: 7px; color: var(--ink-soft); font-size: 13px; text-align: left; cursor: pointer; }
+.workspace-switcher-shortcuts :is(a,button) > span:first-of-type { flex: 1; }
+.workspace-switcher-shortcuts :is(a,button):hover { background: var(--surface-hover); color: var(--ink); }
+.workspace-switcher-shortcuts svg { width: 15px; height: 15px; color: var(--text-muted); }
+.workspace-switcher :is(summary,button,a):focus-visible,.workspace-switcher-empty:focus-visible { outline: 2px solid var(--signal-strong); outline-offset: 2px; }
+/* The mobile drawer scrolls, so its menu expands in place. */
+.mobile-drawer .workspace-switcher { margin-bottom: 12px; }
+.mobile-drawer .workspace-switcher-menu { position: static; width: auto; margin-top: 6px; box-shadow: none; }
+.mobile-drawer .workspace-switcher-empty { margin-bottom: 12px; }
+.mobile-drawer .sidebar-utility { margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--line); }
+@media(max-width:1100px) { .team-table-heading,.team-member-row { grid-template-columns: minmax(0,1fr) 86px minmax(0,1fr) auto; gap: 12px; padding-left: 14px; padding-right: 14px; } }
+@media(max-width:700px) { .team-heading { flex-direction: column; align-items: flex-start; gap: 10px; }.team-heading-actions { justify-content: flex-start; }.team-people-toolbar { gap: 10px; }.team-search { width: 100%; max-width: 100%; }.team-search input { width: 100%; }.team-table-heading { display: none; }.team-member-row { grid-template-columns: minmax(0,1fr) auto; gap: 8px 12px; padding: 10px 14px; }.team-member-scope { grid-column: 1 / -1; }.team-row-actions { grid-column: 1 / -1; justify-content: flex-start; }.team-settings-panel { padding: 16px; }.team-link-notice { grid-template-columns: minmax(0,1fr); }.team-copy-row { flex-wrap: wrap; }.team-copy-row input { flex-basis: 100%; }.team-invitation-row,.team-preview-row { flex-direction: column; align-items: flex-start; gap: 10px; padding: 12px 14px; }.team-inline-notice { flex-direction: column; align-items: flex-start; } }
+/* Icon rail (901–1180px): the switcher shrinks to its avatar and opens beside the rail. */
+@media(max-width:1180px) { .app-sidebar .workspace-switcher-label,.app-sidebar .workspace-switcher-chevron { display: none; }.app-sidebar .workspace-switcher > summary,.app-sidebar .workspace-switcher-empty { display: flex; justify-content: center; min-height: 44px; padding: 0; }.app-sidebar .switcher-badge { position: absolute; top: -5px; right: -5px; }.app-sidebar .workspace-switcher-menu { top: 0; left: calc(100% + 10px); width: 260px; } }
+
+/* Membership forms stay bounded as repository counts grow. */
+.team-form-dialog { width: min(620px,calc(100vw - 24px)); max-height: calc(100dvh - 24px); }
+.team-form-dialog > h2 { padding-right: 24px; }
+.team-form-dialog .dialog-actions { position: sticky; bottom: -24px; padding: 16px 0; background: var(--surface); z-index: 2; }
+.team-form-dialog .team-form { max-width: none; }
+.team-role-choices { min-width: 0; margin-top: 4px; }
+.team-role-choices legend { font-size: .8rem; font-weight: 600; color: var(--ink-soft); margin-bottom: 10px; }
+.team-role-options { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); gap: 8px; }
+.team-role-choice { display: flex; align-items: flex-start; gap: 7px; padding: 12px 9px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); cursor: pointer; min-width: 0; margin: 0 !important; }
+.team-role-choice:has(input:checked) { border-color: var(--signal-strong); background: var(--signal-soft); }
+.team-role-choice:focus-within { outline: 2px solid var(--signal-strong); outline-offset: 2px; }
+.team-role-choice input { accent-color: var(--signal-strong); flex: 0 0 auto; margin-top: 2px; width: 13px !important; min-height: 0 !important; padding: 0 !important; }
+.team-role-choice strong { display: block; font-size: .78rem; font-weight: 650; }
+.team-role-choice small { display: block; color: var(--text-muted); font-size: .69rem; line-height: 1.45; margin-top: 4px; }
+.team-repository-choices { max-height: none; overflow: visible; min-width: 0; }
+.team-repository-toolbar { display: grid; gap: 10px; }
+.team-repository-toolbar[hidden] { display: none; }
+.team-repository-selection { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: .72rem; color: var(--text-muted); }
+.team-repository-selection > div { display: flex; gap: 12px; }
+.team-repository-selection button { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.team-repository-list { display: grid; gap: 6px; max-height: min(26dvh,240px); overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 8px; padding: 8px; min-width: 0; }
+.team-repository-choices .team-repository-option { margin: 0; padding: 9px 8px; align-items: center; min-width: 0; }
+.team-repository-option[hidden] { display: none; }
+.team-repository-option code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; font-size: .75rem; }
+.team-repository-option input { flex: 0 0 auto; margin: 0; }
+.team-repository-option .badge { flex: 0 0 auto; }
+.team-scope-button { cursor: pointer; }
+.team-scope-button:hover { border-color: var(--line-strong); color: var(--ink); }
+.team-field-error { color: var(--danger-ink); font-size: .8rem; line-height: 1.6; }
+.team-form input[aria-invalid=true] { border-color: var(--danger-ink); }
+@media(max-width:500px) { .team-form-dialog { padding: 20px; }.team-form-dialog .dialog-actions { bottom: -20px; }.team-role-options { gap: 6px; }.team-role-choice { padding: 10px 7px; flex-direction: column; }.team-role-choice small { font-size: .67rem; }}
+
+.pr-description { padding: 14px 18px 16px; min-width: 0; }
+.pr-description-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+.pr-description-heading h2 { font-size: 14px; font-weight: 650; }
+.pr-description-heading a { flex-shrink: 0; font-size: 12px; }
+.pr-description-content { max-height: 28rem; overflow: auto; color: var(--ink-soft); font-size: 13.5px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media(max-width:500px) { .pr-description { padding: 14px; }.pr-description-heading { align-items: flex-start; } }
+
+.team-form-dialog .team-form input[aria-invalid=true] { border-color: var(--danger-ink); }
+.team-form-dialog .team-form input[aria-invalid=true]:focus { outline-color: var(--danger-ink); }
+.account-identity strong { white-space: nowrap; }
+
+/* People link to their workspace profile. */
+a.team-person-link { color: inherit; text-decoration: none; }
+a.team-person-link:hover strong { text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+.team-deactivated-row .team-person strong { color: var(--ink-soft); }
+
+/* Member profile */
+.member-hero { display: flex; align-items: center; gap: 14px; }
+.member-hero .user-avatar-xl { width: 56px; height: 56px; border-radius: 14px; font-size: 22px; }
+.member-hero-text { flex: 1; min-width: 0; }
+.member-hero h1 { display: flex; align-items: center; gap: 4px; margin: 0; color: var(--ink); font-size: 22px; font-weight: 680; letter-spacing: -.025em; line-height: 1.25; overflow-wrap: anywhere; }
+.member-hero-text p { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 4px; color: var(--text-muted); font-size: 13px; }
+.member-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+.member-access-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.member-deactivated-notice { justify-content: flex-start; color: var(--ink-soft); font-size: 13px; line-height: 1.55; }
+@media(max-width:700px) { .member-hero { flex-wrap: wrap; }.member-hero .team-heading-actions { width: 100%; justify-content: flex-start; } }
+
+/* New workspace checklist */
+.setup-steps { margin: 0; padding: 0 8px 4px; list-style: none; }
+.setup-step { display: grid; grid-template-columns: 28px minmax(0,1fr) auto; align-items: center; gap: 14px; padding: 12px 10px; }
+.setup-step + .setup-step { border-top: 1px solid var(--line); }
+.setup-mark { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--text-muted); font-size: 12px; font-weight: 650; }
+.setup-mark svg { width: 14px; height: 14px; }
+.setup-step[data-done=true] .setup-mark { border-color: var(--signal-strong); background: var(--signal); color: var(--on-signal); }
+.setup-step-text strong { color: var(--ink); font-size: 13.5px; font-weight: 620; }
+.setup-step-text p { max-width: 72ch; margin-top: 2px; color: var(--text-muted); font-size: 12.5px; line-height: 1.5; }
+.setup-invited { display: grid; gap: 2px; margin: 6px 0 0; padding: 0; color: var(--text-muted); font-size: 12px; list-style: none; }
+@media(max-width:700px) { .setup-step { grid-template-columns: 28px minmax(0,1fr); }.setup-step-action { grid-column: 2; } }
+
+/* Invitations addressed to the signed-in person */
+.received-row .workspace-avatar { width: 32px; height: 32px; border-radius: 9px; font-size: 13px; }
+.team-person p.received-scope { color: var(--ink-soft); }
+
+/* Workspace deletion */
+.team-page .primary-action.danger-action { background: var(--danger-ink); color: #fff; }
+.team-page .primary-action.danger-action:hover { background: var(--danger-ink); filter: brightness(.92); }
+.team-page .primary-action.danger-action:disabled { opacity: .45; }
+.delete-alternative { margin: 4px 0 2px; padding: 10px 12px; }
+
+/* Refused actions explain themselves in a small card, not a full-width page. */
+.team-failure { max-width: 560px; }
+.team-failure-card { display: flex; align-items: flex-start; gap: 14px; }
+.team-failure-card h1 { margin: 0 0 4px; font-size: 16px; font-weight: 650; }
+.team-failure-card p { margin-bottom: 12px; color: var(--text-muted); font-size: 13px; line-height: 1.55; }
+.team-page .secondary-action.team-danger { color: var(--danger-ink); }
+.team-page .secondary-action.team-danger:hover { border-color: var(--danger-line); background: var(--danger-soft); }
+.delete-alternative .secondary-action { flex-shrink: 0; white-space: nowrap; }
+@media(max-width:700px) { .team-segmented { width: 100%; overflow-x: auto; scrollbar-width: none; }.team-segmented a { flex: 1 0 auto; justify-content: center; gap: 3px; padding: 0 5px; font-size: 11.5px; }.team-segmented .team-count { min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; } }
+
+/* PR page: the description sits under the build status; the head commit's
+   message sits with its SHA in Details. */
+.pr-description-heading a { display: inline-flex; align-items: center; gap: 4px; }
+.pr-description-heading a svg { width: 12px; height: 12px; }
+.pr-description-content { max-height: 20rem; }
+.pr-description-empty { margin: 0; color: var(--text-muted); font-size: 13px; }
+.commit-message { display: grid; gap: 4px; margin-top: 8px; min-width: 0; }
+.commit-subject { display: -webkit-box; overflow: hidden; margin: 0; color: var(--ink); font-size: 13px; font-weight: 560; line-height: 1.45; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.commit-body > summary { color: var(--text-muted); font-size: 12px; cursor: pointer; }
+.commit-body > summary:hover { color: var(--ink-soft); }
+.commit-body pre { max-height: 12rem; margin: 6px 0 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-muted); color: var(--ink-soft); font-family: var(--font-code); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.commit-meta { margin: 0; color: var(--text-muted); font-size: 12px; }
+.delete-word { padding: 1px 5px; border-radius: 5px; background: var(--danger-soft); color: var(--danger-ink); font-family: var(--font-code); font-size: 12px; font-weight: 700; letter-spacing: .04em; }

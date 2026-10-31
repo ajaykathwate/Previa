@@ -13,7 +13,7 @@ templ Error(message string) {
 			<span class="standalone-icon" aria-hidden="true">
 				@components.AlertIcon()
 			</span>
-			<span class="eyebrow">GitHub sign-in</span>
+			<span class="eyebrow">Account sign-in</span>
 			<h1 id="signin-error-title">Sign-in</h1>
 			@alert.Alert(alert.Props{Variant: alert.VariantDestructive, Class: "standalone-alert"}) {
 				@alert.Description() {
@@ -21,7 +21,7 @@ templ Error(message string) {
 				}
 			}
 			<div class="standalone-actions">
-				@button.Button(button.Props{Href: "/auth/github/login"}) {
+				@button.Button(button.Props{Href: "/auth/login"}) {
 					@components.GitHubMark()
 					Try signing in again
 				}

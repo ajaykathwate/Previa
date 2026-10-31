@@ -63,8 +63,8 @@ func (r *Repository) WithBuildSlots(slots int) *Repository {
 	return r
 }
 
-// AccountLimits share one server fairly between accounts (installation
-// owners). Zero turns a limit off.
+// AccountLimits share one server fairly between stable workspaces. Configuration
+// names keep ACCOUNT for compatibility; zero turns a limit off.
 type AccountLimits struct {
 	BuildsPerAccount int // running builds at once (BUILDS_PER_ACCOUNT)
 	MinutesPerDay    int // build minutes per UTC day (BUILD_MINUTES_PER_ACCOUNT_DAY)
@@ -84,7 +84,7 @@ func (r *Repository) WithAccountLimits(limits AccountLimits) *Repository {
 // (one with nothing building that has waited longer). A request that already
 // runs keeps its slot and never waits here.
 func (r *Repository) admissionWaitTx(ctx context.Context, q *dbgen.Queries, pullRequestID int64, now time.Time) (*WaitingError, error) {
-	if r.buildSlots <= 0 && r.accounts == (AccountLimits{}) {
+	if r.buildSlots <= 0 && r.accounts == (AccountLimits{}) && r.usage == nil {
 		return nil, nil
 	}
 	if err := q.LockBuildSlots(ctx); err != nil {
@@ -107,24 +107,24 @@ func (r *Repository) admissionWaitTx(ctx context.Context, q *dbgen.Queries, pull
 	if r.buildSlots > 0 && running >= int64(r.buildSlots) {
 		return &WaitingError{Reason: WaitCapacity}, nil
 	}
-	owner, err := q.FindPROwner(ctx, pullRequestID)
+	workspace, err := q.FindPRWorkspace(ctx, pullRequestID)
 	if err != nil {
-		return nil, fmt.Errorf("find the build's account: %w", err)
+		return nil, fmt.Errorf("find the build's workspace: %w", err)
 	}
-	if r.accounts.BuildsPerAccount > 0 {
-		mine, err := q.CountAccountRunningBuilds(ctx, dbgen.CountAccountRunningBuildsParams{PrID: pullRequestID, OwnerUserID: owner.Int64})
+	if r.usage == nil && r.accounts.BuildsPerAccount > 0 {
+		mine, err := q.CountWorkspaceRunningBuilds(ctx, dbgen.CountWorkspaceRunningBuildsParams{PrID: pullRequestID, WorkspaceID: workspace.Int64})
 		if err != nil {
-			return nil, fmt.Errorf("count the account's running builds: %w", err)
+			return nil, fmt.Errorf("count the workspace's running builds: %w", err)
 		}
 		if mine >= int64(r.accounts.BuildsPerAccount) {
 			return &WaitingError{Reason: WaitAccount}, nil
 		}
 	}
-	if r.accounts.MinutesPerDay > 0 {
+	if r.usage == nil && r.accounts.MinutesPerDay > 0 {
 		day := now.UTC()
-		used, err := q.AccountBuildSeconds(ctx, dbgen.AccountBuildSecondsParams{UserID: owner.Int64, Day: pgtype.Date{Time: day, Valid: true}})
+		used, err := q.WorkspaceBuildSeconds(ctx, dbgen.WorkspaceBuildSecondsParams{WorkspaceID: workspace.Int64, Day: pgtype.Date{Time: day, Valid: true}})
 		if err != nil {
-			return nil, fmt.Errorf("read the account's build minutes: %w", err)
+			return nil, fmt.Errorf("read the workspace's build minutes: %w", err)
 		}
 		if used >= int64(r.accounts.MinutesPerDay)*60 {
 			midnight := time.Date(day.Year(), day.Month(), day.Day()+1, 0, 0, 0, 0, time.UTC)
@@ -136,11 +136,11 @@ func (r *Repository) admissionWaitTx(ctx context.Context, q *dbgen.Queries, pull
 		if current.WaitingSince.Valid {
 			since = current.WaitingSince.Time
 		}
-		turn, err := q.OlderWaiterFromIdleAccount(ctx, dbgen.OlderWaiterFromIdleAccountParams{
-			Since: pgtype.Timestamptz{Time: since, Valid: true}, LiveAfter: pgtype.Timestamptz{Time: now.Add(-liveWait), Valid: true}, OwnerUserID: owner.Int64,
+		turn, err := q.OlderWaiterFromIdleWorkspace(ctx, dbgen.OlderWaiterFromIdleWorkspaceParams{
+			Since: pgtype.Timestamptz{Time: since, Valid: true}, LiveAfter: pgtype.Timestamptz{Time: now.Add(-liveWait), Valid: true}, WorkspaceID: workspace.Int64,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("check other accounts' turns: %w", err)
+			return nil, fmt.Errorf("check other workspaces' turns: %w", err)
 		}
 		if turn {
 			return &WaitingError{Reason: WaitCapacity}, nil
@@ -151,12 +151,19 @@ func (r *Repository) admissionWaitTx(ctx context.Context, q *dbgen.Queries, pull
 
 // markWaitingTx notes that the request waits, and reports the PR when the
 // note changed.
-func (r *Repository) markWaitingTx(ctx context.Context, tx pgx.Tx, request Request, reason string) error {
+func (r *Repository) markWaitingTx(ctx context.Context, tx pgx.Tx, request Request, reason string, until ...time.Time) error {
 	changed, err := dbgen.New(tx).MarkIntentWaiting(ctx, dbgen.MarkIntentWaitingParams{
 		PrID: request.PullRequestID, Generation: request.Generation, Revision: request.Revision, Reason: reason,
 	})
 	if err != nil {
 		return fmt.Errorf("note waiting build request: %w", err)
+	}
+	var reset *time.Time
+	if len(until) > 0 && !until[0].IsZero() {
+		reset = &until[0]
+	}
+	if _, err := tx.Exec(ctx, `UPDATE build_intents SET usage_wait_until=$3 WHERE pull_request_id=$1 AND revision=$2`, request.PullRequestID, request.Revision, reset); err != nil {
+		return fmt.Errorf("record compute reset: %w", err)
 	}
 	if err := dbgen.New(tx).TouchIntentWaiting(ctx, dbgen.TouchIntentWaitingParams{PrID: request.PullRequestID, Revision: request.Revision}); err != nil {
 		return fmt.Errorf("note a waiting build request looked again: %w", err)
@@ -169,12 +176,17 @@ func (r *Repository) markWaitingTx(ctx context.Context, tx pgx.Tx, request Reque
 
 // markWaiting notes, under the PR's lock, that an admitted or queued request
 // waits.
-func (r *Repository) markWaiting(ctx context.Context, request Request, reason string) error {
+func (r *Repository) markWaiting(ctx context.Context, request Request, reason string, until ...time.Time) error {
 	return database.InTransaction(ctx, r.pool, func(tx pgx.Tx) error {
 		if _, err := dbgen.New(tx).LockRequest(ctx, request.PullRequestID); err != nil {
 			return fmt.Errorf("lock PR to note waiting: %w", err)
 		}
-		return r.markWaitingTx(ctx, tx, request, reason)
+		if usageWait(reason) {
+			if err := r.releaseComputeSlotTx(ctx, tx, request); err != nil {
+				return err
+			}
+		}
+		return r.markWaitingTx(ctx, tx, request, reason, until...)
 	})
 }
 
@@ -195,6 +207,9 @@ func waitingReason(err error) string {
 	case "disk_low":
 		return WaitDisk
 	}
+	if usageWait(coded.FailureCode()) {
+		return coded.FailureCode()
+	}
 	return ""
 }
 
@@ -210,4 +225,70 @@ func waitDelay(job *rivertype.JobRow) time.Duration {
 		delay *= 2
 	}
 	return min(delay, 5*time.Minute)
+}
+
+// Baseline admission outcomes (docs/32-persistent-test-data.md): a repository
+// baseline refresh waits like a pull request build when every build slot is
+// taken, its workspace runs its allowance of builds, or its workspace used
+// its daily build minutes.
+const (
+	BaselineCapacityWait = "capacity_wait"
+	BaselineQuotaBlocked = "quota_blocked"
+)
+
+// AdmitBaselineTx decides, under the build-slot lock, whether a baseline
+// refresh may run now. It returns "" when it may, otherwise why it waits and,
+// for the daily allowance, until when. The caller claims the refresh in the
+// same transaction, so the slot count stays exact.
+func (r *Repository) AdmitBaselineTx(ctx context.Context, tx pgx.Tx, workspaceID, refreshID int64, now time.Time) (string, time.Time, error) {
+	if r.buildSlots <= 0 && r.accounts == (AccountLimits{}) && r.usage == nil {
+		return "", time.Time{}, nil
+	}
+	q := dbgen.New(tx)
+	if err := q.LockBuildSlots(ctx); err != nil {
+		return "", time.Time{}, fmt.Errorf("lock build slots: %w", err)
+	}
+	if r.buildSlots > 0 {
+		running, err := q.CountRunningBuildsBesidesBaseline(ctx, refreshID)
+		if err != nil {
+			return "", time.Time{}, fmt.Errorf("count running builds: %w", err)
+		}
+		if running >= int64(r.buildSlots) {
+			return BaselineCapacityWait, time.Time{}, nil
+		}
+	}
+	if r.usage == nil && r.accounts.BuildsPerAccount > 0 {
+		mine, err := q.CountWorkspaceRunningBesidesBaseline(ctx, dbgen.CountWorkspaceRunningBesidesBaselineParams{WorkspaceID: workspaceID, RefreshID: refreshID})
+		if err != nil {
+			return "", time.Time{}, fmt.Errorf("count the workspace's running builds: %w", err)
+		}
+		if mine >= int64(r.accounts.BuildsPerAccount) {
+			return BaselineCapacityWait, time.Time{}, nil
+		}
+	}
+	if r.usage == nil && r.accounts.MinutesPerDay > 0 {
+		day := now.UTC()
+		used, err := q.WorkspaceBuildSeconds(ctx, dbgen.WorkspaceBuildSecondsParams{WorkspaceID: workspaceID, Day: pgtype.Date{Time: day, Valid: true}})
+		if err != nil {
+			return "", time.Time{}, fmt.Errorf("read the workspace's build minutes: %w", err)
+		}
+		if used >= int64(r.accounts.MinutesPerDay)*60 {
+			return BaselineQuotaBlocked, time.Date(day.Year(), day.Month(), day.Day()+1, 0, 0, 0, 0, time.UTC), nil
+		}
+	}
+	return "", time.Time{}, nil
+}
+
+// RecordBaselineUsage adds a baseline refresh's execution time to its
+// workspace's daily build time.
+func (r *Repository) RecordBaselineUsage(ctx context.Context, workspaceID int64, day time.Time, seconds int64) error {
+	if workspaceID <= 0 || seconds < 0 {
+		return nil
+	}
+	if err := dbgen.New(r.pool).RecordBaselineUsage(ctx, dbgen.RecordBaselineUsageParams{
+		WorkspaceID: workspaceID, Day: pgtype.Date{Time: day.UTC(), Valid: true}, Seconds: seconds,
+	}); err != nil {
+		return fmt.Errorf("record baseline build time: %w", err)
+	}
+	return nil
 }

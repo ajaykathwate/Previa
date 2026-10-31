@@ -61,8 +61,12 @@ All three only *observe* state; none of them authorizes a build. The screens are
   authorizing/publishing a result. A later source observation or fenced API refresh
   resolves it. A close wins an equal-time open/head conflict.
 - Discovery is observational: first sightings may have generation zero. A changed
-  existing head/state advances generation and supersedes active obsolete intent;
-  it never creates automatic build intent, even in Automatic mode.
+  existing head/state advances generation and supersedes active obsolete intent.
+  Connection-time discovery never creates automatic build intent, even in
+  Automatic mode, so connecting a repository never builds its open PRs. A sync
+  someone asked for (**Sync Pull Requests**, `SyncArgs.Confirm`) and housekeeping's
+  confirmation treat a **new commit on a tracked open PR** as the push whose webhook
+  was lost: Automatic schedules it after the quiet period (never for forks).
 - Discovery never lists or stores historical closed/merged PRs. A closed webhook
   only updates an existing tracked row; an unknown closure creates no row. A
   targeted mergeability GET may close an already tracked PR without adding history.
@@ -215,3 +219,13 @@ Conflicts to Open, needs a disposable repository with write access. Steps:
    expect only the two open PRs after discovery.
 3. Create a conflicting change on the base branch; expect Conflicts and the refusal
    reason. Push a resolution; expect Checking, then Open.
+
+## Recovery when a lifecycle delivery is missed (F5)
+
+`installation_reconcile` observes GitHub outside transactions, then calls the
+same `DeliveryService.lifecycle` path used here under revision locks. Source-time
+fences, repository tombstones, `RevokeTx`, cleanup pending and sweep enqueueing
+commit together. A concurrent signed delivery wins; redelivery of an already
+applied loss does not advance teardown again. Polling only removes access.
+Installation-token creation failures enqueue suspicion without changing access
+from discovery, reporting or build code. See [35](35-installation-recovery-and-early-access.md).

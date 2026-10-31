@@ -153,3 +153,7 @@ func (p LogPage) Viewer() logviewer.Panel {
 	}
 	return v
 }
+
+func (p LogPage) PublicReferences() []components.ResourceRef {
+	return components.PRRefs(p.RepoID, p.Number)
+}

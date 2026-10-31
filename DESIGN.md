@@ -33,6 +33,10 @@ Each feature has five parts:
 17. Build log streaming and dashboard
 18. Observability
 19. End-to-end sequence diagram
+21. Shared team workspaces (approved SaaS Feature 1)
+22. Guided onboarding (approved SaaS Feature 2)
+23. Native preview review and feedback (approved SaaS Feature 3)
+24. Ready-to-test sample data (approved SaaS Feature 5)
 
 ---
 
@@ -68,10 +72,10 @@ Medium. The tables are simple, but correctness under duplicate and out-of-order 
 
 ---
 
-## 2. GitHub OAuth login
+## 2. Human authentication (GitHub and optional Google)
 
 ### Requirement
-Let a repo owner sign in to the dashboard with their GitHub identity. No separate password system. This feature establishes identity only; it grants no repo permissions.
+Let a person sign in with GitHub or optional Google, without a password system. Authentication establishes a local identity only; memberships/grants determine roles. Section30 extends the original GitHub flow with Google, explicit linking and verified-email reviewer invitations.
 
 ### Complexity
 Medium. The standard flow is well understood, but the security details (state parameter, redirect validation, token handling) are easy to get subtly wrong.
@@ -86,7 +90,7 @@ Medium. The standard flow is well understood, but the security details (state pa
 2. GitHub shows a consent screen and, on approval, redirects back to the server's callback URL with a temporary `code` and the same `state`.
 3. The callback handler compares the returned `state` with the cookie value and rejects the request on mismatch (CSRF protection).
 4. The server exchanges the `code` plus client secret for an access token by calling GitHub server to server.
-5. It calls GitHub's user endpoint with that token to fetch the numeric GitHub user ID, username and avatar.
+5. It calls GitHub's user endpoint with that token to fetch the numeric GitHub user ID, username and avatar (shown unless the member uploads their own photo).
 6. It upserts the user row keyed by the numeric GitHub ID (never by username or email, which can change).
 7. It creates a session (feature 3) and returns to the requested local page
    (including a PR's build logs); direct sign-in defaults to the dashboard.
@@ -118,6 +122,8 @@ Low to Medium. Simple in concept; security settings matter.
 4. Set both an idle timeout and an absolute lifetime.
 5. Logout asks for confirmation in a modal over the current screen; confirming
    submits a CSRF-protected POST that deletes the server-side record and clears the cookie.
+   GitHub stays signed in, so the next sign-in from that browser asks GitHub to show
+   its account picker (`prompt=select_account`), letting the person switch accounts.
 6. State-changing dashboard actions (for example "tear down now") require a CSRF token.
 
 ### Design decisions and edge cases
@@ -372,7 +378,7 @@ High. This is the security-critical feature.
 - **gVisor** raises the isolation bar substantially and is a low-cost upgrade path if kernel-level escape risk matters.
 - **Backend previews (Prompt 13):** a candidate may bring managed PostgreSQL/Redis/MySQL (its own, per build revision, with generated credentials, on a per-PR internal services network with no egress or route, data on a size-capped tmpfs), a one-off setup container and up to three processes from the same image. Readiness runs services (protocol check), setup, processes, then the app; every container carries the candidate's key and is counted, inventoried and removed with the app's artifact through the existing cleanup contract. Owner-approved outbound connections reach external databases through the egress proxy, which identifies the repository by the preview's network; forks get none. See [11-backend-previews.md](docs/11-backend-previews.md).
 - **Current implementation:** `internal/runtime` implements `environments.Runtime`: it rechecks that the request is still current and accessible, builds through `internal/builds`, rechecks again, decides secrets (`secrets.Provider`; none for forks or unknown heads), and starts a candidate on the PR's own internal network `previa-pr-<id>`, shared only with the egress proxy and, once published, the router. Candidates run as UID 65532 when the image would run as root, with a read-only root and a bounded `/tmp` tmpfs (server-wide operator opt-outs only), no capabilities, `no-new-privileges`, IPv6 disabled, clamped tier CPU/memory, a PID limit, half CPU weight, a raised OOM score, capped logs and on-failure restarts (3, then a crash loop). Outbound traffic goes only through `previa-egress` (public addresses, ports 80/443). Readiness is probed from inside the egress container (HTTP 200-399 on `health_check_path`, else TCP), within `PREVIEW_STARTUP_TIMEOUT`. Admission keeps previews within 60% of Docker memory, 75% of CPUs and 10 per repository. Inventory and removal verify ownership labels, including the PR (`RemoveResource`, used by cleanup operations: graceful stop, then force; images never forced; idle networks); `Endpoint` re-checks a candidate right before it is routed. gVisor is optional via `PREVIEW_OCI_RUNTIME`. Docker keeps at most 2 × 5 MB of output per container. See [10-preview-runtime.md](docs/10-preview-runtime.md).
-- **After publication (an addition):** the worker follows Docker's `die` events and copies a live preview's last output into its build log when its app or a process stops (once per event, workers sharing a host included); reads the router's per-preview request counters every minute for "Last opened" (counts only, never request details); and, with `PREVIEW_IDLE_SLEEP`, stops an idle preview's app and processes while the router sends visitors to a public wake page, which starts it again (services keep running, so their data survives). Previews never sleep while visit counts cannot be read. Output read after startup is redacted from the container's `io.previa.redact-env` label (names of secret variables, never values). Per-account caps (`PREVIEW_MAX_PER_ACCOUNT`) join the per-repository one. Private previews (owner setting) put the router's forward authentication in front of a repository's previews: visitors sign in with GitHub and must be able to see the repository ([12-routing-and-https.md](docs/12-routing-and-https.md#private-previews)).
+- **After publication (an addition):** the worker follows Docker's `die` events and copies a live preview's last output into its build log when its app or a process stops (once per event, workers sharing a host included); reads the router's per-preview request counters every minute for "Last opened" (counts only, never request details); and, with `PREVIEW_IDLE_SLEEP`, stops an idle preview's app and processes while the router sends visitors to a public wake page, which starts it again (services keep running, so their data survives). Previews never sleep while visit counts cannot be read. Output read after startup is redacted from the container's `io.previa.redact-env` label (names of secret variables, never values). Per-account caps (`PREVIEW_MAX_PER_ACCOUNT`) join the per-repository one. Private previews (owner setting) put the router's forward authentication in front of a repository's previews: visitors sign in with GitHub or configured Google and need an active local repository grant; the existing GitHub-reader outsider fallback still requires a connected GitHub account ([12-routing-and-https.md](docs/12-routing-and-https.md#private-previews)).
 
 ---
 
@@ -540,7 +546,7 @@ High. Reconciliation logic is subtle, and getting it wrong can delete live envir
 - **Disk exhaustion is the most likely real outage;** a build short of disk waits and triggers an emergency prune. Metrics and alerts are Prompt 11.
 - **Current implementation:** `internal/housekeeping` (recovery, resources, PR reconciliation, expiry, prune, River jobs) with capacity in `internal/environments` (build slots, waiting), `internal/runtime` (admission lock, headroom) and `internal/builds` (disk check, caches), migration 0016. The worker registers housekeeping with builds and applies build slots and preview headroom at admission. See [15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md).
 - **Retention of records (an addition):** an hourly job deletes webhook delivery records and finished operations after 30 days (keeping route operations that protect a live preview and failed cleanups), daily build-minute ledgers after 90 days, and closed or merged pull requests with everything recorded about them 90 days after closing, once their teardown finished and nothing is pending. Backups keep deleted rows until they expire. See [15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md#retention-of-records).
-- **Fair sharing (an addition):** optional per-account limits on running builds, daily build minutes and previews; waiting builds take turns by account, and a finished build wakes the next in turn. See [17-build-scheduling.md](docs/17-build-scheduling.md#fair-sharing-between-accounts).
+- **Fair sharing:** finite workspace limits on running builds, allowance minutes and previews, with additional operator ceilings; waiting builds take turns by workspace, and a finished build wakes the next in turn. See [17-build-scheduling.md](docs/17-build-scheduling.md#fair-sharing-between-accounts) and [33-usage-and-free-plan.md](docs/33-usage-and-free-plan.md).
 
 ---
 
@@ -556,8 +562,8 @@ High. Security-sensitive with subtle leakage paths.
 - AES-GCM (Go standard library) or `age` for encryption at rest; key supplied through server environment.
 
 ### Technical implementation
-1. The repo owner adds key/value pairs in the dashboard; the server encrypts each value with a unique nonce before storing it, keyed by repo.
-2. Values are never shown again after saving (write-only in the UI; only key names are listed).
+1. Repository Owners and Admins keep one `.env` file per repository in the dashboard; the server encrypts the file and each value it sets with a unique nonce before storing them, keyed by repo.
+2. Values are hidden by default (names, comments and order are shown with every value masked); **Show values and edit** opens the whole file to Owners and Admins only. *(Owner decision, 2026-10-23: replaces the earlier write-only, per-name editor; see below.)*
 3. At container start, the worker decrypts the values in memory and injects them as environment variables.
 4. The log pipeline redacts any string matching a known secret value before storing build or runtime output.
 5. **Fork PR policy:** secrets are never injected for PRs from forks, because fork authors control the code. The same rule withholds owner-approved outbound connections (Prompt 13).
@@ -569,7 +575,7 @@ High. Security-sensitive with subtle leakage paths.
 - **Build-time vs run-time:** secrets are runtime by default; build-time use only through BuildKit secret mounts.
 - **Build permission:** migration 0028 defaults every secret's build permission to false. Owners allow or stop build use through a CSRF-protected modal flow; `Provider.ForBuild` decrypts only allowed secrets for verified same-repository heads, and the runtime rechecks trust before execution. `REGISTRY_AUTH` is reserved for pull authentication and excluded from Dockerfile mounts and runtime injection. Build output and returned failures redact credential values.
 - **Blast radius:** a preview-only credential (for example, a sandbox API key) should be recommended in docs; previews are not the place for production keys.
-- **Current implementation:** `internal/secrets` stores values as AES-256-GCM ciphertext with random nonces, authenticating repository, name and key version. Keys come from `SECRETS_ENCRYPTION_KEYS`/`SECRETS_ACTIVE_KEY_VERSION`; rotation uses an explicit, repeatable `make secrets-reencrypt` (not lazy re-encryption) and keeps old keys until it reports zero. Owners manage values on a repository Secrets tab (write-only, CSRF): several lines or pasted `.env` text are saved in one transaction, all or nothing, and deletion confirms in a modal for one name or the selected ones. At container creation the worker calls `Provider.ForContainer`: untrusted sources (forks, unknown heads) decrypt nothing; for trusted sources a stored secret overrides a same-named YAML entry. `Redactor` streams exact-value redaction across write boundaries; its limits are documented. The preview runtime injects them after a fresh access recheck. The worker's keyring is optional: without it, repositories without secrets build normally and a repository with secrets fails closed (`secrets_unavailable`). See [07-repository-secrets.md](docs/07-repository-secrets.md).
+- **Current implementation:** `internal/secrets` stores values as AES-256-GCM ciphertext with random nonces, authenticating repository, name and key version. Keys come from `SECRETS_ENCRYPTION_KEYS`/`SECRETS_ACTIVE_KEY_VERSION`; rotation uses an explicit, repeatable `make secrets-reencrypt` (not lazy re-encryption) and keeps old keys until it reports zero. Owners and Admins manage one `.env` file on the repository's Secrets tab (CSRF-protected): it is stored encrypted with comments and order kept (`repository_env_files`, migration 47, authenticated as the repository's `.env`), shown with values masked until **Show values and edit**, and saved as a whole. Each save makes `env_secrets` exactly the names the file sets, in the same transaction, so injection, build opt-ins, redaction and rotation keep reading per-name rows; a save that removes names confirms them in a modal, a stale editor is refused, and a name left empty (`NAME=`) stays in the file but is not set. **Deviation (owner decision, 2026-10-23):** values are viewable by Owners and Admins in the editor instead of write-only, because managing a large environment as one file was preferred over per-name entry. At container creation the worker calls `Provider.ForContainer`: untrusted sources (forks, unknown heads) decrypt nothing; for trusted sources a stored secret overrides a same-named YAML entry. `Redactor` streams exact-value redaction across write boundaries; its limits are documented. The preview runtime injects them after a fresh access recheck. The worker's keyring is optional: without it, repositories without secrets build normally and a repository with secrets fails closed (`secrets_unavailable`). See [07-repository-secrets.md](docs/07-repository-secrets.md).
 
 ---
 
@@ -589,7 +595,7 @@ Medium.
 2. The logs page loads existing lines, then opens an SSE stream that pushes new lines as they arrive. Use `internal/platform/realtime`: the hub wakes the stream on a log notification and `realtime.SSE` frames lines whose ids are log sequence numbers.
 3. A reconnecting client resumes from the last sequence number it received, so nothing is duplicated or lost.
 4. The workspace has separate Overview, Repositories, Builds and Previews pages. Overview summarizes real state; Repositories uses ownership-scoped database pagination (10 records), search and Available/Unavailable/All access tabs (Available by default). Environments shows each preview's status, URL, deployed commit SHA (marked when earlier than the latest), expiry and a **Tear down** action confirmed in a modal; it shows the expiry rather than the age, because expiry is what an owner acts on. Builds shows queued and running work with latest and requested SHAs, wait and failure reasons and log links. Overview places the owner's open pull requests along the delivery pipeline (waiting, building, live, failed) with their shares and preview coverage, lists the newest build requests and previews (rows expand to their details) and shows which pipeline stages a running worker provides. Developer tools has its own local diagnostic page. An FAQ page, and the home page's How it works and FAQ sections, explain Previa as a conversation with it: static copy kept true to the current release, with examples labelled as examples.
-5. Dashboard actions check both authentication and ownership: a user can only see and act on environments in installations they own.
+5. Dashboard actions check active workspace membership and repository grants. Owner/Admins span their workspace; Developers operate granted repositories with current GitHub source permission; Reviewers use the permitted preview directory. The original installer is provenance, not an authorization bypass. See Section 21.
 6. Log retention has a size and age cap; old logs are pruned.
 7. Build log viewers share a presentation component (`web/components/logviewer`):
    full inline copyable timestamps, source colors and owner-scoped source/literal
@@ -660,28 +666,41 @@ Make the system operable: know what it is doing, how it fails, and when it is ab
 Medium.
 
 ### Tech stack (feature-specific)
-- `slog` structured logs, Prometheus metrics, Grafana dashboards, optional OpenTelemetry tracing.
+- `slog` structured logs; Sentry (free plan) for errors, warning/error logs, an uptime monitor and the backup's cron monitor, with email alerts; Prometheus metrics on internal listeners; Prometheus and Grafana as an optional Compose profile; optional OpenTelemetry tracing.
 
 ### Technical implementation
 1. Structured logs everywhere, carrying correlation fields: delivery ID, repo, PR number, environment ID, job ID, commit SHA.
 2. Metrics: webhook deliveries by type and outcome, queue depth and wait time, build duration and outcome, active environments, container starts and failures, GitHub API errors and rate-limit headroom, disk usage.
 3. Dashboards for the health of the pipeline (webhook to running preview latency is the headline number).
 4. Alerts on: queue wait beyond a threshold, failure rate spike, disk above threshold, GitHub rate limit nearly exhausted, reconciler deleting unexpectedly many resources.
-5. Optional tracing follows one PR event from webhook through queue, build and comment.
+5. Production alerting that needs no server of its own: every error-level record reaches Sentry as an issue (emailed when new or returning), Sentry checks the dashboard from outside, and the nightly backup checks in with a Sentry cron monitor.
+6. Optional tracing follows one PR event from webhook through queue, build and comment.
 
 ### Design decisions and edge cases
 - **Correlation IDs** turn a scattered incident into one searchable story.
-- **Never log secrets or tokens;** redaction happens at the logging layer.
+- **Never log secrets or tokens;** redaction happens at the logging layer, before
+  any record reaches Sentry. A preview app's own output never goes to Sentry.
+- **Why Sentry rather than Prometheus and Grafana in production:** on an 8 GB
+  server the two take up to 1.5 GiB and their alerts reach nobody without an
+  Alertmanager and a receiver; Sentry's free plan runs outside the server, so it
+  also reports a dead host, and needs nothing installed. The Prometheus metrics,
+  the 27 alert rules and the Grafana dashboard stay as the optional
+  `observability` profile for when history graphs are needed.
 - **Current implementation:** `internal/platform/logging` (JSON at `LOG_LEVEL`,
   correlation fields from request, webhook and job contexts, redaction by key and
   by credential shape), `internal/platform/metrics` (bounded labels; durable state
   exported by the server at scrape time), River job middleware in
   `internal/platform/queue`, and `/livez`, `/readyz` and `/metrics` on an internal
-  listener per process (`internal/platform/httpx`). The headline number is
+  listener per process (`internal/platform/httpx`). `internal/platform/errortracking`
+  sends the server's and worker's redacted warnings and errors to Sentry when
+  `SENTRY_DSN` is set (`check-config` validates it; `previa-server sentry-test`
+  proves delivery), and `deploy/production/backup.sh` checks in with Sentry's cron
+  monitor. The headline number is
   `previa_request_to_preview_seconds`, measured from a request becoming eligible
   (after Automatic's quiet period) to its preview serving. `deploy/observability`
-  holds the Prometheus configuration, 24 alert rules with promtool tests and a
-  provisioned Grafana dashboard. Tracing stays optional and is not built. See
+  holds the Prometheus configuration, 27 alert rules with promtool tests and a
+  provisioned Grafana dashboard, run only by the optional Compose profile. Tracing
+  stays optional and is not built. See
   [23-observability-and-hardening.md](docs/23-observability-and-hardening.md) and
   [24-incident-runbook.md](docs/24-incident-runbook.md).
 
@@ -851,15 +870,49 @@ preview/
 │   └── egress/main.go              # previa-egress: proxy and prober, in its own container
 │
 ├── internal/
+│   ├── earlyaccess/                # FEATURE: operator workspace approval and audit
+│   ├── workspaces/                 # FEATURE: shared teams, grants, invitations, handover
+│   │   ├── handler.go  middleware.go  repository.go  service.go
+│   │   ├── membership.go  invitations.go  pages.go  queries.sql
+│   │   ├── profile.go  profile_handler.go  invitation_handler.go
+│   │   ├── lifecycle.go            # activity, member profiles, re-invite, received invitations, delete
+│   │   └── dbgen/
+│   │
+│   ├── onboarding/                 # FEATURE: the repository Setup tab (first-preview checklist)
+│   │   ├── handler.go  service.go  steps.go   # routes, page state, check requests, opens
+│   │   ├── checks.go  github.go  result.go    # bounded preflight of one commit
+│   │   ├── jobs.go                 # setup check worker (claim, read GitHub, fenced result)
+│   │   └── queries.sql  dbgen/
+│   │
+│   ├── reviews/                    # FEATURE: a pull request's review page, instructions and findings
+│   │   ├── handler.go              # page and no-JS forms; drafts shown again on errors/conflicts
+│   │   ├── service.go  writes.go   # page state; locked, revisioned, deduplicated writes
+│   │   ├── limits.go  errors.go    # content limits and validation; refusals the handler shows
+│   │   ├── testaccess.go           # sealed test access: save, reveal, key rotation store
+│   │   └── queries.sql  dbgen/
+│   │
+│   ├── activity/                   # FEATURE: bounded timeline events (recorder + retention job)
+│   │   ├── recorder.go  prune.go
+│   │   └── queries.sql  dbgen/
+│   │
+│   ├── sampledata/                 # FEATURE: persistent test data (Test data tab, baselines)
+│   │   ├── handler.go  service.go  # tab, settings, Refresh/Delete/Turn off, refresh logs
+│   │   ├── store.go  storage.go    # settings, refresh requests, baselines; encrypted dump files
+│   │   ├── runner.go  github.go    # worker refresh: claim, admit, branch head, build, fence
+│   │   ├── jobs.go                 # refresh job, dispatcher, daily freshness, cleanup
+│   │   └── queries.sql  dbgen/
 │   ├── app/                        # composition root: builds and wires everything
 │   │   ├── server.go               # creates features, mounts routes, starts HTTP
 │   │   ├── worker.go               # starts River, the capability heartbeat, draining
 │   │   ├── pipeline.go             # composes the worker pipeline from validated dependencies
 │   │   ├── observe.go              # scrape-time state gauges from the features' counts
-│   │   └── migrate.go              # embedded Goose and River migrations (cmd/migrate)
+│   │   ├── migrate.go              # embedded Goose and River migrations (cmd/migrate)
+│   │   └── testdata/               # E2E fixtures: backend/ and reference/ (docs/31 journeys)
 │   │
-│   ├── auth/                       # FEATURE: GitHub OAuth login + sessions
+│   ├── auth/                       # FEATURE: GitHub/Google sign-in, linking + sessions
 │   │   ├── handler.go              # login, callback, logout (the "controller")
+│   │   ├── profile_handler.go      # own profile page, in-place name saves, photo upload/serve
+│   │   ├── avatar.go               # profile photo validation, crop/scale and storage
 │   │   ├── routes.go               # Mount(r chi.Router): this feature's URLs
 │   │   ├── service.go              # login logic: verify state, upsert user
 │   │   ├── repository.go           # wraps generated queries for users/sessions
@@ -895,6 +948,24 @@ preview/
 │   │   ├── handler.go  repository.go  queries.sql  dbgen/
 │   │   ├── actions.go              # owner actions: Build/Retry/Rebuild, teardown
 │   │   ├── observation.go  github.go  sync.go
+│   │   ├── commits.go              # cached head-commit message for the PR page
+│   │
+│   ├── usage/                      # FEATURE: finite workspace plans and execution ledger
+│   │   ├── handler.go  overview.go # authorized Usage screen and snapshot
+│   │   ├── repository.go          # transactional entitlement, allowance and slot gates
+│   │   ├── execution.go           # bounded reservations, renewal, idempotent settlement
+│   │   ├── reconcile.go  jobs.go   # expired reservation recovery (River, every minute)
+│   │   └── accounting_test.go     # execution, races, boundaries and recovery tests
+│   │
+│   ├── earlyaccess/           # Workspace approval and operator admission
+│   ├── accounts/                   # FEATURE: durable disconnect/deletion coordination
+│   │   ├── handler.go repository.go # account controls, authorized catalog reads
+│   │   ├── service.go disconnect.go deletion.go # scope locks, fences, child operations
+│   │   └── jobs.go journal.go      # retry/erasure, bounded independent restore journal
+│   │
+│   ├── support/                    # FEATURE: requests, operator audit, status and policies
+│   │   ├── handler.go service.go   # native forms, operator authorization and retention
+│   │   └── status.go               # real dependency observations and public incidents
 │   │
 │   ├── repoconfig/                 # FEATURE: .previewrc.yaml parse + validate
 │   │   ├── config.go               # typed struct + defaults
@@ -922,6 +993,8 @@ preview/
 │   │   ├── endpoint.go  cleanup.go # pre-publication check; owner-verified cleanup executor
 │   │   ├── crashes.go              # stops of live previews -> build log; following app output
 │   │   ├── sleep.go                # stop and start an idle preview's app and processes
+│   │   ├── data.go                 # starting data: kept -> baseline -> empty, with fallbacks
+│   │   ├── baseline.go             # baseline builds: services, setup, seed, capture; no app
 │   │
 │   ├── routing/                    # FEATURE: hostnames, route controller, Traefik
 │   │   ├── hostname.go             # stable DNS-safe labels per lifetime environment
@@ -996,8 +1069,9 @@ preview/
 │       ├── dockerx/                # Docker client construction, shared labels
 │       ├── egress/                 # egress proxy, build metering, readiness probe, its container
 │       ├── textlines/              # control-sequence stripping and bounded line splitting
-│       ├── httpx/                  # router, ingress controls, security headers, internal listener
+│       ├── httpx/                  # router, ingress controls, security headers, in-place form results, internal listener
 │       ├── logging/                # slog setup, correlation, secret redaction
+│       ├── errortracking/          # redacted warnings and errors to Sentry
 │       ├── metrics/                # Prometheus registry + bounded shared metrics
 │       └── version/                # release identity for logs, readiness and metrics
 │
@@ -1016,6 +1090,11 @@ preview/
 │   │   ├── dashboard/              # overview, session, developer tools
 │   │   ├── repositories/           # paginated, filtered repository page
 │   │   ├── pullrequests/           # repository/PR detail and shared current activity
+│   │   ├── onboarding/             # a repository's Setup tab
+│   │   ├── reviews/                # a pull request's review page (instructions, findings)
+│   │   ├── sampledata/             # a repository's Test data tab, baseline refresh logs
+│   │   ├── accounts/               # local connections, exit controls and progress
+│   │   ├── support/                # Help, operator console, status and policy pages
 │   │   ├── builds/                 # Builds page, current-attempt build log page
 │   │   ├── appoutput/              # live app output page
 │   │   ├── idle/                   # "Waking the preview…" page (public)
@@ -1174,3 +1253,666 @@ the server records work and the worker executes it.
 - One `platform/` package holding cross-cutting infrastructure mirrors what teams call "shared kernel" or "common".
 
 Start with a smaller version: create `auth`, `environments`, `platform` and `dashboard` first, and add the other folders as you reach each feature. The names above are the ones to grow into.
+
+
+## 21. Shared team workspaces
+
+### Requirement
+
+Implement approved Feature 1 of `README-MVP-PRODUCT-EXPANSION.md`: shared teams,
+explicit roles/grants, invitation consent and handover. Connections, serving
+previews, stable URLs and consumption belong to a workspace across staff changes.
+Native review and account deletion remain later features; their controls are
+omitted from workspace settings until implemented.
+
+### Complexity
+
+High. Tenant isolation must cover every existing resource path and asynchronous
+execution boundary; navigation alone cannot provide access control.
+
+### Tech stack (feature-specific)
+
+Existing Go, PostgreSQL/pgx/sqlc, Goose, SCS, templ/HTMX and theme tokens. No new
+application library. GitHub numeric identities and App permission reads establish
+human source authority. Shared modal components provide accessible confirmation.
+
+### Technical implementation
+
+- `internal/workspaces` owns team handlers/services/repository queries in flat
+  files. Resource features keep their queries and call invoker-security SQL
+  predicates. Consumer-defined runtime/source interfaces are wired in `internal/app`.
+- Migration 0030 backfills one workspace per installer with connections and leaves
+  resource IDs unchanged. `installations.workspace_id` is ownership;
+  `owner_user_id` is provenance. A deferred constraint and unique index enforce
+  exactly one active Owner. Relational grants cannot cross workspace boundaries.
+- A session remembers selected navigation; an explicit switch saves a default.
+  Resource URLs derive and authorize their actual workspace before display.
+  `internal/platform/scope` carries selection without becoming authorization.
+  Shared shell display data flows through `web/components`; presentation imports
+  no backend features. Team pages use database pagination.
+- One workspace is one team; people may belong to multiple workspaces. Members
+  and Workspace settings are separate sidebar destinations. Member/invitation
+  lists have literal username search and database pagination. Previews uses its
+  existing route and scoped query, with a read-only Reviewer presentation; legacy
+  workspace preview URLs redirect there after membership checks.
+- Migration 0031 adds a description and independent profile revision, plus a
+  separate small logo table. Owner/Admin profile mutations serialize on the
+  workspace row and reject stale profile forms without changing authorization
+  revisions or cancelling work. PNG/JPEG uploads are capped at 192 KiB and
+  512 × 512, decoded and re-encoded as PNG to remove metadata. Logos are served
+  only to active members through an authenticated, uncached same-origin endpoint.
+  No asset service, image library or external logo URL is required.
+- Migration 0032 separates editable member first/last names from cached GitHub
+  metadata; verified primary email is visible only on the member's own profile.
+  OAuth requests only `user:email` and discards the token after fetching details.
+  Name edits use a separate revision and never change membership authorization.
+- Migration 0034 stores PR descriptions with independently ordered metadata edits:
+  a description-only edit does not advance code generation or schedule a build.
+  The detail page safely escapes the original text. Current build revisions keep
+  their admitted River job address and a safe execution error category. Retry,
+  failed finalization and recovery of abandoned terminal jobs update that exact
+  revision, clear stale progress, preserve serving previews and trigger the
+  existing realtime/report paths. Raw worker errors remain in operator logs.
+- Migration 0033 gives user-facing resources persisted random UUID addresses while
+  retaining bigint relational keys and worker payloads. `platform/publicid`
+  resolves addresses before feature-owned authorization and batches authorized
+  display references. Presentation formats from supplied data only. PR UUIDs are
+  bound to their repository; old numeric HTML bookmarks redirect after access
+  checks, while numeric mutations/streams/downloads are rejected. GitHub PR
+  numbers remain labels and upstream protocol IDs remain upstream identifiers.
+- Member access tables summarize grants with two chips and an overflow action.
+  Access/invitation dialogs use role radio cards, a bounded searchable repository
+  picker, selection counts and filtered bulk actions. Invitation validation keeps
+  form context and identifies invalid/missing accounts, existing membership,
+  pending invitations and GitHub outages at the username field.
+- Migration 0035 lets members replace their GitHub picture with an uploaded photo
+  (separate `user_avatars` row; `users.avatar_version` only grows so every upload
+  gets a new cacheable address). PNG/JPEG uploads (192 KiB, 2048 × 2048 max) are
+  centre-cropped, area-averaged down to 256 × 256 and re-encoded as PNG using only
+  the standard library; the browser shrinks large photos first. Photos are served
+  at `/avatars/{member UUID}` to the member and current teammates only — auth asks
+  workspaces through a consumer-defined `SharesWorkspace` interface — with a
+  private one-hour cache and ETag. GitHub pictures load directly from
+  `https://avatars.githubusercontent.com`, the CSP's only external image origin,
+  without a referrer; a failed image falls back to the initial.
+- Migration 0036: removal stays a soft delete (`state='removed'`) and now records
+  `removed_by` and the repositories held, so managers see a Deactivated list and a
+  re-invitation preselects previous access; acceptance reactivates the same row.
+  Invitations stay addressed to an immutable GitHub ID, which also lets a signed-in
+  person answer from Previa (Invitations for you, switcher badge) without the link
+  token; the same creator/expiry/identity checks apply. Member activity is derived
+  from existing records (manual build requests, memberships, invitations,
+  removals) — no audit table — and filtered by the viewer's repository access and
+  manager role. Workspace deletion is a soft delete limited to a sole owner with no
+  connected installation, because preview teardown follows installation lifecycle
+  events; DESIGN's account deletion remains a later feature.
+- Migration 0037 caches the PR head commit's message/author per head SHA: the PR
+  page fetches it once (2.5 s cap, retried after 10 minutes on failure) because
+  GitHub's pull request payloads omit it. The description sits under the build
+  status; the commit message sits with the SHA in Details.
+- App pages share one compact heading (`components.PageTitle`): the title plus an
+  info tooltip holding the page's explanation (hover/focus, Escape dismisses).
+  "Create workspace" is a shell-level dialog that never navigates until submit;
+  menus and dialogs close before navigation so view transitions show no overlay.
+- Profile and workspace settings use compact side-by-side cards of label/value
+  rows edited in place: Enter/✓ saves, Esc/✕ restores, leaving a changed field
+  saves, and a small toast confirms (errors stay inline). Enhanced saves send
+  `Accept: application/json` and receive the new revision and saved values; the
+  same forms still post and redirect without JavaScript.
+- Invitations store token digests and immutable intended GitHub IDs, have seven-day
+  expiry, exact scope consent, revoke/regenerate, decline and idempotent accept.
+  Acceptance cannot replace existing active membership. Removed inviters lose
+  their pending invitation authority. Logging redacts invite paths.
+- Membership changes lock workspace, installations in ID order and affected PRs.
+  Existing protected mutation paths repeat authorization after compatible locks.
+  Manual intents capture workspace and membership/grant stamps; stale work is
+  cancelled, generation-fenced and cleaned up while serving previews remain.
+  This includes finished builds whose candidate has not passed the route fence.
+  Accepted routes belong to the workspace, so departure preserves their recovery
+  and final accounting; unaccepted candidates release their resource references.
+  Workers verify manual actors' current GitHub permission at admission/runtime
+  boundaries. Source permissions are verified outside database transactions.
+- Cookies/tokens for private previews recheck current database grants on every
+  request. SSE checks access before subsequent frames and heartbeats. Reviewer
+  navigation contains granted previews without operational logs/actions; on
+  repository paths Reviewers reach only a pull request's review page and its forms,
+  the repository's change stream and Open preview (§23).
+- Quotas and fairness use workspace IDs and a workspace usage ledger. Container
+  labels identify workspace; legacy labels resolve through PR identity. Captured
+  attempt consumption survives ownership transfer and running cancellation.
+
+### Design decisions and edge cases
+
+Only Owners appoint/demote Admins. Admins manage Developers/Reviewers. The Owner
+cannot leave until a nominated Admin accepts an atomic handover. Stale forms and
+concurrent acceptance fail safely. Saving unchanged access does not cancel work.
+GitHub outages block source-sensitive actions while local preview reads remain.
+Administrators retain credential/approval cleanup even when source access is lost.
+Removed local members cannot use GitHub outsider access to bypass offboarding.
+
+Migration 0030 requires a coordinated old-server/worker stop and new-binary
+restart; it is an explicit exception to the ordinary rolling schema compatibility
+assumption. A solo rollback preserves usage; rollback after team data exists
+refuses data loss. Detailed flows, permissions and upgrade steps:
+[28-shared-workspaces.md](docs/28-shared-workspaces.md) and
+[02-development-setup.md](docs/02-development-setup.md#shared-workspace-cutover).
+
+## 22. Guided onboarding
+
+### Requirement
+
+Implement approved Feature 2 of `README-MVP-PRODUCT-EXPANSION.md`: a short,
+repository-specific path from a connected repository to a usable preview someone
+opened, for one open pull request, with setup checks for that exact commit. It must
+not generate code, detect frameworks, enable Automatic builds or build anything by
+itself, and an already-working repository must not need a wizard.
+
+### Complexity
+
+Medium. The checks must be honest about what static reads can prove, never let a
+stale or delayed result claim the current commit is ready, and stay cheap against
+GitHub's rate limit; every step must be derived from current records.
+
+### Tech stack (feature-specific)
+
+Existing Go, PostgreSQL/pgx/sqlc, Goose, River, go-github, templ/HTMX and the
+realtime hub. `repoconfig.ParseFor` (the build's parser) and
+`source.SubmodulesInContext` (the build's submodule rule) are reused; no new library.
+
+### Technical implementation
+
+- `internal/onboarding` owns the Setup tab (`GET /repositories/{id}/setup`), check
+  requests (`POST …/setup/check`) and the Open preview action
+  (`GET …/pull-requests/{pr}/open`). Presentation is `web/pages/onboarding`.
+- Five steps (connect, check the configuration, review what the app needs, publish,
+  open from Previa) are derived on every view by pure functions over current
+  records; a step after an unfinished one waits. A head commit that already built
+  counts as checked.
+- Migration 0038 stores only what cannot be derived: the latest check per pull
+  request (request revision, head SHA and generation, state, failure code, and the
+  last completed result with its time, expiry and platform fingerprint),
+  `preview_opens`, and a per-workspace hourly check allowance. Triggers on the first
+  two notify the repository's realtime topic.
+- A request records the check and a `repository_setup_check` River job in one
+  transaction, once per commit (20 s cooldown, 60 per workspace and hour). Any worker
+  with the GitHub App runs it: claim under lock, read GitHub outside transactions
+  (repository by immutable ID, `.previewrc.yaml`, the Dockerfile inside its context,
+  the root `.gitmodules`, all size-bounded), then record the result only if the
+  revision, head, generation, open state and access are unchanged.
+- Results are validated against the services and build deadline the running build
+  workers advertise (Previa's default catalog when none runs), as Starter kits do;
+  a fingerprint of that platform and the check rules invalidates older results.
+  They keep only names, paths, numbers and parser messages, never config values.
+- Building uses the existing PR Build action with `return=setup`; refusals return to
+  the checklist with a fixed notice code. The tab offers Build only after a passing
+  check of the head commit; the PR page is unchanged.
+- Open preview actions for people who can build go through the recording route,
+  which redirects with `Referrer-Policy: no-referrer` and records only navigations
+  started on Previa. The review page uses it for everyone, with an optional
+  validated `path` inside the preview; Reviewers keep direct links on Previews.
+- The Overview's checklist is role-aware and links to the Setup tab where setup
+  continues; accepted invitations land Reviewers on Previews and others on the
+  Overview, in the joined workspace.
+
+### Design decisions and edge cases
+
+Static checks label runtime facts *Checked during the build*; a passing check never
+claims the image compiles. A failed attempt (rate limit, outage, lost access) keeps
+the last completed result for reference but never counts as current success. A push
+while checking, a closed pull request or revoked access discards the result. A check
+nobody picks up turns stale after two minutes. Developers who cannot manage secrets
+see whom to ask instead of an editor. Hosted pages never show operator settings.
+After the first preview is open, the next step is the pull request's review page;
+asking specific people to review is labelled as not available (Feature 4). The checks are per
+pull request rather than per repository, and building acknowledges the app's
+prerequisites (no stored boolean). Details: [29-guided-onboarding.md](docs/29-guided-onboarding.md).
+
+## 23. Native preview review and feedback
+
+### Requirement
+
+Implement approved Feature 3 of `README-MVP-PRODUCT-EXPANSION.md`, with the
+publication references and activity hooks of delivery step B: one review page per
+pull request where people who can build write testing instructions and every member
+with preview access records findings, discusses them and resolves them, entirely in
+Previa. Findings keep the deployment they were recorded against; Reviewers never
+need source access, logs or build controls.
+
+### Complexity
+
+High. Authorization spans three roles and moderation; every write must survive
+double submission, concurrent edits, a deployment published mid-draft, member
+removal and pull request closure; drafts must survive validation errors and live
+refreshes; all of it works without JavaScript.
+
+### Tech stack (feature-specific)
+
+Existing Go, PostgreSQL/pgx/sqlc, Goose, River, templ/HTMX and the realtime hub. No
+new library.
+
+### Technical implementation
+
+- **Publications (step B).** Migration 0039 adds `preview_publications`: written in
+  `environments.activateTx`, the transaction that makes a candidate the serving
+  preview, never at build completion. One row per (pull request, generation,
+  revision), numbered per pull request ("Deployment 3"), with SHA, candidate, the
+  effective configuration hash (threaded from the build into
+  `preview_components.config_hash`) and activation time. A retried activation
+  records nothing; a same-commit Rebuild is a new revision, so a new publication.
+  Live previews at migration are backfilled with their deployed fence and labelled
+  *Present at migration*. Rows are references; nothing runnable is retained.
+- **Activity (step B).** `internal/activity` owns `activity_events` (workspace,
+  repository, pull request, publication, actor or system, kind, visibility, small
+  safe metadata, dedup key) and `activity_pruned`. Features record through their
+  own small interfaces, adapted in `internal/app`, inside their own transactions:
+  publications (`preview.published`), instructions and every finding change. An
+  hourly River job keeps 90 days and the newest 5,000 events per pull request and
+  moves a pruned-history marker. The timeline view is Feature 4.
+- **Reviews.** `internal/reviews` owns `pr_review_instructions` (revisioned, one per
+  pull request), `preview_feedback_threads` (per-PR number, recorded publication,
+  state open/resolved/removed with revision, resolver's live publication, moderation
+  reason, idempotency key), `preview_feedback_messages` (position, author,
+  publication, text, page path and reproduction details on the opening message,
+  revision, edit and removal metadata), `pr_review_counters` and
+  `review_write_budgets`. Composite foreign keys keep messages and publications
+  inside their pull request; everything cascades with the pull request.
+- Writes lock in one order — the pull request (key share, as references do), the
+  writer's active membership (share, so a removal waits and is seen by later
+  writes), then the per-PR counters — check access in SQL
+  (`workspace_repository_access`: preview for feedback, operate for instructions,
+  moderation and resolving others' findings), compare revisions, enforce limits, and
+  record the event in the same transaction. No GitHub call is involved.
+- A new finding names the deployment the page showed. If a newer one was published
+  meanwhile the form returns a conflict with the draft; the person records it
+  against the newest or keeps the tested one on purpose. Replies record what was
+  shown; resolving records the deployment only while the preview serves it.
+- Routes live under `/repositories/{id}/pull-requests/{n}/review`: the page and
+  POST forms for instructions, findings, replies, edits, removals (own, or
+  moderation with a reason), finding removal, resolve and reopen. Success redirects
+  back with a toast; problems render the page again (422/409/429) with the draft.
+  The workspace guard lets Reviewers reach only these paths, the repository's
+  change stream and Open preview, and treats review writes as preview access.
+- Presentation is `web/pages/reviews` plus `components.PullRequestTabs` (Preview |
+  Review) for people who can build. Triggers on the review tables notify the
+  repository topic; `ui.js` keeps unsent drafts (with their deployment and revision)
+  across live refreshes and waits while someone types.
+- GitHub's living comment gains a link-only *Review in Previa* line; no review text,
+  status, counts or people are projected (the sharing policy is delivery step E).
+
+### Design decisions and edge cases
+
+One page instead of Review/Feedback/Activity tabs keeps instructions, the deployment
+and findings side by side. Removal erases text (tombstones keep who and why);
+removing an unanswered opening message removes the finding. A removed member's
+words stay attributed as a former member. Closed or merged pull requests are
+read-only except removal. Limits: 8 KB per message and per reproduction details,
+32 KB of instructions, 500 findings and 5,000 messages per pull request, 200 per
+finding, 300 review changes per member per hour; removals never give allowance
+back. Details: [30-reviews.md](docs/30-reviews.md).
+
+## 24. Ready-to-test sample data
+
+### Requirement
+
+Implement approved Feature 5 of `README-MVP-PRODUCT-EXPANSION.md`: make the
+existing `setup` command a complete customer workflow. Repositories seed their own
+synthetic data in `setup`; the review page says how setup went for the deployment
+under review; Reset test data starts again from the seed; reviewers get a
+preview-only test login through Previa; and two reference journeys (a web app with
+a test login, an HTTP API with SQL data) are proven on real Docker.
+
+### Complexity
+
+Medium. No new lifecycle hook: the hard parts are reporting the serving
+deployment's setup (not a failed newer attempt's), making Reset a normal Rebuild
+with its own recorded intent, and keeping shared test-login material sealed,
+write-only and revealed only on request.
+
+### Tech stack (feature-specific)
+
+Existing Go, PostgreSQL/pgx/sqlc, Goose, templ/HTMX and the secrets keyring
+(AES-256-GCM with repository- and purpose-bound associated data). No new library.
+
+### Technical implementation
+
+- **Setup outcome.** Migration 0040 adds `preview_components.setup_ms`: the runtime
+  times each candidate's setup command and records it with the candidate's
+  components once it is ready. The review page reads the components of the newest
+  publication (the deployment serving now), because after a failed update the
+  environment's applied revision names the failed attempt. It shows *Completed in
+  12.4 s* or *No setup declared*, a Test data note when the deployment runs managed
+  databases, and *failed in its setup command* when the newest commit's setup
+  failed while the earlier deployment keeps serving.
+- **Reset test data** is a confirmed modal on the review page that posts the pull
+  request's existing Build action with `action=rebuild`, `reset=true` and
+  `return=review`. It is offered only when Rebuild applies now (open, buildable,
+  available, latest commit built successfully and serving, nothing building or
+  being torn down, the viewer can build). `environments.IntentCommand.Reset` is
+  accepted only with Rebuild; the broker calls a `ResetRecorder` inside the request
+  transaction, adapted in `internal/app` to an activity event
+  (`preview.reset_requested`, deduplicated per revision). Source verification,
+  policy, capacity and publication fences are the Rebuild's own.
+- **Test access.** `internal/reviews` owns `review_test_access` (one row per
+  repository): account text shown to members with preview access, and an optional
+  secret sealed through a small `Sealer` interface implemented by the secrets
+  keyring, under the name `previa:test-access` and the repository's ID, so it can
+  neither be opened as a repository secret nor moved to another repository. Owners
+  and Admins save it (revisioned, write-only secret); members with preview access
+  reveal it with a CSRF-protected POST answered `Cache-Control: no-store`, as JSON
+  for the page script or as the page itself without JavaScript. Each reveal is
+  recorded on the row and as an activity event and spends the review write
+  allowance. Saves wake live pages; reveals and key rotations do not, and the page
+  script keeps a revealed value across other live refreshes for two minutes.
+  `make secrets-reencrypt` rotates test access beside repository secrets.
+- **Starter kits** offer migrate-and-seed setup presets per stack and say that a
+  seed should be repeatable and synthetic.
+- **Reference journeys.** `internal/app/testdata/reference` is a small app with two
+  modes (a shop API and a notes web app with a login) built from its own
+  Dockerfile; `TestRealReferenceJourneys` (`make test-reference`) runs both through
+  the worker's pipeline with a fake GitHub, BuildKit, Traefik and managed
+  PostgreSQL.
+
+### Design decisions and edge cases
+
+Reset is a Rebuild, not a seed command or SQL console: a fresh candidate with fresh
+services is the only state Previa can promise, and the preview keeps serving until
+the replacement is live. Findings stay with the deployment they were recorded on.
+Test access is repository-level and carried across rebuilds, so the seed must
+recreate the same preview-only account on every deployment; binding a value to one
+deployment, a third journey with a background process and a *Setup declared* state
+while a build runs are deferred. Forks get no repository secrets, so a seed that
+needs one must say the test login is unavailable. Details:
+[31-test-data.md](docs/31-test-data.md).
+
+## 25. Persistent test data
+
+### Requirement
+
+Implement approved Feature 5B of `README-MVP-PRODUCT-EXPANSION.md` (§8B): previews
+share copies of data, never a live database. A repository baseline is built from
+one branch with the repository's own migrations and `seed`, stored encrypted and
+restored into every pull request's first candidate; a pull request's next
+candidate starts from a copy of its own serving data; Reset test data starts
+again from the baseline or from empty databases and the seed; every source falls
+back automatically and says why.
+
+### Complexity
+
+High. A new build kind owned by a repository instead of a pull request, data
+copied between containers without disk or network paths, fallback that restarts
+databases mid-candidate, and coalesced, fenced refreshes that share build slots,
+quotas and capacity with pull request builds.
+
+### Tech stack (feature-specific)
+
+Existing Go, Docker exec streams, PostgreSQL/pgx/sqlc, Goose, River, templ/HTMX
+and the secrets keyring (streamed AES-256-GCM, repository- and purpose-bound).
+`pg_dump`/`pg_restore` and `mysqldump`/`mysql` run inside the managed service
+images Previa already uses. No new library.
+
+### Technical implementation
+
+- **Configuration.** `.previewrc.yaml` gains `seed` (argv, the same limits as
+  `setup`, a PostgreSQL or MySQL service required). Migration 0041 adds
+  `repository_sampledata_settings`, `baseline_refreshes`, `baseline_logs`,
+  `repository_baselines`, starting-data columns on `preview_components` and
+  `build_intents.start_source`, a realtime trigger and the workers'
+  `baselines` capability.
+- **Starting data** (`internal/runtime/data.go`). After services are ready and
+  before setup, each SQL service tries kept data (dumped inside the serving
+  candidate's service container and streamed into the new one's, same or newer
+  version only), then the baseline (decrypted from storage and streamed in), then
+  empty. `setup` runs after every source; `seed` only on the empty attempt. A
+  failed setup or copy on copied data restarts the database containers (their
+  tmpfs empties) and tries the next source, at most twice; the empty attempt
+  decides. The candidate records the source, every fallback and Setup/Seed
+  timings without data.
+- **Baselines** (`internal/runtime/baseline.go`, `internal/sampledata`). A refresh
+  resolves the branch head (the GitHub default branch unless one is chosen),
+  builds the image without repository secrets under its own cache scope, starts
+  the services on an internal network, runs setup and seed, and captures each SQL
+  database into a gzip-compressed file encrypted under the keyring
+  (`PREVIEW_BASELINE_DIR`, `PREVIEW_BASELINE_MAX_SIZE`, sha256-checked). Requests
+  coalesce (one waiting, one running per repository); a sequence fence keeps the
+  newest result; automatic refreshes are spaced by
+  `PREVIEW_BASELINE_MIN_INTERVAL`; refreshes take build slots, count running
+  builds and build minutes, and wait like pull request builds. One River job per
+  repository runs on the build queue; a dispatcher replaces lost jobs, a daily
+  check follows the branch head, and cleanup removes retired and orphaned files
+  and Docker leftovers.
+- **Triggers:** Test data turned on, the baseline used again or its branch changed
+  (a person's action, not spaced); a merged `closed` webhook into the baseline
+  branch (in the delivery transaction); the daily check; an unreadable baseline
+  or a catalog version no longer offered; Refresh baseline.
+- **Presentation.** The Test data tab (`web/pages/sampledata`) shows current
+  baselines, recent refreshes with safe failure categories and their build logs,
+  and in-place settings for Owners and Admins; Refresh, Delete, Turn on and Turn
+  off confirm in modals. The PR page, review page and GitHub comment name the
+  starting source; Reset test data offers the baseline or empty databases.
+- **Starter kits** split migrations (`setup`) from seed data (`seed`).
+
+### Design decisions and edge cases
+
+Baselines are derived data on one worker's disk: a lost file is rebuilt, backups
+exclude them, and several workers would need shared storage. Defaults, decided for a
+free early-access host: 64 MiB per dump (any database that fits a preview's tmpfs
+dumps to less), 2-minute copies, and automatic refreshes at most hourly per
+repository, because refreshes spend the build minutes pull requests share. With
+Test data off, builds record no starting source and look exactly as before. Spacing applies only
+to automatic triggers; enabling Test data, changing its branch and Refresh
+baseline start at once. Turning Test data off deletes baselines (confirmed);
+turning only the baseline off keeps them unused. A result whose branch or
+settings changed meanwhile is discarded with its files. A Reset never keeps data:
+without a choice it starts empty. Edited migrations on kept data and data written
+to the serving preview during a copy cannot be detected; the PR page and Reset say
+so. Details: [32-persistent-test-data.md](docs/32-persistent-test-data.md).
+
+## 26. Workspace usage and finite free limits
+
+### Requirement
+
+Give every workspace finite visible free allowances, count bounded physical build
+execution once, and explain blocked compute without cutting off serving previews,
+feedback, reads or cleanup. This is expansion specification §9.3/§9.7, step H;
+paid billing and F4 account lifecycle remain outside this task.
+
+### Complexity
+
+High: admission, physical execution, retries, crashes, UTC boundaries, preview
+replacement and publication need one consistent entitlement and ledger contract.
+
+### Tech stack
+
+Existing PostgreSQL/pgx transactions, River, chi, templ and signal theme tokens.
+`internal/usage` owns feature-local parameterized SQL, accounting, recovery and
+handlers; `web/pages/usage` receives display data. No new dependency or global layer.
+
+### Technical implementation
+
+- Migration 0042 installs the owner-delegated free policy (300 minutes per UTC
+  calendar month, one concurrent build, two preview slots), backfills active
+  workspaces with fresh allowances and grants future workspaces through a trigger.
+  The owner confirmed no hosted users. Legacy elapsed-time counters are retained
+  and labelled; the migration records the new accounting cutover.
+- `workspace_entitlements` is the workspace reservation lock;
+  `workspace_usage_periods`, `workspace_usage_attempts` and
+  `workspace_usage_segments` capture stable ownership, physical attempt UUIDs,
+  unique segment sequences, consumed microseconds and bounded reservations.
+  Target-history pruning cannot erase segment consumption.
+- PR and baseline admission share the existing global slot lock and reserve under
+  the entitlement lock. Admission waits are uncharged. Execution start rechecks
+  limits, then a renewable cancellation context bounds source/build/startup/setup/
+  seed/fallback execution. Each reservation totals at most 60 seconds; segments
+  split at UTC day/month boundaries. Failed/superseded work counts, and repeated
+  settlement cannot count twice.
+- A timer independent of database renewal cancels at the last committed deadline.
+  Admission and a one-minute River recovery job settle expired holds. A running
+  crash uses only its reserved upper bound and stays labelled provisional; an
+  admission that never started costs zero. Period totals reconcile with segments.
+- Preview slots count PR identities, retaining active/sleeping/pending previews
+  and admitted new ones. Same-PR replacement reuses a slot. Publication checks
+  current entitlement at route acceptance; baseline publication checks compute
+  limits. Restricted work waits without exhausting River retries. Existing routes
+  are never removed by quota logic.
+- Usage snapshots authorize active membership and repository grants. Owners/Admins
+  see totals; Developers see granted repository technical usage only; Reviewers
+  are denied. Exact reset/checked times, pending/provisional recovery and unknown
+  policy are explicit. There are no purchase controls or quota middleware on
+  reads, feedback, cancellation or teardown.
+
+### Design decisions and edge cases
+
+An execution fitting its already-accounted balance may publish when that balance
+is exactly exhausted. Lowered/restricted entitlements are rechecked. Reserved
+minutes can free before reset, so their wait ends by the relevant lease deadline.
+`BUILDS_PER_ACCOUNT`/`BUILD_MINUTES_PER_ACCOUNT_DAY` are additional workspace
+ceilings; zero never makes the free plan unlimited. Workers are restarted together
+when these operator settings change. Host capacity, lifetime and idle rules remain
+unchanged and their last worker report is shown. Unknown crash time is not claimed
+as an exact measurement. Details: [33](docs/33-usage-and-free-plan.md).
+
+## 27. Account exits, support, status and restore-safe deletion
+
+### Requirement
+
+Implement F4/spec §9.5–§9.6/§9.8: revocable sessions, scoped workspace exits,
+explicit local repository/installation disconnection, ordered workspace erasure,
+personal deletion preserving team data, support requests, public status and
+plain policies. Include the optional finite Disconnected GitHub comment. Billing,
+review assignments remain deferred; missed-uninstall polling is specified in Section 28.
+
+### Complexity and stack
+
+High: immediate access fences and physical cleanup must survive crashes, retries,
+late signed events and restoring an older snapshot. Use existing pgx/PostgreSQL,
+River, chi, templ and shared signal tokens. No application dependency is added.
+The host's existing age/rclone backup channel carries the independent journal.
+
+### Technical implementation
+
+- `internal/accounts` is a lifecycle coordinator with small consumer-defined
+  fence, inventory, cleanup and erasure interfaces. Environments, Test data,
+  installation catalog, housekeeping, workspaces, auth and support own their
+  actual mutations. Composition stays in `internal/app`.
+- Migration 0043 adds account epochs/deletion markers, lifecycle operations,
+  provider identity fences, journal/metadata, final-comment attempts, support,
+  operator audit, incidents and real dependency observations. Owning foreign
+  keys cascade only after verified external cleanup. Downgrade refuses to
+  discard existing revocations.
+- Epochs are rechecked on authenticated requests, live frames/heartbeats and
+  private-preview authorization. Other-session revocation retains/rotates the
+  current browser. Streams also check their original opaque session exists.
+- Disconnect acceptance locks scope and validates role, revision and typed
+  confirmation; records journal/operation; fences admission, PRs, routes and
+  baselines transactionally. The worker retries physical removal separately
+  from compute allowance. Parent operations wait for children. Completion
+  requires verified inventory/file/cache cleanup and remote journal acknowledgement.
+- Baseline ownership sidecars precede file bytes. Cleanup removes unrecorded
+  interrupted dumps, attributable source trees and repository build caches.
+  Missing Docker/storage leaves progress pending rather than claiming erasure.
+- Personal deletion requires no owned active/deleting workspace, revokes
+  membership/session authority immediately, repairs manual requests and then
+  removes profile/avatar/support data. Shared authorship is pseudonymous;
+  numeric GitHub/public IDs remain minimal revocation tombstones. Ownership
+  creation/transfer serializes against deleted identities. A hashed, seven-day
+  HttpOnly receipt provides signed-out progress.
+- Final comments share the normal report lease, update only an App-owned marked
+  comment and stop after three attempts or ten minutes. Local teardown does not
+  require GitHub. Configured numeric App ID permits worker startup during an
+  upstream identity-read outage; unknown bot-login fallback is disabled.
+- `internal/support` owns native requests, immutable-ID operator authorization,
+  audit, incident forms, status observations and retention. Empty configured
+  operator IDs deny everyone, independently of workspace roles. Messages/references
+  are bounded/authorized; rendering escapes messages. Every operator read and
+  mutation is audited without granting access to source/secrets/previews.
+- Workers probe Docker and loaded Traefik fallback configuration every 30 seconds;
+  stale (>90 seconds) and absent observations are unknown. Incident text is
+  operator-published. No uptime percentage is inferred from a heartbeat.
+- `deletion-journal.sh` exports bounded identifier-only JSON, age-encrypts it,
+  uploads through the off-host backup channel, then acknowledges exact events.
+  Timer/restore share a channel lock. Backups mark a boundary and require a newer
+  journal. Restore stops writers/router, verifies the independent latest object,
+  replays missing events with checkpoints, clears the old generated route table,
+  and starts paused. Existing snapshot events do not undo later grants; ownership
+  events preserve a successor before a former owner's deletion.
+
+### Presentation, configuration and decisions
+
+Templates/display types are in `web/pages/accounts` and `web/pages/support`;
+`web/styles/customer.css` uses theme tokens. Shared sidebar/profile/settings links
+reach controls; typed destructive confirmation stays in accessible modals. All
+mutations use CSRF and native forms. Contact, operator display name, numeric
+operator IDs, support limits and journal/backup retention/bounds use env.
+
+Owner delegated defaults: 16 KiB/message, five requests per UTC day, resolved
+support retained 90 days, encrypted journal 90 days and 1 MiB, backups 30 days.
+Unfinished journal entries never expire. User supplied the local support email
+and requested operator IDs remain unset with explanatory comments. Privacy/terms
+describe actual behavior; operator identity and legal review remain pre-launch
+checks. Reconnection uses a fresh explicit GitHub installation after cleanup;
+old credentials/history are not restored. Details: [34](docs/34-accounts-support-and-deletion.md).
+
+
+## 28. Missed GitHub installation lifecycle (F5)
+
+Requirement: recover dropped uninstall/suspension/repository-removal deliveries
+without treating an outage or partial listing as revocation. Complexity: high.
+Stack: existing App JWT/install-token clients, PostgreSQL and River.
+
+The installations feature captures revisions before GitHub IO. Every five minutes
+(and after a durable token-mint suspicion), a bounded 25-installation pass validates
+GET /app, checks exact installation IDs and complete paginated repository listings.
+All observations precede one short transaction through webhooks' existing lifecycle
+applier, source tombstones, RevokeTx, cleanup_pending and sweep wake-up. A concurrent
+webhook wins through the installation revision. Recovery never grants access.
+
+401, wrong App identity, outages, rate limits and incomplete listings abort without
+revocation. Removing every known installation or exceeding the configurable small
+change budget opens a circuit and alerts. A verified explicit reconnect may recover
+a confirmed deleted installation in the same authorized workspace; it cannot move
+history between workspaces. Reconnect still preserves Manual/Automatic semantics.
+Metrics have bounded outcomes; repairs warn through Sentry and Prometheus alerts.
+
+## 29. Early-access workspace approval (F6)
+
+Requirement: operator approval for each new workspace; preserve existing access.
+Complexity: medium. Stack: existing sessions/CSRF, PostgreSQL, templ and signal theme.
+Implementation: internal/earlyaccess owns approval service, repository and handler;
+presentation lives in web/pages/earlyaccess. Existing workspaces are grandfathered;
+new rows default Pending. The server guards connection/setup/build requests and
+checks connection persistence under its workspace lock. Worker usage independently
+checks PR/baseline admission, execution and renewal; teardown and account exits are
+never gated. Operators use the configured immutable GitHub-ID allowlist. The native
+approval form checks revision and audits atomically; retries are idempotent and
+approval never dispatches a build. Pending workspaces can still manage members,
+use support and request deletion. Disabled gate mode is explicit env configuration.
+
+## 30. Google sign-in and provider-independent reviewers (F7)
+
+**Requirement:** the owner-approved final MVP feature lets stakeholders use Google
+without requiring a GitHub account. Login methods never assign workspace roles.
+
+**Implementation:** extend existing auth/workspaces feature packages, not a new
+identity service. Migration0046 makes GitHub ID nullable and adds a unique Google
+subject plus verified Google email. Explicit CSRF-protected linking preserves the
+local account; identity collisions are refused, never merged by matching email.
+Google uses OAuth2 code+PKCE+nonce and `coreos/go-oidc/v3` signature/issuer/audience/
+expiry verification. Tokens are discarded. Credentials are optional env settings.
+
+Managers may invite a verified email as Reviewer, using the same copied-link,
+consent, revision, expiry, repository-grant and revocation model as GitHub invites.
+No email delivery infrastructure is added. New Google-only users see a welcome
+page without an Owner workspace. Technical role/owner creation requires GitHub
+at service and database boundaries. Connecting it never promotes a member.
+Private-preview access uses local grants and refuses Google-only outsider fallback.
+
+**Recovery:** journalv2 carries immutable Google subject, accepts oldv1, and replays
+membership removal by public user ID. Erasure clears profile/email but retains
+provider tombstones. Migration rollback refuses after new identity/access data.
+
+**Edge cases/verification:** provider mix-up, replay, nonce/PKCE, forged or expired
+ID token, wrong issuer/audience, unverified email, duplicate identity, forwarded
+invitation, absent GitHub, source/preview separation, offboarding, post-backup
+account creation/deletion, JS on/off and existing GitHub regression tests. See
+[36](docs/36-google-sign-in-and-reviewer-invitations.md). This explicitly replaces
+the old GitHub-only identity/invitation assumption; no visual-theme change.

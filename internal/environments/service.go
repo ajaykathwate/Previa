@@ -31,6 +31,7 @@ type Runtime interface {
 type Attempt struct {
 	EnvironmentID int64
 	LogEpoch      int64
+	UsageKey      string
 }
 
 // BuildLogs closes an attempt's log stream once its execution has returned, so
@@ -188,7 +189,17 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	}
 	started := s.now()
 	buildCtx, cancel := context.WithTimeout(ctx, s.buildTimeout)
-	artifact, buildErr := s.runtime.Build(buildCtx, request, attempt)
+	var artifact Artifact
+	var buildErr error
+	if s.repo.usage != nil {
+		buildErr = s.repo.usage.Run(buildCtx, attempt.UsageKey, func(execCtx context.Context) error {
+			var err error
+			artifact, err = s.runtime.Build(execCtx, request, attempt)
+			return err
+		})
+	} else {
+		artifact, buildErr = s.runtime.Build(buildCtx, request, attempt)
+	}
 	cancel()
 	// This is the pre-registration gate. Cancellation/timeouts still get a bounded
 	// chance to record a CURRENT failure and clean up, never a stale final state.
@@ -203,6 +214,9 @@ func (s *Service) Build(ctx context.Context, request Request) error {
 	}
 	s.finishLogs(completeCtx, request, attempt)
 	if reason := waitingReason(buildErr); reason != "" {
+		if usageWait(reason) {
+			return errors.Join(s.wait(completeCtx, request, reason, buildErr), s.cleanup(completeCtx, request))
+		}
 		// Not a failure: the admitted request keeps its slot and its place,
 		// and is retried once capacity or disk frees up.
 		return s.wait(completeCtx, request, reason, buildErr)
@@ -266,7 +280,12 @@ func (s *Service) verifyUpstream(ctx context.Context, request Request) (bool, er
 // WaitingError that retries it without spending an attempt.
 func (s *Service) wait(ctx context.Context, request Request, reason string, cause error) error {
 	metrics.BuildWaited(reason)
-	return errors.Join(&WaitingError{Reason: reason, Err: cause}, s.repo.markWaiting(ctx, request, reason))
+	var retry interface{ RetryAt() time.Time }
+	var until time.Time
+	if errors.As(cause, &retry) {
+		until = retry.RetryAt()
+	}
+	return errors.Join(&WaitingError{Reason: reason, Err: cause, Until: until}, s.repo.markWaiting(ctx, request, reason, until))
 }
 
 // record applies an attempt's outcome, then schedules cleanup of whatever the

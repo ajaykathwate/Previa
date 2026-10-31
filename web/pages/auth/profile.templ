@@ -1,0 +1,286 @@
+package auth
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+	"strconv"
+)
+
+// MemberProfile puts the editable Previa profile and the read-only GitHub
+// account side by side; each fact appears once, in the section that owns it.
+templ MemberProfile(p Profile) {
+	@layouts.App("Your profile", p.Name, p.CSRF, components.NavNone) {
+		<div class="team-page profile-page">
+			<header class="team-heading">
+				<div class="team-heading-copy">
+					@components.PageTitle("Your profile", "How you appear to teammates in Previa, and your connected login methods.")
+				</div>
+			</header>
+			<p><a href="/account">Account, connections and deletion</a></p>
+			<div class="field-grid">
+				@PreviaProfile(p)
+                if p.GitHubID > 0 {
+                    @GitHubAccount(p)
+                } else {
+                    <section class="workspace-panel field-card" aria-labelledby="github-connect-heading">
+                        <header class="field-card-head">
+                            <h2 id="github-connect-heading">@components.GitHubMark() GitHub is not connected</h2>
+                        </header>
+                        <dl class="field-list">
+                            <div class="field-row">
+                                <dt class="field-label">Sign-in method</dt>
+                                <dd class="field-value">
+                                    <form method="post" action="/auth/github/link">
+                                        <input type="hidden" name="csrf_token" value={ p.CSRF }/>
+                                        <button class="field-card-action" type="submit">Connect GitHub</button>
+                                    </form>
+                                </dd>
+                            </div>
+                        </dl>
+                        <p class="field-card-foot">You can review shared previews without GitHub. Connect it before requesting Developer/Admin access or creating a workspace. Your role will not change automatically.</p>
+                    </section>
+                }
+                if p.GoogleEnabled || p.GoogleConnected {
+                    <section class="workspace-panel field-card" aria-labelledby="google-account-heading">
+                        <header class="field-card-head">
+                            <h2 id="google-account-heading">@components.LockIcon() Google sign-in</h2>
+                        </header>
+                        <dl class="field-list">
+                            if p.GoogleConnected {
+                                @Fact("Connected email", p.GoogleEmail, false)
+                            } else {
+                                <div class="field-row">
+                                    <dt class="field-label">Sign-in method</dt>
+                                    <dd class="field-value">
+                                        <form method="post" action="/auth/google/link">
+                                            <input type="hidden" name="csrf_token" value={ p.CSRF }/>
+                                            <button class="field-card-action" type="submit">Connect Google</button>
+                                        </form>
+                                    </dd>
+                                </div>
+                            }
+                        </dl>
+                        if p.GoogleConnected {
+                            <p class="field-card-foot">Use your connected methods to sign in to this same account. Your workspace roles stay the same.</p>
+                        } else {
+                            <p class="field-card-foot">Connect Google to sign in to this same account with either method.</p>
+                        }
+                    </section>
+                }
+				<section class="workspace-panel field-card field-card-span" aria-labelledby="activity-heading">
+					<header class="field-card-head">
+						<h2 id="activity-heading">
+							@components.ClockIcon()
+							Recent activity
+						</h2>
+						<span class="field-card-note">Only you see this list</span>
+					</header>
+					if p.ActivityUnavailable {
+						<p class="activity-empty">Recent activity couldn't be loaded right now. Refresh to try again.</p>
+					} else {
+						@components.ActivityFeed(p.Activity, true, "Nothing yet. Builds you request, workspaces you join or create, and invitations you send appear here.")
+					}
+				</section>
+			</div>
+		</div>
+		@components.Toasts(p.Toast)
+		@components.ConfirmationDialog("end-other-sessions", "End other sessions?", "Other Previa sessions stop working, including live streams. This browser stays signed in. Private previews may ask you to open them again.") {
+			<form method="post" action="/auth/sessions/revoke" class="dialog-actions">
+				<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+				<button type="button" class="field-card-action" commandfor="end-other-sessions" command="close" data-close-dialog autofocus>Cancel</button>
+				<button type="submit" class="field-card-action">End other sessions</button>
+			</form>
+		}
+	}
+}
+
+templ PreviaProfile(p Profile) {
+	<section class="workspace-panel field-card" aria-labelledby="previa-profile-heading">
+		<header class="field-card-head">
+			<h2 id="previa-profile-heading">
+				@components.UserIcon()
+				Previa profile
+			</h2>
+			<span class="field-card-note">Visible to your teammates</span>
+		</header>
+		<div class="field-list">
+			<div class="field-row">
+				<span class="field-label" id="photo-label">Photo</span>
+				<div class="photo-field">
+					<form method="post" action="/protected/profile/avatar" enctype="multipart/form-data" class="avatar-editor" data-avatar-form data-image-kind="avatar">
+						<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+						<label for="avatar-file" class="avatar-editor-target" title="Change photo">
+							@components.UserAvatar(p.Avatar, p.Name, "user-avatar-xl", templ.Attributes{"data-viewer-avatar": true})
+							<span class="avatar-editor-badge" aria-hidden="true">
+								@components.PencilIcon()
+							</span>
+						</label>
+						<input id="avatar-file" name="avatar" type="file" accept="image/png,image/jpeg" required class="avatar-editor-input" aria-labelledby="photo-label" aria-describedby="avatar-help avatar-error"/>
+						<button type="submit" class="avatar-editor-submit field-card-action">Upload</button>
+					</form>
+					<div class="photo-actions">
+						<label for="avatar-file" class="text-action">Change photo</label>
+						<form method="post" action="/protected/profile/avatar/remove" data-avatar-remove hidden?={ !p.CustomAvatar }>
+							<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+							<button type="submit" class="text-action">Use default picture</button>
+						</form>
+						<span id="avatar-help" class="field-meta">PNG or JPEG</span>
+					</div>
+				</div>
+			</div>
+			if p.AvatarError != "" {
+				<p id="avatar-error" class="field-error" role="alert">{ p.AvatarError }</p>
+			} else {
+				<p id="avatar-error" class="field-error" hidden></p>
+			}
+		</div>
+		<form method="post" action="/protected/profile" class="field-list field-list-tight" data-inline-form>
+			<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+			<input type="hidden" name="profile_revision" value={ strconv.FormatInt(p.Revision, 10) } data-revision/>
+			<div class="field-row">
+				<label class="field-label" for="first-name">First name</label>
+				@components.InlineText("first-name", "first_name", p.FirstName, placeholder(p.FirstHint, "Add first name"), "first name", templ.Attributes{"maxlength": "80", "autocomplete": "given-name", "aria-describedby": "name-help name-error"})
+			</div>
+			<div class="field-row">
+				<label class="field-label" for="last-name">Last name</label>
+				@components.InlineText("last-name", "last_name", p.LastName, placeholder(p.LastHint, "Add last name"), "last name", templ.Attributes{"maxlength": "80", "autocomplete": "family-name", "aria-describedby": "name-help name-error"})
+			</div>
+			<p id="name-help" class="field-note">
+				if p.GitHubID > 0 {
+					Leave both blank to appear as @{ p.Login }.
+				} else {
+					Leave both blank to use your sign-in name.
+				}
+			</p>
+			if p.NameError != "" {
+				<p id="name-error" class="field-error" role="alert" data-inline-error>{ p.NameError }</p>
+			} else {
+				<p id="name-error" class="field-error" hidden data-inline-error></p>
+			}
+		</form>
+		<dl class="field-list field-list-tight">
+			<div class="field-row">
+				<dt class="field-label">Email</dt>
+				<dd class="field-value">
+					if p.Email != "" {
+						<span>{ p.Email }</span>
+					} else if p.GoogleEmail != "" {
+						<span>{ p.GoogleEmail }</span>
+					} else {
+						<span class="text-muted">No verified email available</span>
+					}
+					<span class="field-meta" title="Your verified sign-in email. Only you can see it.">
+						@components.LockIcon()
+						Verified sign-in email · only you
+					</span>
+					if p.EmailSyncError {
+						<small class="field-value-note tone-warn">GitHub couldn't refresh your email at the last sign-in, so this is the last saved address.</small>
+					}
+				</dd>
+			</div>
+			if p.PublicID != "" {
+				<div class="field-row">
+					<dt class="field-label">Member ID</dt>
+					<dd class="field-value">
+						<code>{ p.PublicID }</code>
+						@components.CopyButton(p.PublicID, "Copy member ID")
+					</dd>
+				</div>
+			}
+			if p.Joined != "" {
+				<div class="field-row">
+					<dt class="field-label">Member since</dt>
+					<dd class="field-value">
+						@components.Time(p.Joined, p.Joined)
+					</dd>
+				</div>
+			}
+			<div class="field-row">
+				<dt class="field-label">Session</dt>
+				<dd class="field-value field-value-split">
+					<span>
+						if p.Expires != "" {
+							{ "Expires " }
+							@components.Time(p.Expires, p.Expires)
+						} else {
+							Signed in
+						}
+					</span>
+					<button type="button" class="field-card-action" data-open-dialog="logout-confirmation" commandfor="logout-confirmation" command="show-modal" aria-haspopup="dialog">
+						@components.LogoutIcon()
+						Log out
+					</button>
+					<button type="button" class="field-card-action" data-open-dialog="end-other-sessions" commandfor="end-other-sessions" command="show-modal" aria-haspopup="dialog">End other sessions</button>
+				</dd>
+			</div>
+		</dl>
+	</section>
+}
+
+templ GitHubAccount(p Profile) {
+	<section class="workspace-panel field-card" aria-labelledby="github-account-heading">
+		<header class="field-card-head">
+			<h2 id="github-account-heading">
+				@components.GitHubMark()
+				GitHub account
+			</h2>
+			<a class="field-card-action" href="/auth/github/login?next=%2Fprotected" title="Sign in again to fetch your latest GitHub details">
+				@components.SyncIcon()
+				Refresh
+			</a>
+		</header>
+		<dl class="field-list">
+			@Fact("Username", "@"+p.Login, true)
+			@Fact("GitHub ID", strconv.FormatInt(p.GitHubID, 10), true)
+			if p.GitHubName != "" {
+				@Fact("Name", p.GitHubName, false)
+			}
+			if p.ProfileURL != "" {
+				<div class="field-row">
+					<dt class="field-label">Profile</dt>
+					<dd class="field-value"><a href={ components.PublicURL(ctx, p.ProfileURL) } target="_blank" rel="noopener noreferrer">{ displayURL(p.ProfileURL) }</a></dd>
+				</div>
+			}
+			if p.Company != "" {
+				@Fact("Company", p.Company, false)
+			}
+			if p.Location != "" {
+				@Fact("Location", p.Location, false)
+			}
+			if p.Bio != "" {
+				@Fact("Bio", p.Bio, false)
+			}
+			if p.GitHubJoined != "" {
+				@DateFact("Joined GitHub", p.GitHubJoined)
+			}
+			if p.Synced != "" {
+				@DateFact("Last refreshed", p.Synced)
+			} else {
+				@Fact("Last refreshed", "Not yet — use Refresh to fetch your details", false)
+			}
+		</dl>
+		<p class="field-card-foot">Read-only. Previa refreshes these details each time you sign in and doesn't keep your GitHub sign-in token. Logging out of Previa leaves your GitHub session as it is.</p>
+	</section>
+}
+
+templ Fact(label, value string, code bool) {
+	<div class="field-row">
+		<dt class="field-label">{ label }</dt>
+		<dd class="field-value">
+			if code {
+				<code>{ value }</code>
+			} else {
+				{ value }
+			}
+		</dd>
+	</div>
+}
+
+templ DateFact(label, value string) {
+	<div class="field-row">
+		<dt class="field-label">{ label }</dt>
+		<dd class="field-value">
+			@components.Time(value, value)
+		</dd>
+	</div>
+}

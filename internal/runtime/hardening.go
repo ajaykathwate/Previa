@@ -33,10 +33,12 @@ type Policy struct {
 	OCIRuntime     string
 	StartupTimeout time.Duration
 	SetupTimeout   time.Duration // a preview's setup command
-	MemoryBudget   int64         // 0: derived from the Docker host
-	CPUBudget      float64       // CPUs; 0: derived from the Docker host
-	MaxPerRepo     int
-	MaxPerAccount  int // running previews per account; 0: no limit
+	// DataCopyTimeout bounds one dump-and-restore of test data (docs/32).
+	DataCopyTimeout time.Duration
+	MemoryBudget    int64   // 0: derived from the Docker host
+	CPUBudget       float64 // CPUs; 0: derived from the Docker host
+	MaxPerRepo      int
+	MaxPerAccount   int // running previews per account; 0: no limit
 }
 
 // candidate is everything needed to create one preview container.
@@ -160,8 +162,9 @@ func previewLabels(instance string, t Target, request requestIdentity, imageRef 
 	if healthPath != "" {
 		labels[dockerx.LabelHealthPath] = healthPath
 	}
-	if t.AccountID > 0 {
-		labels[dockerx.LabelAccount] = strconv.FormatInt(t.AccountID, 10)
+	if t.WorkspaceID > 0 {
+		labels[dockerx.LabelAccount] = strconv.FormatInt(t.WorkspaceID, 10)
+		labels[dockerx.LabelWorkspace] = strconv.FormatInt(t.WorkspaceID, 10)
 	}
 
 	return labels

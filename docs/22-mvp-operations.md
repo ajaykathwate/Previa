@@ -46,7 +46,7 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 
 | Queue | Workers per process | Work and timeout |
 | --- | --- | --- |
-| `build` | `MAX_CONCURRENT_BUILDS` | One build attempt: `BUILD_TIMEOUT` plus one minute to record it. Builds are also bounded across all workers by the same number (build slots). |
+| `build` | `MAX_CONCURRENT_BUILDS` | One build attempt: `BUILD_TIMEOUT` plus one minute to record it. Builds are also bounded across all workers by the same number (build slots). A repository's test-data baseline refresh (`baseline_refresh`, one job per repository) runs here too and takes a build slot ([32](32-persistent-test-data.md)): `BUILD_TIMEOUT` plus three minutes. |
 | `teardown` | 2 | Starts a teardown: 3 minutes. |
 | `environment_coordination` | 4 | Wake-ups (deadlines, handoffs): 15 seconds. |
 | `environment_route` | 2 | Route activation and removal: 2 minutes each (+30 s bookkeeping), under a 4-minute operation lease. |
@@ -58,6 +58,7 @@ reporting=true housekeeping=true discovery=true build_workers=2`, preceded by a
 | `app_output` | 16 | One follower per watched preview: until nobody watched for a minute, at most 2 hours. |
 | `idle` | 4 | `preview_sleep` every 5 minutes (4-minute timeout) when `PREVIEW_IDLE_SLEEP` is set; `preview_wake` per waiting visitor (5 minutes). |
 | `route_sync` | 1 | Rewrites the router's file after a repository's previews turn private or public. |
+| `test_data` | 1 | Persistent test data, on workers with baseline storage ([32](32-persistent-test-data.md)): the refresh dispatcher every minute (1-minute timeout), the baseline freshness check hourly (10), baseline cleanup hourly (10). |
 
 Beside River, the worker runs two loops: the crash watch (Docker events) and the
 visit count read (every minute). Both end with the process.
@@ -149,13 +150,17 @@ Each needs something this environment does not have; none is claimed.
 6. **Capacity and disk pressure on the target host's real resources**, with
    `MAX_CONCURRENT_BUILDS` concurrent builds.
 7. **gVisor** (`PREVIEW_OCI_RUNTIME=runsc`) if the threat model requires it.
-8. **The production stack on the target host**: `setup.sh`, the release images,
-   staged certificates, the backup timer with a real object-storage remote, a
-   restore rehearsal there, and an upgrade ([25](25-production-deployment.md)).
-   `make prod-smoke` rehearses all of it on local staging.
-9. **CI and releases on GitHub**: the workflows have not run on GitHub yet, the
-   protected `release` environment and its reviewers need configuring, and
-   publishing images to GHCR needs a tag pushed by a maintainer.
-10. **Alert delivery**: an Alertmanager and a receiver of the operator's choice.
+8. **The production stack on the target host**: `setup.sh`, SSH over Tailscale with
+   port 22 closed, the images built there from a release tag, staged
+   certificates, the backup timer with Cloudflare R2, a restore rehearsal on the
+   reinstalled VPS before launch, and an upgrade and rollback
+   ([25](25-production-deployment.md)). `make prod-smoke` rehearses most of it on
+   local staging.
+9. **CI on GitHub**: CI runs on pull requests into `master`, and its latest runs
+   (11–15 October 2026) failed; a release is tagged only on a commit whose run
+   passed. The optional Release workflow has never run and is not needed.
+10. **Alert delivery**: Sentry's emails for a test error (`server sentry-test`), a
+    failing uptime check and the backup's cron monitor
+    ([25](25-production-deployment.md#monitoring-with-sentry)).
 
 One worker host is supported: source workspaces and the route file are per host.

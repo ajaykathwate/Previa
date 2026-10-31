@@ -3,14 +3,15 @@ package pullrequests
 import (
 	"context"
 	"errors"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/a-h/templ"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/platform/realtime"
@@ -39,17 +40,34 @@ type LiveEvents interface {
 	Cursor() realtime.Cursor
 	Subscribe(topic string, since realtime.Cursor) *realtime.Subscription
 }
+type SourceAccess interface {
+	CanReadSource(context.Context, int64, int64) (bool, error)
+}
+
 type Handler struct {
-	repo    *Repository
-	sync    Refresher
-	policy  Policy
-	users   UserSession
-	logger  *slog.Logger
-	enabled bool
-	live    LiveEvents
-	actions *Actions
-	logs    LogTail
-	now     func() time.Time // when failures stop needing attention is measured from
+	sourceAccess  SourceAccess
+	admission     Admission
+	previewDomain string
+	repo          *Repository
+	sync          Refresher
+	policy        Policy
+	users         UserSession
+	logger        *slog.Logger
+	enabled       bool
+	live          LiveEvents
+	actions       *Actions
+	logs          LogTail
+	commits       CommitSource
+	now           func() time.Time // when failures stop needing attention is measured from
+	// sourceAnswers remembers GitHub's answer to "may this person read the
+	// code" briefly, so live re-renders do not ask GitHub every time.
+	sourceMu      sync.Mutex
+	sourceAnswers map[[2]int64]sourceAnswer
+}
+
+type sourceAnswer struct {
+	denied bool
+	until  time.Time
 }
 
 func NewHandler(repo *Repository, sync Refresher, policy Policy, users UserSession, logger *slog.Logger, enabled bool) *Handler {
@@ -84,7 +102,7 @@ func (h *Handler) Mount(r chi.Router, requireUser func(http.Handler) http.Handle
 	})
 }
 func (h *Handler) identity(r *http.Request) (int64, int64, error) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "repoID"), 10, 64)
+	id, err := publicid.Param(r, "repoID", "repository")
 	if err != nil || id <= 0 {
 		return 0, 0, ErrUnavailable
 	}
@@ -150,7 +168,7 @@ func (h *Handler) servePage(w http.ResponseWriter, r *http.Request, detail bool)
 		params.Del("page")
 	}
 	if detail {
-		n, err := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
+		n, err := publicid.PRNumber(r, id)
 		if err != nil || n < 1 {
 			http.NotFound(w, r)
 			return
@@ -182,22 +200,25 @@ func (h *Handler) servePage(w http.ResponseWriter, r *http.Request, detail bool)
 	if requested := params.Get("pr_page"); requested != "" && requested != strconv.FormatInt(page.Number, 10) || r.URL.Query().Has("state") {
 		location := page.CurrentURL()
 		if partial {
-			w.Header().Set("HX-Replace-Url", location)
+			if err := publicid.SetHeader(w, r, "HX-Replace-Url", location); err != nil {
+				http.Error(w, "Unable to prepare the page address.", http.StatusServiceUnavailable)
+				return
+			}
 		} else {
-			http.Redirect(w, r, location, http.StatusSeeOther)
+			publicid.Redirect(w, r, location, http.StatusSeeOther)
 			return
 		}
 	}
 	if partial && r.Header.Get("HX-Target") == "pull-request-results" {
-		templ.Handler(pages.Results(page)).ServeHTTP(w, r)
+		publicid.Handler(r, pages.Results(page), page).ServeHTTP(w, r)
 		return
 	}
 	if partial && r.Header.Get("HX-Target") == "repository-detail" {
-		templ.Handler(pages.Panel(page, h.users.CSRFToken(r.Context()))).ServeHTTP(w, r)
+		publicid.Handler(r, pages.Panel(page, h.users.CSRFToken(r.Context())), page).ServeHTTP(w, r)
 		return
 	}
 	username, _ := h.users.Username(r.Context())
-	templ.Handler(pages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
+	publicid.Handler(r, pages.Index(username, h.users.CSRFToken(r.Context()), page), page).ServeHTTP(w, r)
 }
 
 // events streams invalidation signals for one owned repository. Browsers react
@@ -217,7 +238,9 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 	}
 	sub := h.live.Subscribe(RepositoryTopic(id), realtime.RequestCursor(r))
 	defer sub.Close()
-	if err := realtime.Stream(w, r, sub, realtime.DefaultStreamOptions); err != nil && r.Context().Err() == nil {
+	opts := realtime.DefaultStreamOptions
+	opts.Authorize = func(ctx context.Context) error { return h.repo.Owns(ctx, user, id) }
+	if err := realtime.Stream(w, r, sub, opts); err != nil && r.Context().Err() == nil {
 		h.logger.WarnContext(r.Context(), "repository event stream ended", "error", err)
 	}
 }
@@ -277,7 +300,7 @@ func (h *Handler) activity(w http.ResponseWriter, r *http.Request) {
 	}
 	var repoID int64
 	if v := r.URL.Query().Get("repo_id"); v != "" {
-		repoID, err = strconv.ParseInt(v, 10, 64)
+		repoID, err = publicid.Value(r, "repository", v, 0)
 		if err != nil || repoID <= 0 {
 			http.Error(w, "Invalid repository.", http.StatusBadRequest)
 			return
@@ -297,19 +320,20 @@ func (h *Handler) activity(w http.ResponseWriter, r *http.Request) {
 	}
 	page := pages.Activity{Number: data.Page, Pages: data.Pages, Total: data.Total, RepoID: repoID, Previews: previews, Failures: failures,
 		AttentionDays: int(FailureAttentionWindow / (24 * time.Hour))}
-	page.DismissedRepo, page.DismissedNumber = dismissedNotice(r.URL.Query().Get("dismissed"))
+	page.DismissedRepo, page.DismissedNumber = publicid.Dismissed(r, r.URL.Query().Get("dismissed"), dismissedNotice)
+	page.Joined = previews && r.URL.Query().Get("saved") == "joined"
 	for _, row := range data.Rows {
-		page.Rows = append(page.Rows, h.activityRow(row, previews, since))
+		page.Rows = append(page.Rows, h.lock(r.Context(), h.activityRow(row, previews, since)))
 	}
 	if page.Number != f.Page {
-		http.Redirect(w, r, page.PageURL(page.Number), http.StatusSeeOther)
+		publicid.Redirect(w, r, page.PageURL(page.Number), http.StatusSeeOther)
 		return
 	}
 	username, _ := h.users.Username(r.Context())
 	if previews {
-		templ.Handler(previewpages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
+		publicid.Handler(r, previewpages.Index(username, h.users.CSRFToken(r.Context()), page), page).ServeHTTP(w, r)
 	} else {
-		templ.Handler(buildpages.Index(username, h.users.CSRFToken(r.Context()), page)).ServeHTTP(w, r)
+		publicid.Handler(r, buildpages.Index(username, h.users.CSRFToken(r.Context()), page), page).ServeHTTP(w, r)
 	}
 }
 
@@ -320,7 +344,7 @@ func movedToPreviews(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
-	http.Redirect(w, r, target, http.StatusMovedPermanently)
+	publicid.Redirect(w, r, target, http.StatusMovedPermanently)
 }
 
 // dismissedNotice reads the Builds page's "dismissed=<repo>-<number>", which
@@ -347,14 +371,14 @@ func (h *Handler) Highlights(ctx context.Context, userID int64, limit int) (buil
 		return nil, nil, err
 	}
 	for _, row := range recent.Rows[:min(limit, len(recent.Rows))] {
-		builds = append(builds, h.activityRow(row, false, since))
+		builds = append(builds, h.lock(ctx, h.activityRow(row, false, since)))
 	}
 	live, err := h.repo.Activity(ctx, userID, ActivityQuery{Page: 1, Previews: true, Since: since})
 	if err != nil {
 		return nil, nil, err
 	}
 	for _, row := range live.Rows {
-		if out := h.activityRow(row, true, since); out.Deployed != "" && out.State != "tearing_down" && len(previews) < limit {
+		if out := h.lock(ctx, h.activityRow(row, true, since)); out.Deployed != "" && out.State != "tearing_down" && len(previews) < limit {
 			previews = append(previews, out)
 		}
 	}
@@ -363,6 +387,15 @@ func (h *Handler) Highlights(ctx context.Context, userID int64, limit int) (buil
 
 // activityRow maps one Builds or Previews row to display data. A failed
 // request is highlighted only while it needs attention (see failureAttention).
+// lock hides a row's logs, failure dismissal and teardown from someone
+// GitHub no longer lets read the repository's code.
+func (h *Handler) lock(ctx context.Context, row pages.ActivityRow) pages.ActivityRow {
+	if h.sourceDenied(ctx, row.RepoID) {
+		row.Locked, row.Teardown = true, false
+	}
+	return row
+}
+
 func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool, since time.Time) pages.ActivityRow {
 	available := row.Accessible && row.InstallationStatus == "active"
 	out := pages.ActivityRow{RepoID: row.RepoID, Number: row.Number, Name: row.FullName, Title: row.Title, Latest: row.HeadSha,
@@ -387,10 +420,13 @@ func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool, since tim
 	if row.WaitingReason != "" && (row.BuildState == "pending" || row.BuildState == "queued" || row.BuildState == "running") {
 		out.Waiting = environments.WaitingTitle(row.WaitingReason)
 	}
+	if row.ExecutionErrorCode == "worker_retrying" && (row.BuildState == "running" || row.BuildState == "queued") {
+		out.Waiting = "Retrying after a worker error"
+	}
 	switch {
 	case !deployments && row.BuildState == "failed":
-		code := ""
-		if row.FailureCurrent {
+		code := row.ExecutionErrorCode
+		if code == "" && row.FailureCurrent {
 			code = row.FailureCode
 		}
 		out.Failure, out.FailureCode = environments.FailureMessage(code), code
@@ -404,4 +440,59 @@ func (h *Handler) activityRow(row dbgen.ActivityRow, deployments bool, since tim
 		out.PublishedAt = ""
 	}
 	return out
+}
+
+func (h *Handler) WithSourceAccess(access SourceAccess) *Handler { h.sourceAccess = access; return h }
+
+// Admission says whether a workspace may build yet (early-access approval).
+type Admission interface {
+	Allowed(ctx context.Context, workspace int64) (bool, error)
+}
+
+// WithAdmission shows builds as waiting while the workspace is pending.
+func (h *Handler) WithAdmission(a Admission) *Handler       { h.admission = a; return h }
+func (h *Handler) WithPreviewDomain(domain string) *Handler { h.previewDomain = domain; return h }
+
+// sourceDenied reports whether GitHub definitively denies this person read
+// access to the repository's code. Building, tearing down, syncing and logs
+// need it, so they are not offered. When GitHub cannot answer they stay
+// offered: the server asks again, fresh, when one is used.
+func (h *Handler) sourceDenied(ctx context.Context, repo int64) bool {
+	if h.sourceAccess == nil {
+		return false
+	}
+	user, _, ok := h.users.UserIDs(ctx)
+	if !ok {
+		return true
+	}
+	key, now := [2]int64{user, repo}, h.now()
+	h.sourceMu.Lock()
+	answer, known := h.sourceAnswers[key]
+	h.sourceMu.Unlock()
+	if known && now.Before(answer.until) {
+		return answer.denied
+	}
+	allowed, err := h.sourceAccess.CanReadSource(ctx, user, repo)
+	if err != nil {
+		return false
+	}
+	h.sourceMu.Lock()
+	defer h.sourceMu.Unlock()
+	if h.sourceAnswers == nil || len(h.sourceAnswers) > 4096 {
+		h.sourceAnswers = map[[2]int64]sourceAnswer{}
+	}
+	h.sourceAnswers[key] = sourceAnswer{denied: !allowed, until: now.Add(30 * time.Second)}
+	return !allowed
+}
+
+func (h *Handler) canReadLogTail(ctx context.Context, repo int64) bool {
+	if h.sourceAccess == nil {
+		return true
+	}
+	user, _, ok := h.users.UserIDs(ctx)
+	if !ok {
+		return false
+	}
+	allowed, err := h.sourceAccess.CanReadSource(ctx, user, repo)
+	return err == nil && allowed
 }

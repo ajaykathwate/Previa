@@ -4,7 +4,8 @@
 
 A self-hosted service that builds and deploys isolated, publicly reachable preview
 environments for pull requests on connected GitHub repositories. Each repository
-defaults to **Manual**: its owner requests a build for a specific PR. Owners can
+defaults to **Manual**: a workspace Owner, Admin or granted Developer requests a
+build for a specific PR. Owners and Admins can
 enable **Automatic**, which builds the latest commit after a five-minute quiet
 period. Previews are torn down when the PR closes or merges.
 
@@ -12,11 +13,12 @@ The full pipeline runs end to end as an operational **local/staging** MVP: the
 worker composes source fetching, isolated builds, hardened previews, fenced HTTPS
 routing, PR feedback, durable teardown and housekeeping from validated settings, and
 the dashboard's Build, Retry, Rebuild and Tear down controls drive it. It is
-observable (correlated logs, Prometheus metrics, readiness, a Grafana dashboard
-and alerts), hardened for production, and packaged as release images with a
-production Compose file, host setup, encrypted backups with a rehearsed restore,
-CI and releases. Live proofs against hosted GitHub, real DNS and a real host remain
-before a public rollout. See [operating the MVP](docs/22-mvp-operations.md),
+observable (correlated, redacted logs; errors, uptime and backup checks reported
+to Sentry; private Prometheus metrics and readiness), hardened for production, and
+packaged with a production Compose file whose images the server builds from a
+release tag, host setup, encrypted backups with a rehearsed restore, and CI.
+Live proofs against hosted GitHub, real DNS and a real host remain before a public
+rollout. See [operating the MVP](docs/22-mvp-operations.md),
 [production deployment](docs/25-production-deployment.md), the
 [release report](docs/26-release-report.md) and the [roadmap](docs/27-roadmap.md). Start with the [documentation index](docs/README.md)
 for a guided reading order. Quick references: [tech stack](technical-docs/tech-stack.md),
@@ -122,6 +124,19 @@ even if the person who installed it changes their password or leaves the team.
 4. The repository defaults to **Manual**. Its owner may enable **Automatic** in
    the dashboard; this policy is stored by the platform, not in PR-controlled YAML.
    Connecting a repository or enabling Automatic does not bulk-build existing PRs.
+5. Optionally, the repository's **Setup** tab checks one open pull request's
+   commit (configuration, Dockerfile and context, without building) and walks to
+   its first preview; see [guided onboarding](docs/29-guided-onboarding.md).
+6. Each pull request has a **review page**: Owners, Admins and Developers write
+   its testing instructions, and everyone with preview access (Reviewers included)
+   records findings against the deployment they tested, replies, edits, removes and
+   resolves them in Previa; GitHub's comment links to it. See
+   [native review and feedback](docs/30-reviews.md).
+7. Previews are ready to test: the repository's `setup` seeds synthetic data into
+   each deployment's own database, the review page shows how setup went, people who
+   can build **Reset test data** (a confirmed Rebuild that seeds again), and Owners
+   and Admins store a preview-only **test access** login, sealed, that members
+   reveal on request. See [ready-to-test sample data](docs/31-test-data.md).
 
 Backend and API repositories can also declare platform-managed PostgreSQL, Redis
 and MySQL (`services`), a setup command for migrations and seed data (`setup`), up to
@@ -225,9 +240,14 @@ must match the worker's architecture; Windows and GPU workloads are unsupported.
 
 The dashboard supports login, installation linking and the accepted manual build
 workflow. Owners need repository mode controls and a way to select a PR and request
-its latest commit. GitHub comments/checks remain the review-facing feedback channel.
+its latest commit. Review feedback lives in Previa: each pull request's review page
+holds its testing instructions and findings, and the GitHub comment links to it
+while comments and checks keep reporting builds.
 
-Current pages are Overview, Repositories, Builds, Previews and Developer Tools.
+Current pages are Overview, Repositories, Builds, Previews, Workspaces (members,
+invitations and settings), and Developer Tools, plus a review page per pull
+request. Reviewer navigation exposes only permitted previews, their review pages
+and team settings.
 The workspace uses a "signal" theme (graphite neutrals, a lime accent, light and
 dark modes that follow the OS with a manual toggle, system sans plus monospace for
 commits and branches). A grouped sidebar collapses to an icon rail on medium screens
@@ -256,9 +276,9 @@ requires an owner-controlled, CSRF-protected confirmation modal. Search, sync
 progress and policy saves update in place through HTMX, and committed changes
 (sync progress, webhook and mergeability updates) are pushed to open repository
 pages over Server-Sent Events rather than polled. Each repository also has a
-**Secrets** tab where its owner stores encrypted runtime values (write-only, never
-given to fork PRs), several at once or from pasted `.env` text, and deletes the
-selected ones together. Page URLs are shareable
+**Secrets** tab where its Owners and Admins keep one encrypted `.env` file of
+runtime values (comments kept, values masked until they choose to edit, never
+given to fork PRs). Page URLs are shareable
 and navigation works without JavaScript.
 
 PR discovery, latest/requested/deployed commit views and the owner's Build,
@@ -270,7 +290,7 @@ readable without JavaScript, with Copy and Download). On PR details, log links
 open the latest 300 events below the main card, with a link to the full page.
 Log viewers include copyable inline dates and Previa/application source filters
 (both shown by default), plus literal text search. When no worker that can build
-is running, the build action is shown disabled with the reason and the fix (for
+is running, no build action is offered: the page states the reason and the fix (for
 example a worker without a preview domain), and the endpoints refuse with 503
 instead of recording work.
 See the [user guide](technical-docs/user-guide.md) for the current browser workflow.
@@ -283,6 +303,15 @@ See the [user guide](technical-docs/user-guide.md) for the current browser workf
   it is on Builds only.
 - All lists/actions are scoped to the logged-in installation owner. Mutations
   require CSRF protection; destructive confirmation uses a modal.
+
+**Your profile** shows the editable Previa profile (photo, first/last name, email,
+session) beside connected login methods and the read-only GitHub account when connected, with in-place edits confirmed by a
+small toast. Personal first/last names take precedence over GitHub usernames without
+changing the linked identity; uploaded photos are visible only to teammates. Shared access forms support searchable repository
+lists and keep invitation errors in the form. Previa resource links and form
+identifiers use persisted random UUIDs; GitHub PR numbers remain readable labels.
+See [shared workspaces](docs/28-shared-workspaces.md) and
+[sign-in/profile behavior](docs/04-github-sign-in-and-app.md).
 
 ### 2.5 Explicit MVP boundaries (what's out of scope for v1)
 
@@ -339,6 +368,46 @@ Reviewer clicks preview link
    → Router (subdomain → container)
    → Running container serves the request directly
 ```
+
+### Shared team workspace requirement
+
+Workspace membership is authoritative for Previa access. Owner/Admin access spans
+that workspace; Developer and Reviewer access requires explicit repository grants.
+Source-sensitive actions and logs additionally verify current GitHub permission
+and numeric identity. Reviewer access intentionally includes granted private
+previews without source permission. Invitations expire and require consent from
+the addressed GitHub account. Ownership handover preserves connections, URLs and
+shared workspace quotas. Removal fences unfinished manual builds and revokes
+protected previews and live streams.
+
+A workspace represents one team with multiple members and repositories; nested
+teams are not part of this model. A person can join multiple workspaces. Members
+and Workspace settings have separate direct sidebar destinations. Owners/Admins
+can edit the name, description and logo in Settings; previews stay on Previews.
+People open as member profiles with workspace-scoped recent activity; removed
+members stay on a Deactivated tab and can be re-invited with their previous
+access. Invitations also appear inside Previa for the invited GitHub account. A new
+workspace opens on a setup checklist, and a sole owner can delete a workspace that
+has no connected GitHub App installation.
+
+The detailed contract and current user flows are in
+[Shared team workspaces](docs/28-shared-workspaces.md). References below to a
+GitHub repository owner describe the GitHub connection authority; they do not
+create a separate installer-only dashboard authorization path. Review feedback,
+billing and deletion remain the later features specified in
+[the team SaaS plan](README-MVP-PRODUCT-EXPANSION.md).
+
+### Guided onboarding requirement
+
+A repository's Setup tab takes people who can build (Owner, Admin, Developer) from
+a connected repository to a preview opened from Previa, for one open pull request:
+connection, a bounded check of that exact commit's configuration (run by a worker
+from a few GitHub reads, never the archive), what the app declares it needs, an
+explicit build through the existing action, and opening it. Every step is derived
+from current records; only checks and opens are stored. Checks never build, never
+enable Automatic builds and are limited per commit and per workspace hour. The
+Overview's next steps follow the person's role, and accepted invitations land
+Reviewers on Previews. Details: [guided onboarding](docs/29-guided-onboarding.md).
 
 ### 3.3 Key design decisions worth being able to explain
 
@@ -435,8 +504,8 @@ forward ([docs/12-routing-and-https.md](docs/12-routing-and-https.md)).
 | Container runtime | Docker Engine, hardened, optionally gVisor |
 | Image builds | BuildKit |
 | Frontend | templ + HTMX + SSE + Tailwind |
-| Deployment | Single VPS, Docker Compose |
-| Observability | Prometheus + Grafana (+ optional OpenTelemetry) |
+| Deployment | Single VPS (OVHcloud VPS-2), Docker Compose, images built on the server from a release tag; Cloudflare DNS and R2 backups; SSH over Tailscale |
+| Observability | `slog` logs and Sentry (errors, logs, uptime and backup monitors, email alerts); private Prometheus metrics (Prometheus + Grafana optional, + optional OpenTelemetry) |
 
 ### 4.3 Libraries in detail
 
@@ -464,6 +533,7 @@ forward ([docs/12-routing-and-https.md](docs/12-routing-and-https.md)).
 - Styling: Tailwind CSS via the standalone CLI (no Node toolchain needed)
 
 **Observability**
+- Errors, logs and alerts: `github.com/getsentry/sentry-go` (and its `slog` integration), sending the already-redacted warnings and errors to Sentry
 - Metrics: `github.com/prometheus/client_golang`
 - Tracing (optional): OpenTelemetry Go SDK
 
@@ -577,13 +647,14 @@ each one turns on, and what happens without it, is in
 [docs/22-mvp-operations.md](docs/22-mvp-operations.md).
 
 - `DATABASE_URL`
-- `APP_ENV` (`development` or `production`), `LOG_LEVEL`, `INTERNAL_ADDR` / `WORKER_INTERNAL_ADDR` (internal health and metrics listeners), `TRUSTED_PROXIES`, `BACKUP_STATUS_FILE` (server), `BUILDS_PAUSED` (worker; the execution kill switch); see [docs/23-observability-and-hardening.md](docs/23-observability-and-hardening.md)
+- `SUPPORT_EMAIL`, `OPERATOR_NAME`, `SUPPORT_OPERATOR_GITHUB_IDS` (immutable numeric user IDs; empty denies operator access), support limits and deletion-journal bounds/retention configure [account exits and support](docs/34-accounts-support-and-deletion.md). `/account`, `/help`, `/status` and `/policies/*` expose real controls and information. The independent encrypted journal must be uploaded before deletion completes and replayed before a restore serves traffic.
+- `APP_ENV` (`development` or `production`), `LOG_LEVEL`, `SENTRY_DSN` (server and worker report warnings and errors to Sentry; the backup checks in with it), `INTERNAL_ADDR` / `WORKER_INTERNAL_ADDR` (internal health and metrics listeners), `TRUSTED_PROXIES`, `BACKUP_STATUS_FILE` (server), `BUILDS_PAUSED` (worker; the execution kill switch); see [docs/23-observability-and-hardening.md](docs/23-observability-and-hardening.md)
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
 - `APP_BASE_URL` (server; also the worker once previews are routed: unknown preview hosts redirect to it)
 - `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`; server and worker), `ROUTER_DYNAMIC_DIR`, `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS`, `ROUTER_METRICS_ADDRESS` (preview request counts), `PREVIEW_ACCESS_URL` (private previews) (worker; route controller)
 - `SESSION_SECRET` (server); `SECRETS_ENCRYPTION_KEYS`, `SECRETS_ACTIVE_KEY_VERSION` (server and worker; versioned keyring for repository secrets, optional for the worker, which then fails repositories with secrets closed)
-- `MAX_CONCURRENT_BUILDS` (builds at once across all workers), `BUILDS_PER_ACCOUNT`, `BUILD_MINUTES_PER_ACCOUNT_DAY`, `PREVIEW_MAX_PER_ACCOUNT` (fair sharing between accounts), `ENV_TTL_HOURS` (preview lifetime after its latest publication), `PREVIEW_IDLE_SLEEP` (idle previews sleep until the next visit), `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE`, `BUILD_CACHE_BUDGET` (worker; housekeeping and capacity, see [docs/15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md)), `BUILD_LOG_RETENTION_DAYS` (server and worker; days finished build logs are kept)
+- `MAX_CONCURRENT_BUILDS` (builds at once across all workers), `BUILDS_PER_ACCOUNT`, `BUILD_MINUTES_PER_ACCOUNT_DAY`, `PREVIEW_MAX_PER_ACCOUNT` (additional workspace safety ceilings; zero disables only the extra ceiling). Every workspace also has a finite free entitlement: 300 build minutes per UTC calendar month, one concurrent build and two preview slots; [Usage and the free plan](docs/33-usage-and-free-plan.md) describes accounting and cutover. `ENV_TTL_HOURS` (preview lifetime after its latest publication), `PREVIEW_IDLE_SLEEP` (idle previews sleep until the next visit), `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE`, `BUILD_CACHE_BUDGET` (worker; housekeeping and capacity, see [docs/15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md)), `BUILD_LOG_RETENTION_DAYS` (server and worker; days finished build logs are kept)
 - `BUILD_TIMEOUT`, `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS`, `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK`, `BUILD_EGRESS`, `BUILD_EGRESS_HOSTS`, `BUILDKIT_IMAGE`, `SOURCE_WORKSPACE_ROOT` (worker; isolated image builds and exact-commit source workspaces)
 - `EGRESS_IMAGE`, `PREVIEW_ALLOW_ROOT`, `PREVIEW_WRITABLE_ROOTFS`, `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT`, `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY`, `PREVIEW_OCI_RUNTIME` (worker; hardened previews and the shared egress proxy)
 - `PREVIEW_SERVICE_CATALOG`, `PREVIEW_SETUP_TIMEOUT` (worker; managed services and the setup command), `PREVIEW_OUTBOUND_PORTS` (server and worker; owner-approved outbound connections), see [docs/11-backend-previews.md](docs/11-backend-previews.md)
@@ -591,19 +662,23 @@ each one turns on, and what happens without it, is in
 
 ### 4.9 Infrastructure and deployment
 
-- One VPS (OVHcloud VPS-2 or similar) running Docker; control plane (Go server, worker, Postgres, Traefik) via Docker Compose
-- DNS: a wildcard A record (`*.preview.yourdomain.com`) pointing at the VPS
-- Provisioning: Terraform for the VPS and DNS, or a documented setup script for the MVP
-- CI/CD: GitHub Actions for tests and image builds; `goreleaser` for versioned releases
-- Backups: nightly `pg_dump` to object storage
+- One VPS (OVHcloud VPS-2) running Docker; control plane (Go server, worker, Postgres, Traefik) via Docker Compose
+- DNS on Cloudflare: `previa.live` for the landing page and dashboard, and a wildcard A record (`*.preview.<preview domain>`) on a separate registrable domain, both pointing at the VPS
+- Provisioning: a documented setup script, no Terraform (one server)
+- CI/CD: GitHub Actions runs CI on pull requests into `master`; a version tag marks a release, and the operator checks it out on the server and builds the images there (GoReleaser and GHCR publishing stay available as a manual, optional workflow)
+- Backups: nightly `pg_dump` to object storage (Cloudflare R2)
+- Monitoring: Sentry's free plan (errors and logs from the server and worker, an uptime monitor, the backup's cron monitor, email alerts)
+- Access: SSH only over Tailscale (port 22 closed to the internet); lazydocker for containers and logs
 
 Implemented as [docs/25-production-deployment.md](docs/25-production-deployment.md)
-describes: `deploy/production/compose.yml` (PostgreSQL, a migration step, server,
-worker, Traefik, optional Prometheus and Grafana), release images from the
-`Dockerfile`, the documented setup script `deploy/production/setup.sh` (Terraform
-is optional and not provided), GitHub Actions CI and tag-driven releases with
-GoReleaser, and a nightly `pg_dump` encrypted with age before it is copied to
-object storage through rclone, with a scripted, rehearsed restore.
+describes, at about €8 a month plus VAT: `deploy/production/compose.yml`
+(PostgreSQL, a migration step, server, worker, Traefik; Prometheus and Grafana as
+an optional profile production does not run), images built on the server from the
+`Dockerfile` of the checked-out tag, the setup script `deploy/production/setup.sh`
+(Docker, Tailscale, lazydocker, firewall, secrets, backup timer), GitHub Actions
+CI, error reporting in `internal/platform/errortracking`, and a nightly `pg_dump`
+encrypted with age before it is copied to R2 through rclone and checked in with
+Sentry, with a scripted, rehearsed restore.
 
 ### 4.10 Operational limits to set on day one
 
@@ -611,7 +686,7 @@ object storage through rclone, with a scripted, rehearsed restore.
 - Automatic builds become eligible after a five-minute trailing quiet period;
   manual requests bypass this delay but still wait for worker capacity.
 - Disk pruning job for old images and build cache (disk exhaustion is the most likely real-world failure)
-- Per-repo cap on concurrent active previews, optional per-account caps on builds, previews and daily build minutes, with turns between accounts
+- Per-repo and workspace preview caps, finite workspace build allowances and concurrency, additional operator ceilings, and turns between workspaces
 - Build timeout and image size limit
 - Data retention: build logs 14 days (configurable to 90, deletable by the owner), webhook receipts and finished operations 30 days, closed pull requests 90 days; backups keep deleted data at most 30 more days
 
@@ -622,3 +697,23 @@ object storage through rclone, with a scripted, rehearsed restore.
 - Stronger isolation: Firecracker microVMs
 - Bigger logs: move build logs to S3/MinIO or Loki
 - Multi-service previews: more managed service kinds, or `docker-compose.yml` support beyond the managed PostgreSQL, Redis and MySQL of [docs/11](docs/11-backend-previews.md)
+
+
+### Installation recovery and early access
+
+[Installation recovery and workspace approval](docs/35-installation-recovery-and-early-access.md)
+adds App-authenticated missed-webhook recovery through the existing revocation
+path, and operator approval for new workspaces. Existing workspaces are preserved.
+`EARLY_ACCESS_ENABLED` defaults true; operators are numeric IDs configured in env.
+Approval gates connections and compute, while cleanup and account exits remain
+available. Migration 45 and matching server/worker configuration are required.
+
+### Google sign-in and reviewer invitations
+
+[Google sign-in](docs/36-google-sign-in-and-reviewer-invitations.md) extends human
+authentication without assigning roles by provider. Reviewers can join by a
+verified-email invitation and review shared previews without GitHub. Existing
+accounts explicitly connect the second method from Your profile; emails never
+automatically merge identities. Technical roles and workspace creation require
+a connected GitHub account, normal authorization and F6 approval. Optional
+`GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`, migration0046/schema46.

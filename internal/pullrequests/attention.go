@@ -2,12 +2,11 @@ package pullrequests
 
 import (
 	"errors"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
-
-	"github.com/go-chi/chi/v5"
 
 	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
 )
@@ -77,7 +76,7 @@ func (h *Handler) ownedFailurePR(w http.ResponseWriter, r *http.Request) (user i
 		h.fail(w, r, err)
 		return 0, row, false
 	}
-	n, err := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
+	n, err := publicid.PRNumber(r, id)
 	if err != nil || n <= 0 {
 		http.NotFound(w, r)
 		return 0, row, false
@@ -132,7 +131,7 @@ func (h *Handler) restoreFailure(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) returnAfterFailureAction(w http.ResponseWriter, r *http.Request, row dbgen.OwnedPRRow, dismissed bool) {
 	switch r.PostFormValue("return") {
 	case "overview":
-		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+		publicid.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 	case "builds":
 		v := url.Values{}
 		if page, err := strconv.ParseInt(r.PostFormValue("page"), 10, 64); err == nil && page > 1 {
@@ -141,7 +140,7 @@ func (h *Handler) returnAfterFailureAction(w http.ResponseWriter, r *http.Reques
 		if f := r.PostFormValue("failures"); f != "" && validFailures(f) {
 			v.Set("failures", f)
 		}
-		if repoID, err := strconv.ParseInt(r.PostFormValue("repo_id"), 10, 64); err == nil && repoID > 0 {
+		if repoID, err := publicid.Value(r, "repository", r.PostFormValue("repo_id"), 0); err == nil && repoID > 0 {
 			v.Set("repo_id", strconv.FormatInt(repoID, 10))
 		}
 		if dismissed {
@@ -151,8 +150,8 @@ func (h *Handler) returnAfterFailureAction(w http.ResponseWriter, r *http.Reques
 		if len(v) > 0 {
 			target += "?" + v.Encode()
 		}
-		http.Redirect(w, r, target, http.StatusSeeOther)
+		publicid.Redirect(w, r, target, http.StatusSeeOther)
 	default:
-		http.Redirect(w, r, "/repositories/"+strconv.FormatInt(row.RepoID, 10)+"/pull-requests/"+strconv.Itoa(int(row.Number)), http.StatusSeeOther)
+		publicid.Redirect(w, r, "/repositories/"+strconv.FormatInt(row.RepoID, 10)+"/pull-requests/"+strconv.Itoa(int(row.Number)), http.StatusSeeOther)
 	}
 }

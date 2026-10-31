@@ -14,6 +14,16 @@ survives crashes, retries and races. Scheduling the decision is
   12:04 make the latest commit eligible at 12:09 (capacity can add queue wait).
 - **Manual requests bypass the quiet period** but still obey capacity, access and
   safety checks.
+- **The wait is visible and live.** While a commit waits out its quiet period, the
+  pull request's status card reads *New commit `b8d09e7` builds in 4:32* (or
+  *Commit … builds in* before a first preview) with a ticking countdown, says
+  another push restarts the wait and that a live preview keeps serving the
+  earlier commit meanwhile, and offers **Build now**. The PR list row (*New commit
+  builds in 4:32* or *Builds in 4:32*), Builds and the Overview (*Starts in 4:32*)
+  count down too. A push during the wait updates every open page live, and the
+  countdown starts again from 5:00. Once the deadline passes the card reads
+  *Starting the build of …* until a worker takes it; it never counts below 0:00.
+  Without JavaScript the countdown shows the time left when the page loaded.
 - The mode is **owner-controlled platform data**, never a `.previewrc.yaml` field:
   a PR contributor must not be able to switch on platform spend.
 
@@ -154,7 +164,10 @@ operation keys, reporting and cleanup ([17](17-build-scheduling.md#same-generati
 - `ObserveTx` composes with a trusted lifecycle update in one transaction and reads
   the locked PR row, never a caller-supplied SHA. Manual observations create no
   work and supersede stale intent; Automatic observations of a new generation set a
-  deadline; a duplicate observation does not reset it. Discovery never calls it.
+  deadline; a duplicate observation does not reset it. Webhooks call it; so does a
+  confirmed new commit on a tracked open PR (housekeeping or Sync Pull Requests),
+  because GitHub does not retry a webhook it could not deliver. Connection
+  discovery and the check before a manual build never call it.
 
 ## Code
 
@@ -177,3 +190,24 @@ rename/reinstall, duplicate keys and actions, Retry/Rebuild, stale same-SHA
 transitions, Manual observation, Automatic deadlines, manual override, mode switches
 during pending/queued/running work, close/new-commit supersession, concurrent
 requests and rollback after a failed cancellation.
+
+## Execution failures and recovery
+
+Migration 0034 stores the admitted River job ID on the exact current build
+revision, separately from the PR's domain identity. New requests clear the old
+execution link and error category. An attempt error records a safe retry notice;
+admission clears it when the next attempt starts. Exhausted attempts or failed
+finalization use a bounded failure-only transaction to mark that exact request
+failed. It cannot publish, overwrite a successor, or change an existing successful
+request. Raw worker/SQL errors stay in operator logs rather than being copied into
+the product UI or GitHub comments.
+
+The existing scheduler recovery also detects completed/discarded/cancelled jobs
+whose request was left active and records terminal failure instead of silently
+starting that same revision over. Legacy requests without a stored job ID are
+matched by captured PR, generation, revision and commit. This recovery runs after
+a worker restarts as well. Existing preview routes remain available; retry creates
+a new authorized revision. The PR headline distinguishes automatic retry and an
+unavailable worker from active build progress. The original missing database
+function remains a separate operator diagnosis; these changes do not recreate it
+or alter migration 0030.

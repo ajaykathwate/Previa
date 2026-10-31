@@ -62,7 +62,7 @@ const (
 	// MaxProcesses caps the unrouted processes (queue workers and the like)
 	// one preview runs next to its app.
 	MaxProcesses = 3
-	// MaxCommandArgs and MaxCommandBytes bound a setup or process command.
+	// MaxCommandArgs and MaxCommandBytes bound a setup, seed or process command.
 	MaxCommandArgs  = 64
 	MaxCommandBytes = 4096
 )
@@ -72,7 +72,7 @@ var ServiceKinds = []string{"postgres", "redis", "mysql"}
 
 var (
 	processName          = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
-	reservedProcessNames = []string{"app", "setup", "postgres", "redis", "mysql"}
+	reservedProcessNames = []string{"app", "setup", "seed", "postgres", "redis", "mysql"}
 	versionText          = regexp.MustCompile(`^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$`)
 )
 
@@ -93,6 +93,10 @@ type Config struct {
 	// Setup is the optional one-off command (argv) that runs once per
 	// candidate after its services are ready and before the app starts.
 	Setup []string `yaml:"setup" json:"setup,omitempty"`
+	// Seed is the optional one-off command (argv) that creates the starting
+	// data: it runs after Setup, only on an empty database and in baseline
+	// builds (docs/32-persistent-test-data.md). It needs a SQL service.
+	Seed []string `yaml:"seed" json:"seed,omitempty"`
 	// Processes are unrouted commands from the same image, sorted by name.
 	Processes []Process `yaml:"processes" json:"processes,omitempty"`
 	// DocsPath is an optional path on the preview's own host that reports
@@ -126,6 +130,7 @@ type document struct {
 	ResourceTier    string            `yaml:"resource_tier"`
 	Services        map[string]any    `yaml:"services"` // read from the AST, which keeps versions as written
 	Setup           []string          `yaml:"setup"`
+	Seed            []string          `yaml:"seed"`
 	Processes       []processDocument `yaml:"processes"`
 	DocsPath        string            `yaml:"docs_path"`
 }
@@ -179,7 +184,7 @@ func ParseFor(data []byte, platform Platform) (Result, error) {
 	cfg := Config{
 		Context:    doc.Context,
 		Dockerfile: doc.Dockerfile, Port: doc.Port, Env: doc.Env, HealthCheckPath: doc.HealthCheckPath,
-		ResourceTier: doc.ResourceTier, Setup: doc.Setup, DocsPath: doc.DocsPath,
+		ResourceTier: doc.ResourceTier, Setup: doc.Setup, Seed: doc.Seed, DocsPath: doc.DocsPath,
 	}
 	var issues []Issue
 	cfg.Context, cfg.BuildTimeout, issues = resolveBuildSettings(doc.Context, doc.BuildTimeout, platform.BuildTimeout)
@@ -213,6 +218,12 @@ func ParseFor(data []byte, platform Platform) (Result, error) {
 	issues = append(issues, serviceIssues...)
 	if doc.Setup != nil {
 		issues = append(issues, validateCommand("setup", doc.Setup)...)
+	}
+	if doc.Seed != nil {
+		issues = append(issues, validateCommand("seed", doc.Seed)...)
+		if !slices.ContainsFunc(found.services, func(s requestedService) bool { return s.Kind == "postgres" || s.Kind == "mysql" }) {
+			issues = append(issues, Issue{Field: "seed", Code: "seed_without_database", Message: "A seed command needs a database: add postgres or mysql under services."})
+		}
 	}
 	var processIssues []Issue
 	cfg.Processes, processIssues = validateProcesses(doc.Processes)
@@ -330,7 +341,7 @@ func validateProcesses(docs []processDocument) ([]Process, []Issue) {
 		case !processName.MatchString(doc.Name):
 			issues = append(issues, Issue{Field: field + ".name", Code: "invalid_process_name", Message: "Use a lowercase name of letters, digits and hyphens, starting with a letter, such as worker."})
 		case slices.Contains(reservedProcessNames, doc.Name):
-			issues = append(issues, Issue{Field: field + ".name", Code: "reserved_process_name", Message: "app, setup, postgres, redis and mysql are reserved; choose another name."})
+			issues = append(issues, Issue{Field: field + ".name", Code: "reserved_process_name", Message: "app, setup, seed, postgres, redis and mysql are reserved; choose another name."})
 		case seen[doc.Name]:
 			issues = append(issues, Issue{Field: field + ".name", Code: "duplicate_process", Message: "Each process needs its own name."})
 		}

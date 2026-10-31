@@ -1,0 +1,110 @@
+package components
+
+import "strconv"
+
+// WorkspaceSwitcher shows the current workspace and switches between them.
+// Pending invitations addressed to the viewer are counted on it.
+templ WorkspaceSwitcher() {
+	{{ w := Workspace(ctx) }}
+	if w.ID > 0 {
+		<details class="workspace-switcher" data-workspace-switcher>
+			<summary title={ w.Name } aria-label={ "Switch workspace: " + w.Name }>
+				@WorkspaceAvatar(w.Name, w.ID, w.LogoVersion)
+				<span class="workspace-switcher-label">
+					<strong data-current-workspace-name>{ w.Name }</strong>
+					<span class="workspace-switcher-role" data-workspace-role={ w.Role }>{ RoleName(w.Role) }</span>
+				</span>
+				if w.Invitations > 0 {
+					<span class="switcher-badge" title={ invitationCount(w.Invitations) }>{ strconv.FormatInt(w.Invitations, 10) }</span>
+				}
+				<span class="workspace-switcher-chevron">
+					@ChevronDownIcon()
+				</span>
+			</summary>
+			<div class="workspace-switcher-menu">
+				<p class="switcher-menu-label">Workspaces</p>
+				for _, item := range w.Items {
+					if item.ID == w.ID {
+						<div class="switcher-item" aria-current="true">
+							@WorkspaceAvatar(item.Name, item.ID, item.LogoVersion)
+							<span>
+								<strong>{ item.Name }</strong>
+								<small data-workspace-role={ item.Role }>{ RoleName(item.Role) }</small>
+							</span>
+							@CheckIcon()
+						</div>
+					} else {
+						<form method="post" action={ PublicURL(ctx, WorkspaceURL(item.ID, "select")) }>
+							<input type="hidden" name="csrf_token" value={ w.CSRF }/>
+							<button type="submit" class="switcher-item">
+								@WorkspaceAvatar(item.Name, item.ID, item.LogoVersion)
+								<span>
+									<strong>{ item.Name }</strong>
+									<small data-workspace-role={ item.Role }>{ RoleName(item.Role) }</small>
+								</span>
+							</button>
+						</form>
+					}
+				}
+				<div class="workspace-switcher-shortcuts">
+					if w.Invitations > 0 {
+						<a href="/workspaces#invitations">
+							@SendIcon()
+							<span>Invitations</span>
+							<span class="team-count">{ strconv.FormatInt(w.Invitations, 10) }</span>
+						</a>
+					}
+					if GitHubConnected(ctx) {
+<button type="button" commandfor="create-workspace" command="show-modal" data-open-dialog="create-workspace" aria-haspopup="dialog">
+						@PlusIcon()
+						<span>Create workspace</span>
+					</button>
+}
+
+					<a href="/workspaces">
+						@OverviewIcon()
+						<span>All workspaces</span>
+					</a>
+				</div>
+			</div>
+		</details>
+	} else {
+		<a class="workspace-switcher-empty" href="/workspaces" title="Choose a workspace">
+			<span class="workspace-avatar" aria-hidden="true">
+				@PlusIcon()
+			</span>
+			<span class="workspace-switcher-label">
+				<strong>Choose a workspace</strong>
+				<span class="workspace-switcher-role">
+					if w.Invitations > 0 {
+						{ invitationCount(w.Invitations) }
+					} else {
+						Create one or join a team
+					}
+				</span>
+			</span>
+		</a>
+	}
+}
+
+func invitationCount(n int64) string {
+	if n == 1 {
+		return "1 invitation waiting"
+	}
+	return strconv.FormatInt(n, 10) + " invitations waiting"
+}
+
+templ WorkspaceAvatar(name string, id, version int64) {
+	<span class="workspace-avatar" aria-hidden="true">
+		{ WorkspaceInitial(name) }
+		if version>0 {
+			<img src={ PublicURL(ctx, WorkspaceLogoURL(id, version)) } alt="" width="64" height="64" decoding="async"/>
+		}
+	</span>
+}
+
+templ WorkspaceRole(role string) {
+	<span class={ "badge tone-neutral team-role",templ.KV("team-role-owner",role=="owner") } data-workspace-role={ role }>{ RoleName(role) }</span>
+}
+
+

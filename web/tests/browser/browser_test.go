@@ -152,7 +152,8 @@ func TestBrowserRegression(t *testing.T) {
 			DeveloperTools: true, Identity: handler.UserIDs,
 			Summary: func(ctx context.Context, _ int64) (dashboardpages.Summary, error) {
 				if sessions.GetString(ctx, "fixture-overview") != "busy" {
-					return dashboardpages.Summary{}, nil
+					// A new owner: nothing connected yet.
+					return dashboardpages.Summary{Journey: dashboardpages.Journey{Manager: true}}, nil
 				}
 				return fixtureOverview(time.Now()), nil
 			},
@@ -198,7 +199,7 @@ func TestBrowserRegression(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		secretService, err := secrets.NewService(&fixtureSecrets{names: map[int64]map[string]time.Time{}}, fixtureKeys)
+		secretService, err := secrets.NewService(&fixtureSecrets{}, fixtureKeys)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -419,7 +420,9 @@ func TestBrowserRegression(t *testing.T) {
 	server.Start()
 	t.Cleanup(server.Close)
 	t.Cleanup(hub.Close) // Runs first, ending open event streams so Close returns.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// The full suite now has 55 scenarios. Keep per-action browser deadlines,
+	// but allow the complete process to finish alongside local Docker tests.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	args := []string{"--test"}
 	if pattern := os.Getenv("UI_TEST_PATTERN"); pattern != "" {
@@ -455,11 +458,12 @@ func (fixtureProvider) Authenticate(_ context.Context, code string) (auth.Identi
 	return auth.Identity{ID: 42, Username: "design-review"}, nil
 }
 
-// fixtureSecrets keeps names only; sealed values are discarded after encryption.
+// fixtureSecrets keeps sealed .env files and values in memory.
 type fixtureSecrets struct {
-	mu    sync.Mutex
-	names map[int64]map[string]time.Time
-	build map[int64]map[string]bool
+	mu     sync.Mutex
+	files  map[int64]secrets.SealedFile
+	values map[int64]map[string]secrets.SealedSecret
+	build  map[int64]map[string]bool
 }
 
 func (f *fixtureSecrets) Repository(_ context.Context, _ int64, repoID int64) (secrets.RepositoryView, error) {
@@ -476,56 +480,56 @@ func (f *fixtureSecrets) List(ctx context.Context, user, repoID int64) ([]secret
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []secrets.Summary
-	for name, at := range f.names[repoID] {
-		out = append(out, secrets.Summary{Name: name, UpdatedAt: at, Build: f.build[repoID][name]})
+	for name := range f.values[repoID] {
+		out = append(out, secrets.Summary{Name: name, UpdatedAt: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC), Build: f.build[repoID][name]})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
-func (f *fixtureSecrets) PutMany(ctx context.Context, user, repoID int64, items []secrets.SealedSecret) (int, error) {
+func (f *fixtureSecrets) EnvFile(ctx context.Context, user, repoID int64) (secrets.SealedFile, []secrets.SealedSecret, error) {
+	if _, err := f.Repository(ctx, user, repoID); err != nil {
+		return secrets.SealedFile{}, nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var sealed []secrets.SealedSecret
+	for _, value := range f.values[repoID] {
+		sealed = append(sealed, value)
+	}
+	sort.Slice(sealed, func(i, j int) bool { return sealed[i].Name < sealed[j].Name })
+	return f.files[repoID], sealed, nil
+}
+
+func (f *fixtureSecrets) SaveEnvFile(ctx context.Context, user, repoID int64, save secrets.FileSave) (int64, error) {
 	repo, err := f.Repository(ctx, user, repoID)
-	if err != nil || !repo.Available {
+	if err != nil || (!repo.Available && len(save.Upsert) > 0) {
 		return 0, secrets.ErrUnavailable
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.names[repoID] == nil {
-		f.names[repoID] = map[string]time.Time{}
+	if f.files[repoID].Revision != save.Expected {
+		return 0, secrets.ErrChanged
 	}
-	created := 0
-	for _, item := range items {
-		if len(item.Value) == 0 {
-			return 0, errors.New("fixture expected ciphertext")
-		}
-		if _, exists := f.names[repoID][item.Name]; !exists {
-			created++
-		}
+	if f.files == nil {
+		f.files, f.values, f.build = map[int64]secrets.SealedFile{}, map[int64]map[string]secrets.SealedSecret{}, map[int64]map[string]bool{}
 	}
-	if len(f.names[repoID])+created > secrets.MaxSecretsPerRepository {
-		return 0, secrets.ErrLimit
+	if f.values[repoID] == nil {
+		f.values[repoID], f.build[repoID] = map[string]secrets.SealedSecret{}, map[string]bool{}
 	}
-	for _, item := range items {
-		f.names[repoID][item.Name] = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
-	}
-	return created, nil
-}
-
-func (f *fixtureSecrets) DeleteMany(ctx context.Context, user, repoID int64, names []string) (int, error) {
-	if _, err := f.Repository(ctx, user, repoID); err != nil {
-		return 0, err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	deleted := 0
-	for _, name := range names {
-		if _, exists := f.names[repoID][name]; exists {
-			deleted++
-			delete(f.names[repoID], name)
+	for name := range f.values[repoID] {
+		if !slices.Contains(save.Keep, name) {
+			delete(f.values[repoID], name)
 			delete(f.build[repoID], name)
 		}
 	}
-	return deleted, nil
+	for _, item := range save.Upsert {
+		f.values[repoID][item.Name] = item
+	}
+	revision := save.Expected + 1
+	f.files[repoID] = secrets.SealedFile{Value: save.File.Value, Version: save.File.Version, Revision: revision,
+		UpdatedAt: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC), UpdatedBy: "design-review"}
+	return revision, nil
 }
 
 func (f *fixtureSecrets) SetBuild(ctx context.Context, user, repoID int64, name string, build bool) (bool, error) {
@@ -535,14 +539,8 @@ func (f *fixtureSecrets) SetBuild(ctx context.Context, user, repoID int64, name 
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, ok := f.names[repoID][name]; !ok {
+	if _, ok := f.values[repoID][name]; !ok {
 		return false, nil
-	}
-	if f.build == nil {
-		f.build = map[int64]map[string]bool{}
-	}
-	if f.build[repoID] == nil {
-		f.build[repoID] = map[string]bool{}
 	}
 	changed := f.build[repoID][name] != build
 	f.build[repoID][name] = build
@@ -738,6 +736,7 @@ func fixtureOverview(now time.Time) dashboardpages.Summary {
 	return dashboardpages.Summary{
 		Installations: 2, Repositories: 6, Available: 5, OpenPRs: 12, Waiting: 2, Building: 1, Failed: 1, FailedOlder: 2, Live: 4, AttentionDays: 7,
 		Workers: dashboardpages.Workers{Discovery: true, Execution: true, Reporting: true, Housekeeping: true},
+		Journey: dashboardpages.Journey{Manager: true, Repositories: 6, Available: 5, Checked: true, Published: true, Opened: true, FocusID: 1, FocusName: "fixture-owner/repository-1"},
 		Builds: []prpages.ActivityRow{
 			{RepoID: 1, Number: 3, Name: "fixture-owner/repository-1", Title: "Fixture pull request 3", Latest: "latest-commit", Requested: "latest-commit",
 				State: "running", RequestCurrent: true, RequestSource: "manual", Available: true, Deadline: at(-3 * time.Minute), StartedAt: at(-2 * time.Minute)},

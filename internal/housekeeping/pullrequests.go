@@ -14,10 +14,11 @@ import (
 )
 
 // Verifier reads one tracked PR from GitHub and records what it found under
-// the usual fences; *pullrequests.SyncService implements it. It never
-// authorizes work.
+// the usual fences; *pullrequests.SyncService implements it. A new commit it
+// finds counts as a push (Automatic schedules it after the quiet period);
+// nothing else authorizes work.
 type Verifier interface {
-	VerifyUpstream(ctx context.Context, pullRequestID int64) (environments.UpstreamSnapshot, error)
+	ConfirmUpstream(ctx context.Context, pullRequestID int64) (environments.UpstreamSnapshot, error)
 }
 
 // PullRequests confirms live PRs with GitHub, so a close, a new commit or a
@@ -60,7 +61,7 @@ func (p *PullRequests) RunOnce(ctx context.Context) (ConfirmPass, error) {
 		return pass, fmt.Errorf("list PRs to confirm: %w", err)
 	}
 	for _, id := range ids {
-		_, err := p.verifier.VerifyUpstream(ctx, id)
+		_, err := p.verifier.ConfirmUpstream(ctx, id)
 		outcome, delay := outcomeOf(err)
 		if ctx.Err() != nil {
 			return pass, ctx.Err()

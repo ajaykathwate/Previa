@@ -85,10 +85,18 @@ func newIntentFixture(t *testing.T) *intentFixture {
 	applyIntentMigration(t, pool, "0007_intent_dispatch.sql")
 	applyIntentMigration(t, pool, "0008_pr_workspace.sql")
 	applyIntentMigration(t, pool, "0010_pr_mergeability.sql")
+	applyIntentMigration(t, pool, "0011_realtime_events.sql")
 	applyIntentMigration(t, pool, "0014_routes_and_teardown.sql") // local teardown markers cleared by a new owner build
 	applyIntentMigration(t, pool, "0016_housekeeping.sql")        // build requests that wait for capacity
 	applyIntentMigration(t, pool, "0022_account_fairness.sql")    // waits that take turns between accounts
 	applyIntentMigration(t, pool, "0027_private_previews.sql")    // publication reads privacy under the repository lock
+	applyIntentMigration(t, pool, "0030_workspaces.sql")          // shared team authorization and request stamps
+	applyIntentMigration(t, pool, "0017_worker_capabilities.sql")
+	applyIntentMigration(t, pool, "0020_backend_previews.sql")
+	applyIntentMigration(t, pool, "0033_public_resource_ids.sql")
+	applyIntentMigration(t, pool, "0034_pr_details_and_execution_health.sql")
+	applyIntentMigration(t, pool, "0041_persistent_test_data.sql") // Reset test data's starting source
+	applyIntentMigration(t, pool, "0042_workspace_usage.sql")      // compute wait deadlines in the current intent row
 	if _, err := pool.Exec(ctx, "UPDATE pull_requests SET mergeable=true, mergeable_state='clean', build_status='open', head_repo_id=501"); err != nil {
 		t.Fatal(err)
 	}
@@ -629,6 +637,24 @@ func TestIntentCurrentRequestTransitionRetryAndGenerationZero(t *testing.T) {
 
 func TestIntentMigrationRollbackAndReapplyInIsolatedSchema(t *testing.T) {
 	f := newIntentFixture(t)
+	// This historical test exercises 0006/0030. Remove the later ledger's
+	// workspace references before rolling back the tables it depends on.
+	usageMigration, err := os.ReadFile("../../db/migrations/0042_workspace_usage.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, usageDown, _ := strings.Cut(string(usageMigration), "-- +goose Down")
+	if _, err := f.pool.Exec(t.Context(), usageDown); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := os.ReadFile("../../db/migrations/0030_workspaces.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, workspaceDown, _ := strings.Cut(string(workspace), "-- +goose Down")
+	if _, err := f.pool.Exec(t.Context(), workspaceDown); err != nil {
+		t.Fatal(err)
+	}
 	data, err := os.ReadFile("../../db/migrations/0006_build_intents.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -641,6 +667,7 @@ func TestIntentMigrationRollbackAndReapplyInIsolatedSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	applyIntentMigration(t, f.pool, "0006_build_intents.sql")
+	applyIntentMigration(t, f.pool, "0030_workspaces.sql")
 	view, err := f.service.Get(t.Context(), f.owner, f.prID)
 	if err != nil || view.HeadSHA != strings.Repeat("a", 40) || view.BuildMode != "manual" || view.Current != nil {
 		t.Fatal("rollback/reapply damaged existing repository/PR")

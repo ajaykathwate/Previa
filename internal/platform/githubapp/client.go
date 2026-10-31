@@ -20,6 +20,7 @@ type Client struct {
 	app           *ghinstallation.AppsTransport
 	mu            sync.Mutex
 	installations map[int64]*ghinstallation.Transport
+	signal        func(context.Context, int64) error
 }
 
 func New(cfg config.ServerConfig) (*Client, error) {
@@ -92,8 +93,9 @@ func (c *Client) InstallationClient(id int64) (*github.Client, error) {
 		transport.Client = &http.Client{Transport: baseTransport, Timeout: 10 * time.Second}
 		c.installations[id] = transport
 	}
+	signal := c.signal
 	c.mu.Unlock()
-	return github.NewClient(github.WithHTTPClient(&http.Client{Transport: transport, Timeout: 10 * time.Second}))
+	return github.NewClient(github.WithHTTPClient(&http.Client{Transport: installationTransport{next: transport, signal: signal}, Timeout: 10 * time.Second}))
 }
 
 // Invalidate drops cached credentials after access or lifecycle changes. Existing

@@ -106,7 +106,7 @@ func TestEditedConfigIsCheckedWithLines(t *testing.T) {
 func TestSwitchingStackKeepsServicesAndTakesNewDefaults(t *testing.T) {
 	q := url.Values{"from": {"nextjs"}, "stack": {"rails"}, "port": {"3001"}, "redis": {"on"}, "redis_version": {"7"}, "setup": {"on"}, "tier": {"large"}}
 	c := choicesFrom(q)
-	if c.Stack != "rails" || c.Port != 3000 || c.Health != "/up" || c.Redis != "7" || !c.Setup || c.SetupWith != "prepare" || c.Tier != "large" {
+	if c.Stack != "rails" || c.Port != 3000 || c.Health != "/up" || c.Redis != "7" || !c.Setup || c.SetupWith != "migrate" || c.Tier != "large" {
 		t.Fatalf("switching keeps services, setup and tier and takes Rails' defaults, got %+v", c)
 	}
 	q.Set("from", "rails")

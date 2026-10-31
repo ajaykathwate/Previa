@@ -1,0 +1,406 @@
+package sampledata
+
+import (
+	"cmp"
+	"strconv"
+
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/components/button"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+// Index is a repository's Test data tab: the baseline every pull request's
+// first build restores, recent refreshes, and the settings beside them.
+templ Index(username string, p Page) {
+	@layouts.AppTrail(p.Name+" · Test data", components.Crumb{Label: p.Repository(), Href: "/repositories/" + strconv.FormatInt(p.RepoID, 10)}, "Test data", username, p.CSRF, components.NavRepositories) {
+		<div class="repository-workspace test-data-page">
+			@components.RepositoryHero(p.Owner(), p.Repository(), "Where previews' databases start: a baseline built from one branch, and data each pull request keeps between builds.")
+			@components.RepositoryTabs(p.RepoID, "test-data")
+			@components.Toasts(p.Toast)
+			<section id="test-data-detail" aria-label="Test data" hx-sync="this:replace" hx-request='{"timeout":10000}'>
+				@Detail(p)
+			</section>
+			if p.LiveURL != "" {
+				// Change signals refetch the tab through this GET handler.
+				<div hidden data-live-events={ components.PublicURL(ctx, p.LiveURL) } data-live-refresh hx-get={ components.PublicURL(ctx, URL(p.RepoID)) } hx-trigger="live-update from:body" hx-target="#test-data-detail" hx-sync="#test-data-detail:drop"></div>
+			}
+			@dialogs(p)
+		</div>
+	}
+}
+
+// Detail is the part live updates replace.
+templ Detail(p Page) {
+	if p.Notice.Text != "" {
+		@notice(p.Notice.Tone, p.Notice.Text)
+	}
+	if !p.Available {
+		@notice("warn", "Previa's GitHub access to this repository was removed: baselines cannot be refreshed and Test data cannot be turned on.")
+	} else if !p.Databases {
+		@notice("warn", "No worker offers PostgreSQL or MySQL now, so there is no data to keep or restore. Previews build as before.")
+	} else if p.UsesBaseline() && !p.Baselines {
+		@notice("warn", "No worker can store baselines now (it needs SECRETS_ENCRYPTION_KEYS), so refreshes wait and first builds start empty. Kept data still works.")
+	}
+	<div class="section-grid test-data-grid">
+		<div class="section-main">
+			@baselineCard(p)
+			@refreshesCard(p)
+		</div>
+		<aside class="section-aside test-data-aside">
+			@settingsCard(p)
+			@guidance()
+		</aside>
+	</div>
+}
+
+templ notice(tone, text string) {
+	<p class={ "connection-notice", "tone-" + tone } role="status">
+		if tone == "warn" || tone == "danger" {
+			@components.AlertIcon()
+		} else {
+			@components.InfoIcon()
+		}
+		<span>{ text }</span>
+	</p>
+}
+
+templ baselineCard(p Page) {
+	<section class="workspace-panel test-data-card" aria-labelledby="baseline-title">
+		<header class="test-data-card-head">
+			<div>
+				<h2 id="baseline-title">
+					@components.DatabaseIcon()
+					Repository baseline
+				</h2>
+				<p>
+					Built from
+					if p.Settings.BranchKnown() {
+						<code>{ p.Settings.BranchLabel() }</code>
+					} else {
+						{ p.Settings.BranchLabel() }
+					}
+					with its <code>setup</code> and <code>seed</code> commands, without repository secrets.
+				</p>
+			</div>
+			<div class="test-data-card-actions">
+				{{ label, tone := p.Status() }}
+				<span class={ "badge", tone } data-baseline-status><span class="badge-dot" aria-hidden="true"></span>{ label }</span>
+				if p.CanRefresh() {
+					@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Size: button.SizeSm, Attributes: templ.Attributes{"commandfor": "refresh-baseline", "command": "show-modal", "data-open-dialog": "refresh-baseline", "aria-haspopup": "dialog"}}) {
+						@components.RestartIcon()
+						Refresh baseline
+					}
+				}
+				if p.Manager && len(p.Current) > 0 {
+					<button type="button" class="text-link danger-link" commandfor="delete-baseline" command="show-modal" data-open-dialog="delete-baseline" aria-haspopup="dialog">Delete</button>
+				}
+			</div>
+		</header>
+		switch {
+			case !p.Settings.Enabled:
+				@empty("Test data is off", "Every build starts with empty databases and runs setup, as before. Turn Test data on to give pull requests a baseline and let them keep their data between builds.")
+			case !p.Settings.UseBaseline:
+				@empty("The baseline is not used", "First builds start from empty databases and run setup and seed. Pull requests still keep their own data between builds when that is on.")
+			case len(p.Current) == 0:
+				if p.Busy() != nil {
+					@empty("Building the first baseline", "Pull requests built before it is ready start from empty databases and run seed.")
+				} else {
+					@empty("No baseline yet", "Pull requests start from empty databases and run seed until a refresh succeeds. The latest refresh below says what stopped it.")
+				}
+			default:
+				<div class="repository-table-scroll" tabindex="0" role="region" aria-label="Current baselines">
+					<table class="pr-table test-data-table">
+						<thead>
+							<tr>
+								<th>Database</th>
+								<th>Built from</th>
+								<th>Built</th>
+								<th>Size</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, b := range p.Current {
+								<tr>
+									<td data-label="Database"><strong>{ b.Service }</strong></td>
+									<td data-label="Built from"><code class="test-data-ref" title={ b.Branch + "@" + b.Commit }>{ b.Branch }<span>{ "@" + Short(b.Commit) }</span></code></td>
+									<td class="secret-updated" data-label="Built">
+										@components.Time(b.BuiltAt, b.BuiltAt)
+									</td>
+									<td class="test-data-size" data-label="Size">{ b.Size }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+		}
+		if p.Moved != "" {
+			<p class="test-data-foot" data-baseline-moved>
+				@components.BranchIcon()
+				<span>{ p.Moved }</span>
+			</p>
+		}
+	</section>
+}
+
+templ empty(title, text string) {
+	<div class="test-data-empty">
+		<h3>{ title }</h3>
+		<p>{ text }</p>
+	</div>
+}
+
+templ refreshesCard(p Page) {
+	<section class="workspace-panel test-data-card" aria-labelledby="refreshes-title">
+		<header class="test-data-card-head">
+			<div>
+				<h2 id="refreshes-title">
+					@components.SyncIcon()
+					Refreshes
+				</h2>
+				<p>A refresh follows a merge into the baseline branch, a moved branch head (checked daily) or Refresh baseline. One runs at a time.</p>
+			</div>
+		</header>
+		if len(p.Refreshes) == 0 {
+			<p class="test-data-none">No refreshes yet.</p>
+		} else {
+			<ol class="test-data-refreshes">
+				for _, r := range p.Refreshes {
+					<li class="test-data-refresh" data-refresh={ strconv.FormatInt(r.Number, 10) }>
+						<span class={ "badge", r.Tone }><span class="badge-dot" aria-hidden="true"></span>{ r.Label }</span>
+						<div class="test-data-refresh-main">
+							<p class="test-data-refresh-title">
+								<strong>{ "#" + strconv.FormatInt(r.Number, 10) }</strong>
+								<span>{ r.Trigger }</span>
+								if r.Commit != "" {
+									<code class="test-data-ref" title={ r.Branch + "@" + r.Commit }>{ r.Branch }<span>{ "@" + Short(r.Commit) }</span></code>
+								}
+							</p>
+							if r.Detail != "" {
+								<p class="test-data-refresh-detail">{ r.Detail }</p>
+							}
+						</div>
+						<div class="test-data-refresh-meta">
+							if r.When != "" {
+								<span>{ r.WhenLabel + " " }@components.Time(r.When, r.When)</span>
+							}
+							if r.Took != "" {
+								<span>{ r.Took }</span>
+							}
+							if r.HasLog {
+								<a class="text-link" href={ components.PublicURL(ctx, LogURL(p.RepoID, r.Number)) }>
+									@components.LogsIcon()
+									Build log
+								</a>
+							}
+						</div>
+					</li>
+				}
+			</ol>
+		}
+	</section>
+}
+
+// settingsCard shows the settings; Owners and Admins change each in place.
+templ settingsCard(p Page) {
+	<section class="workspace-panel field-card test-data-settings" aria-labelledby="test-data-settings-title">
+		<header class="field-card-head">
+			<h2 id="test-data-settings-title">
+				@components.WrenchIcon()
+				Settings
+			</h2>
+		</header>
+		<div class="field-list">
+			<div class="field-row">
+				<span class="field-label" id="test-data-enabled-label">Test data</span>
+				<div class="field-value">
+					@enabledSwitch(p)
+				</div>
+			</div>
+			@switchRow(p, "keep_data", "Keep data between builds", p.Settings.KeepData, "A pull request's next build copies its serving preview's databases.")
+			@switchRow(p, "use_baseline", "Use a baseline", p.Settings.UseBaseline, "First builds restore the repository baseline.")
+			if !p.Manager {
+				<div class="field-row">
+					<span class="field-label">Baseline branch</span>
+					<div class="field-value">
+						<span>{ cmp.Or(p.Settings.Branch, p.Settings.BranchPlaceholder()) }</span>
+					</div>
+				</div>
+			} else {
+			<form method="post" action={ components.PublicURL(ctx, URL(p.RepoID)+"/settings") } class="test-data-branch" data-inline-form data-live-pause>
+				<div class="field-row">
+					@hiddenSettings(p, "baseline_branch")
+					<label class="field-label" for="test-data-branch">Baseline branch</label>
+					@components.InlineText("test-data-branch", "baseline_branch", branchValue(p), p.Settings.BranchPlaceholder(), "baseline branch", branchAttributes(p))
+				</div>
+				<p class="field-error" id="test-data-branch-error" data-inline-error role="alert" hidden?={ p.Error.Name != "baseline_branch" }>{ p.Error.Message }</p>
+			</form>
+			}
+			@switchRow(p, "auto_refresh", "Refresh automatically", p.Settings.AutoRefresh, "After merges into the branch and when its head moves.")
+		</div>
+		<p class="field-card-foot">
+			The baseline branch decides what every pull request starts with, forks included: choose a branch only trusted maintainers can push to.
+		</p>
+	</section>
+}
+
+templ enabledSwitch(p Page) {
+	if !p.Manager || !p.Settings.Enabled && !p.Available {
+		@settingValue(p.Settings.Enabled)
+	} else if p.Settings.Enabled {
+		<button type="button" role="switch" aria-checked="true" aria-labelledby="test-data-enabled-label" class="automatic-switch test-data-switch" data-open-dialog="turn-off-test-data" commandfor="turn-off-test-data" command="show-modal" aria-haspopup="dialog"><span>On</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
+	} else {
+		<button type="button" role="switch" aria-checked="false" aria-labelledby="test-data-enabled-label" class="automatic-switch test-data-switch" data-open-dialog="turn-on-test-data" commandfor="turn-on-test-data" command="show-modal" aria-haspopup="dialog"><span>Off</span><span class="switch-track" aria-hidden="true"><span></span></span></button>
+	}
+}
+
+// settingValue states a setting a person cannot change.
+templ settingValue(on bool) {
+	if on {
+		<span>On</span>
+	} else {
+		<span>Off</span>
+	}
+}
+
+// switchRow saves one setting flipped, keeping the others. People who cannot
+// change it, or settings that cannot change now, read its value instead.
+templ switchRow(p Page, name, label string, on bool, help string) {
+	if !p.Manager || !p.Available && !p.Settings.Enabled {
+		<div class="field-row field-row-top">
+			<span class="field-label">{ label }</span>
+			<div class="field-value">
+				@settingValue(on)
+				<span class="field-value-help">{ help }</span>
+			</div>
+		</div>
+	} else {
+	<form method="post" action={ components.PublicURL(ctx, URL(p.RepoID)+"/settings") } class="field-row field-row-top">
+		@hiddenSettings(p, name)
+		if !on {
+			<input type="hidden" name={ name } value="on"/>
+		}
+		<span class="field-label" id={ "test-data-" + name + "-label" }>{ label }</span>
+		<div class="field-value">
+			<button type="submit" role="switch" aria-checked={ strconv.FormatBool(on) } aria-labelledby={ "test-data-" + name + "-label" } aria-describedby={ "test-data-" + name + "-help" } class="automatic-switch test-data-switch">
+				if on {
+					<span>On</span>
+				} else {
+					<span>Off</span>
+				}
+				<span class="switch-track" aria-hidden="true"><span></span></span>
+			</button>
+			<span class="field-value-help" id={ "test-data-" + name + "-help" }>{ help }</span>
+		</div>
+	</form>
+	}
+}
+
+// hiddenSettings carries every current setting except the one a form edits.
+templ hiddenSettings(p Page, except string) {
+	<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+	<input type="hidden" name="revision" value={ strconv.FormatInt(p.Settings.Revision, 10) }/>
+	if p.Settings.Enabled {
+		<input type="hidden" name="enabled" value="on"/>
+	}
+	if except != "keep_data" && p.Settings.KeepData {
+		<input type="hidden" name="keep_data" value="on"/>
+	}
+	if except != "use_baseline" && p.Settings.UseBaseline {
+		<input type="hidden" name="use_baseline" value="on"/>
+	}
+	if except != "auto_refresh" && p.Settings.AutoRefresh {
+		<input type="hidden" name="auto_refresh" value="on"/>
+	}
+	if except != "baseline_branch" {
+		<input type="hidden" name="baseline_branch" value={ p.Settings.Branch }/>
+	}
+}
+
+func branchValue(p Page) string {
+	if p.Error.Name == "baseline_branch" {
+		return p.Error.Value
+	}
+	return p.Settings.Branch
+}
+
+func branchAttributes(p Page) templ.Attributes {
+	attrs := templ.Attributes{"maxlength": "255", "autocomplete": "off", "autocapitalize": "none"}
+	if !p.Manager {
+		attrs["readonly"] = true
+	}
+	attrs["aria-describedby"] = "test-data-branch-error"
+	if p.Error.Name == "baseline_branch" {
+		attrs["aria-invalid"] = "true"
+	}
+	return attrs
+}
+
+templ guidance() {
+	<section class="workspace-panel guidance-card" aria-labelledby="test-data-guidance-title">
+		<h2 id="test-data-guidance-title">
+			@components.ShieldIcon()
+			How test data works
+		</h2>
+		<ul class="guidance-list">
+			<li><strong>Kept, then baseline, then empty.</strong> A build copies its pull request's serving data; without it, the baseline; without that, empty databases and <code>seed</code>. <code>setup</code> runs every time.</li>
+			<li><strong>Fallbacks are automatic.</strong> When <code>setup</code> fails on copied data, the build tries the next source and the pull request page says why.</li>
+			<li><strong>Isolated copies.</strong> Each pull request gets its own copy; data never moves between pull requests. Forks get the baseline and nothing else.</li>
+			<li><strong>PostgreSQL and MySQL only.</strong> Redis always starts empty.</li>
+		</ul>
+	</section>
+}
+
+templ dialogs(p Page) {
+	if p.Manager && !p.Settings.Enabled && p.Available {
+		@components.ConfirmationDialog("turn-on-test-data", "Turn on Test data?", "Pull requests keep their databases between builds. With a baseline, Previa builds "+p.Settings.BranchLabel()+" now, without repository secrets, and its build uses build minutes.") {
+			<form method="post" action={ components.PublicURL(ctx, URL(p.RepoID)+"/settings") } class="dialog-actions">
+				@hiddenSettings(p, "")
+				<input type="hidden" name="enabled" value="on"/>
+				@cancel("turn-on-test-data")
+				@button.Button(button.Props{Type: button.TypeSubmit}) {
+					Turn on
+				}
+			</form>
+		}
+	}
+	if p.Manager && p.Settings.Enabled {
+		@components.ConfirmationDialog("turn-off-test-data", "Turn off Test data?", "The repository's baselines are deleted. Builds from now on start with empty databases and run seed; running previews keep their data until their next build.") {
+			<form method="post" action={ components.PublicURL(ctx, URL(p.RepoID)+"/off") } class="dialog-actions">
+				<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+				<input type="hidden" name="revision" value={ strconv.FormatInt(p.Settings.Revision, 10) }/>
+				@cancel("turn-off-test-data")
+				@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantDestructive}) {
+					Turn off and delete baselines
+				}
+			</form>
+		}
+	}
+	if p.CanRefresh() {
+		@components.ConfirmationDialog("refresh-baseline", "Refresh the baseline?", "Previa builds the head of "+p.Settings.BranchLabel()+" without repository secrets, runs setup and seed, and replaces the baseline when that succeeds. The build uses build minutes.") {
+			<form method="post" action={ components.PublicURL(ctx, URL(p.RepoID)+"/refresh") } class="dialog-actions">
+				<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+				@cancel("refresh-baseline")
+				@button.Button(button.Props{Type: button.TypeSubmit}) {
+					Refresh baseline
+				}
+			</form>
+		}
+	}
+	if p.Manager && len(p.Current) > 0 {
+		@components.ConfirmationDialog("delete-baseline", "Delete the baseline?", "Pull requests built from now on start with empty databases and run seed until the next refresh. Running previews keep their data.") {
+			<form method="post" action={ components.PublicURL(ctx, URL(p.RepoID)+"/delete") } class="dialog-actions">
+				<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+				@cancel("delete-baseline")
+				@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantDestructive}) {
+					Delete baseline
+				}
+			</form>
+		}
+	}
+}
+
+templ cancel(id string) {
+	@button.Button(button.Props{Type: button.TypeButton, Variant: button.VariantOutline, Attributes: templ.Attributes{"autofocus": true, "commandfor": id, "command": "close", "data-close-dialog": true}}) {
+		Cancel
+	}
+}

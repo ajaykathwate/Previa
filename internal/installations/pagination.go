@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ajaykathwatee/previa/internal/installations/dbgen"
+	"github.com/ajaykathwatee/previa/internal/platform/scope"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -53,7 +54,7 @@ func (s *Service) Page(ctx context.Context, userID int64, filter RepositoryFilte
 	return s.store.Page(ctx, userID, filter)
 }
 func (r *Repository) Summary(ctx context.Context, userID int64) (WorkspaceSummary, error) {
-	row, err := dbgen.New(r.db).GetWorkspaceSummary(ctx, pgtype.Int8{Int64: userID, Valid: true})
+	row, err := dbgen.New(r.db).GetWorkspaceSummary(ctx, dbgen.GetWorkspaceSummaryParams{OwnerUserID: pgtype.Int8{Int64: userID, Valid: true}, WorkspaceID: scope.WorkspaceID(ctx)})
 	if err != nil {
 		return WorkspaceSummary{}, fmt.Errorf("read workspace summary: %w", err)
 	}
@@ -74,7 +75,7 @@ func (r *Repository) Page(ctx context.Context, userID int64, filter RepositoryFi
 		}
 	}()
 	q := dbgen.New(tx)
-	total, err := q.CountRepositoryPage(ctx, dbgen.CountRepositoryPageParams{UserID: pgtype.Int8{Int64: userID, Valid: true}, Search: filter.Search, Access: filter.Access})
+	total, err := q.CountRepositoryPage(ctx, dbgen.CountRepositoryPageParams{WorkspaceID: scope.WorkspaceID(ctx), UserID: pgtype.Int8{Int64: userID, Valid: true}, Search: filter.Search, Access: filter.Access})
 	if err != nil {
 		return page, fmt.Errorf("count repository page: %w", err)
 	}
@@ -83,7 +84,7 @@ func (r *Repository) Page(ctx context.Context, userID int64, filter RepositoryFi
 		pages = (total-1)/RepositoryPageSize + 1
 	}
 	current := min(filter.Page, pages)
-	rows, err := q.ListRepositoryPage(ctx, dbgen.ListRepositoryPageParams{UserID: pgtype.Int8{Int64: userID, Valid: true}, Search: filter.Search, Access: filter.Access, PageSize: RepositoryPageSize, PageOffset: (current - 1) * RepositoryPageSize})
+	rows, err := q.ListRepositoryPage(ctx, dbgen.ListRepositoryPageParams{WorkspaceID: scope.WorkspaceID(ctx), UserID: pgtype.Int8{Int64: userID, Valid: true}, Search: filter.Search, Access: filter.Access, PageSize: RepositoryPageSize, PageOffset: (current - 1) * RepositoryPageSize})
 	if err != nil {
 		return page, fmt.Errorf("list repository page: %w", err)
 	}

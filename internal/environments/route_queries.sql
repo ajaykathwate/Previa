@@ -84,6 +84,9 @@ WHERE id = $1 AND asleep_at IS NOT NULL;
 -- name: ReadRoute :one
 SELECT * FROM environment_routes WHERE pull_request_id = $1;
 
+-- name: WorkspacePublicationAuthorized :one
+SELECT workspace_publication_authorized($1::bigint)::boolean;
+
 -- name: ReadRouteTable :many
 -- One statement, one snapshot: the version and every active route at it. The
 -- outer join returns the version even when no route is active.

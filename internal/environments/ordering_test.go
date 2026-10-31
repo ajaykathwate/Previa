@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -67,8 +68,12 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, name := range []string{"0001_init.sql", "0003_pr_generation.sql", "0004_durable_operations.sql", "0005_installation_linking.sql", "0006_build_intents.sql", "0007_intent_dispatch.sql", "0008_pr_workspace.sql", "0009_environment_identity.sql", "0010_pr_mergeability.sql", "0013_build_log_streams.sql", "0014_routes_and_teardown.sql", "0015_pr_reports.sql", "0016_housekeeping.sql", "0017_worker_capabilities.sql", "0018_builds_paused.sql", "0022_account_fairness.sql", "0023_build_log_deletion.sql", "0024_preview_activity.sql", "0025_app_output.sql", "0026_preview_sleep.sql", "0027_private_previews.sql"} {
-		data, err := os.ReadFile("../../db/migrations/" + name)
+	migrationFiles, err := filepath.Glob("../../db/migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range migrationFiles {
+		data, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}

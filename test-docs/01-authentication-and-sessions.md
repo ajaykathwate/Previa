@@ -3,8 +3,12 @@
 **Module:** AUTH · **Code:** `internal/auth`, `internal/platform/httpx` · **Feature
 docs:** [04 · GitHub sign-in and App](../docs/04-github-sign-in-and-app.md)
 
-Signing in with GitHub, the server-side session, signing out, and the access and
-CSRF rules every page and action depends on.
+Signing in with GitHub or optional Google, explicit identity linking, the
+server-side session, signing out, and the access and CSRF rules every page and
+action depends on. F7 additions and their executed evidence are in the
+[Google sign-in report](2026-10-20-google-sign-in-report.md) and
+[feature guide](../docs/36-google-sign-in-and-reviewer-invitations.md); the numbered
+cases below retain the historical baseline. Login methods never assign roles.
 
 | Sub-module | Prefix | Cases |
 | --- | --- | --- |

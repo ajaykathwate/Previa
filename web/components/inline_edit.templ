@@ -1,0 +1,55 @@
+package components
+
+// UserAvatar layers a member's picture over their initial, so a missing or
+// blocked image still leaves a readable avatar. Pictures load without a referrer.
+templ UserAvatar(src, name, class string, attrs templ.Attributes) {
+	<span class={ "user-avatar", class } aria-hidden="true" { attrs... }>
+		{ Initial(name) }
+		if src != "" {
+			<img src={ PublicURL(ctx, src) } alt="" width="64" height="64" decoding="async" referrerpolicy="no-referrer"/>
+		}
+	</span>
+}
+
+// Toasts hosts small, self-dismissing save confirmations. A redirect after a
+// plain form save renders one here; ui.js adds in-place ones to the same region.
+templ Toasts(message string) {
+	<div class="toast-region" data-toast-region aria-live="polite">
+		if message != "" {
+			<p class="toast tone-ok" role="status">
+				@CheckIcon()
+				<span>{ message }</span>
+			</p>
+		}
+	</div>
+}
+
+// InlineText is an in-place editable field inside a form (data-inline-form).
+// It reads as text, shows its input on hover and focus, and saves with Enter
+// or ✓; Esc or ✕ restores the saved value. Without JavaScript it is a plain
+// input whose ✓ submits the form and ✕ resets it.
+templ InlineText(id, name, value, placeholder, label string, attrs templ.Attributes) {
+	<div class="inline-edit" data-inline-edit>
+		<input id={ id } name={ name } value={ value } placeholder={ placeholder } class="inline-input" spellcheck="false" { attrs... }/>
+		@InlineActions(label)
+	</div>
+}
+
+// InlineTextarea is InlineText for multi-line values; Ctrl/⌘+Enter saves.
+templ InlineTextarea(id, name, value, placeholder, label string, attrs templ.Attributes) {
+	<div class="inline-edit inline-edit-multiline" data-inline-edit>
+		<textarea id={ id } name={ name } placeholder={ placeholder } class="inline-input" rows="2" { attrs... }>{ value }</textarea>
+		@InlineActions(label)
+	</div>
+}
+
+templ InlineActions(label string) {
+	<span class="inline-actions">
+		<button type="submit" class="inline-save" aria-label={ "Save " + label } title="Save">
+			@CheckIcon()
+		</button>
+		<button type="reset" class="inline-cancel" aria-label={ "Cancel " + label + " changes" } title="Cancel">
+			@XIcon()
+		</button>
+	</span>
+}

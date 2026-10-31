@@ -100,7 +100,7 @@ the build process (and its error), not to the page.
 
 ## Reading and live updates
 
-The full page is `/repositories/{id}/pull-requests/{number}/logs`, owner-only
+The full page is `/repositories/{id}/pull-requests/{number}/logs`, workspace operational members only
 (the same installation-owner scope as PR pages; retained PRs stay readable after
 access is revoked, with a notice). It shows the newest 500 matching events.
 **Earlier lines** / **Later lines** page by stored sequence (`?before=`, `?after=`);
@@ -125,7 +125,7 @@ received clock, which explained the inconsistent dates. The timestamp tooltip
 always retains the received time. **Copy** includes the displayed timestamps and
 messages, preserving indentation. `…/logs/download` exports the complete matching
 output as `text/plain` (attachment `<repository>-pr-<number>-build.log`, bounded
-1,000-event reads, owner-only, `no-store`) with the same timestamp treatment.
+1,000-event reads, workspace operational members only, `no-store`) with the same timestamp treatment.
 
 On a PR detail, **Build logs**, **Follow the build log**, and diagnosis log links
 open an accessible **Recent build logs** panel below the main PR card. The
@@ -204,7 +204,7 @@ expired or deleted logs.
 
 ## Live app output
 
-`/repositories/{id}/pull-requests/{number}/output` (owner-only, linked as **App
+`/repositories/{id}/pull-requests/{number}/output` (workspace operational members only, linked as **App
 output** on the pull request page while its preview runs) shows what the app prints,
 live, including its own request logs: the place to look when a preview answers 500.
 
@@ -246,6 +246,11 @@ retried revision getting a new epoch; rejected and rolled-back admissions keepin
 logs; continuation across writers; finish and retention; the realtime trigger;
 owner scoping; escaped script-looking output; no-JavaScript paging; status states;
 resume without duplicates; reset for a replacement attempt; per-user stream caps;
-and dropping a client that stops reading; the owner-only download of a whole
+and dropping a client that stops reading; the workspace operational members only download of a whole
 attempt; and `Tail` refusing another generation or revision. The browser suite covers
 live append, following, reset and paging without JavaScript.
+
+Workspace Owners/Admins and granted Developers need current GitHub source permission
+for log/output entry points. Local membership is rechecked before live frames and
+heartbeats; removal ends the stream. Reviewers receive previews without logs. See
+[shared workspaces](28-shared-workspaces.md).

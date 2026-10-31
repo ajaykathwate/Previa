@@ -2,6 +2,7 @@ package starterkits
 
 import (
 	"context"
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -63,7 +64,7 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 	username, _ := h.users.Username(r.Context())
 	p := view(kit, offer)
 	p.CSRF = h.users.CSRFToken(r.Context())
-	templ.Handler(kitpages.Index(username, p)).ServeHTTP(w, r)
+	publicid.Handler(r, kitpages.Index(username, p), nil).ServeHTTP(w, r)
 }
 
 // maxFileBytes bounds an edited file; a build reads at most this much of
@@ -181,6 +182,7 @@ func choicesFrom(q url.Values) Choices {
 		c := Fresh(id)
 		c.Postgres, c.Redis, c.MySQL = version("postgres"), version("redis"), version("mysql")
 		c.Setup = on("setup") && c.SetupWith != ""
+		c.Seed = on("seed")
 		c.Worker = on("worker") && len(Find(id).Workers) > 0
 		c.Tier = q.Get("tier")
 		return c
@@ -195,6 +197,7 @@ func choicesFrom(q url.Values) Choices {
 	return Choices{
 		Stack: id, Postgres: version("postgres"), Redis: version("redis"), MySQL: version("mysql"),
 		Setup: on("setup"), SetupWith: q.Get("setup_with"), SetupCommand: q.Get("setup_cmd"),
+		Seed: on("seed"), SeedWith: q.Get("seed_with"), SeedCommand: q.Get("seed_cmd"),
 		Worker: on("worker"), WorkerWith: q.Get("worker_with"), WorkerCommand: q.Get("worker_cmd"),
 		Docs: on("docs"), DocsPath: q.Get("docs_path"),
 		Port: port, Health: q.Get("health"), Tier: q.Get("tier"), Detail: q.Get("detail"),

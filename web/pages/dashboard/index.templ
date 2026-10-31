@@ -17,12 +17,13 @@ import (
 templ Index(username string, csrfToken string, summary Summary) {
 	@layouts.App("Overview", username, csrfToken, components.NavOverview) {
 		{{ note, attention := summary.WorkerNote() }}
+		if summary.Joined {
+			@components.Toasts("Welcome to " + components.Workspace(ctx).Name)
+		}
 		<div class="ov" data-overview>
 			<header class="page-header dashboard-heading ov-hero">
 				<div class="page-header-text">
-					<span class="eyebrow">Overview</span>
-					<h1>Welcome back, <span class="accent-text">{ username }</span></h1>
-					<p>Your previews at a glance. Every number here comes from your own linked installations.</p>
+					@components.PageTitle("Overview", "Your previews at a glance. Every number here comes from your workspace's linked installations.")
 				</div>
 				<div class="ov-hero-side">
 					@workerStatus(summary.Workers)
@@ -113,7 +114,7 @@ templ kpis(summary Summary) {
 			</a>
 		</li>
 		<li>
-			<a class={ "ov-kpi", templ.KV("is-attention", summary.Failed > 0) } href={ templ.SafeURL(summary.FailuresURL()) }>
+			<a class={ "ov-kpi", templ.KV("is-attention", summary.Failed > 0) } href={ components.PublicURL(ctx, summary.FailuresURL()) }>
 				<span class="ov-kpi-head">
 					<span class="ov-kpi-label">Needs attention</span>
 					<span class={ "ov-kpi-icon", templ.KV("is-danger", summary.Failed > 0), templ.KV("is-ok", summary.Failed == 0) } aria-hidden="true">
@@ -230,8 +231,8 @@ templ setup(summary Summary) {
 						}
 					</strong>
 					<span class="ov-step-detail">{ step.Detail }</span>
-					if !step.Done && step.Href != "" {
-						<a class="ov-step-action" href={ templ.SafeURL(step.Href) }>
+					if i == next && step.Href != "" {
+						<a class="ov-step-action" href={ components.PublicURL(ctx, step.Href) }>
 							{ step.Action }
 							@components.Arrow()
 						</a>
@@ -268,7 +269,7 @@ templ flow(summary Summary) {
 			@flowNode("/builds", "Building", "Image and preview starting", summary.Building, summary.OpenPRs, "tone-info", true, summary.Building > 0, components.BuildIcon())
 			@flowNode("/previews", "Live previews", "Serving at their address", summary.Live, summary.OpenPRs, "tone-ok", true, false, components.EnvironmentIcon())
 		</ol>
-		<a class={ "ov-flow-failed", templ.KV("tone-danger", summary.Failed > 0), templ.KV("tone-ok", summary.Failed == 0 && summary.FailedOlder == 0 && summary.OpenPRs > 0), templ.KV("tone-neutral", summary.Failed == 0 && (summary.FailedOlder > 0 || summary.OpenPRs == 0)) } href={ templ.SafeURL(summary.FailuresURL()) }>
+		<a class={ "ov-flow-failed", templ.KV("tone-danger", summary.Failed > 0), templ.KV("tone-ok", summary.Failed == 0 && summary.FailedOlder == 0 && summary.OpenPRs > 0), templ.KV("tone-neutral", summary.Failed == 0 && (summary.FailedOlder > 0 || summary.OpenPRs == 0)) } href={ components.PublicURL(ctx, summary.FailuresURL()) }>
 			<span class="ov-flow-failed-icon" aria-hidden="true">
 				if summary.Failed > 0 {
 					@components.AlertIcon()
@@ -294,7 +295,7 @@ templ flow(summary Summary) {
 
 templ flowNode(href, label, hint string, n, whole int64, tone string, share, active bool, icon templ.Component) {
 	<li class={ "ov-flow-node", tone, templ.KV("is-active", active), templ.KV("is-empty", n == 0) }>
-		<a class="ov-flow-link" href={ templ.SafeURL(href) }>
+		<a class="ov-flow-link" href={ components.PublicURL(ctx, href) }>
 			<span class="ov-flow-top">
 				<span class="ov-flow-icon" aria-hidden="true">
 					@icon
@@ -440,10 +441,10 @@ templ buildRow(row prpages.ActivityRow, csrf string) {
 							Started { " " }
 							@components.Time(row.StartedAt, prpages.TimeLabel(row.StartedAt))
 						</small>
-					} else if row.Deadline != "" {
+					} else if row.CountingDown() {
 						<small>
-							Eligible { " " }
-							@components.Time(row.Deadline, prpages.TimeLabel(row.Deadline))
+							Starts in { " " }
+							@components.Countdown(row.Deadline, prpages.TimeLabel(row.Deadline))
 						</small>
 					}
 				</span>
@@ -467,11 +468,12 @@ templ buildRow(row prpages.ActivityRow, csrf string) {
 					if row.RequestSource != "" {
 						<div><dt>Requested</dt><dd>{ prpages.Label(row.RequestSource) }</dd></div>
 					}
-					if row.Deadline != "" {
+					if row.CountingDown() {
 						<div>
-							<dt>Eligible</dt>
+							<dt>Starts in</dt>
 							<dd>
-								@components.Time(row.Deadline, prpages.TimeLabel(row.Deadline))
+								@components.Countdown(row.Deadline, prpages.TimeLabel(row.Deadline))
+								<span class="ov-fact-note">another commit restarts the five quiet minutes</span>
 							</dd>
 						</div>
 					}
@@ -509,17 +511,19 @@ templ buildRow(row prpages.ActivityRow, csrf string) {
 					}
 				</dl>
 				<p class="ov-row-links">
-					<a class="text-link" href={ templ.SafeURL(prpages.PRURL(row.RepoID, row.Number)) }>
+					<a class="text-link" href={ components.PublicURL(ctx, prpages.PRURL(row.RepoID, row.Number)) }>
 						Pull request
 						@components.Arrow()
 					</a>
-					<a class="text-link" href={ templ.SafeURL(prpages.LogsURL(row.RepoID, row.Number)) }>
-						Build logs
-						@components.Arrow()
-					</a>
+					if !row.Locked {
+						<a class="text-link" href={ components.PublicURL(ctx, prpages.LogsURL(row.RepoID, row.Number)) }>
+							Build logs
+							@components.Arrow()
+						</a>
+					}
 				</p>
-				if row.CanDismiss() || row.Dismissed() {
-					<form method="post" action={ row.FailureURL(failureAction(row)) } class="ov-row-dismiss">
+				if !row.Locked && (row.CanDismiss() || row.Dismissed()) {
+					<form method="post" action={ components.PublicURL(ctx, row.FailureURL(failureAction(row))) } class="ov-row-dismiss">
 						<input type="hidden" name="csrf_token" value={ csrf }/>
 						<input type="hidden" name="return" value="overview"/>
 						if row.CanDismiss() {
@@ -616,20 +620,22 @@ templ previewRow(row prpages.ActivityRow) {
 					}
 				</dl>
 				<p class="ov-row-links">
-					<a class="text-link" href={ templ.SafeURL(prpages.PRURL(row.RepoID, row.Number)) }>
+					<a class="text-link" href={ components.PublicURL(ctx, prpages.PRURL(row.RepoID, row.Number)) }>
 						Pull request
 						@components.Arrow()
 					</a>
-					<a class="text-link" href={ templ.SafeURL(prpages.LogsURL(row.RepoID, row.Number)) }>
-						Build logs
-						@components.Arrow()
-					</a>
+					if !row.Locked {
+						<a class="text-link" href={ components.PublicURL(ctx, prpages.LogsURL(row.RepoID, row.Number)) }>
+							Build logs
+							@components.Arrow()
+						</a>
+					}
 				</p>
 			</div>
 		</details>
 		if row.PreviewURL != "" {
 			<div class="ov-row-quick">
-				<a class="ov-open" href={ templ.SafeURL(row.PreviewURL) } target="_blank" rel="noopener noreferrer" title={ row.PreviewURL }>
+				<a class="ov-open" href={ components.PublicURL(ctx, prpages.PreviewHref(ctx, row.RepoID, row.Number, row.PreviewURL)) } target="_blank" rel="noopener noreferrer" title={ row.PreviewURL }>
 					Open
 					@components.ArrowUpRight()
 				</a>

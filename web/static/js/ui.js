@@ -43,16 +43,37 @@
   }
 
   function initNavigation() {
+    // The workspace switcher's menu is anchored to it in CSS (beside the icon rail when collapsed).
+    // Menus close as soon as one of their links or forms starts a navigation, so
+    // the outgoing page (and its view transition) never shows a menu still open.
+    const closeMenus = () => document.querySelectorAll('details[data-menu][open], details[data-workspace-switcher][open], details[data-mobile-nav][open]').forEach(menu => { menu.open = false; });
+    document.addEventListener('click', event => {
+      const link = event.target.closest('a[href]');
+      if (link && link.closest('details[data-menu], details[data-workspace-switcher]') && !event.defaultPrevented) closeMenus();
+    });
+    document.addEventListener('submit', event => {
+      if (event.target.closest('details[data-menu], details[data-workspace-switcher]')) closeMenus();
+    });
+    // Open dialogs (a submitted confirmation, the create form) close too, so the
+    // view transition never cross-fades a modal into the next page.
+    window.addEventListener('pageswap', () => {
+      closeMenus();
+      document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
+    });
+    window.addEventListener('pagehide', closeMenus);
     document.querySelectorAll('[data-mobile-nav] a').forEach(link => {
       link.addEventListener('click', () => { link.closest('details').open = false; });
     });
     document.addEventListener('click', (event) => {
       const backdrop = event.target.closest('[data-mobile-nav-close]');
       if (backdrop) backdrop.closest('details').open = false;
+      document.querySelectorAll('[data-workspace-switcher][open]').forEach(menu => {
+        if (!menu.contains(event.target)) menu.open = false;
+      });
     });
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
-      document.querySelectorAll('[data-mobile-nav][open]').forEach((nav) => {
+      document.querySelectorAll('[data-mobile-nav][open], [data-workspace-switcher][open]').forEach((nav) => {
         nav.open = false;
         nav.querySelector('summary').focus();
       });
@@ -60,6 +81,311 @@
     const mac = /Mac|iPhone|iPad/.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
     if (mac) document.querySelectorAll('[data-shortcut-label]').forEach(label => { label.textContent = '⌘K'; });
   }
+
+  function initWorkspaceForms() {
+    document.querySelectorAll('[data-repository-picker]').forEach(picker => {
+      const search = picker.querySelector('[data-repository-search]');
+      if (!search) return;
+      const rows = [...picker.querySelectorAll('[data-repository-option]')];
+      const count = picker.querySelector('[data-repository-count]');
+      picker.querySelector('[data-repository-enhancement]').hidden = false;
+      const update = () => {
+        const query = search.value.trim().toLocaleLowerCase();
+        let selected = 0, visible = 0;
+        rows.forEach(row => {
+          row.hidden = !row.dataset.repositoryName.toLocaleLowerCase().includes(query);
+          if (!row.hidden) visible++;
+          if (row.querySelector('input').checked) selected++;
+        });
+        count.textContent = `${selected} of ${rows.length} selected`;
+        picker.querySelector('[data-repository-empty]').hidden = visible !== 0;
+      };
+      search.addEventListener('input', update);
+      search.addEventListener('keydown', event => { if (event.key === 'Enter') event.preventDefault(); });
+      picker.addEventListener('change', update);
+      const selectVisible = checked => { rows.filter(row => !row.hidden).forEach(row => { row.querySelector('input').checked = checked; }); update(); };
+      picker.querySelector('[data-repository-select]').addEventListener('click', () => selectVisible(true));
+      picker.querySelector('[data-repository-clear]').addEventListener('click', () => selectVisible(false));
+      update();
+    });
+    const recovery = document.querySelector('[data-invite-recovery]');
+    if (recovery) {
+      const dialog = document.createElement('dialog');
+      dialog.id = 'invite-member'; dialog.className = 'confirmation-dialog team-form-dialog';
+      dialog.dataset.confirmationDialog = '';
+      const close = document.createElement('button'); close.type = 'button'; close.className = 'dialog-close';
+      close.setAttribute('aria-label', 'Close form'); close.dataset.closeDialog = ''; close.textContent = '×';
+      dialog.append(close);
+      const heading = recovery.querySelector('h2'); heading.id = 'invite-member-title';
+      dialog.setAttribute('aria-labelledby', heading.id);
+      recovery.classList.remove('workspace-panel', 'team-settings-panel');
+      recovery.replaceWith(dialog); dialog.append(recovery);
+      dialog.showModal(); dialog.querySelector('[aria-invalid="true"]')?.focus();
+    }
+
+    const descriptions = {
+      developer: 'Can build and inspect logs for selected repositories after a GitHub permission check. Code can receive configured runtime secrets.',
+      reviewer: 'Can open selected previews, including private previews. Cannot run builds, inspect logs or manage repository settings.',
+      admin: 'Can access every repository and manage members and repository settings. Only the owner can appoint other admins.',
+    };
+    document.querySelectorAll('[data-role-controls]').forEach(form => {
+      const roles = [...form.querySelectorAll('[data-workspace-role-select]')];
+      const selectedRole = () => roles.find(input => input.checked)?.value || 'developer';
+      const choices = form.querySelector('.team-repository-choices');
+      const explain = () => {
+        form.querySelector('[data-workspace-role-description]').textContent = descriptions[selectedRole()] || '';
+        choices.hidden = selectedRole() === 'admin';
+        choices.disabled = selectedRole() === 'admin';
+      };
+      roles.forEach(input => input.addEventListener('change', explain));
+      form.addEventListener('submit', event => {
+        if (form.dataset.submitting) { event.preventDefault(); return; }
+        form.dataset.submitting = 'true'; form.setAttribute('aria-busy', 'true');
+        const submit = form.querySelector('button[type=submit]');
+        if (submit) { submit.dataset.idleLabel = submit.textContent; submit.disabled = true; submit.textContent = form.classList.contains('team-invite-form') ? 'Creating invitation…' : 'Saving access…'; }
+      });
+      explain();
+    });
+  }
+
+  // Small save confirmations. Errors stay next to the control that failed.
+  function toast(message, tone = 'ok') {
+    if (!message) return;
+    let region = document.querySelector('[data-toast-region]');
+    if (!region) {
+      region = document.createElement('div');
+      region.className = 'toast-region'; region.dataset.toastRegion = ''; region.setAttribute('aria-live', 'polite');
+      document.body.append(region);
+    }
+    const item = document.createElement('p');
+    item.className = `toast tone-${tone}`; item.setAttribute('role', tone === 'danger' ? 'alert' : 'status');
+    item.innerHTML = tone === 'danger'
+      ? '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 8v5M12 16.5v.01"></path><circle cx="12" cy="12" r="9"></circle></svg>'
+      : '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"></path></svg>';
+    const text = document.createElement('span'); text.textContent = message; item.append(text);
+    region.querySelectorAll('.toast').forEach(old => old.remove());
+    region.append(item);
+  }
+  function initToasts() {
+    document.addEventListener('animationend', event => {
+      if (event.target.matches?.('.toast') && event.animationName === 'toast-out') event.target.remove();
+    });
+    document.addEventListener('click', event => { event.target.closest?.('.toast')?.remove(); });
+    // A confirmation after a plain form redirect should not repeat on reload.
+    const url = new URL(location.href);
+    if (['saved', 'notice', 'until'].some(name => url.searchParams.has(name))) {
+      ['saved', 'notice', 'until'].forEach(name => url.searchParams.delete(name));
+      history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+    }
+    // A picture that fails to load leaves the initial underneath visible.
+    document.addEventListener('error', event => {
+      if (event.target instanceof HTMLImageElement && event.target.matches('.user-avatar > img, .workspace-avatar > img')) event.target.remove();
+    }, true);
+  }
+
+  // Enhanced forms post with Accept: application/json and get FormResult back.
+  async function postForm(form, body) {
+    let response;
+    try {
+      response = await fetch(form.action, {method: 'POST', body, credentials: 'same-origin', redirect: 'manual', headers: {Accept: 'application/json'}});
+    } catch {
+      throw new Error('Couldn’t reach Previa. Check your connection and try again.');
+    }
+    if (response.type === 'opaqueredirect') throw new Error('Your session has ended. Sign in again, then retry.');
+    if (response.status === 403) throw new Error('Your session check failed. Refresh the page, then try again.');
+    if (response.status === 413) throw new Error('That file is too large. Choose a smaller image.');
+    let result = {};
+    try { result = await response.json(); } catch { /* a non-JSON refusal keeps the generic message */ }
+    if (!response.ok) throw new Error(result.error || 'This change could not be saved. Please try again.');
+    if (result.revision) document.querySelectorAll('input[name=profile_revision]').forEach(input => { input.value = result.revision; input.defaultValue = String(result.revision); });
+    return result;
+  }
+  const setText = (selector, value) => { if (value) document.querySelectorAll(selector).forEach(el => { el.textContent = value; if (el.title) el.title = value; }); };
+
+  // In-place fields (Jira style): Enter or ✓ saves, Esc or ✕ restores, and
+  // leaving a changed field saves it. Only the edited field changes; the
+  // others are sent with their saved values.
+  function initInlineForms() {
+    document.querySelectorAll('form[data-inline-form]').forEach(form => {
+      // A live refresh swaps in new forms; each is bound once.
+      if (form.dataset.inlineBound) return;
+      form.dataset.inlineBound = 'true';
+      const fields = [...form.querySelectorAll('[data-inline-edit] .inline-input')];
+      const error = form.querySelector('[data-inline-error]');
+      const showError = (field, message) => {
+        if (error) { error.textContent = message; error.hidden = !message; }
+        if (field) field.setAttribute('aria-invalid', message ? 'true' : 'false');
+      };
+      const cancel = field => { field.value = field.defaultValue; showError(field, ''); field.blur(); };
+      // A save started by leaving the field reports problems without pulling focus back.
+      const save = async (field, fromBlur = false) => {
+        const group = field.closest('[data-inline-edit]');
+        if (group.dataset.saving) return;
+        if (field.value === field.defaultValue) { showError(field, ''); return; }
+        if (!field.checkValidity()) { showError(field, field.validationMessage); if (!fromBlur) field.focus(); return; }
+        const body = new FormData(form);
+        fields.filter(other => other !== field).forEach(other => body.set(other.name, other.defaultValue));
+        group.dataset.saving = 'true'; field.readOnly = true;
+        try {
+          const result = await postForm(form, body);
+          const saved = result.fields || {};
+          fields.forEach(f => { if (saved[f.name] !== undefined) f.defaultValue = saved[f.name]; });
+          field.defaultValue = saved[field.name] ?? field.value;
+          field.value = field.defaultValue;
+          showError(field, '');
+          setText('[data-viewer-name]', saved.display_name);
+          if (form.matches('[data-workspace-profile]') && field.name === 'name') {
+            setText('[data-current-workspace-name]', saved.name);
+            document.querySelectorAll('.app-breadcrumb-parent .app-breadcrumb-label').forEach(el => { el.textContent = saved.name; });
+          }
+          toast(result.message || 'Saved');
+          if (document.activeElement === field) field.blur();
+        } catch (e) {
+          showError(field, e.message);
+          if (!fromBlur) field.focus();
+        } finally {
+          delete group.dataset.saving; field.readOnly = false;
+        }
+      };
+      fields.forEach(field => {
+        const group = field.closest('[data-inline-edit]');
+        field.addEventListener('keydown', event => {
+          const multiline = field instanceof HTMLTextAreaElement;
+          if (event.key === 'Escape') { event.preventDefault(); cancel(field); }
+          else if (event.key === 'Enter' && (!multiline || event.metaKey || event.ctrlKey)) { event.preventDefault(); save(field); }
+        });
+        group.addEventListener('focusout', event => {
+          if (!group.contains(event.relatedTarget) && field.value !== field.defaultValue && !group.dataset.saving) save(field, true);
+        });
+        group.querySelector('.inline-cancel').addEventListener('click', event => { event.preventDefault(); cancel(field); });
+        // Keep focus in the field while pressing ✓ or ✕ so the controls stay put.
+        group.querySelectorAll('.inline-actions button').forEach(button => button.addEventListener('mousedown', event => event.preventDefault()));
+      });
+      form.addEventListener('submit', event => {
+        event.preventDefault();
+        const field = event.submitter?.closest('[data-inline-edit]')?.querySelector('.inline-input') || fields.find(f => f.value !== f.defaultValue);
+        if (field) save(field);
+      });
+    });
+  }
+
+  // Photos and logos upload as soon as a file is chosen. The browser crops a
+  // profile photo to a square and shrinks large images first, so phone photos
+  // fit the upload limit; the server still validates and re-encodes.
+  const UPLOAD_LIMIT = 190 * 1024;
+  async function prepareImage(file, kind) {
+    if (!['image/png', 'image/jpeg'].includes(file.type)) throw new Error('Choose a PNG or JPEG image.');
+    if (typeof createImageBitmap !== 'function') return file;
+    let bitmap;
+    try { bitmap = await createImageBitmap(file); } catch { throw new Error('This image could not be read. Choose another PNG or JPEG.'); }
+    const avatar = kind === 'avatar';
+    if (!avatar && file.size <= UPLOAD_LIMIT && bitmap.width <= 512 && bitmap.height <= 512) return file;
+    const side = Math.min(bitmap.width, bitmap.height);
+    const encode = async (limit, type) => {
+      const scale = avatar ? Math.min(1, limit / side) : Math.min(1, limit / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round((avatar ? side : bitmap.width) * scale));
+      canvas.height = Math.max(1, Math.round((avatar ? side : bitmap.height) * scale));
+      const context = canvas.getContext('2d');
+      context.imageSmoothingQuality = 'high';
+      if (type === 'image/jpeg') { context.fillStyle = '#fff'; context.fillRect(0, 0, canvas.width, canvas.height); }
+      if (avatar) context.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, canvas.width, canvas.height);
+      else context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      return new Promise(resolve => canvas.toBlob(resolve, type, 0.9));
+    };
+    for (const [limit, type] of avatar ? [[256, 'image/png'], [256, 'image/jpeg']] : [[512, 'image/png'], [256, 'image/png'], [256, 'image/jpeg']]) {
+      const blob = await encode(limit, type);
+      if (blob && blob.size <= UPLOAD_LIMIT) return new File([blob], type === 'image/png' ? `${kind}.png` : `${kind}.jpg`, {type});
+    }
+    throw new Error('This image is too large. Choose a smaller PNG or JPEG.');
+  }
+  function showPicture(targets, src) {
+    targets.forEach(avatar => {
+      let image = avatar.querySelector(':scope > img');
+      if (!src) { image?.remove(); return; }
+      if (!image) {
+        image = document.createElement('img');
+        image.alt = ''; image.width = 64; image.height = 64; image.referrerPolicy = 'no-referrer';
+        avatar.append(image);
+      }
+      image.src = src;
+    });
+  }
+  function initImageEditors() {
+    document.querySelectorAll('form[data-avatar-form]').forEach(form => {
+      const kind = form.dataset.imageKind;
+      const input = form.querySelector('input[type=file]');
+      const remove = form.closest('.photo-field')?.querySelector('form[data-avatar-remove]');
+      const error = document.getElementById('avatar-error');
+      const targets = () => kind === 'avatar'
+        ? document.querySelectorAll('[data-viewer-avatar]')
+        : document.querySelectorAll('[data-logo-preview] .workspace-avatar, .workspace-switcher > summary .workspace-avatar');
+      const fail = message => { if (error && kind === 'avatar') { error.textContent = message; error.hidden = false; } toast(message, 'danger'); };
+      input.addEventListener('change', async () => {
+        const chosen = input.files[0];
+        if (!chosen || form.getAttribute('aria-busy') === 'true') return;
+        form.setAttribute('aria-busy', 'true');
+        if (error) error.hidden = true;
+        try {
+          const file = await prepareImage(chosen, kind);
+          const body = new FormData(form);
+          body.set(input.name, file, file.name);
+          const result = await postForm(form, body);
+          showPicture(targets(), result.fields?.[kind === 'avatar' ? 'avatar' : 'logo']);
+          if (remove) remove.hidden = false;
+          toast(result.message || 'Saved');
+        } catch (e) {
+          fail(e.message);
+        } finally {
+          form.removeAttribute('aria-busy');
+          input.value = '';
+        }
+      });
+      remove?.addEventListener('submit', async event => {
+        event.preventDefault();
+        try {
+          const result = await postForm(remove, new FormData(remove));
+          showPicture(targets(), result.fields?.avatar || '');
+          remove.hidden = true;
+          toast(result.message || 'Removed');
+        } catch (e) {
+          fail(e.message);
+        }
+      });
+    });
+  }
+
+  // Info tooltips show on hover and focus in CSS; Escape hides one until the
+  // pointer or focus leaves it.
+  function initInfoTips() {
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      document.querySelectorAll('[data-info-tip]').forEach(tip => { if (tip.matches(':hover, :focus-within')) tip.dataset.dismissed = ''; });
+    });
+    document.querySelectorAll('[data-info-tip]').forEach(tip => {
+      tip.addEventListener('mouseleave', () => { delete tip.dataset.dismissed; });
+      tip.addEventListener('focusout', () => { delete tip.dataset.dismissed; });
+    });
+  }
+  // A destructive action stays disabled until its confirmation text matches.
+  function initConfirmMatch() {
+    document.querySelectorAll('[data-confirm-match]').forEach(input => {
+      const submit = input.form?.querySelector('[data-confirm-submit]');
+      if (!submit) return;
+      const update = () => { submit.disabled = input.value.trim() !== input.dataset.confirmMatch; };
+      input.addEventListener('input', update);
+      update();
+    });
+  }
+
+  // Restore forms when navigating back to a page from the browser's cache.
+  window.addEventListener('pageshow', () => {
+    document.querySelectorAll('[data-submitting]').forEach(form => {
+      delete form.dataset.submitting; form.removeAttribute('aria-busy');
+      const submit = form.querySelector('button[type=submit]');
+      if (submit?.dataset.idleLabel) { submit.disabled = false; submit.textContent = submit.dataset.idleLabel; delete submit.dataset.idleLabel; }
+    });
+  });
 
   // Theme choice is a per-browser preference; without a choice the OS theme applies.
   const themeQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -98,7 +424,7 @@
       source: 'document',
       where: {and: [
         {href_matches: '/*'},
-        {not: {href_matches: ['/', '/auth/*', '/installations/*', '/queue/*', '/webhooks/*', '/static/*']}},
+        {not: {href_matches: ['/', '/auth/*', '/installations/*', '/queue/*', '/webhooks/*', '/static/*', '/repositories/*/pull-requests/*/open']}},
         {not: {selector_matches: '[target], [download], [hx-get], [hx-post]'}},
       ]},
       eagerness: 'moderate',
@@ -121,7 +447,10 @@
       const trigger = event.target.closest('[data-open-dialog]');
       if (trigger) {
         event.preventDefault(); // Prevent duplicate native command handling.
-        openDialog(document.getElementById(trigger.dataset.openDialog), trigger);
+        // A dialog opened from a menu closes the menu first; focus returns to its button.
+        const menu = trigger.closest('details[data-menu], details[data-workspace-switcher]');
+        if (menu) menu.open = false;
+        openDialog(document.getElementById(trigger.dataset.openDialog), menu ? menu.querySelector('summary') : trigger);
       }
       const dismiss = event.target.closest('[data-close-dialog]');
       if (dismiss) {
@@ -168,19 +497,41 @@
   }
 
   function initAccountMenus() {
-    const menus = document.querySelectorAll('[data-menu]');
+    // Menus are looked up per event: a live refresh may have replaced them.
+    const menus = () => document.querySelectorAll('details[data-menu]');
     document.addEventListener('click', (event) => {
-      menus.forEach((menu) => {
+      menus().forEach((menu) => {
         if (!menu.contains(event.target)) menu.open = false;
       });
     });
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape' || document.querySelector('[data-confirmation-dialog][open]')) return;
-      menus.forEach((menu) => {
+      menus().forEach((menu) => {
         if (menu.open) {
           menu.open = false;
           menu.querySelector('summary').focus();
         }
+      });
+    });
+  }
+
+  // A plain form marked data-busy-form submits once: its busy button shows a
+  // spinner and its label (busy-label) until the next page loads. Returning to
+  // the page from the back-forward cache resets it.
+  function initBusyForms() {
+    document.addEventListener('submit', (event) => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement) || !form.matches('[data-busy-form]')) return;
+      if (form.getAttribute('aria-busy') === 'true') { event.preventDefault(); return; }
+      form.setAttribute('aria-busy', 'true');
+      // Disable after the browser has read the form, so the submission goes ahead.
+      setTimeout(() => form.querySelectorAll('button[type=submit]').forEach(button => { button.disabled = true; }));
+    });
+    window.addEventListener('pageshow', (event) => {
+      if (!event.persisted) return;
+      document.querySelectorAll('form[data-busy-form][aria-busy="true"]').forEach(form => {
+        form.removeAttribute('aria-busy');
+        form.querySelectorAll('button[type=submit]').forEach(button => { button.disabled = false; });
       });
     });
   }
@@ -333,10 +684,12 @@
     livePending = false;
     if (document.querySelector('[data-live-refresh]')) window.htmx?.trigger(document.body, 'live-update');
   };
-  // Live refreshes wait while a confirmation dialog is open (policy, teardown)
-  // or the PR search has focus, so nothing moves under the owner's hand.
-  const liveBlocked = () => Boolean(document.querySelector('dialog[data-confirmation-dialog][open]') ||
-    document.activeElement?.closest('#pull-request-filters'));
+  // Live refreshes wait while a confirmation dialog or menu is open, or while
+  // someone types in a filter or a review form, so nothing moves under their
+  // hand. Review drafts that are not being typed in survive a refresh.
+  const livePause = '#pull-request-filters, [data-live-pause], [data-draft-form]';
+  const liveBlocked = () => Boolean(document.querySelector('dialog[data-confirmation-dialog][open], details[data-menu][open]') ||
+    document.activeElement?.closest(livePause));
 
   // A state that changes with time alone (a sync turning stale) carries
   // data-refresh-at: refresh the panel once that moment passes, since no
@@ -365,7 +718,11 @@
     let failures = 0;
     let retry = 0;
     const setState = (state) => { document.documentElement.dataset.liveState = state; };
-    const request = () => { if (liveBlocked()) livePending = true; else liveRefresh(); };
+    const request = () => {
+      if (!liveBlocked()) { liveRefresh(); return; }
+      livePending = true;
+      document.dispatchEvent(new CustomEvent('live-deferred'));
+    };
     const connect = () => {
       clearTimeout(retry);
       const url = new URL(base);
@@ -398,8 +755,24 @@
     document.addEventListener('close', (event) => {
       if (event.target.matches?.('dialog[data-confirmation-dialog]') && livePending) setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
     }, true);
+    // A refresh that returns while a menu inside its target is open, or
+    // while someone types in a paused form inside it, waits until the menu
+    // closes or the form loses focus, so nothing vanishes under the pointer
+    // or the cursor.
+    document.addEventListener('htmx:beforeSwap', (event) => {
+      const trigger = event.detail.requestConfig?.elt || event.detail.elt;
+      const target = event.detail.target;
+      const typing = document.activeElement?.closest(livePause) && target?.contains?.(document.activeElement);
+      if (!trigger?.hasAttribute?.('data-live-refresh') || !(target?.querySelector?.('details[data-menu][open]') || typing)) return;
+      event.detail.shouldSwap = false;
+      livePending = true;
+    });
+    // A refresh deferred while a menu was open runs once it closes.
+    document.addEventListener('toggle', (event) => {
+      if (event.target.matches?.('details[data-menu]') && !event.target.open && livePending) setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
+    }, true);
     document.addEventListener('focusout', (event) => {
-      const form = event.target.closest?.('#pull-request-filters');
+      const form = event.target.closest?.(livePause);
       if (!form || form.contains(event.relatedTarget) || !livePending) return;
       setTimeout(() => { if (livePending && !liveBlocked()) liveRefresh(); });
     });
@@ -516,6 +889,25 @@
       const hours = Math.floor(seconds / 3600);
       const minutes = Math.floor(seconds / 60) % 60;
       const text = (hours ? hours + 'h ' : '') + (hours || minutes ? minutes + 'm ' : '') + (seconds % 60) + 's';
+      if (element.textContent !== text) element.textContent = text;
+    });
+    render();
+    setInterval(render, 1000);
+    document.addEventListener('htmx:afterSettle', render);
+  }
+
+  // Countdowns (time[data-countdown]) tick down to their datetime ("4:32",
+  // "1:04:32"), the same text the server renders, and stop at 0:00 until a
+  // live update replaces them.
+  function initCountdowns() {
+    const render = () => document.querySelectorAll('time[data-countdown]').forEach((element) => {
+      const until = Date.parse(element.dateTime);
+      if (Number.isNaN(until)) return;
+      const left = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+      const hours = Math.floor(left / 3600);
+      const minutes = Math.floor(left / 60) % 60;
+      const seconds = String(left % 60).padStart(2, '0');
+      const text = hours ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}` : `${minutes}:${seconds}`;
       if (element.textContent !== text) element.textContent = text;
     });
     render();
@@ -792,259 +1184,37 @@
     });
   }
 
-  // .env text: the same rules as the server's secrets.ParseDotenv.
-  function parseDotenv(text) {
-    const lines = text.replace(/\r\n/g, '\n').split('\n');
-    const entries = [];
-    const closing = (body) => {
-      for (let i = 0; i < body.length; i++) {
-        if (body[i] === '\\') i++;
-        else if (body[i] === '"') return i;
-      }
-      return -1;
-    };
-    const unescape = body => body.replace(/\\(.)/g, (_, c) => (c === 'n' ? '\n' : c === 't' ? '\t' : c));
-    for (let i = 0; i < lines.length; i++) {
-      const number = i + 1;
-      let line = lines[i].trim();
-      if (!line || line.startsWith('#')) continue;
-      if (line.startsWith('export ')) line = line.slice(7);
-      const equals = line.indexOf('=');
-      const name = equals < 0 ? '' : line.slice(0, equals).trim();
-      if (!name) throw new Error(`Line ${number}: expected NAME=value.`);
-      let raw = line.slice(equals + 1).trim();
-      let value;
-      if (raw.startsWith('"')) {
-        let body = raw.slice(1);
-        for (;;) {
-          const end = closing(body);
-          if (end >= 0) { value = unescape(body.slice(0, end)); break; }
-          i++;
-          if (i >= lines.length) throw new Error(`Line ${number}: the quoted value of ${name} is not closed.`);
-          body += '\n' + lines[i].replace(/[ \t]+$/, '');
-        }
-      } else if (raw.startsWith("'")) {
-        const end = raw.lastIndexOf("'");
-        if (end === 0) throw new Error(`Line ${number}: the quoted value of ${name} is not closed.`);
-        value = raw.slice(1, end);
-      } else {
-        const comment = raw.indexOf(' #');
-        if (comment >= 0) raw = raw.slice(0, comment).trim();
-        value = raw;
-      }
-      entries.push([name, value]);
-    }
-    return entries;
-  }
-
-  // Secrets editor: lines of name and value like a key-value table. Pasting
-  // several NAME=value lines into a name splits them into lines; a .env file
-  // or pasted text can be moved into lines to review before saving. Checks
-  // run before submit; the server checks everything again.
-  function initSecretEditor() {
-    const form = document.querySelector('[data-secret-editor]');
+  // Secrets: the repository's .env file. The editor can load a file from disk
+  // (the server checks every line on save); a save that would remove names
+  // comes back with its confirmation, which opens as a modal.
+  function initEnvEditor() {
+    const removals = document.querySelector('#confirm-env-removals[data-open-on-load]');
+    if (removals && !removals.open) removals.showModal();
+    const form = document.querySelector('[data-env-editor]');
     if (!form) return;
-    const list = form.querySelector('[data-secret-rows]');
-    const template = form.querySelector('[data-secret-row-template]');
-    const existing = new Set((form.dataset.existingNames || '').split(' ').filter(Boolean));
-    const remaining = Number(form.dataset.remaining || 0);
-    const dotenv = form.querySelector('[data-dotenv-text]');
-    const dotenvFeedback = form.querySelector('[data-dotenv-feedback]');
-    const feedback = form.querySelector('[data-secret-editor-feedback]');
-    const submitLabel = form.querySelector('[data-secret-submit-label]');
-    const namePattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
-    const rows = () => [...list.querySelectorAll('[data-secret-row]')];
-    const fields = row => [row.querySelector('[name="name"]'), row.querySelector('[name="value"]')];
-    // setNote shows a hint, or an error that marks invalidField.
-    const setNote = (row, text, invalidField = null) => {
-      const note = row.querySelector('[data-row-note]');
-      row.classList.toggle('has-error', Boolean(invalidField));
-      fields(row).forEach((field) => {
-        if (field === invalidField) field.setAttribute('aria-invalid', 'true'); else field.removeAttribute('aria-invalid');
-      });
-      note.replaceChildren();
-      if (!text) return;
-      if (invalidField) {
-        const span = document.createElement('span');
-        span.className = 'field-error';
-        span.textContent = text;
-        note.append(span);
-      } else note.textContent = text;
+    const text = form.querySelector('textarea[name="env"]');
+    const feedback = form.querySelector('[data-env-feedback]');
+    // The file's size against its limit, as the server counts it (UTF-8).
+    const size = form.querySelector('[data-env-size]');
+    const max = Number(size?.dataset.envMax || 0);
+    const kib = n => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KiB`);
+    const measure = () => {
+      if (!size || !text) return;
+      const bytes = new TextEncoder().encode(text.value).length;
+      size.textContent = `${kib(bytes)} of ${max / 1024} KiB`;
+      size.classList.toggle('is-over', bytes > max);
     };
-    const hint = (row) => {
-      const name = fields(row)[0].value.trim();
-      if (!row.classList.contains('has-error')) setNote(row, existing.has(name) ? 'Replaces the stored value.' : '');
-    };
-    const grow = (area) => { area.rows = Math.min(8, Math.max(1, area.value.split('\n').length)); };
-    const relabel = () => rows().forEach((row, index) => {
-      const [name, value] = fields(row);
-      name.setAttribute('aria-label', `Name, line ${index + 1}`);
-      value.setAttribute('aria-label', `Value, line ${index + 1}`);
-      row.querySelector('[data-remove-secret-row]').setAttribute('aria-label', `Remove line ${index + 1}`);
-    });
-    const count = () => {
-      const filled = rows().filter(row => fields(row).some(field => field.value.trim() !== '')).length;
-      let pasted = 0;
-      try { pasted = dotenv?.value.trim() ? parseDotenv(dotenv.value).length : 0; } catch { /* Reported on submit. */ }
-      const total = filled + pasted;
-      if (submitLabel) submitLabel.textContent = total > 1 ? `Save ${total} secrets` : total === 1 ? 'Save 1 secret' : 'Save secrets';
-    };
-    const addRow = (name = '', value = '') => {
-      const empty = rows().find(row => fields(row).every(field => field.value === ''));
-      const row = empty || template.content.firstElementChild.cloneNode(true);
-      if (!empty) list.append(row);
-      const [nameField, valueField] = fields(row);
-      nameField.value = name;
-      valueField.value = value;
-      grow(valueField);
-      hint(row);
-      relabel();
-      return row;
-    };
-    const fill = (entries) => {
-      entries.forEach(([name, value]) => addRow(name, value));
-      count();
-    };
-    list.addEventListener('input', (event) => {
-      const row = event.target.closest('[data-secret-row]');
-      if (!row) return;
-      if (event.target.name === 'value') grow(event.target);
-      if (row.classList.contains('has-error')) setNote(row, '');
-      hint(row);
-      count();
-    });
-    list.addEventListener('paste', (event) => {
-      if (event.target.name !== 'name') return;
-      const text = event.clipboardData?.getData('text') || '';
-      if (!text.includes('=')) return;
-      try {
-        const entries = parseDotenv(text);
-        if (!entries.length) return;
-        event.preventDefault();
-        const row = event.target.closest('[data-secret-row]');
-        fields(row).forEach(field => { field.value = ''; });
-        fill(entries);
-        if (feedback) feedback.textContent = `Added ${entries.length} line${entries.length === 1 ? '' : 's'} from the pasted text.`;
-      } catch { /* Not .env text: paste it as typed. */ }
-    });
-    list.addEventListener('click', (event) => {
-      const remove = event.target.closest('[data-remove-secret-row]');
-      if (!remove) return;
-      const row = remove.closest('[data-secret-row]');
-      if (rows().length > 1) {
-        const next = row.nextElementSibling || row.previousElementSibling;
-        row.remove();
-        fields(next)[0]?.focus();
-      } else {
-        fields(row).forEach(field => { field.value = ''; });
-        setNote(row, '');
-        fields(row)[0].focus();
-      }
-      relabel();
-      count();
-    });
-    form.querySelector('[data-add-secret-row]')?.addEventListener('click', () => {
-      const row = template.content.firstElementChild.cloneNode(true);
-      list.append(row);
-      relabel();
-      fields(row)[0].focus();
-    });
-    dotenv?.addEventListener('input', count);
-    form.querySelector('[data-dotenv-file]')?.addEventListener('change', async (event) => {
+    text?.addEventListener('input', measure);
+    form.querySelector('[data-env-file]')?.addEventListener('change', async (event) => {
       const file = event.target.files?.[0];
-      if (!file || !dotenv) return;
-      if (file.size > 256 * 1024) { dotenvFeedback.textContent = 'That file is too large for secrets (256 KiB at most).'; return; }
-      dotenv.value = await file.text();
       event.target.value = '';
-      dotenvFeedback.textContent = `Loaded ${file.name}. Review it, then save or move it into lines.`;
-      count();
+      if (!file || !text) return;
+      if (file.size > 64 * 1024) { feedback.textContent = `${file.name} is larger than 64 KiB, the most a .env file may hold.`; return; }
+      text.value = await file.text();
+      measure();
+      feedback.textContent = `Loaded ${file.name}. Review it, then save.`;
+      text.focus();
     });
-    form.querySelector('[data-dotenv-split]')?.addEventListener('click', () => {
-      if (!dotenv?.value.trim()) { dotenvFeedback.textContent = 'Paste .env text or choose a file first.'; return; }
-      try {
-        const entries = parseDotenv(dotenv.value);
-        fill(entries);
-        dotenv.value = '';
-        dotenv.removeAttribute('aria-invalid');
-        dotenvFeedback.textContent = `Moved ${entries.length} line${entries.length === 1 ? '' : 's'} above.`;
-        count();
-      } catch (error) {
-        dotenvFeedback.textContent = error.message;
-      }
-    });
-    form.addEventListener('submit', (event) => {
-      const seen = new Map();
-      let firstInvalid = null;
-      let fresh = 0;
-      const fail = (row, message, field) => { setNote(row, message, field); firstInvalid ||= field; };
-      rows().forEach((row) => {
-        const [nameField, valueField] = fields(row);
-        const name = nameField.value.trim();
-        const value = valueField.value;
-        if (!name && !value) { setNote(row, ''); return; }
-        if (!name) return fail(row, 'Enter a name for this value.', nameField);
-        if (!namePattern.test(name)) return fail(row, 'Use letters, digits and underscores, starting with a letter or underscore.', nameField);
-        if (name.toUpperCase().startsWith('PREVIA_')) return fail(row, 'Names starting with PREVIA_ are reserved for the platform.', nameField);
-        if (seen.has(name)) return fail(row, `${name} appears more than once. Keep one value per name.`, nameField);
-        if (!value) return fail(row, `Enter a value for ${name}.`, valueField);
-        seen.set(name, row);
-        if (!existing.has(name)) fresh++;
-        hint(row);
-      });
-      let pasted = [];
-      try {
-        pasted = dotenv?.value.trim() ? parseDotenv(dotenv.value) : [];
-      } catch (error) {
-        dotenvFeedback.textContent = error.message;
-        firstInvalid ||= dotenv;
-      }
-      for (const [name] of pasted) {
-        if (seen.has(name)) {
-          dotenvFeedback.textContent = `${name} is both in the lines above and in the pasted text. Keep one.`;
-          firstInvalid ||= dotenv;
-        }
-        seen.set(name, null);
-        if (!existing.has(name)) fresh++;
-      }
-      if (!firstInvalid && seen.size === 0) {
-        if (feedback) feedback.textContent = 'Add at least one name and value.';
-        firstInvalid = fields(rows()[0])[0];
-      } else if (!firstInvalid && fresh > remaining) {
-        if (feedback) feedback.textContent = `Only ${remaining} more name${remaining === 1 ? '' : 's'} fit. Delete some secrets or save fewer new names.`;
-        firstInvalid = fields(rows()[0])[0];
-      }
-      if (firstInvalid) {
-        event.preventDefault();
-        firstInvalid.closest('details')?.setAttribute('open', '');
-        firstInvalid.focus();
-      }
-    });
-    rows().forEach((row) => { hint(row); grow(fields(row)[1]); });
-    count();
-  }
-
-  // Bulk delete: checkboxes belong to the confirmation's form; the trigger
-  // shows how many are selected and stays disabled until one is.
-  function initBulkDelete() {
-    const trigger = document.querySelector('[data-bulk-delete]');
-    if (!trigger) return;
-    const boxes = [...document.querySelectorAll('[data-select-secret]')];
-    const all = document.querySelector('[data-select-all]');
-    const counter = trigger.querySelector('[data-bulk-delete-count]');
-    const summary = document.querySelector('[data-bulk-delete-summary]');
-    const update = () => {
-      const chosen = boxes.filter(box => box.checked);
-      trigger.disabled = chosen.length === 0;
-      counter.textContent = chosen.length ? `(${chosen.length})` : '';
-      if (all) {
-        all.checked = chosen.length === boxes.length && boxes.length > 0;
-        all.indeterminate = chosen.length > 0 && chosen.length < boxes.length;
-      }
-      if (summary) summary.textContent = chosen.length ? `${chosen.length === 1 ? '1 secret' : chosen.length + ' secrets'}: ${chosen.map(box => box.value).join(', ')}` : '';
-    };
-    boxes.forEach(box => box.addEventListener('change', update));
-    all?.addEventListener('change', () => { boxes.forEach((box) => { box.checked = all.checked; }); update(); });
-    update();
   }
 
   function initRepositorySearch() {
@@ -1565,12 +1735,184 @@
     document.addEventListener('htmx:afterSwap', setup);
   }
 
+  // Review pages (docs/30-reviews.md): edit forms open in place, removals
+  // confirm in one shared modal, filters apply on change and Ctrl/⌘+Enter
+  // sends. A live refresh keeps every unsent draft, with the deployment and
+  // revision it was written against, so a newer deployment is never assumed.
+  function initReviews() {
+    const region = () => document.getElementById('review-detail');
+    if (!region()) return;
+    const byKey = (attribute, key) => document.querySelectorAll(`[${attribute}="${CSS.escape(key)}"]`);
+    const fields = form => [...form.querySelectorAll('[data-draft-key]')];
+    const dirty = form => fields(form).some(field => field.type !== 'hidden' && field.value !== field.defaultValue);
+    const showEdit = (key, focus = true) => {
+      const form = byKey('data-edit-form', key)[0];
+      if (!form) return false;
+      byKey('data-edit-view', key).forEach(view => { view.hidden = true; });
+      byKey('data-edit-open', key).forEach(link => { if (link.closest('.field-card-head')) link.hidden = true; });
+      form.hidden = false;
+      if (focus) {
+        const field = form.querySelector('textarea, input:not([type=hidden])');
+        field?.focus();
+        if (field instanceof HTMLTextAreaElement) field.setSelectionRange(field.value.length, field.value.length);
+      }
+      return true;
+    };
+    const hideEdit = key => {
+      const form = byKey('data-edit-form', key)[0];
+      if (!form) return;
+      form.reset();
+      form.hidden = true;
+      byKey('data-edit-view', key).forEach(view => { view.hidden = false; });
+      byKey('data-edit-open', key).forEach(link => { link.hidden = false; });
+      const anchor = form.closest('[id]');
+      (anchor?.querySelector('.review-menu summary') || byKey('data-edit-open', key)[0])?.focus({preventScroll: true});
+    };
+    const dialog = document.getElementById('review-remove');
+    const confirmRemoval = trigger => {
+      const form = dialog.querySelector('[data-remove-form]');
+      form.action = trigger.dataset.removeAction;
+      form.removeAttribute('aria-busy');
+      form.querySelectorAll('button[type=submit]').forEach(button => { button.disabled = false; });
+      dialog.querySelector('[data-remove-title]').textContent = trigger.dataset.removeTitle;
+      dialog.querySelector('[data-remove-text]').textContent = trigger.dataset.removeText;
+      const moderate = trigger.dataset.removeModerate === 'true';
+      const reasons = dialog.querySelector('[data-remove-reasons]');
+      reasons.hidden = !moderate;
+      reasons.querySelectorAll('input').forEach(input => { input.required = moderate; input.checked = false; });
+      openDialog(dialog, trigger);
+    };
+    document.addEventListener('click', event => {
+      const open = event.target.closest('[data-edit-open]');
+      if (open && showEdit(open.dataset.editOpen)) {
+        event.preventDefault();
+        open.closest('details[data-menu]')?.removeAttribute('open');
+        return;
+      }
+      const cancel = event.target.closest('[data-edit-cancel]');
+      if (cancel) {
+        event.preventDefault();
+        hideEdit(cancel.dataset.editCancel);
+        return;
+      }
+      const remove = event.target.closest('[data-remove-open]');
+      if (remove && dialog) {
+        event.preventDefault();
+        confirmRemoval(remove);
+      }
+    });
+    if (dialog?.hasAttribute('data-open-on-load')) openDialog(dialog, null);
+    document.addEventListener('keydown', event => {
+      const form = event.target.closest?.('[data-draft-form]');
+      if (!form) return;
+      if (event.key === 'Escape' && form.matches('[data-edit-form]') && !document.querySelector('dialog[open]')) {
+        event.preventDefault();
+        hideEdit(form.dataset.editForm);
+      } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && event.target instanceof HTMLTextAreaElement) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
+    document.addEventListener('change', event => {
+      if (event.target.matches?.('select[data-auto-submit]')) event.target.form?.requestSubmit();
+    });
+    // A test-access reveal shows the value in place for two minutes, also
+    // across live refreshes unless the test access changed meanwhile. It is
+    // never stored; reloading the page drops it.
+    let revealed = null;
+    let hideRevealed = 0;
+    const showRevealed = () => {
+      const form = document.querySelector('[data-reveal-form]');
+      if (revealed && form?.dataset.revealForm !== revealed.revision) revealed = null;
+      const output = form?.parentElement.querySelector('[data-reveal-output]');
+      if (!form || !output) return;
+      const value = revealed ? revealed.value : '';
+      output.querySelector('[data-reveal-value]').textContent = value;
+      const copy = output.querySelector('[data-reveal-copy]');
+      if (copy) copy.dataset.copy = value;
+      form.hidden = Boolean(revealed);
+      output.hidden = !revealed;
+    };
+    document.addEventListener('submit', async event => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement) || !form.matches('[data-reveal-form]')) return;
+      event.preventDefault();
+      let result;
+      try {
+        result = await postForm(form, new FormData(form));
+      } catch (e) {
+        toast(e.message, 'danger');
+        return;
+      }
+      if (typeof result.value !== 'string') return;
+      revealed = {value: result.value, revision: form.dataset.revealForm};
+      showRevealed();
+      clearTimeout(hideRevealed);
+      hideRevealed = setTimeout(() => { revealed = null; showRevealed(); }, 120000);
+    });
+    document.addEventListener('htmx:afterSwap', event => {
+      if (event.detail.target?.id === 'review-detail' && revealed) showRevealed();
+    });
+    // While someone types, a waiting refresh says so instead of moving the page.
+    let note = null;
+    document.addEventListener('live-deferred', () => {
+      if (note || !document.activeElement?.closest('#review-detail [data-draft-form]')) return;
+      note = document.createElement('p');
+      note.className = 'review-live-note';
+      note.setAttribute('role', 'status');
+      note.textContent = 'New activity on this review. It appears when you leave the text field; your draft stays.';
+      document.querySelector('.review-workspace')?.append(note);
+    });
+    let stash = null;
+    document.addEventListener('htmx:beforeSwap', event => {
+      if (event.detail.target?.id !== 'review-detail' || event.detail.shouldSwap === false) return;
+      stash = {drafts: [], deployment: region().querySelector('[data-review-deployment]')?.dataset.reviewDeployment};
+      region().querySelectorAll('[data-draft-form]').forEach(form => {
+        const editing = form.matches('[data-edit-form]') && !form.hidden;
+        if (!dirty(form) && !editing) return;
+        stash.drafts.push({
+          key: form.dataset.draftForm, edit: editing ? form.dataset.editForm : '',
+          values: Object.fromEntries(fields(form).map(field => [field.dataset.draftKey, field.value])),
+          open: [...form.querySelectorAll('details')].map(details => details.open),
+        });
+      });
+    });
+    document.addEventListener('htmx:afterSwap', event => {
+      if (event.detail.target?.id !== 'review-detail' || !stash) return;
+      const kept = stash;
+      stash = null;
+      note?.remove();
+      note = null;
+      let lost = false;
+      for (const draft of kept.drafts) {
+        const form = byKey('data-draft-form', draft.key)[0];
+        if (!form) { lost = lost || Object.entries(draft.values).some(([key, value]) => key === 'body' && value.trim()); continue; }
+        fields(form).forEach(field => {
+          if (draft.values[field.dataset.draftKey] !== undefined) field.value = draft.values[field.dataset.draftKey];
+        });
+        form.querySelectorAll('details').forEach((details, i) => { if (draft.open[i]) details.open = true; });
+        if (draft.edit) showEdit(draft.edit, false);
+      }
+      if (lost) toast('A message you were writing could not be kept: its finding was removed meanwhile.', 'danger');
+      const now = region().querySelector('[data-review-deployment]')?.dataset.reviewDeployment;
+      if (kept.deployment && now && now !== '0' && now !== kept.deployment) toast(`Deployment ${now} is now the newest. Unsent drafts stay with the one you were testing.`);
+    });
+  }
+
   initMotion();
   initTheme();
   initNavigation();
+  initWorkspaceForms();
+  initToasts();
+  initInlineForms();
+  document.addEventListener('htmx:afterSwap', initInlineForms);
+  initImageEditors();
+  initConfirmMatch();
+  initInfoTips();
   initPrefetch();
   initConfirmationDialogs();
   initAccountMenus();
+  initBusyForms();
   initQueueForms();
   initCommandPalette();
   initRepositorySearch();
@@ -1579,14 +1921,15 @@
   initPRLogs();
   initBuildProgress();
   initElapsed();
+  initCountdowns();
   initRelativeTimes();
   initCopyButtons();
-  initSecretEditor();
-  initBulkDelete();
+  initEnvEditor();
   initRefreshDeadlines();
   initStory();
   initFilm();
   initFAQ();
   initOverview();
   initStarterKit();
+  initReviews();
 })();

@@ -2,10 +2,13 @@ package realtime
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -160,4 +163,50 @@ func TestLimiterCapsTotalAndPerKey(t *testing.T) {
 		t.Fatal("double release freed an extra slot")
 	}
 	b1()
+}
+
+func TestStreamClosesBeforeSendingAnEventAfterRevocation(t *testing.T) {
+	hub := NewHub()
+	var revoked atomic.Bool
+	ended := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sub := hub.Subscribe("repository:1", Cursor{})
+		defer sub.Close()
+		ended <- Stream(w, r, sub, StreamOptions{Retry: time.Second, Heartbeat: time.Minute, MaxDuration: time.Minute, Authorize: func(context.Context) error {
+			if revoked.Load() {
+				return errors.New("member removed")
+			}
+			return nil
+		}})
+	}))
+	defer server.Close()
+	res, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	reader := bufio.NewReader(res.Body)
+	for {
+		frame := readFrame(t, reader)
+		if frame["event"] == "ready" {
+			break
+		}
+	}
+	revoked.Store(true)
+	hub.Publish("repository:1", "private change")
+	select {
+	case err := <-ended:
+		if err == nil {
+			t.Fatal("revocation was ignored")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream retained access")
+	}
+	rest, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rest), "private change") || strings.Contains(string(rest), "event: change") {
+		t.Fatal("data sent after revocation", string(rest))
+	}
 }

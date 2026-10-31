@@ -4,9 +4,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ajaykathwatee/previa/web/components"
 )
 
-// Secret is a stored name; values are never part of any view model.
+// Secret is a name the .env file sets, with its build access. Values are
+// never part of a view model except the editor's Text.
 type Secret struct {
 	Name      string
 	UpdatedAt time.Time
@@ -29,29 +32,42 @@ func (s Secret) BuildTitle() string {
 	return "Dockerfile steps of this repository's own branches may read it with RUN --mount=type=secret,id=" + s.Name + "; forks never do."
 }
 
-// Row is one line of the secrets editor. Only the name is kept after a
-// rejected save; values are never rendered back.
-type Row struct {
-	Name, Error string
+// UpdatedLabel is a compact UTC timestamp for a table cell.
+func (s Secret) UpdatedLabel() string { return s.UpdatedAt.UTC().Format("2 Jan 2006, 15:04 UTC") }
+
+func (s Secret) UpdatedISO() string { return s.UpdatedAt.UTC().Format(time.RFC3339) }
+
+// Line is one line of the .env file shown with its value hidden: a comment or
+// blank line as written, or a name and whether it has a value.
+type Line struct {
+	Comment  string
+	Name     string
+	HasValue bool
 }
 
-// Page is the Secrets tab of one owned repository.
+// Page is the Secrets tab of one owned repository: its .env file.
 type Page struct {
 	RepoID     int64
 	FullName   string
-	Available  bool // GitHub access is current; adding and replacing require it
+	Available  bool // GitHub access is current; new or changed values need it
 	Configured bool // the server has an encryption keyring
 	Secrets    []Secret
-	Limit      int
 	Notice     string
-	Error      string // why a save or delete was refused, for the whole form
-	// Rows are the editor's lines after a rejected save, or the name being
-	// replaced; empty shows one blank line.
-	Rows []Row
-	// DotenvError explains why pasted .env text was rejected; the text itself
-	// is never rendered back.
-	DotenvError string
-	Replacing   string // name chosen with a row's Replace link
+	Error      string // why a save was refused
+	// Editing shows the file with its values in the editor. Text is the file
+	// as edited and is set only while editing.
+	Editing  bool
+	Text     string
+	Revision int64 // the revision the editor opened; 0 before the first save
+	Lines    []Line
+	// UpdatedAt and UpdatedBy describe the last save; zero before the first.
+	UpdatedAt time.Time
+	UpdatedBy string
+	// Removals are the names a save would remove, awaiting confirmation.
+	Removals []string
+	// Size is the file's length in bytes; MaxKiB its limit.
+	Size   int
+	MaxKiB int
 }
 
 func (p Page) Owner() string {
@@ -67,55 +83,56 @@ func (p Page) RepositoryName() string {
 	return name
 }
 
-// CanEdit reports whether new values can be saved.
-func (p Page) CanEdit() bool { return p.Configured && p.Available }
+// CanEdit reports whether the file can be opened for editing.
+func (p Page) CanEdit() bool { return p.Configured }
 
-// AtLimit: no new names fit; existing ones can still be replaced.
-func (p Page) AtLimit() bool { return len(p.Secrets) >= p.Limit }
+func (p Page) URL() string { return "/repositories/" + strconv.FormatInt(p.RepoID, 10) + "/secrets" }
 
-// Remaining is how many new names still fit.
-func (p Page) Remaining() int { return max(0, p.Limit-len(p.Secrets)) }
-
-// EditorRows are the lines the editor starts with.
-func (p Page) EditorRows() []Row {
-	if len(p.Rows) == 0 {
-		return []Row{{}}
+// Summary describes the file under its heading.
+func (p Page) Summary() string {
+	set := len(p.Secrets)
+	what := strconv.Itoa(set) + " variables"
+	if set == 1 {
+		what = "1 variable"
 	}
-	return p.Rows
-}
-
-// Exists reports whether name is already stored, so saving replaces it.
-func (p Page) Exists(name string) bool {
-	for _, s := range p.Secrets {
-		if s.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-// ExistingNames lists stored names for the editor's "replaces" hints.
-func (p Page) ExistingNames() string {
-	names := make([]string, len(p.Secrets))
-	for i, s := range p.Secrets {
-		names[i] = s.Name
-	}
-	return strings.Join(names, " ")
-}
-
-// RemainingLabel says how many new names fit.
-func (p Page) RemainingLabel() string {
-	switch n := p.Remaining(); n {
-	case 0:
-		return "The limit is reached: you can replace existing names but not add new ones."
-	case 1:
-		return "1 more name fits."
+	switch {
+	case !p.Configured:
+		return "Encryption is not configured, so the file cannot be opened; " + what + " are stored."
+	case p.UpdatedAt.IsZero() && set == 0:
+		return "No variables yet · " + p.SizeLabel()
+	case p.UpdatedAt.IsZero():
+		return "Sets " + what + " · " + p.SizeLabel() + " · saved one at a time before .env files. Save it once to add comments."
+	case p.UpdatedBy != "":
+		return "Sets " + what + " · " + p.SizeLabel() + " · saved " + p.UpdatedAt.UTC().Format("2 Jan 2006, 15:04 UTC") + " by " + p.UpdatedBy
 	default:
-		return strconv.Itoa(n) + " more names fit."
+		return "Sets " + what + " · " + p.SizeLabel() + " · saved " + p.UpdatedAt.UTC().Format("2 Jan 2006, 15:04 UTC")
 	}
 }
 
-// UpdatedLabel is a compact UTC timestamp for a table cell.
-func (s Secret) UpdatedLabel() string { return s.UpdatedAt.UTC().Format("2 Jan 2006, 15:04 UTC") }
+// SizeLabel is how much of the limit the file uses, as "1.2 KiB of 64 KiB".
+func (p Page) SizeLabel() string {
+	return FormatSize(p.Size) + " of " + strconv.Itoa(p.MaxKiB) + " KiB"
+}
 
-func (s Secret) UpdatedISO() string { return s.UpdatedAt.UTC().Format(time.RFC3339) }
+// FormatSize writes a byte count as ui.js does while the file is edited.
+func FormatSize(n int) string {
+	if n < 1024 {
+		return strconv.Itoa(n) + " B"
+	}
+	return strconv.FormatFloat(float64(n)/1024, 'f', 1, 64) + " KiB"
+}
+
+// OverLimit reports a file too large to save.
+func (p Page) OverLimit() bool { return p.Size > p.MaxKiB*1024 }
+
+// RemovalTitle asks to confirm the names a save removes.
+func (p Page) RemovalTitle() string {
+	if len(p.Removals) == 1 {
+		return "Remove " + p.Removals[0] + "?"
+	}
+	return "Remove " + strconv.Itoa(len(p.Removals)) + " secrets?"
+}
+
+func (p Page) PublicReferences() []components.ResourceRef {
+	return components.ResourceRefs("repository", p.RepoID)
+}

@@ -78,14 +78,19 @@ func plural(n int, noun string) string {
 	return strconv.Itoa(n) + " " + noun + "s"
 }
 
-// coreLead introduces the core set with its coverage, counted from the data.
-func coreLead() string {
+// projectsLead introduces the projects with their coverage, counted from the
+// data.
+func projectsLead() string {
 	covered := map[string]bool{}
-	for _, r := range Core() {
+	for _, r := range Repos() {
 		for _, c := range r.Covers {
 			covered[c] = true
 		}
 	}
-	return fmt.Sprintf("Static sites, server-rendered apps and APIs in TypeScript, Go, Python, Ruby, Java and PHP. Between them they exercise %d of the %d capabilities above, from the first build to cleanup.",
-		len(covered), len(Capabilities()))
+	reach := fmt.Sprintf("%d of the %d capabilities above", len(covered), len(Capabilities()))
+	if len(covered) == len(Capabilities()) {
+		reach = fmt.Sprintf("all %d capabilities above", len(Capabilities()))
+	}
+	return "Static sites, server-rendered apps and APIs in TypeScript, Go, Python, Ruby, Java and PHP. Between them they exercise " +
+		reach + ", from the first build to cleanup."
 }

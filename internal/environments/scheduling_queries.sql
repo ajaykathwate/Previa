@@ -1,6 +1,6 @@
 -- name: FindPROwner :one
-SELECT i.owner_user_id FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
-JOIN installations i ON i.id = r.installation_id WHERE pr.id = $1;
+SELECT w.owner_user_id FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
+JOIN installations i ON i.id = r.installation_id JOIN workspaces w ON w.id=i.workspace_id WHERE pr.id = $1;
 
 -- name: LockSchedulingPR :one
 SELECT id, generation, head_sha, state, teardown_completed_generation FROM pull_requests WHERE id = $1 FOR UPDATE;
@@ -13,7 +13,7 @@ WHERE pull_request_id = $1 AND revision = $2 AND state = 'pending';
 -- Admission ends a wait for a build slot; a running request that waits for
 -- preview capacity or disk keeps its note until a result is applied. An
 -- automatic request never starts for a fork's code (see LockIntentPR).
-UPDATE build_intents b SET state = 'running', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp(),
+UPDATE build_intents b SET state = 'running', execution_error_code='', started_at = COALESCE(started_at,clock_timestamp()), updated_at = clock_timestamp(),
     waiting_revision = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_revision END,
     waiting_reason = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_reason END,
     waiting_since = CASE WHEN b.state IN ('pending','queued') THEN NULL ELSE b.waiting_since END,
@@ -22,7 +22,7 @@ FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id
 WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
     AND (b.source = 'manual' OR b.state = 'running'
          OR NOT (pr.is_fork OR pr.head_repo_id IS NULL OR pr.head_repo_id IS DISTINCT FROM r.github_repo_id))
-    AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation) AND pr.head_sha = sqlc.arg(head_sha)
+    AND workspace_intent_authorized(pr.id) AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation) AND pr.head_sha = sqlc.arg(head_sha)
     AND b.generation = pr.generation AND b.head_sha = pr.head_sha AND b.revision = sqlc.arg(revision)
     AND b.state IN ('pending','queued','running') AND b.available_at <= sqlc.arg(now_at)
     AND (b.source = 'manual' OR sqlc.arg(build_mode)::text = 'automatic' OR b.state = 'running');
@@ -47,11 +47,11 @@ DELETE FROM build_logs l USING environments e
 WHERE l.environment_id = e.id AND e.pull_request_id = $1;
 
 -- name: FinishBuildIntent :execrows
-UPDATE build_intents b SET state = sqlc.arg(next_state), completed_at = clock_timestamp(), updated_at = clock_timestamp(),
+UPDATE build_intents b SET state = sqlc.arg(next_state), execution_error_code='', completed_at = clock_timestamp(), updated_at = clock_timestamp(),
     waiting_revision = NULL, waiting_reason = NULL, waiting_since = NULL, waiting_checked_at = NULL
 FROM pull_requests pr
 WHERE b.pull_request_id = pr.id AND pr.id = sqlc.arg(pr_id)
-    AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation)
+    AND workspace_publication_authorized(pr.id) AND pr.state = 'open' AND pr.build_status='open' AND NOT pr.needs_refresh AND pr.generation = sqlc.arg(generation)
     AND b.generation = pr.generation AND b.revision = sqlc.arg(revision)
     AND b.state IN ('queued','running');
 
@@ -75,7 +75,9 @@ SELECT pg_advisory_xact_lock(hashtext('previa.build_slots.' || instance)) FROM p
 -- name: CountRunningBuilds :one
 -- An admitted build holds its slot until its final attempt ends, including
 -- between River retries; another attempt of the same PR's request reuses it.
-SELECT count(*) FROM build_intents WHERE state = 'running' AND pull_request_id <> $1;
+-- A running repository baseline refresh (docs/32) holds a slot too.
+SELECT ((SELECT count(*) FROM build_intents WHERE state = 'running' AND pull_request_id <> $1)
+     + (SELECT count(*) FROM baseline_refreshes WHERE state = 'running'))::bigint;
 
 -- name: MarkIntentWaiting :execrows
 -- Notes that the current request waits for capacity or disk space. Reports
@@ -100,17 +102,21 @@ WHERE pull_request_id = sqlc.arg(pr_id) AND waiting_revision = sqlc.arg(revision
 -- name: ReadIntentWait :one
 SELECT state, waiting_since FROM build_intents WHERE pull_request_id = $1;
 
--- name: CountAccountRunningBuilds :one
--- Running builds of other PRs of one account (installation owner).
-SELECT count(*) FROM build_intents b
-JOIN pull_requests p ON p.id = b.pull_request_id
-JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
-WHERE b.state = 'running' AND b.pull_request_id <> sqlc.arg(pr_id) AND i.owner_user_id = sqlc.arg(owner_user_id)::bigint;
+-- name: CountWorkspaceRunningBuilds :one
+-- Running builds of other PRs, and running baseline refreshes, in one stable
+-- workspace.
+SELECT ((SELECT count(*) FROM build_intents b
+        JOIN pull_requests p ON p.id = b.pull_request_id
+        JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE b.state = 'running' AND b.pull_request_id <> sqlc.arg(pr_id) AND i.workspace_id = sqlc.arg(workspace_id)::bigint)
+     + (SELECT count(*) FROM baseline_refreshes br
+        JOIN repos r ON r.id = br.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE br.state = 'running' AND i.workspace_id = sqlc.arg(workspace_id)::bigint))::bigint;
 
--- name: AccountBuildSeconds :one
-SELECT coalesce((SELECT build_seconds FROM account_build_usage WHERE user_id = sqlc.arg(user_id) AND day = sqlc.arg(day)), 0)::bigint;
+-- name: WorkspaceBuildSeconds :one
+SELECT coalesce((SELECT build_seconds FROM workspace_build_usage WHERE workspace_id = sqlc.arg(workspace_id) AND day = sqlc.arg(day)), 0)::bigint;
 
--- name: OlderWaiterFromIdleAccount :one
+-- name: OlderWaiterFromIdleWorkspace :one
 -- Whether another account with nothing building has waited longer for a
 -- build slot: then the last free slot is its turn. Only waits that looked
 -- again since live_after count, so an abandoned wait never holds a turn.
@@ -120,12 +126,12 @@ SELECT EXISTS (
     JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
     WHERE b.state IN ('pending', 'queued') AND b.waiting_reason = 'capacity' AND b.waiting_revision = b.revision
       AND b.waiting_since < sqlc.arg(since) AND b.waiting_checked_at > sqlc.arg(live_after)
-      AND i.owner_user_id IS DISTINCT FROM sqlc.arg(owner_user_id)::bigint
+      AND i.workspace_id IS DISTINCT FROM sqlc.arg(workspace_id)::bigint
       AND NOT EXISTS (
           SELECT 1 FROM build_intents rb
           JOIN pull_requests rp ON rp.id = rb.pull_request_id
           JOIN repos rr ON rr.id = rp.repo_id JOIN installations ri ON ri.id = rr.installation_id
-          WHERE rb.state = 'running' AND ri.owner_user_id = i.owner_user_id)
+          WHERE rb.state = 'running' AND ri.workspace_id = i.workspace_id)
 )::boolean;
 
 -- name: NextWaitingBuild :one
@@ -140,18 +146,81 @@ ORDER BY EXISTS (
     SELECT 1 FROM build_intents rb
     JOIN pull_requests rp ON rp.id = rb.pull_request_id
     JOIN repos rr ON rr.id = rp.repo_id JOIN installations ri ON ri.id = rr.installation_id
-    WHERE rb.state = 'running' AND ri.owner_user_id = i.owner_user_id), b.waiting_since, b.pull_request_id
+    WHERE rb.state = 'running' AND ri.workspace_id = i.workspace_id), b.waiting_since, b.pull_request_id
 LIMIT 1;
 
 -- name: RecordFinishedBuildTime :exec
 -- Adds a finished build's time to its account's day (UTC).
-INSERT INTO account_build_usage (user_id, day, build_seconds, builds)
-SELECT i.owner_user_id, (b.completed_at AT TIME ZONE 'UTC')::date,
+INSERT INTO workspace_build_usage (workspace_id, day, build_seconds, builds)
+SELECT b.workspace_id, (b.completed_at AT TIME ZONE 'UTC')::date,
        GREATEST(0, floor(extract(epoch FROM b.completed_at - b.started_at)))::bigint, 1
 FROM build_intents b
 JOIN pull_requests p ON p.id = b.pull_request_id
 JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 WHERE b.pull_request_id = sqlc.arg(pr_id) AND b.revision = sqlc.arg(revision)
-  AND b.completed_at IS NOT NULL AND b.started_at IS NOT NULL AND i.owner_user_id IS NOT NULL
-ON CONFLICT (user_id, day) DO UPDATE SET build_seconds = account_build_usage.build_seconds + EXCLUDED.build_seconds,
-    builds = account_build_usage.builds + 1;
+  AND b.completed_at IS NOT NULL AND b.started_at IS NOT NULL AND b.workspace_id IS NOT NULL
+ON CONFLICT (workspace_id, day) DO UPDATE SET build_seconds = workspace_build_usage.build_seconds + EXCLUDED.build_seconds,
+    builds = workspace_build_usage.builds + 1;
+
+-- name: FindPRWorkspace :one
+SELECT i.workspace_id FROM pull_requests p JOIN repos r ON r.id=p.repo_id JOIN installations i ON i.id=r.installation_id WHERE p.id=$1;
+
+-- name: LinkExecutionJob :exec
+UPDATE build_intents SET execution_job_id=$3
+WHERE pull_request_id=$1 AND revision=$2 AND state IN ('pending','queued','running');
+
+-- name: NoteExecutionRetry :execrows
+UPDATE build_intents SET execution_error_code='worker_retrying', updated_at=clock_timestamp()
+WHERE pull_request_id=$1 AND revision=$2 AND generation=$3 AND head_sha=$4
+AND state IN ('queued','running') AND execution_error_code<>'worker_retrying';
+
+-- name: FailAbandonedExecution :execrows
+-- Finalization is a failure-only fallback; it neither grants authorization nor
+-- publishes resources, and it cannot replace a newer request or successful one.
+UPDATE build_intents b SET state='failed', execution_error_code='worker_failed',
+ started_at=coalesce(b.started_at,clock_timestamp()),completed_at=clock_timestamp(),updated_at=clock_timestamp(),
+ waiting_revision=NULL,waiting_reason=NULL,waiting_since=NULL,waiting_checked_at=NULL
+FROM pull_requests p WHERE b.pull_request_id=p.id AND p.id=$1 AND b.revision=$2
+AND b.generation=$3 AND b.head_sha=$4 AND p.generation=b.generation AND p.head_sha=b.head_sha AND p.state='open'
+AND b.state IN ('queued','running');
+
+-- name: FinishAbandonedStream :exec
+UPDATE build_log_streams s SET state='finished',finished_at=clock_timestamp(),updated_at=clock_timestamp()
+FROM environments e WHERE s.environment_id=e.id AND e.pull_request_id=$1
+AND s.generation=$2 AND s.revision=$3 AND s.head_sha=$4 AND s.state='open';
+
+-- name: FailPublicationBuild :one
+-- Publication is part of the requested preview. Fail only its captured revision;
+-- preserve already-recorded build time if image execution finished earlier.
+WITH previous AS MATERIALIZED (
+ SELECT b.pull_request_id,b.state FROM build_intents b JOIN pull_requests p ON p.id=b.pull_request_id
+ WHERE p.id=$1 AND b.generation=$2 AND b.revision=$3 AND p.generation=b.generation AND p.head_sha=b.head_sha
+ AND p.state='open' AND b.state IN ('queued','running','succeeded') FOR UPDATE OF b
+)
+UPDATE build_intents b SET state='failed',execution_error_code='',started_at=coalesce(b.started_at,clock_timestamp()),
+ completed_at=coalesce(b.completed_at,clock_timestamp()),updated_at=clock_timestamp(),
+ waiting_revision=NULL,waiting_reason=NULL,waiting_since=NULL,waiting_checked_at=NULL
+FROM previous WHERE b.pull_request_id=previous.pull_request_id RETURNING previous.state AS previous_state;
+
+-- name: CountRunningBuildsBesidesBaseline :one
+-- Running builds and baseline refreshes other than one refresh, for its
+-- admission (docs/32).
+SELECT ((SELECT count(*) FROM build_intents WHERE state = 'running')
+     + (SELECT count(*) FROM baseline_refreshes WHERE state = 'running' AND id <> sqlc.arg(refresh_id)::bigint))::bigint;
+
+-- name: CountWorkspaceRunningBesidesBaseline :one
+SELECT ((SELECT count(*) FROM build_intents b
+        JOIN pull_requests p ON p.id = b.pull_request_id
+        JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE b.state = 'running' AND i.workspace_id = sqlc.arg(workspace_id)::bigint)
+     + (SELECT count(*) FROM baseline_refreshes br
+        JOIN repos r ON r.id = br.repo_id JOIN installations i ON i.id = r.installation_id
+        WHERE br.state = 'running' AND br.id <> sqlc.arg(refresh_id)::bigint AND i.workspace_id = sqlc.arg(workspace_id)::bigint))::bigint;
+
+-- name: RecordBaselineUsage :exec
+-- A baseline refresh's execution counts toward its workspace's daily build
+-- time like a pull request build's.
+INSERT INTO workspace_build_usage (workspace_id, day, build_seconds, builds)
+VALUES (sqlc.arg(workspace_id)::bigint, sqlc.arg(day)::date, sqlc.arg(seconds)::bigint, 1)
+ON CONFLICT (workspace_id, day) DO UPDATE SET build_seconds = workspace_build_usage.build_seconds + EXCLUDED.build_seconds,
+    builds = workspace_build_usage.builds + 1;

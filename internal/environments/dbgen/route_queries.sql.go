@@ -478,3 +478,14 @@ func (q *Queries) WakeForNewRoute(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, wakeForNewRoute, id)
 	return err
 }
+
+const workspacePublicationAuthorized = `-- name: WorkspacePublicationAuthorized :one
+SELECT workspace_publication_authorized($1::bigint)::boolean
+`
+
+func (q *Queries) WorkspacePublicationAuthorized(ctx context.Context, dollar_1 int64) (bool, error) {
+	row := q.db.QueryRow(ctx, workspacePublicationAuthorized, dollar_1)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}

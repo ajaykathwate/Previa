@@ -18,13 +18,13 @@ var ErrUnavailable = errors.New("repository is unavailable or not owned by this 
 var ErrSnapshotChanged = errors.New("repository changed during discovery; retry the page")
 
 type Observation struct {
-	Number                                 int32
-	SHA, State, Title, Author, Branch, URL string
-	HeadRepoID                             int64
-	Fork                                   bool
-	UpdatedAt                              time.Time
-	Mergeable                              *bool
-	MergeableState, BuildStatus            string
+	Number                                              int32
+	SHA, State, Title, Author, Branch, URL, Description string
+	HeadRepoID                                          int64
+	Fork                                                bool
+	UpdatedAt                                           time.Time
+	Mergeable                                           *bool
+	MergeableState, BuildStatus                         string
 }
 
 func FromGitHub(p *github.PullRequest, baseRepoID int64) (Observation, error) {
@@ -39,7 +39,7 @@ func FromGitHub(p *github.PullRequest, baseRepoID int64) (Observation, error) {
 		return Observation{}, errors.New("invalid pull request state")
 	}
 	headID := p.GetHead().GetRepo().GetID()
-	return Observation{Number: int32(p.GetNumber()), SHA: p.GetHead().GetSHA(), State: state, Title: p.GetTitle(), Author: p.GetUser().GetLogin(), Branch: p.GetHead().GetRef(), URL: p.GetHTMLURL(), Mergeable: p.Mergeable, MergeableState: p.GetMergeableState(), BuildStatus: MergeabilityStatus(p.Mergeable, p.GetMergeableState()), HeadRepoID: headID, Fork: headID == 0 || headID != baseRepoID, UpdatedAt: p.GetUpdatedAt().Time}, nil
+	return Observation{Number: int32(p.GetNumber()), SHA: p.GetHead().GetSHA(), State: state, Title: p.GetTitle(), Description: p.GetBody(), Author: p.GetUser().GetLogin(), Branch: p.GetHead().GetRef(), URL: p.GetHTMLURL(), Mergeable: p.Mergeable, MergeableState: p.GetMergeableState(), BuildStatus: MergeabilityStatus(p.Mergeable, p.GetMergeableState()), HeadRepoID: headID, Fork: headID == 0 || headID != baseRepoID, UpdatedAt: p.GetUpdatedAt().Time}, nil
 }
 
 type Observer interface {
@@ -91,8 +91,17 @@ func lockScope(ctx context.Context, tx pgx.Tx, repoID, userID int64) (scope, err
 	if err != nil {
 		return scope{}, scopeError(err)
 	}
-	if !r.GithubRepoID.Valid || r.GithubRepoID.Int64 <= 0 || r.InstallationID != i.ID || !r.Accessible || i.Status != "active" || !i.OwnerUserID.Valid || (userID > 0 && i.OwnerUserID.Int64 != userID) {
+	if !r.GithubRepoID.Valid || r.GithubRepoID.Int64 <= 0 || r.InstallationID != i.ID || !r.Accessible || i.Status != "active" || !i.WorkspaceID.Valid {
 		return scope{}, ErrUnavailable
+	}
+	if userID > 0 {
+		allowed, err := q.CanOperateRepository(ctx, dbgen.CanOperateRepositoryParams{Column1: repoID, Column2: userID})
+		if err != nil {
+			return scope{}, fmt.Errorf("verify workspace source action: %w", err)
+		}
+		if !allowed {
+			return scope{}, ErrUnavailable
+		}
 	}
 	return scope{i, r}, nil
 }
@@ -103,18 +112,37 @@ func scopeError(err error) error {
 	return fmt.Errorf("read repository scope: %w", err)
 }
 
+// Origin is where an observation came from, and so what it may start.
+type Origin int
+
+const (
+	// Discovered: connection discovery, the check before a manual build, or a
+	// mergeability answer. It records the PR and never starts work, so
+	// connecting a repository never builds its open pull requests.
+	Discovered Origin = iota
+	// Confirmed: a re-read of pull requests already tracked (housekeeping or
+	// Sync Pull Requests). A new commit on a tracked open PR counts as a push,
+	// so a lost webhook delays an Automatic build instead of losing it.
+	Confirmed
+	// Pushed: GitHub's own event.
+	Pushed
+)
+
 // ObserveTx expects installation/repository locks in that order. Source time is
 // distinct from local generation. Snapshot callers have additionally fenced the
 // entire API read against repository observation and installation revisions.
-// Only webhook observations reach observer.ObserveTx (and so can authorize
-// work); other observations that change the PR only record a report.
-func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webhook bool, observer Observer) (bool, error) {
+// Pushes, and confirmed new commits on tracked open PRs, reach
+// observer.ObserveTx, which schedules Automatic work (never for forks, never in
+// Manual); other observations that change the PR only record a report.
+func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, origin Origin, observer Observer) (bool, error) {
 	q := dbgen.New(tx)
 	old, err := q.LockPR(ctx, dbgen.LockPRParams{RepoID: repoID, Number: o.Number})
 	exists := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("lock observed PR: %w", err)
 	}
+	webhook := origin == Pushed
+	newCommit := origin == Confirmed && exists && old.State == environments.StateOpen && o.State == environments.StateOpen && old.HeadSha != o.SHA
 	switch judgeObservation(old, exists, o, webhook) {
 	case ignoreObservation:
 		return false, nil
@@ -127,11 +155,11 @@ func ObserveTx(ctx context.Context, tx pgx.Tx, repoID int64, o Observation, webh
 	if webhook || (exists && changed) {
 		generation++
 	}
-	id, err := q.SaveObservation(ctx, dbgen.SaveObservationParams{RepoID: repoID, Number: o.Number, HeadSha: o.SHA, State: o.State, Generation: generation, Title: o.Title, Author: o.Author, HeadBranch: o.Branch, HtmlUrl: o.URL, HeadRepoID: pgtype.Int8{Int64: o.HeadRepoID, Valid: o.HeadRepoID > 0}, IsFork: o.Fork, SourceUpdatedAt: pgtype.Timestamptz{Time: o.UpdatedAt, Valid: true}, Mergeable: nullableBool(o.Mergeable), MergeableState: o.MergeableState, BuildStatus: o.BuildStatus})
+	id, err := q.SaveObservation(ctx, dbgen.SaveObservationParams{RepoID: repoID, Number: o.Number, HeadSha: o.SHA, State: o.State, Generation: generation, Title: o.Title, Description: o.Description, Author: o.Author, HeadBranch: o.Branch, HtmlUrl: o.URL, HeadRepoID: pgtype.Int8{Int64: o.HeadRepoID, Valid: o.HeadRepoID > 0}, IsFork: o.Fork, SourceUpdatedAt: pgtype.Timestamptz{Time: o.UpdatedAt, Valid: true}, Mergeable: nullableBool(o.Mergeable), MergeableState: o.MergeableState, BuildStatus: o.BuildStatus})
 	if err != nil {
 		return false, fmt.Errorf("save PR observation: %w", err)
 	}
-	if webhook {
+	if webhook || newCommit {
 		if _, err := observer.ObserveTx(ctx, tx, environments.NewRequest(id, generation, o.SHA, o.State)); err != nil {
 			return false, err
 		}
@@ -228,7 +256,7 @@ func ProcessWebhookTx(ctx context.Context, tx pgx.Tx, githubRepoID, installation
 	if err := q.BumpObservation(ctx, repoID); err != nil {
 		return err
 	}
-	applied, err := ObserveTx(ctx, tx, repoID, o, true, observer)
+	applied, err := ObserveTx(ctx, tx, repoID, o, Pushed, observer)
 	if err == nil && applied && o.State == "open" && o.BuildStatus == "checking" {
 		for _, refresher := range refreshers {
 			if refresher == nil {
@@ -263,4 +291,27 @@ func DisplayStatus(state, buildStatus string) string {
 		return state
 	}
 	return buildStatus
+}
+
+// ProcessMetadataWebhookTx updates text without advancing code generation or
+// scheduling builds. Its independent source time cannot hide a delayed push.
+func ProcessMetadataWebhookTx(ctx context.Context, tx pgx.Tx, githubRepoID, installationID int64, o Observation) error {
+	q := dbgen.New(tx)
+	repoID, err := q.FindGitHubRepository(ctx, dbgen.FindGitHubRepositoryParams{GithubRepoID: pgtype.Int8{Int64: githubRepoID, Valid: true}, GithubInstallationID: installationID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("find metadata repository: %w", err)
+	}
+	if _, err := lockScope(ctx, tx, repoID, 0); err != nil {
+		if errors.Is(err, ErrUnavailable) {
+			return nil
+		}
+		return err
+	}
+	if err := q.UpdatePRMetadata(ctx, dbgen.UpdatePRMetadataParams{RepoID: repoID, Number: o.Number, Title: o.Title, Description: o.Description, DescriptionUpdatedAt: pgtype.Timestamptz{Time: o.UpdatedAt, Valid: true}}); err != nil {
+		return fmt.Errorf("save PR metadata: %w", err)
+	}
+	return nil
 }

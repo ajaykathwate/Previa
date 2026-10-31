@@ -53,9 +53,15 @@ Rules that hold in every state:
   commit says newer commits have not been built.
 - **Links only to things that work.** The preview URL appears only for a published
   preview (`https://<hostname>.<PREVIEW_BASE_DOMAIN>`); the build-log link
-  (`<APP_BASE_URL>/repositories/<id>/pull-requests/<n>/logs`, owner sign-in required)
+  (`<APP_BASE_URL>/repositories/<id>/pull-requests/<n>/logs`, Previa sign-in required)
   only when the PR has an environment and therefore a log page. With either setting
-  empty, that link is omitted. Removed and expired previews link nowhere.
+  empty, that link is omitted. Removed and expired previews link nowhere except to
+  the review.
+- **Review in Previa.** With `APP_BASE_URL` set, every comment links the pull
+  request's review page (`…/pull-requests/<n>/review`, public IDs), beside the build
+  log link: *[Review in Previa] · [Build log] (sign in to Previa)*. It is a link
+  only: no findings, instructions, review status, counts or reviewer names are
+  projected ([30](30-reviews.md)), so review changes do not bump report versions.
 - **Safe failure text.** Failures are stable categories (`unhealthy`, `crashed`,
   `build_failed`, …) stored in `environments.last_error_code` and mapped to fixed
   sentences; unknown categories read "The preview could not be built." Raw errors,
@@ -219,3 +225,12 @@ and slug, used to recognise its own comments, come from the App itself
 - Expiry, PR reconciliation (which finds a close missed while webhooks were down)
   and the waiting states come from housekeeping and capacity
   ([15](15-housekeeping-and-capacity.md)).
+
+## Missed installation deliveries (F5)
+
+App-authenticated reconciliation can discover a lost installation or repository
+and use the normal local revocation/teardown path even when GitHub is unreachable
+for reporting. It does not rewrite an inaccessible PR comment or invent a final
+check result. Token-mint 403/404 failures in the shared client only signal a
+durable reconciliation job; reporting does not revoke access itself. Reconnects
+do not authorize builds. See [35](35-installation-recovery-and-early-access.md).

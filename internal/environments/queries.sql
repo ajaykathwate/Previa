@@ -225,6 +225,26 @@ RETURNING locked.container_id AS previous_container_id,
           e.head_sha AS active_head_sha,
           locked.eligible_at::timestamptz AS eligible_at;
 
+-- name: RecordPublication :one
+-- The immutable reference to a candidate that just started serving
+-- (docs/30-reviews.md), written in its activating transaction under the PR
+-- lock, which also serializes the per-PR sequence. A retried activation of
+-- the same candidate records nothing new.
+INSERT INTO preview_publications (pull_request_id, repo_id, workspace_id, sequence, head_sha, generation, revision,
+                                  container_id, image_tag, config_hash)
+SELECT p.id, p.repo_id, i.workspace_id,
+       coalesce((SELECT max(x.sequence) FROM preview_publications x WHERE x.pull_request_id = p.id), 0) + 1,
+       sqlc.arg(head_sha)::text, sqlc.arg(generation)::bigint, sqlc.arg(revision)::bigint,
+       sqlc.narg(container_id)::text, sqlc.narg(image_tag)::text,
+       (SELECT c.config_hash FROM preview_components c
+        WHERE c.pull_request_id = p.id AND c.generation = sqlc.arg(generation)::bigint AND c.revision = sqlc.arg(revision)::bigint)
+FROM pull_requests p
+JOIN repos r ON r.id = p.repo_id
+JOIN installations i ON i.id = r.installation_id
+WHERE p.id = sqlc.arg(pull_request_id)::bigint AND i.workspace_id IS NOT NULL
+ON CONFLICT (pull_request_id, generation, revision) DO NOTHING
+RETURNING id, sequence;
+
 -- name: FinalizePendingTeardown :one
 -- Completes the teardown this route removal belongs to, once the removal
 -- converged. A newer teardown or a newer publication owns the environment

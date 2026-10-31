@@ -176,7 +176,7 @@ SELECT p.id AS pull_request_id, p.repo_id, p.number, p.title, r.full_name,
        coalesce(e.head_sha, '')::text AS deployed_sha
 FROM pull_requests p JOIN repos r ON r.id = p.repo_id JOIN installations i ON i.id = r.installation_id
 LEFT JOIN environments e ON e.pull_request_id = p.id
-WHERE r.id = $1 AND i.owner_user_id = $2 AND p.number = $3
+WHERE r.id = $1 AND workspace_repository_access(r.id,$2::bigint,'operate') AND p.number = $3
 `
 
 type OwnedPreviewParams struct {

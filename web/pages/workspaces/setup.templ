@@ -1,0 +1,104 @@
+package workspaces
+
+import "github.com/ajaykathwatee/previa/web/components"
+
+// Setup is the checklist a new workspace opens on. Each step reflects real
+// workspace state, so it stays accurate if the owner returns later.
+templ Setup(p Page) {
+	@InviteRecovery(p)
+	<section class="workspace-panel field-card" aria-labelledby="setup-heading">
+		<header class="field-card-head">
+			<h2 id="setup-heading">
+				@components.ChecklistIcon()
+				Checklist
+			</h2>
+			<span class="field-card-note">{ ID(p.SetupDone()) } of 4 done</span>
+		</header>
+		<ol class="setup-steps">
+			<li class="setup-step" data-done="true">
+				@setupMark(true, 1)
+				<div class="setup-step-text">
+					<strong>Create the workspace</strong>
+					<p>{ p.Name } is ready, and you're its owner.</p>
+				</div>
+			</li>
+			<li class="setup-step" data-done={ setupState(p.MemberCount > 1 || p.InvitationCount > 0) }>
+				@setupMark(p.MemberCount > 1 || p.InvitationCount > 0, 2)
+				<div class="setup-step-text">
+					<strong>Invite your teammates</strong>
+					<p>Invite people by GitHub username and choose their role. They see the invitation in Previa, and you also get a link to send them.</p>
+					if len(p.Invitations) > 0 {
+						<ul class="setup-invited">
+							for _, v := range p.Invitations {
+								<li><code>{ "@" + v.Login }</code> · { components.RoleName(v.Role) } · awaiting acceptance</li>
+							}
+						</ul>
+					}
+				</div>
+				<div class="setup-step-action">
+					<button type="button" class="primary-action" commandfor="invite-member" command="show-modal" data-open-dialog="invite-member" aria-haspopup="dialog">
+						@components.PlusIcon()
+						Invite teammate
+					</button>
+				</div>
+			</li>
+			<li class="setup-step" data-done={ setupState(p.RepositoryCount > 0 || p.InstallationCount > 0) }>
+				@setupMark(p.RepositoryCount > 0 || p.InstallationCount > 0, 3)
+				<div class="setup-step-text">
+					<strong>Connect repositories</strong>
+					<p>Install the Previa GitHub App on the accounts whose pull requests should get previews. Developers and reviewers then get access per repository.</p>
+				</div>
+				<div class="setup-step-action">
+					if p.RepositoryCount > 0 {
+						<a class="secondary-action" href="/repositories">{ CountLabel(p.RepositoryCount, "repository", "repositories") }</a>
+					} else {
+						<form method="post" action="/installations/start">
+							<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+							<button type="submit" class="secondary-action">
+								@components.GitHubMark()
+								Connect on GitHub
+							</button>
+						</form>
+					}
+				</div>
+			</li>
+			<li class="setup-step" data-done={ setupState(p.Description != "" || p.LogoVersion > 0) }>
+				@setupMark(p.Description != "" || p.LogoVersion > 0, 4)
+				<div class="setup-step-text">
+					<strong>Describe the workspace</strong>
+					<p>Add a short description and a logo so teammates recognize it in the switcher.</p>
+				</div>
+				<div class="setup-step-action">
+					<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/settings") }>Open settings</a>
+				</div>
+			</li>
+		</ol>
+	</section>
+	if !p.Invite.Failed {
+		@InviteDialog(p)
+	}
+}
+
+templ setupMark(done bool, n int64) {
+	<span class="setup-mark" aria-hidden="true">
+		if done {
+			@components.CheckIcon()
+		} else {
+			{ ID(n) }
+		}
+	</span>
+	<span class="sr-only">
+		if done {
+			Done:
+		} else {
+			To do:
+		}
+	</span>
+}
+
+func setupState(done bool) string {
+	if done {
+		return "true"
+	}
+	return "false"
+}

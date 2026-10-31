@@ -1,15 +1,17 @@
-# Versioned releases (docs/25-production-deployment.md#ci-and-releases).
-# A pushed tag vX.Y.Z on a commit in master (the release branch; any other
-# commit stops before anything is built) builds the binaries, checksums and SBOMs with GoReleaser
-# into a draft GitHub release, and pushes multi-architecture images with
-# provenance and SBOM attestations to GitHub Container Registry. The jobs run
-# in the protected "release" environment, so a maintainer approves before
-# anything is published; nothing here deploys.
+# Optional published releases (docs/25-production-deployment.md#ci-and-releases).
+# Production builds its images on the server from the tagged checkout, so a
+# pushed version tag publishes nothing by itself. Run this by hand (Actions ->
+# Release -> Run workflow, "Use workflow from" a vX.Y.Z tag on master; any other
+# ref stops before anything is built) only when published artifacts are
+# wanted, such as for a second host later: it builds the binaries, checksums
+# and SBOMs with GoReleaser into a draft GitHub release, and pushes
+# multi-architecture images with provenance and SBOM attestations to GitHub
+# Container Registry. The jobs run in the "release" environment; nothing here
+# deploys.
 name: Release
 
 on:
-  push:
-    tags: ["v*.*.*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -28,8 +30,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Release only commits on master
+      - name: Release only version tags on master
         run: |
+          [[ $GITHUB_REF == refs/tags/v* ]] || {
+            echo "::error::Run this workflow from a version tag (Use workflow from → Tags), not $GITHUB_REF_NAME."
+            exit 1
+          }
           git merge-base --is-ancestor "$GITHUB_SHA" origin/master || {
             echo "::error::$GITHUB_REF_NAME points to a commit that is not on master; tag a commit on master."
             exit 1

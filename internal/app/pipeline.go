@@ -7,12 +7,16 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ajaykathwatee/previa/internal/accounts"
+	"github.com/ajaykathwatee/previa/internal/activity"
 	"github.com/ajaykathwatee/previa/internal/appoutput"
+	"github.com/ajaykathwatee/previa/internal/auth"
 	"github.com/ajaykathwatee/previa/internal/buildlogs"
 	"github.com/ajaykathwatee/previa/internal/builds"
 	"github.com/ajaykathwatee/previa/internal/environments"
 	"github.com/ajaykathwatee/previa/internal/housekeeping"
 	"github.com/ajaykathwatee/previa/internal/idle"
+	"github.com/ajaykathwatee/previa/internal/installations"
 	"github.com/ajaykathwatee/previa/internal/outbound"
 	"github.com/ajaykathwatee/previa/internal/platform/config"
 	"github.com/ajaykathwatee/previa/internal/platform/egress"
@@ -21,9 +25,13 @@ import (
 	"github.com/ajaykathwatee/previa/internal/pullrequests"
 	"github.com/ajaykathwatee/previa/internal/routing"
 	"github.com/ajaykathwatee/previa/internal/runtime"
+	"github.com/ajaykathwatee/previa/internal/sampledata"
 	"github.com/ajaykathwatee/previa/internal/secrets"
 	"github.com/ajaykathwatee/previa/internal/source"
+	"github.com/ajaykathwatee/previa/internal/webhooks"
+	"github.com/ajaykathwatee/previa/internal/workspaces"
 	"github.com/google/go-github/v91/github"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moby/moby/client"
@@ -74,6 +82,7 @@ type pipelineInput struct {
 // pipeline is what one worker process runs: its capabilities, its River
 // registrations and what must happen once before it starts working.
 type pipeline struct {
+	lifecycle    *accounts.Service
 	capabilities workers.Capabilities
 	register     []func(*river.Config)
 	startup      []func(context.Context) error
@@ -91,17 +100,54 @@ type pipeline struct {
 func buildPipeline(ctx context.Context, in pipelineInput) (*pipeline, error) {
 	p := &pipeline{}
 	cfg, log := in.cfg, in.logger
-	// Log retention needs only the database.
+	supportService := newSupport(in.pool, cfg.CustomerConfig)
+	workspaceLifecycle := workspaces.NewService(workspaces.NewRepository(in.pool), nil, nil, nil)
+	p.lifecycle = accounts.NewService(in.pool).WithAccountFences(workspaceLifecycle).WithAccountErasers(supportService, workspaceLifecycle, auth.NewRepository(in.pool)).WithWorkspaces(workspaceLifecycle, supportService).WithRepositoryErasers(installations.NewRepository(in.pool)).WithInstallations(installations.NewRepository(in.pool))
+	p.register = append(p.register, func(rc *river.Config) { p.lifecycle.Register(rc) })
+	p.background = append(p.background, func(ctx context.Context) {
+		timer := time.NewTicker(time.Hour)
+		defer timer.Stop()
+		for {
+			if err := supportService.Prune(ctx); err != nil && ctx.Err() == nil {
+				log.ErrorContext(ctx, "support retention failed", "error", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+		}
+	})
+	// Log and activity retention need only the database.
 	p.register = append(p.register, func(rc *river.Config) {
 		river.AddWorker(rc.Workers, &buildlogs.PruneWorker{Store: buildlogs.NewStore(in.pool).WithRetention(cfg.BuildLogRetention()), Logger: log})
 		rc.Queues[buildlogs.PruneQueue] = river.QueueConfig{MaxWorkers: 1}
 		rc.PeriodicJobs = append(rc.PeriodicJobs, buildlogs.PeriodicPrune())
+		activity.Register(rc, in.pool, log)
 	})
 	if in.github == nil {
 		p.unavailable = append(p.unavailable, "GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH are not set: no discovery, builds or PR reports")
 		return p, nil
 	}
+	if api, ok := in.github.(installations.ReconciliationApp); ok && cfg.GitHubAppID > 0 {
+		broker := environments.NewRequestBroker(in.pool, in.producer)
+		deliveries := webhooks.NewDeliveryService(in.pool, broker, nil)
+		if client, ok := in.github.(interface{ Invalidate(int64) }); ok {
+			deliveries = webhooks.NewDeliveryService(in.pool, broker, client.Invalidate)
+		}
+		reconciler := installations.NewReconciler(installations.NewRepository(in.pool), api, deliveries, log, cfg.GitHubAppID, cfg.InstallationReconcileMaxChanges)
+		p.register = append(p.register, reconciler.Register)
+		if client, ok := in.github.(interface {
+			WithInstallationSignals(func(context.Context, int64) error)
+		}); ok {
+			client.WithInstallationSignals(installations.SignalReconciliation(in.pool, in.producer))
+		}
+	}
 	upstream := pullrequests.NewGitHubSource(in.github)
+	// Setup checks read a few files from GitHub; any worker with the App runs them.
+	if err := p.addSetupChecks(in); err != nil {
+		return nil, err
+	}
 	if !cfg.RoutingConfigured() {
 		// Discovery and mergeability only; webhooks and requests still record
 		// durable intent and wake-ups, which wait for an execution worker.
@@ -137,14 +183,16 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		return err
 	}
 	cfg := in.cfg
+	p.lifecycle = x.accounts
 	if !cfg.SecretsConfigured() {
-		p.unavailable = append(p.unavailable, "SECRETS_ENCRYPTION_KEYS is not set: repositories with secrets cannot start previews")
+		p.unavailable = append(p.unavailable, "SECRETS_ENCRYPTION_KEYS is not set: repositories with secrets cannot start previews, and test-data baselines are not stored (kept data still works)")
 	}
 	p.addDiscovery(x.sync)
 	p.capabilities.Execution, p.capabilities.Routing, p.capabilities.Reporting, p.capabilities.Housekeeping = true, true, true, true
 	p.capabilities.Services = x.catalog.Offers()
 	p.capabilities.BuildTimeout = cfg.BuildTimeout
 	p.capabilities.PrivatePreviews = cfg.PreviewAccessURL != ""
+	p.capabilities.Baselines = x.testData != nil
 	if !p.capabilities.PrivatePreviews {
 		p.unavailable = append(p.unavailable, "PREVIEW_ACCESS_URL is not set: private previews deny access and their builds cannot be published; configure the router's server URL and restart this worker")
 	}
@@ -180,14 +228,21 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 		rc.Queues[environments.CleanupOperationQueue] = river.QueueConfig{MaxWorkers: cleanupWorkers}
 		rc.Queues[environments.TeardownSweepQueue] = river.QueueConfig{MaxWorkers: 1}
 		x.keeper.Register(rc)
+		x.usage.Register(rc)
 		outbound.Register(rc, x.runtime)
 		river.AddWorker(rc.Workers, &appoutput.FollowWorker{Store: appoutput.NewStore(in.pool), Source: x.runtime, Logger: in.logger})
 		rc.Queues[appoutput.Queue] = river.QueueConfig{MaxWorkers: appoutput.MaxFollowers}
 		sleeper.Register(rc)
 		river.AddWorker(rc.Workers, &routing.SyncWorker{Controller: x.controller})
 		rc.Queues[routing.SyncQueue] = river.QueueConfig{MaxWorkers: 1}
+		if x.testData != nil {
+			x.testData.Register(rc)
+		} else {
+			sampledata.RegisterWaiting(rc)
+		}
 	})
 	p.startup = append(p.startup,
+		x.usage.Configure,
 		func(ctx context.Context) error {
 			if _, err := x.gateway.Ensure(ctx); err != nil {
 				return fmt.Errorf("start the egress proxy (make egress-image): %w", err)
@@ -211,6 +266,28 @@ func (p *pipeline) addExecution(ctx context.Context, in pipelineInput, upstream 
 	if err != nil {
 		return err
 	}
+	statusService := newSupport(in.pool, cfg.CustomerConfig)
+	probeID := uuid.NewString()
+	p.background = append(p.background, func(ctx context.Context) {
+		timer := time.NewTicker(30 * time.Second)
+		defer timer.Stop()
+		for {
+			probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			_, dockerErr := docker.Ping(probeCtx, client.PingOptions{})
+			routingErr := router.Available(probeCtx)
+			for component, available := range map[string]bool{"builds": dockerErr == nil && !cfg.BuildsPaused, "routing": routingErr == nil} {
+				if err := statusService.Observe(probeCtx, probeID, component, available); err != nil && ctx.Err() == nil {
+					in.logger.ErrorContext(ctx, "publish availability probe", "error", err)
+				}
+			}
+			cancel()
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+		}
+	})
 	p.background = append(p.background, func(ctx context.Context) {
 		routing.WatchVisits(ctx, router, cfg.MetricsAddress(), x.repo, visits, in.logger)
 	})

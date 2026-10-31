@@ -1,0 +1,11 @@
+package components
+
+templ FormDialog(id, title, description string) {
+	<dialog id={ id } class="confirmation-dialog team-form-dialog" aria-labelledby={ id + "-title" } aria-describedby={ id + "-description" } data-confirmation-dialog>
+		<button type="button" class="dialog-close" aria-label="Close form" commandfor={ id } command="close" data-close-dialog><span aria-hidden="true">×</span></button>
+		<span class="eyebrow">Workspace access</span>
+		<h2 id={ id + "-title" }>{ title }</h2>
+		<p id={ id + "-description" }>{ description }</p>
+		{ children... }
+	</dialog>
+}

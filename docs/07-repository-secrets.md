@@ -14,7 +14,7 @@ without secrets build normally.
 | Decision | Choice | Why |
 | --- | --- | --- |
 | Where owners manage secrets | A **Secrets** tab on each repository (`/repositories/{id}/secrets`) | Keeps the PR list focused; both tabs are ordinary pages, so they work without JavaScript. |
-| Adding many at once | An editor with one name and value per line plus pasted or imported `.env` text, saved in **one transaction** (all or nothing); several names can be deleted with one confirmation | Owners usually have a whole `.env` to bring over; a half-saved batch would be harder to reason about than a refused one. |
+| How they are managed | **One `.env` file per repository** (owner decision, 2026-10-23), kept with its comments and order, shown with values masked and opened in full by **Show values and edit**; each save replaces the repository's secrets with the names the file sets, in **one transaction** | Teams keep a whole `.env`; one file is easier to manage than a growing list of names, and a half-saved file would be harder to reason about than a refused one. This replaces the earlier write-only, per-name editor. |
 | Encryption | Standard-library AES-256-GCM, random 96-bit nonce per value | Authenticated encryption with no extra dependency. |
 | Key provisioning | `SECRETS_ENCRYPTION_KEYS` + `SECRETS_ACTIVE_KEY_VERSION` environment variables | Matches how `SESSION_SECRET` is provided; versioned for rotation. |
 | Name collision with `.previewrc.yaml` env | **The stored secret wins**, and the override is reported by name | The owner's value must beat contributor-editable YAML. |
@@ -24,7 +24,15 @@ without secrets build normally.
 
 ## Storage format
 
-`env_secrets` (migration 12) stores one row per repository and name:
+`repository_env_files` (migration 47) stores the file Owners and Admins edit, one
+row per repository: `encrypted_text` sealed like a value with the name `.env` as
+associated data (no secret can have that name, so neither can stand in for the
+other), its `key_version`, a `revision` that increases with each save, and who
+saved it when. It is removed with its repository.
+
+`env_secrets` (migration 12) stores one row per repository and name, and is what
+previews, builds and redaction read. Saving the file keeps it equal to the names
+the file sets:
 
 - `encrypted_value` = 12-byte random nonce ‖ AES-256-GCM ciphertext ‖ 16-byte tag.
 - The repository ID, the name and the key version are **authenticated associated
@@ -42,26 +50,37 @@ Rules enforced by `secrets.Service`:
 | Name | `[A-Za-z_][A-Za-z0-9_]*`, up to 128 characters, case-sensitive |
 | Reserved | names starting with `PREVIA_` (kept for platform-injected variables) |
 | Value | 1 byte to 32 KiB, no NUL bytes; textarea line breaks are stored as `\n` |
-| Count | 100 secrets per repository (enforced under a repository row lock) |
-| Who | only the installation owner; adding and replacing also need current GitHub access, deleting does not |
+| File | up to 64 KiB, shown as "1.2 KiB of 64 KiB" in the header and, live, under the editor |
+| Count | 500 names with values per file |
+| Who | repository Owners and Admins (the `manage` ability); new or changed values also need current GitHub access, removing names and editing comments do not |
 
-Values are write-only: after saving, pages list names and update times only.
-Values never appear in pages (not even in a rejected form), jobs, logs, metrics or
-errors.
+Values are hidden by default: the page shows the file's comments, blank lines and
+names with every value masked (`NAME=••••••••`, or *not set* for `NAME=`).
+**Show values and edit** (`?edit=1`) opens the whole file to Owners and Admins,
+sent with `Cache-Control: no-store`. A refused save shows the submitted text back
+to the person who typed it. Values never appear in jobs, logs, metrics or errors.
 
-### Saving several at once
+### The .env file
 
-`POST /repositories/{id}/secrets` takes repeated `name`/`value` pairs (unused lines
-are skipped) and optional `dotenv` text, parsed by `secrets.ParseDotenv`: one
-`NAME=value` per line, blank lines and `#` comments ignored, an optional `export `
-prefix, single-quoted literals, double-quoted values with `\n`, `\"` and `\\`
-escapes that may span lines, and unquoted values ending at ` #`. Parse errors name
-the line, never its value. `Service.PutMany` validates every entry (format, reserved
-prefix, duplicates, value size) before sealing any, and `Repository.PutMany` stores
-them under the repository row lock in one transaction; the 100-secret limit counts
-only names that are new. A rejected batch re-renders the names with the reason and
-asks for the values again. `POST …/secrets/delete` takes one or more `name` values
-(`Service.DeleteMany`), so a row's Delete and **Delete selected** share one endpoint.
+`POST /repositories/{id}/secrets` takes the file (`env`) and the `revision` the
+editor opened. `secrets.ParseDotenv` reads it: one `NAME=value` per line, blank
+lines and `#` comments kept in the file, an optional `export ` prefix, single-quoted
+literals, double-quoted values with `\n`, `\t`, `\"` and `\\` escapes that may span
+lines, and unquoted values ending at ` #`. `Service.SaveFile` checks every line
+(format, reserved prefix, a name set twice, value size, size and count limits)
+before sealing anything; errors name the line, never its value, and nothing is
+saved. A name left empty (`NAME=`) stays in the file but is not set, as in any
+`.env` loader. Comparing with the stored values gives the names added, changed and
+removed; a save that removes names returns them for confirmation (a modal over the
+editor, or an inline confirmation without JavaScript) and changes nothing until
+confirmed. `Repository.SaveEnvFile` then, under the installation and repository
+locks and only while the file is still at the opened revision (otherwise the
+editor reopens with the typed text and says someone else saved first), stores the
+file, deletes the names the file no longer sets and writes new and changed values
+in one transaction. Build access stays with a name through value changes and is
+removed with it. A repository whose secrets predate the file opens with one
+`NAME=value` line per secret (revision 0) until its first save. `Service.Put`
+sets one name by rewriting its line in place or appending one.
 
 ## Keys: provisioning and rotation
 
@@ -85,9 +104,12 @@ Rotation, with no downtime:
 1. Add a new version to `SECRETS_ENCRYPTION_KEYS` everywhere (keep the old one).
 2. Set `SECRETS_ACTIVE_KEY_VERSION` to the new version; restart server and worker.
    New and replaced values now use the new key; old values still decrypt.
-3. Run `make secrets-reencrypt`. It moves every value onto the active key in batches,
-   is safe while the server takes edits (a concurrent edit wins) and is safe to
-   repeat. It prints counts only.
+3. Run `make secrets-reencrypt`. It moves every value and every repository's `.env`
+   file onto the active key in batches, then does the same for the review page's
+   sealed test-access passwords
+   ([31](31-test-data.md#test-access)), is safe while the server takes edits (a
+   concurrent edit wins) and is safe to repeat. It prints counts only, one set of
+   lines for `Secrets:` and one for `Test access:`.
 4. When it reports that every value uses the active key, remove the old version and
    restart. If an old key is removed too early, decryption reports an unknown key
    version and re-encryption stops without changing data.
@@ -183,9 +205,9 @@ protect the credential.
 | Path | Role |
 | --- | --- |
 | `internal/secrets/crypto.go` | Keyring parsing, sealing and opening. |
-| `internal/secrets/service.go`, `repository.go`, `queries.sql` | Owner management, batch saves and deletes, limits, owner-scoped SQL. |
-| `internal/secrets/dotenv.go` | Pasted `.env` text. |
-| `internal/secrets/handler.go`, `web/pages/secrets` | Secrets tab, the editor, CSRF-protected forms, delete confirmation modals. |
+| `internal/secrets/service.go`, `repository.go`, `queries.sql` | The `.env` file and its secrets: whole-file saves, removal confirmation, revisions, limits, owner-scoped SQL. |
+| `internal/secrets/dotenv.go` | Reading `.env` text, the masked view and writing one line. |
+| `internal/secrets/handler.go`, `web/pages/secrets` | Secrets tab: masked file, editor, size, build access, removal confirmation. |
 | `internal/secrets/runtime.go` | Trust rule, collision rule, `ContainerEnv` for the worker. |
 | `internal/secrets/redact.go` | Streaming redaction. |
 | `internal/secrets/rotation.go`, `cmd/secrets-reencrypt` | Re-encryption. |
@@ -202,9 +224,11 @@ CSRF middleware; CSRF rejection; cross-owner isolation; revoked repositories
 (delete-only); the 100-secret limit; database constraints; an unconfigured server;
 fork, deleted-head and unverified withholding with no decryption; collision
 precedence; fail-closed decryption; redaction at every split point, random chunking,
-overlaps and multi-line values; `.env` parsing and errors that never repeat a value;
-batch saves that are all or nothing, keep names and never values on rejection, and
-count only new names against the limit; multi-name deletes. The browser suite covers
-the tab, saving several lines, splitting pasted `NAME=value` lines, refusing
-duplicates before submit, replacing, modal and bulk deletion, and saving pasted
-`.env` text without JavaScript.
+overlaps and multi-line values; `.env` parsing, masking and line writing, with
+errors that never repeat a value; whole-file saves that are all or nothing, the
+masked view never containing a value, CRLF normalization, stale-revision refusal,
+confirmed removal, blank names, build access kept through changes, files made from
+older secrets, the size and count limits, revoked and other owners' repositories,
+and rotation of files beside values. The browser suite covers the masked view,
+Show values and edit, the live size, the removal modal, loading a file, a refused
+line and the whole flow without JavaScript.

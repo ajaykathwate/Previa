@@ -1,0 +1,204 @@
+package workspaces
+
+import (
+	"github.com/ajaykathwatee/previa/web/components"
+	"github.com/ajaykathwatee/previa/web/layouts"
+)
+
+templ Directory(username string, p Page) {
+	@layouts.App("Workspaces", username, p.CSRF, components.NavWorkspaces) {
+		<div class="team-page">
+			<header class="team-heading">
+				<div class="team-heading-copy">
+					@components.PageTitle("Choose your workspace", "Each workspace is one team, with its own people, repositories and settings.")
+				</div>
+				if p.GitHubConnected {
+				<button class="primary-action" type="button" commandfor="create-workspace" command="show-modal" data-open-dialog="create-workspace" aria-haspopup="dialog">
+					@components.PlusIcon()
+					Create workspace
+				</button>
+ }
+			</header>
+			if len(p.Received) > 0 {
+				@ReceivedInvitations(p)
+			}
+			if len(p.Workspaces)==0 && len(p.Received)==0 {
+				<section class="workspace-panel team-empty">
+					<span class="team-empty-icon">
+						@components.TeamIcon()
+					</span>
+					if !p.GitHubConnected {
+ <h2>Welcome to Previa</h2><p>Open a review invitation from your team, or ask an administrator to invite your verified email. You can review shared previews and leave findings without GitHub.</p><p><a href="/protected">Your profile and login methods</a></p>
+ } else {
+ <h2>A shared home for your team</h2>
+					<p>Create a workspace to connect repositories and invite teammates, or open an invitation from your administrator.</p><button class="primary-action" type="button" commandfor="create-workspace" command="show-modal" data-open-dialog="create-workspace" aria-haspopup="dialog">Create your first workspace</button>
+ }
+				</section>
+			}
+			<div class="team-workspace-grid">
+				for _,w:=range p.Workspaces {
+					<article class="workspace-panel team-workspace-card">
+						<div class="team-card-identity">
+							@components.WorkspaceAvatar(w.Name, w.ID, w.LogoVersion)
+							@components.WorkspaceRole(w.Role)
+						</div>
+						<div>
+							<h2>{ w.Name }</h2>
+							if w.Description!="" {
+								<p class="team-description">{ w.Description }</p>
+							}
+						</div>
+						<form method="post" action={ components.PublicURL(ctx, components.WorkspaceURL(w.ID, "select")) }><input type="hidden" name="csrf_token" value={ p.CSRF }/><button class="primary-action" type="submit">Open workspace</button></form>
+						<div class="team-card-links">
+							<a href={ components.PublicURL(ctx, components.WorkspaceURL(w.ID, "members")) }>Members</a>
+							if w.Role=="owner" || w.Role=="admin" {
+								<a href={ components.PublicURL(ctx, components.WorkspaceURL(w.ID, "settings")) }>Settings</a>
+							}
+						</div>
+					</article>
+				}
+			</div>
+		</div>
+		@components.Toasts(p.Message)
+	}
+}
+
+// ReceivedInvitations lets an invited person join from inside Previa. The
+// exact role and repositories are shown before they accept.
+templ ReceivedInvitations(p Page) {
+	<section id="invitations" class="workspace-panel field-card received-invitations" aria-labelledby="received-heading">
+		<header class="field-card-head">
+			<h2 id="received-heading">
+				@components.SendIcon()
+				Invitations for you
+			</h2>
+			<span class="field-card-note">{ CountLabel(int64(len(p.Received)), "pending invitation", "pending invitations") }</span>
+		</header>
+		for _, v := range p.Received {
+			<div class="team-invitation-row received-row">
+				<div class="team-person">
+					<span class="workspace-avatar" aria-hidden="true">{ components.WorkspaceInitial(v.Workspace) }</span>
+					<div>
+						<div class="team-inline">
+							<strong>{ v.Workspace }</strong>
+							@components.WorkspaceRole(v.Role)
+						</div>
+						<p>
+							{ "Invited by " + v.Inviter + " · expires " }
+							@components.Time(v.Expires, v.Expires)
+						</p>
+						<p class="received-scope">
+							switch {
+								case v.Role == "admin":
+									Admins access every repository and manage members and settings.
+								case len(v.Repositories) == 0:
+									No repositories yet; an administrator can grant access after you join.
+								default:
+									{ "Access to " + JoinNames(v.Repositories) }
+									if v.Role == "developer" {
+										{ ". Developers run builds and read logs; code may receive the repository's runtime secrets." }
+									}
+							}
+						</p>
+					</div>
+				</div>
+				<form method="post" action={ components.PublicURL(ctx, "/workspace-invitations/received/"+components.ResourceToken(ctx, "invitation", v.ID)) } class="team-row-actions">
+					<input type="hidden" name="csrf_token" value={ p.CSRF }/>
+					<button type="submit" name="action" value="decline" class="secondary-action">Decline</button>
+					<button type="submit" name="action" value="accept" class="primary-action">Join workspace</button>
+				</form>
+			</div>
+		}
+	</section>
+}
+
+templ Index(username string, p Page) {
+	{{
+		title := "Members"
+		nav := components.NavMembers
+		switch p.Tab {
+		case "settings":
+			title = "Workspace settings"
+			nav = components.NavWorkspaceSettings
+		case "setup":
+			title = "Set up your workspace"
+			nav = components.NavNone
+		}
+	}}
+	@layouts.AppTrail(title+" · "+p.Name, components.Crumb{Label: p.Name, Href: "/workspaces"}, title, username, p.CSRF, nav) {
+		<div class="team-page">
+			<header class="team-heading">
+				<div class="team-heading-copy">
+					@components.PageTitle(title, headingInfo(p))
+				</div>
+				<div class="team-heading-actions">
+					if p.Tab=="members" {
+						if p.Manage() {
+							<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/settings") }>
+								@components.WrenchIcon()
+								Settings
+							</a>
+							<button type="button" class="primary-action" commandfor="invite-member" command="show-modal" data-open-dialog="invite-member" aria-haspopup="dialog">
+								@components.PlusIcon()
+								Invite teammate
+							</button>
+						}
+					} else if p.Tab=="setup" {
+						<a class="secondary-action" href="/dashboard">Skip to overview</a>
+					} else {
+						<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members") }>
+							@components.TeamIcon()
+							Members
+						</a>
+					}
+				</div>
+			</header>
+			if p.Error!="" && p.ErrorField=="" {
+				<p class="connection-notice tone-danger" role="alert">{ p.Error }</p>
+			}
+			if p.InvitationURL!="" {
+				<section class="workspace-panel team-link-notice" role="status">
+					<div class="team-link-copy">
+						<h2>
+							<span class="team-success-icon">
+								@components.CheckIcon()
+							</span>
+							Invitation ready
+						</h2>
+						<p>They'll also find it in Previa under Invitations when signed in with the addressed account or verified email. This link is shown once · expires in 7 days.</p>
+					</div>
+					<div class="team-copy-row">
+						<label class="sr-only" for="invitation-link">Invitation link</label><input id="invitation-link" type="text" readonly value={ p.InvitationURL }/>
+						<button type="button" class="secondary-action" data-copy-from="#invitation-link">
+							@components.CopyIcon()
+							<span data-copy-status>Copy link</span>
+						</button>
+					</div>
+				</section>
+			}
+			switch p.Tab {
+				case "members":
+					@Members(p)
+					@Pagination(p)
+				case "setup":
+					@Setup(p)
+				default:
+					@Settings(p)
+			}
+		</div>
+		@components.Toasts(p.Message)
+	}
+}
+
+func headingInfo(p Page) string {
+	switch {
+	case p.Tab == "setup":
+		return "Your workspace is ready. A few steps get your team building previews together."
+	case p.Tab == "settings":
+		return "Name, description, logo and ownership for this team."
+	case p.Manage():
+		return "Invite teammates and choose what they can access. Owners and admins access every repository; developers and reviewers get explicit grants."
+	default:
+		return "The people in this workspace and their roles."
+	}
+}

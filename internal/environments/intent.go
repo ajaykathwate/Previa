@@ -60,6 +60,7 @@ var (
 // BuildIntent is current coordination state, not a historical attempt record.
 // Idempotency keys are opaque and must not be logged or exposed in views.
 type BuildIntent struct {
+	ExecutionJobID int64
 	PullRequestID  int64
 	Revision       int64
 	BaseRevision   int64
@@ -94,7 +95,20 @@ type IntentCommand struct {
 	ExpectedRevision int64
 	IdempotencyKey   string
 	Action           IntentAction
+	// Reset marks a Rebuild asked for to replace the preview's test data
+	// (docs/31-test-data.md); it builds exactly like any Rebuild.
+	Reset bool
+	// StartSource is the starting data a Reset asked for: StartFromBaseline
+	// or StartEmpty (docs/32-persistent-test-data.md). Empty for every other
+	// request, which follows the repository's Test data settings.
+	StartSource string
 }
+
+// Starting sources a Reset test data request may choose.
+const (
+	StartFromBaseline = "baseline"
+	StartEmpty        = "empty"
+)
 
 var intentKey = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
 
@@ -102,7 +116,10 @@ func (c IntentCommand) validate() error {
 	if c.UserID <= 0 || c.PullRequestID <= 0 || c.ExpectedRevision < 0 || !intentKey.MatchString(c.IdempotencyKey) {
 		return errors.New("build command requires an owner, PR, nonnegative expected revision and a 16–128 character URL-safe idempotency key")
 	}
-	if c.Action != BuildLatest && c.Action != RetryBuild && c.Action != Rebuild {
+	if c.Action != BuildLatest && c.Action != RetryBuild && c.Action != Rebuild || c.Reset && c.Action != Rebuild {
+		return ErrIntentAction
+	}
+	if c.StartSource != "" && (!c.Reset || c.StartSource != StartFromBaseline && c.StartSource != StartEmpty) {
 		return ErrIntentAction
 	}
 	return nil

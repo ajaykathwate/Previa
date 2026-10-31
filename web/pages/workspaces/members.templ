@@ -1,0 +1,338 @@
+package workspaces
+
+import "github.com/ajaykathwatee/previa/web/components"
+
+templ Members(p Page) {
+	@InviteRecovery(p)
+	if p.Transfer!=nil && p.Transfer.Accept {
+		<div class="team-inline-notice"><div><strong>You've been nominated as workspace owner</strong><p>Review and accept the handover in workspace settings.</p></div><a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/settings#ownership") }>Review handover</a></div>
+	}
+	<section class="workspace-panel team-members-panel">
+		<header class="team-people-toolbar">
+			<nav class="team-segmented" aria-label="People">
+				<a href={ components.PublicURL(ctx, p.Base()+"/members") } aria-current={ current(!p.InvitationView) }>Members <span class="team-count">{ ID(p.MemberCount) }</span></a>
+				if p.Manage() {
+					<a href={ components.PublicURL(ctx, p.Base()+"/members?view=invitations") } aria-current={ current(p.InvitationView) }>Invitations <span class="team-count">{ ID(p.InvitationCount) }</span></a>
+					<a href={ components.PublicURL(ctx, p.Base()+"/members?view=deactivated") } aria-current={ current(p.DeactivatedView) }>Deactivated <span class="team-count">{ ID(p.DeactivatedCount) }</span></a>
+				}
+			</nav>
+			<form method="get" action={ components.PublicURL(ctx, p.Base()+"/members") } class="team-search" role="search">
+				if p.InvitationView {
+					<input type="hidden" name="view" value="invitations"/>
+				}
+				if p.DeactivatedView {
+					<input type="hidden" name="view" value="deactivated"/>
+				}
+				<label class="sr-only" for="team-search">Search by name or GitHub username</label><input id="team-search" type="search" name="q" value={ p.Search } maxlength="100" placeholder="Search name or GitHub username"/>
+				<button type="submit" class="secondary-action" aria-label="Search people">
+					@components.SearchIcon()
+				</button>
+			</form>
+		</header>
+		if p.InvitationView {
+			@Invitations(p)
+		} else if p.DeactivatedView {
+			@DeactivatedMembers(p)
+		} else {
+			<div class="team-table-heading" aria-hidden="true"><span>Person</span><span>Role</span><span>Repository access</span><span></span></div>
+			if len(p.Members)==0 {
+				@PeopleEmpty(p)
+			}
+			for _,m:=range p.Members {
+				<article class="team-member-row">
+					<a class="team-person team-person-link" href={ components.PublicURL(ctx, p.Base()+"/members/"+ID(m.ID)) }>
+						@components.UserAvatar(m.AvatarSrc(), m.Name(), "", nil)
+						<div>
+							<strong>{ m.Name() }</strong>
+							if m.ID==p.ActorID {
+								<span class="badge tone-neutral team-you">You</span>
+							}
+							<p>{ "@"+m.Login }</p>
+						</div>
+					</a>
+					<div>
+						@components.WorkspaceRole(m.Role)
+					</div>
+					<div class="team-member-scope">
+						@MemberScope(p, m)
+					</div>
+					<div class="team-row-actions">
+						if p.CanManageMember(m) {
+							<button type="button" class="secondary-action" commandfor={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" data-open-dialog={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } aria-haspopup="dialog">Manage access</button>
+							@AccessDialog(p, m)
+							<button type="button" class="team-icon-button team-danger" data-open-dialog={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } commandfor={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" aria-haspopup="dialog" aria-label={ "Remove " + m.Login } title={ "Remove " + m.Login }>
+								@components.TrashIcon()
+							</button>
+							@RemoveDialog(p, m)
+						} else if m.ID==p.ActorID && m.Role!="owner" {
+							<button type="button" class="secondary-action" data-open-dialog={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } commandfor={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" aria-haspopup="dialog">Leave workspace</button>
+							@RemoveDialog(p, m)
+						} else if m.Role=="owner" && p.Owner() {
+							<a class="team-text-action" href={ components.PublicURL(ctx, p.Base()+"/settings#ownership") }>Manage ownership</a>
+						}
+					</div>
+				</article>
+			}
+		}
+		<footer class="team-panel-footer">
+			if p.InvitationView {
+				<p>Only the addressed account or verified email can accept, from the link or inside Previa. Invitations expire after seven days.</p>
+			} else if p.DeactivatedView {
+				<p>Deactivated people have no access. Re-inviting offers their previous role and repositories; they rejoin after accepting.</p>
+			} else {
+				<p>Owners and admins access all repositories. Developers and reviewers receive explicit grants.</p>
+			}
+		</footer>
+	</section>
+	if p.Manage() && !p.Invite.Failed {
+		@InviteDialog(p)
+	}
+}
+
+templ PeopleEmpty(p Page) {
+	<div class="team-empty">
+		<span class="team-empty-icon">
+			@components.SearchIcon()
+		</span>
+		<h2>No matching people</h2>
+		<p>Try another GitHub username.</p><a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members") }>Clear search</a>
+	</div>
+}
+
+templ MemberScope(p Page, m Member) {
+	if m.Role=="owner" || m.Role=="admin" {
+		<span class="badge tone-neutral">All repositories</span>
+	} else if len(m.Repositories)==0 {
+		<span class="badge tone-neutral badge-quiet">No repositories</span>
+	} else if p.Manage() {
+		for i,id:=range m.Repositories {
+			if i<2 {
+				<code class="team-repository-chip" title={ p.RepositoryName(id) }>{ p.RepositoryName(id) }</code>
+			}
+		}
+		if len(m.Repositories)>2 {
+			<button type="button" class="badge tone-neutral team-scope-button" data-open-dialog={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } commandfor={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } command="show-modal" aria-label={ "View all " + ID(int64(len(m.Repositories))) + " repositories for " + m.Name() }>+{ ID(int64(len(m.Repositories)-2)) } more</button>
+		}
+	} else {
+		<span class="badge tone-neutral">{ CountLabel(int64(len(m.Repositories)),"repository","repositories") }</span>
+	}
+}
+
+templ AccessDialog(p Page, m Member) {
+	@components.FormDialog("access-member-"+components.ResourceToken(ctx, "user", m.ID), "Manage access for "+m.Name(), "Changes take effect immediately. Unfinished requests under replaced permissions are cancelled; existing previews stay with the workspace.") {
+		<form id={ "member-" + components.ResourceToken(ctx, "user", m.ID) } method="post" action={ components.PublicURL(ctx, p.Base()+"/members/"+components.ResourceToken(ctx, "user", m.ID)) } class="team-form" data-role-controls>
+			@Hidden(p)
+			<input type="hidden" name="revision" value={ ID(m.Revision) }/>
+			@RoleChoices("member-"+components.ResourceToken(ctx, "user", m.ID), p.Owner(), m.Role)
+			<p class="team-field-hint" data-workspace-role-description>Developers can run code; reviewers can open permitted previews. Admins can manage every repository.</p>
+			@RepositoryChoices(p, m.Repositories)
+			<div class="dialog-actions"><button type="button" class="secondary-action" commandfor={ "access-member-" + components.ResourceToken(ctx, "user", m.ID) } command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Save access</button></div>
+		</form>
+	}
+}
+
+templ InviteDialog(p Page) {
+	@components.FormDialog("invite-member", "Invite a teammate", "Choose their GitHub account or reviewer email and access. You will get a link to share; no email is sent.") {
+		@InvitationForm(p)
+	}
+}
+
+templ InvitationForm(p Page) {
+	<form method="post" action={ components.PublicURL(ctx, p.Base()+"/invitations") } class="team-form team-invite-form" data-role-controls>
+		@Hidden(p)
+		if p.Tab=="setup" {
+			<input type="hidden" name="return" value="setup"/>
+		}
+		<label for="invite-login">GitHub username or reviewer email</label>
+		<input id="invite-login" name="login" value={ p.Invite.Login } required maxlength="254" autocomplete="off" placeholder="octocat or reviewer@example.com" aria-describedby="invite-login-help invite-login-error" aria-invalid={ currentError(p.Invite.LoginError != "") } autofocus/>
+		<p id="invite-login-help" class="team-field-hint">Use a GitHub username for any role, or an email for Reviewer access. The recipient must sign in with that verified email.</p>
+		if p.Invite.LoginError!="" {
+			<p id="invite-login-error" class="team-field-error" role="alert">{ p.Invite.LoginError }</p>
+		} else {
+			<p id="invite-login-error" hidden></p>
+		}
+		@RoleChoices("invite", p.Owner(), p.Invite.SelectedRole())
+		<p class="team-field-hint" data-workspace-role-description>Developers build and inspect logs. Reviewers open shared previews. Admins manage the workspace.</p>
+		@RepositoryChoices(p, p.Invite.Repositories)
+		if p.Invite.FormError!="" {
+			<p class="team-field-error" role="alert">{ p.Invite.FormError }</p>
+		}
+		if len(p.Repositories)==0 {
+			<a class="team-text-action" href="/repositories">Connect repositories</a>
+		}
+		<div class="dialog-actions">
+			if p.Invite.Failed {
+				<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/"+cancelTab(p)) }>Cancel</a>
+			} else {
+				<button type="button" class="secondary-action" commandfor="invite-member" command="close" data-close-dialog>Cancel</button>
+			}
+			<button type="submit" class="primary-action">Create invitation</button>
+		</div>
+	</form>
+}
+
+func currentError(invalid bool) string {
+	if invalid {
+		return "true"
+	}
+	return "false"
+}
+
+templ Invitations(p Page) {
+	if len(p.Invitations)==0 {
+		<div class="team-empty">
+			<span class="team-empty-icon">
+				@components.TeamIcon()
+			</span>
+			<h2>
+				if p.Search!="" {
+					No matching invitations
+				} else {
+					No pending invitations
+				}
+			</h2>
+			<p>Invite teammates by GitHub username or reviewer email and share their invitation link.</p>
+			if p.Search!="" {
+				<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members?view=invitations") }>Clear search</a>
+			} else {
+				<button type="button" class="secondary-action" commandfor="invite-member" command="show-modal" data-open-dialog="invite-member" aria-haspopup="dialog">Invite teammate</button>
+			}
+		</div>
+	}
+	for _,v:=range p.Invitations {
+		<div class="team-invitation-row">
+			<div class="team-person">
+				@components.UserAvatar("", v.Login, "user-avatar-muted", nil)
+				<div>
+					<div class="team-inline">
+						<strong>{ v.Login }</strong>
+						@components.WorkspaceRole(v.Role)
+						if v.Expired {
+							<span class="badge tone-warn">Expired</span>
+						} else {
+							<span class="badge tone-info">Awaiting acceptance</span>
+						}
+					</div>
+					<p>
+						if v.Expired {
+							Generate a new link to invite this account.
+						} else {
+							{ "Expires " }
+							@components.Time(v.Expires, v.Expires)
+						}
+					</p>
+				</div>
+			</div>
+			if p.Owner() || v.Role!="admin" {
+				<div class="team-row-actions">
+					<form method="post" action={ components.PublicURL(ctx, p.Base()+"/invitations/"+components.ResourceToken(ctx, "invitation", v.ID)) }>
+						@Hidden(p)
+						<input type="hidden" name="revision" value={ ID(v.Revision) }/><button type="submit" class="secondary-action" name="action" value="regenerate">Generate new link</button>
+					</form>
+					<button type="button" class="team-icon-button team-danger" data-open-dialog={ "revoke-invite-" + components.ResourceToken(ctx, "invitation", v.ID) } commandfor={ "revoke-invite-" + components.ResourceToken(ctx, "invitation", v.ID) } command="show-modal" aria-label={ "Revoke invitation for " + v.Login } title="Revoke invitation">
+						@components.TrashIcon()
+					</button>
+				</div>
+				@components.ConfirmationDialog("revoke-invite-"+components.ResourceToken(ctx, "invitation", v.ID), "Revoke invitation for "+v.Login+"?", "This invitation link will stop working immediately.") {
+					<form method="post" action={ components.PublicURL(ctx, p.Base()+"/invitations/"+components.ResourceToken(ctx, "invitation", v.ID)) } class="dialog-actions">
+						@Hidden(p)
+						<input type="hidden" name="revision" value={ ID(v.Revision) }/><input type="hidden" name="action" value="revoke"/><button type="button" class="secondary-action" commandfor={ "revoke-invite-" + components.ResourceToken(ctx, "invitation", v.ID) } command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">Revoke invitation</button>
+					</form>
+				}
+			}
+		</div>
+	}
+}
+
+templ RemoveDialog(p Page, m Member) {
+	{{
+		title := "Remove " + m.Login + " from this workspace?"
+		cta := "Remove member"
+		if m.ID == p.ActorID {
+			title = "Leave this workspace?"
+			cta = "Leave workspace"
+		}
+	}}
+	@components.ConfirmationDialog("remove-member-"+components.ResourceToken(ctx, "user", m.ID), title, "Dashboard and private-preview access ends immediately. Unfinished manual requests are cancelled; published previews stay with the team.") {
+		<form method="post" action={ components.PublicURL(ctx, p.Base()+"/members/"+components.ResourceToken(ctx, "user", m.ID)) } class="dialog-actions">
+			@Hidden(p)
+			<input type="hidden" name="revision" value={ ID(m.Revision) }/><input type="hidden" name="action" value="remove"/><button type="button" class="secondary-action" commandfor={ "remove-member-" + components.ResourceToken(ctx, "user", m.ID) } command="close" data-close-dialog>Cancel</button><button type="submit" class="primary-action">{ cta }</button>
+		</form>
+	}
+}
+
+func current(active bool) string {
+	if active {
+		return "page"
+	}
+	return "false"
+}
+
+templ DeactivatedMembers(p Page) {
+	if len(p.Deactivated)==0 {
+		<div class="team-empty">
+			<span class="team-empty-icon">
+				@components.TeamIcon()
+			</span>
+			<h2>No deactivated members</h2>
+			<p>People who leave or are removed appear here, so you can bring them back with their previous access.</p>
+		</div>
+	}
+	for _,m:=range p.Deactivated {
+		<div class="team-invitation-row team-deactivated-row">
+			<a class="team-person team-person-link" href={ components.PublicURL(ctx, p.Base()+"/members/"+ID(m.ID)) }>
+				@components.UserAvatar(m.AvatarSrc(), m.Name(), "user-avatar-muted", nil)
+				<div>
+					<div class="team-inline">
+						<strong>{ m.Name() }</strong>
+						if m.Invited {
+							<span class="badge tone-info">Re-invited</span>
+						}
+					</div>
+					<p>
+						{ "@" + m.Login + " · was " + components.RoleName(m.Role) + " · " }
+						if m.Left {
+							{ "left " }
+						} else if m.RemovedBy != "" {
+							{ "removed by " + m.RemovedBy + " " }
+						} else {
+							{ "removed " }
+						}
+						@components.Time(m.RemovedAt, m.RemovedAt)
+					</p>
+				</div>
+			</a>
+			if !m.Invited && (p.Owner() || m.Role!="admin") {
+				<div class="team-row-actions">
+					<a class="secondary-action" href={ components.PublicURL(ctx, p.Base()+"/members?view=deactivated&reinvite="+components.ResourceToken(ctx, "user", m.ID)) }>
+						@components.SendIcon()
+						Re-invite
+					</a>
+				</div>
+			}
+		</div>
+	}
+}
+
+// InviteRecovery shows a refused or prefilled invitation inline; ui.js reopens it as the modal.
+templ InviteRecovery(p Page) {
+	if p.Invite.Failed {
+		<section id="invite-recovery" class="workspace-panel team-settings-panel" data-invite-recovery>
+			if p.Invite.Reinvite {
+				<h2>{ "Re-invite @" + p.Invite.Login }</h2>
+				<p>Their previous role and repositories are selected. Adjust them if needed; they rejoin after accepting.</p>
+			} else {
+				<h2>Invite a teammate</h2>
+				<p>Your invitation was not created. Review the message below; your selections are kept.</p>
+			}
+			@InvitationForm(p)
+		</section>
+	}
+}
+
+func cancelTab(p Page) string {
+	if p.Tab == "setup" {
+		return "setup"
+	}
+	return "members"
+}

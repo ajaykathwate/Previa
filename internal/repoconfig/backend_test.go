@@ -1,6 +1,7 @@
 package repoconfig
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -109,6 +110,10 @@ func TestBackendConfigProblems(t *testing.T) {
 		{"process as a string", "processes: [worker]", "invalid_type", "processes[0]", backendPlatform()},
 		{"anchored setup", "setup: &cmd [run]\n", "invalid_type", "setup", backendPlatform()},
 		{"aliased command", "setup: &cmd [run]\nprocesses: [{name: w, command: *cmd}]\n", "invalid_type", "processes[0].command", backendPlatform()},
+		{"seed without a database", "services: {redis: 7}\nseed: [run, seed]", "seed_without_database", "seed", backendPlatform()},
+		{"seed as a string", "services: {postgres: 17}\nseed: npm run seed", "invalid_type", "seed", backendPlatform()},
+		{"empty seed", "services: {postgres: 17}\nseed: []", "invalid_command", "seed", backendPlatform()},
+		{"process named seed", "processes: [{name: seed, command: [run]}]", "reserved_process_name", "processes[0].name", backendPlatform()},
 		{"docs path with a host", "docs_path: //example.com/docs", "invalid_docs_path", "docs_path", backendPlatform()},
 		{"docs path traversal", "docs_path: /a/../b", "invalid_docs_path", "docs_path", backendPlatform()},
 		{"docs path as a list", "docs_path: [/docs]", "invalid_type", "docs_path", backendPlatform()},
@@ -144,4 +149,36 @@ func TestProcessTiersAreClamped(t *testing.T) {
 	if fields != 2 {
 		t.Fatalf("notices %+v", result.Notices)
 	}
+}
+
+// seed is a separate one-off command that creates the starting data; it is
+// part of what runs, so it changes the configuration hash, and a
+// configuration without it hashes as before.
+func TestSeedCommand(t *testing.T) {
+	base, err := ParseFor([]byte("services: {postgres: 17}\nsetup: [bin/migrate]\n"), backendPlatform())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeded, err := ParseFor([]byte("services: {postgres: 17}\nsetup: [bin/migrate]\nseed: [bin/seed, --demo]\n"), backendPlatform())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(seeded.Config.Seed, []string{"bin/seed", "--demo"}) || base.Config.Seed != nil {
+		t.Fatalf("seed %q / %q", seeded.Config.Seed, base.Config.Seed)
+	}
+	if seeded.Hash == base.Hash {
+		t.Fatal("the seed command does not change the configuration hash")
+	}
+	if strings.Contains(string(mustJSON(t, base.Config)), "seed") {
+		t.Fatal("a configuration without seed encodes a seed field")
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }

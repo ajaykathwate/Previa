@@ -15,16 +15,9 @@ import (
 templ Index(username string, p Page) {
 	@layouts.App("Starter kits", username, p.CSRF, components.NavStarterKits) {
 		<div class="kit-page">
-			<header class="page-hero">
-				<div class="page-hero-main">
-					<span class="page-hero-icon" aria-hidden="true">
-						@components.KitIcon()
-					</span>
-					<div class="page-hero-text">
-						<p class="page-hero-kicker">Set up a repository</p>
-						<h1>Starter kits</h1>
-						<p class="page-hero-sub">Pick your stack and what it uses. Previa writes the <code>Dockerfile</code> and <code>.previewrc.yaml</code> your repository needs; edit them here, then copy or download.</p>
-					</div>
+			<header class="page-header">
+				<div class="page-header-text">
+					@components.PageTitle("Starter kits", "Pick your stack and what it uses. Previa writes the Dockerfile and .previewrc.yaml your repository needs; edit them here, then copy or download.")
 				</div>
 			</header>
 			@Kit(p)
@@ -96,11 +89,13 @@ templ stackSection(p Page) {
 templ servicesSection(p Page) {
 	<fieldset class="kit-section">
 		<legend class="kit-section-title">Services</legend>
-		<div class="kit-rows">
-			@service("postgres", "PostgreSQL", "Sets DATABASE_URL", p.Form.Postgres, components.DatabaseIcon(), p.ProblemFor("postgres"))
-			@service("redis", "Redis", "Sets REDIS_URL", p.Form.Redis, components.ServerIcon(), p.ProblemFor("redis"))
-			@service("mysql", "MySQL", "Sets MYSQL_URL", p.Form.MySQL, components.DatabaseIcon(), p.ProblemFor("mysql"))
-		</div>
+		if len(p.Form.Postgres.Versions)+len(p.Form.Redis.Versions)+len(p.Form.MySQL.Versions) > 0 {
+			<div class="kit-rows">
+				@service("postgres", "PostgreSQL", "Sets DATABASE_URL", p.Form.Postgres, components.DatabaseIcon(), p.ProblemFor("postgres"))
+				@service("redis", "Redis", "Sets REDIS_URL", p.Form.Redis, components.ServerIcon(), p.ProblemFor("redis"))
+				@service("mysql", "MySQL", "Sets MYSQL_URL", p.Form.MySQL, components.DatabaseIcon(), p.ProblemFor("mysql"))
+			</div>
+		}
 		<p class="kit-hint">
 			@components.InfoIcon()
 			Each preview gets its own, empty. { p.Offer }
@@ -108,7 +103,9 @@ templ servicesSection(p Page) {
 	</fieldset>
 }
 
+// service offers one managed service; one this server cannot run is not shown.
 templ service(id, name, hint string, s Service, icon templ.Component, problem string) {
+	if len(s.Versions) > 0 {
 	<div class={ "kit-row", templ.KV("is-on", s.On) }>
 		<label class="kit-row-main" for={ "kit-" + id }>
 			<span class="kit-row-icon" aria-hidden="true">
@@ -126,18 +123,20 @@ templ service(id, name, hint string, s Service, icon templ.Component, problem st
 				}
 			</div>
 		}
-		<input class="kit-switch" type="checkbox" role="switch" id={ "kit-" + id } name={ id } value="on" checked?={ s.On } disabled?={ len(s.Versions) == 0 }/>
+		<input class="kit-switch" type="checkbox" role="switch" id={ "kit-" + id } name={ id } value="on" checked?={ s.On }/>
 		if problem != "" {
 			<p class="kit-field-problem">{ problem }</p>
 		}
 	</div>
+	}
 }
 
 templ extrasSection(p Page) {
 	<fieldset class="kit-section">
 		<legend class="kit-section-title">Before and beside your app</legend>
 		<div class="kit-rows">
-			@commandRow("setup", "Migrations", "Run once before the app starts", p.Form.Setup, components.RestartIcon(), p.ProblemFor("setup"))
+			@commandRow("setup", "Migrations", "Run before the app in every deployment", p.Form.Setup, components.RestartIcon(), p.ProblemFor("setup"))
+			@commandRow("seed", "Seed data", "Only on an empty database", p.Form.Seed, components.DatabaseIcon(), p.ProblemFor("seed"))
 			@commandRow("worker", "Background worker", "A queue worker next to your app", p.Form.Worker, components.BuildIcon(), p.ProblemFor("worker"))
 			<div class={ "kit-row", templ.KV("is-on", p.Form.Docs) }>
 				<label class="kit-row-main" for="kit-docs">
@@ -280,7 +279,7 @@ templ editor(p Page) {
 				}
 			</div>
 			for _, f := range p.Files {
-				<form class="kit-panel" id={ "kit-panel-" + f.ID } data-kit-file={ f.ID } data-lang={ f.Kind } method="post" action={ templ.SafeURL("/starter-kits/download/" + f.ID) }>
+				<form class="kit-panel" id={ "kit-panel-" + f.ID } data-kit-file={ f.ID } data-lang={ f.Kind } method="post" action={ components.PublicURL(ctx, "/starter-kits/download/"+f.ID) }>
 					<input type="hidden" name="csrf_token" value={ p.CSRF }/>
 					<div class="kit-panel-bar">
 						<p class="kit-crumb"><code>{ f.Name }</code><span aria-hidden="true">›</span>{ f.Purpose }</p>
@@ -380,10 +379,12 @@ templ guide(p Page) {
 				<li>Commit them on a branch and open a pull request.</li>
 				<li>On the pull request's page, choose <strong>Build latest commit</strong>, or let Automatic builds start it.</li>
 			</ol>
-			<a class="text-link kit-repos-link" href="/repositories">
-				Open your repositories
-				@components.Arrow()
-			</a>
+			if components.CanOperate(ctx) {
+				<a class="text-link kit-repos-link" href="/repositories">
+					Open your repositories
+					@components.Arrow()
+				</a>
+			}
 		</section>
 		if len(p.Notes) > 0 {
 			<section class="kit-card kit-notes" aria-labelledby="kit-notes-title">
@@ -455,7 +456,7 @@ templ more() {
 		</details>
 		<details>
 			<summary>Seed data for reviewers</summary>
-			<p>Every preview starts with empty services. Under migrations, choose <strong>My own command…</strong> and chain your seed step, such as <code>npm run migrate &amp;&amp; npm run seed</code>.</p>
+			<p>Put migrations under <strong>Migrations</strong> and synthetic starting data under <strong>Seed data</strong>. Migrations run in every deployment; the seed runs after them only when a database starts empty, so data a repository's <strong>Test data</strong> keeps between builds is never seeded twice. For a test login, the seed creates a preview-only account from a repository secret, and the same password goes under <strong>Test access</strong> on the review page. <strong>Reset test data</strong> there starts the preview again from the repository baseline or from empty databases and the seed.</p>
 		</details>
 	</section>
 }

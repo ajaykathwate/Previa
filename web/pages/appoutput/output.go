@@ -51,3 +51,7 @@ func (p OutputPage) Name() string {
 func (p OutputPage) TrailParent() components.Crumb {
 	return components.Crumb{Label: "#" + strconv.Itoa(int(p.Number)) + " " + p.Title, Href: p.PRURL()}
 }
+
+func (p OutputPage) PublicReferences() []components.ResourceRef {
+	return components.PRRefs(p.RepoID, p.Number)
+}

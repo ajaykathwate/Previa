@@ -76,6 +76,7 @@ func (r *Runtime) usage(ctx context.Context, t Target) (usage, error) {
 		return usage{}, fmt.Errorf("list running previews: %w", err)
 	}
 	u := usage{repoPRs: map[string]bool{}, accountPRs: map[string]bool{}}
+	legacyWorkspaces := make(map[string]int64)
 	for _, c := range listed.Items {
 		if !slices.Contains(dockerx.CandidateKinds, c.Labels[dockerx.LabelKind]) {
 			continue
@@ -91,14 +92,52 @@ func (r *Runtime) usage(ctx context.Context, t Target) (usage, error) {
 			u.cpuMillis += cpu
 			u.memory += memory
 		}
+		// A repository baseline's containers (docs/32) use host capacity but
+		// are no preview: they count towards no repository or account limit.
+		if c.Labels[dockerx.LabelPR] == "" {
+			continue
+		}
 		if c.Labels[dockerx.LabelInstance] == r.instance && c.Labels[dockerx.LabelBaseRepo] == strconv.FormatInt(t.BaseRepoID, 10) {
 			u.repoPRs[c.Labels[dockerx.LabelPR]] = true
 		}
-		if c.Labels[dockerx.LabelInstance] == r.instance && t.AccountID > 0 && c.Labels[dockerx.LabelAccount] == strconv.FormatInt(t.AccountID, 10) {
+		if c.Labels[dockerx.LabelInstance] != r.instance || t.WorkspaceID <= 0 {
+			continue
+		}
+		workspace, err := r.containerWorkspace(ctx, c.Labels, legacyWorkspaces)
+		if err != nil {
+			return usage{}, err
+		}
+		if workspace == t.WorkspaceID {
 			u.accountPRs[c.Labels[dockerx.LabelPR]] = true
 		}
 	}
 	return u, nil
+}
+
+// containerWorkspace reconciles pre-workspace container labels through stable PR
+// identity; legacy account labels contained user IDs and must not be trusted.
+func (r *Runtime) containerWorkspace(ctx context.Context, labels map[string]string, cache map[string]int64) (int64, error) {
+	if id := labels[dockerx.LabelWorkspace]; id != "" {
+		v, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("read workspace label: %w", err)
+		}
+		return v, nil
+	}
+	pr := labels[dockerx.LabelPR]
+	if id, ok := cache[pr]; ok {
+		return id, nil
+	}
+	id, err := strconv.ParseInt(pr, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("read legacy preview identity: %w", err)
+	}
+	scope, err := r.targets.AdmissionScope(ctx, id)
+	if err != nil {
+		return 0, fmt.Errorf("resolve legacy preview workspace: %w", err)
+	}
+	cache[pr] = scope.WorkspaceID
+	return scope.WorkspaceID, nil
 }
 
 // admit refuses a candidate that would exceed the per-repository count or the
@@ -117,7 +156,7 @@ func admit(u usage, b budget, pullRequestID, cpuMillis, memory int64) error {
 	case others >= b.perRepo:
 		return failure(CodeCapacity, fmt.Sprintf("This repository already has %d previews, its limit.", others), true, nil)
 	case b.perAccount > 0 && accountOthers >= b.perAccount:
-		return failure(CodeCapacity, fmt.Sprintf("Your account already has %d previews on this server, its limit. Tear one down, or this starts when one ends.", accountOthers), true, nil)
+		return failure(CodeCapacity, fmt.Sprintf("This workspace already has %d previews on this server, its limit. Tear one down, or this starts when one ends.", accountOthers), true, nil)
 	case u.memory+memory > b.memory:
 		return failure(CodeCapacity, fmt.Sprintf("Previews would need %s of memory together; the host allows %s.", humanBytes(u.memory+memory), humanBytes(b.memory)), true, nil)
 	case u.cpuMillis+cpuMillis > b.cpuMillis:
@@ -143,6 +182,13 @@ func (r *Runtime) checkCapacity(ctx context.Context, t Target, cpuMillis, memory
 // waits queued instead of building an image it cannot start. It takes no
 // lock; startCandidate checks again atomically.
 func (r *Runtime) Admit(ctx context.Context, request environments.Request) error {
+	if a, ok := r.targets.(interface {
+		AuthorizeRequest(context.Context, int64) error
+	}); ok {
+		if err := a.AuthorizeRequest(ctx, request.PullRequestID); err != nil {
+			return err
+		}
+	}
 	scope, err := r.targets.AdmissionScope(ctx, request.PullRequestID)
 	if err != nil {
 		return err

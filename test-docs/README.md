@@ -1,5 +1,37 @@
 # Previa regression test documents
 
+Feature 1 implementation verification is recorded separately in the
+[2026-10-14 shared workspace report](2026-10-14-shared-workspaces-report.md),
+Feature 2 (guided onboarding, the repository Setup tab) in the
+[2026-10-16 guided onboarding report](2026-10-16-guided-onboarding-report.md), and
+Feature 3 (native review and feedback, with deployment records and activity) in the
+[2026-10-16 review and feedback report](2026-10-16-review-feedback-report.md), and
+Feature 5 (ready-to-test sample data, with the reference journeys) in the
+[2026-10-16 test data report](2026-10-16-test-data-report.md), and Feature 5B
+(persistent test data) with the F1 corrections in the
+[2026-10-17 persistent test data report](2026-10-17-persistent-test-data-report.md),
+and F3 (workspace usage and finite free allowances) in the
+[2026-10-18 usage report](2026-10-18-usage-and-free-limits-report.md),
+and F4 (account exits, support/status and restore-safe deletion) in the
+[2026-10-19 account lifecycle report](2026-10-19-accounts-support-and-deletion-report.md),
+and F5/F6 (missed installation recovery and workspace approval) in the
+[2026-10-19 installation recovery and approval report](2026-10-19-installation-recovery-and-early-access-report.md),
+and F7 (Google sign-in, explicit identity linking and email Reviewer invitations)
+in the [2026-10-20 Google sign-in report](2026-10-20-google-sign-in-report.md).
+It includes team access/offboarding, migration, browser and worker-pipeline checks;
+the full product regression cycle below remains the earlier baseline.
+
+The [22 October full regression report](2026-10-22-full-regression-report.md) is
+the latest cycle across the whole application: a route × role access matrix, a
+crawl proving pages offer only what each person can use, a real-Docker role
+journey, a live GitHub pass, six fixed defects, and the owner's changes (only
+usable controls, Automatic countdowns, recovery of pushes whose webhook was lost).
+
+The focused [20 October build stress report](2026-10-20-build-stress-report.md)
+records the build-only aggressive pass: race/shuffle testing, repeated admission
+and quota races, fuzzing, build UI and real Docker/worker failure journeys. It does
+not claim a new acceptance pass for unrelated features.
+
 These documents are Previa's regression test specification: **242 test cases**
 across 16 modules, from signing in to a preview URL being served, reported and
 torn down. Each case says what is tested, how, what must happen, and which
@@ -70,7 +102,7 @@ Each module document has the same shape:
 The commands below are the whole regression. Set up the machine with
 [02 · Development setup](../docs/02-development-setup.md) first. Database tests use
 `TEST_DATABASE_URL`, which should point at a disposable database migrated with
-`make migrate-up` (Goose 29). The tests create isolated schemas; they do not erase
+`make migrate-up` (Goose 46). The tests create isolated schemas; they do not erase
 the development database. Direct Go commands require exported test settings;
 Make's integration targets load `.env` as documented in development setup.
 

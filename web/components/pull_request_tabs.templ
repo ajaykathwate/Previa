@@ -1,0 +1,42 @@
+package components
+
+import "strconv"
+
+// PullRequestTabs switches between a pull request's Preview page (builds,
+// logs and the live preview) and its Review page (testing instructions and
+// findings), for people who can build it. Reviewers only use the review page.
+templ PullRequestTabs(repoID int64, number int32, active string, openFindings int64) {
+	{{ base := "/repositories/" + strconv.FormatInt(repoID, 10) + "/pull-requests/" + strconv.Itoa(int(number)) }}
+	<nav class="repo-tabs pr-tabs" aria-label="Pull request sections">
+		<a
+			href={ PublicURL(ctx, base) }
+			if active == "preview" {
+				aria-current="page"
+			}
+		>
+			@EnvironmentIcon()
+			<span>Preview</span>
+		</a>
+		<a
+			href={ PublicURL(ctx, base+"/review") }
+			if active == "review" {
+				aria-current="page"
+			}
+		>
+			@MessageIcon()
+			<span>Review</span>
+			if openFindings > 0 {
+				<span class="tab-count">
+					<span class="sr-only">, </span>{ strconv.FormatInt(openFindings, 10) }
+					<span class="sr-only">
+						if openFindings == 1 {
+							open finding
+						} else {
+							open findings
+						}
+					</span>
+				</span>
+			}
+		</a>
+	</nav>
+}

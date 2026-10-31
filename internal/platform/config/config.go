@@ -85,6 +85,7 @@ func (c RetentionConfig) checkRetention() error {
 // ServerConfig contains only settings used by the HTTP server.
 type ServerConfig struct {
 	SharedConfig
+	CustomerConfig
 	SecretsConfig
 	EnvironmentConfig
 	OutboundConfig
@@ -100,6 +101,8 @@ type ServerConfig struct {
 	HTTPAddr                string `envconfig:"HTTP_ADDR" default:"127.0.0.1:8080"`
 	GitHubOAuthClientID     string `envconfig:"GITHUB_OAUTH_CLIENT_ID" required:"true"`
 	GitHubOAuthClientSecret string `envconfig:"GITHUB_OAUTH_CLIENT_SECRET" required:"true"`
+	GoogleOAuthClientID     string `envconfig:"GOOGLE_OAUTH_CLIENT_ID"`
+	GoogleOAuthClientSecret string `envconfig:"GOOGLE_OAUTH_CLIENT_SECRET"`
 	GitHubWebhookSecret     string `envconfig:"GITHUB_WEBHOOK_SECRET"`
 	SessionSecret           string `envconfig:"SESSION_SECRET" required:"true"`
 	GitHubAppID             int64  `envconfig:"GITHUB_APP_ID"`
@@ -114,6 +117,7 @@ type ServerConfig struct {
 // WorkerConfig contains only settings used to execute queued jobs.
 type WorkerConfig struct {
 	SharedConfig
+	CustomerConfig
 	SecretsConfig
 	EnvironmentConfig
 	OutboundConfig
@@ -125,8 +129,9 @@ type WorkerConfig struct {
 	GitHubAppPrivateKeyPath string        `envconfig:"GITHUB_APP_PRIVATE_KEY_PATH"`
 	MaxConcurrentBuilds     int           `envconfig:"MAX_CONCURRENT_BUILDS" required:"true"`
 	BuildTimeout            time.Duration `envconfig:"BUILD_TIMEOUT" default:"12m"`
-	// Fair sharing between accounts (installation owners) on one server;
-	// zero turns a limit off. Waiting builds always take turns by account.
+	// Additional workspace safety ceilings; zero disables only the extra cap.
+	// The finite workspace entitlement still applies (docs/33).
+	// The existing account-named configuration keys retain their spelling.
 	BuildsPerAccount          int `envconfig:"BUILDS_PER_ACCOUNT" default:"0"`
 	BuildMinutesPerAccountDay int `envconfig:"BUILD_MINUTES_PER_ACCOUNT_DAY" default:"0"`
 	// InternalAddr serves /livez, /readyz and /metrics; never publish it.
@@ -168,6 +173,9 @@ func LoadWorker() (WorkerConfig, error) {
 	}
 	if err := cfg.SharedConfig.validate(); err != nil {
 		return WorkerConfig{}, fmt.Errorf("validate worker configuration: %w", err)
+	}
+	if err := cfg.checkCustomer(); err != nil {
+		return WorkerConfig{}, err
 	}
 	if err := cfg.EnvironmentConfig.check(); err != nil {
 		return WorkerConfig{}, err
@@ -239,6 +247,9 @@ func checkURLPort(name string, u *url.URL) error {
 }
 
 func (c ServerConfig) validate() error {
+	if err := c.checkCustomer(); err != nil {
+		return err
+	}
 	if err := c.SharedConfig.validate(); err != nil {
 		return err
 	}
@@ -264,6 +275,9 @@ func (c ServerConfig) validate() error {
 		}
 		if strings.TrimSpace(c.GitHubWebhookSecret) == "" {
 			return errors.New("GITHUB_WEBHOOK_SECRET is required when APP_ENV=production")
+		}
+		if c.EarlyAccessWithoutOperator() {
+			return errors.New("SUPPORT_OPERATOR_GITHUB_IDS is required when APP_ENV=production and EARLY_ACCESS_ENABLED=true: otherwise nobody can approve new workspaces; set your numeric GitHub user ID, or EARLY_ACCESS_ENABLED=false")
 		}
 	}
 	if err := checkURLPort("APP_BASE_URL", base); err != nil {
@@ -306,6 +320,10 @@ func parseAppBaseURL(raw string) (*url.URL, error) {
 // checkGitHubApp validates installation linking, which is all or nothing:
 // any GitHub App setting requires all of them.
 func (c ServerConfig) checkGitHubApp() error {
+	if (strings.TrimSpace(c.GoogleOAuthClientID) == "") != (strings.TrimSpace(c.GoogleOAuthClientSecret) == "") {
+		return errors.New("GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET must be configured together")
+	}
+
 	if c.GitHubAppID == 0 && c.GitHubAppSlug == "" && c.GitHubAppPrivateKeyPath == "" && c.GitHubAppClientID == "" && c.GitHubAppClientSecret == "" {
 		return nil
 	}

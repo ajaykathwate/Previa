@@ -3,9 +3,17 @@ package auth
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
+	"fmt"
+	"mime"
 	"net/http"
 	"net/url"
+
+	"github.com/ajaykathwatee/previa/internal/platform/publicid"
+	"github.com/ajaykathwatee/previa/internal/platform/realtime"
+	"github.com/ajaykathwatee/previa/web/components"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -15,6 +23,7 @@ type contextKey uint8
 const (
 	userKey contextKey = iota
 	csrfKey
+	googleLoginKey
 )
 
 // CurrentUser returns the authenticated identity, if one was loaded for the request.
@@ -25,6 +34,13 @@ func CurrentUser(ctx context.Context) (User, bool) {
 
 // Username exposes the session identity to dashboard's small consumer interface.
 func (h *Handler) Username(ctx context.Context) (string, bool) {
+	u, ok := CurrentUser(ctx)
+	return u.DisplayName(), ok
+}
+
+// GitHubUsername is the provider login for source-permission checks. Personal
+// display names must never be sent to GitHub as account identities.
+func (h *Handler) GitHubUsername(ctx context.Context) (string, bool) {
 	u, ok := CurrentUser(ctx)
 	return u.Username, ok
 }
@@ -44,6 +60,9 @@ func (h *Handler) LoadUser(next http.Handler) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		if id := h.sessions.GetInt64(r.Context(), "user_id"); id != 0 {
 			u, err := h.users.GetUser(r.Context(), id)
+			if err == nil && u.SessionEpoch != h.sessions.GetInt64(r.Context(), "session_epoch") {
+				err = pgx.ErrNoRows
+			}
 			switch {
 			case errors.Is(err, pgx.ErrNoRows):
 				// The account is gone: end the session and continue signed out.
@@ -56,11 +75,51 @@ func (h *Handler) LoadUser(next http.Handler) http.Handler {
 				h.fail(w, r, http.StatusServiceUnavailable, "Your account is unavailable. Please try again.")
 				return
 			default:
-				r = r.WithContext(context.WithValue(r.Context(), userKey, u))
+				token := h.sessions.Token(r.Context())
+				r = r.WithContext(components.WithViewer(components.WithGitHubConnected(context.WithValue(r.Context(), userKey, u), u.GitHubID > 0), components.Viewer{Name: u.DisplayName(), Login: u.Username, Avatar: u.AvatarSrc(), PublicID: u.PublicID}))
+				r = r.WithContext(realtime.WithSessionCheck(r.Context(), func(ctx context.Context) error {
+					if err := h.sessionExists(ctx, token); err != nil {
+						return err
+					}
+					fresh, err := h.users.GetUser(ctx, id)
+					if err != nil {
+						return err
+					}
+					if fresh.SessionEpoch != u.SessionEpoch {
+						return errors.New("session revoked")
+					}
+					return nil
+				}))
 			}
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(components.WithGoogleLogin(context.WithValue(r.Context(), googleLoginKey, h.google != nil), h.google != nil)))
 	})
+}
+
+// Long-lived responses must also stop on ordinary logout or idle expiry, even
+// when the account-wide epoch has not changed. The token is captured once so a
+// stream never races against mutable request session data.
+func (h *Handler) sessionExists(ctx context.Context, token string) error {
+	if h.sessions.HashTokenInStore {
+		hash := sha256.Sum256([]byte(token))
+		token = base64.RawURLEncoding.EncodeToString(hash[:])
+	}
+	var found bool
+	var err error
+	if store, ok := h.sessions.Store.(interface {
+		FindCtx(context.Context, string) ([]byte, bool, error)
+	}); ok {
+		_, found, err = store.FindCtx(ctx, token)
+	} else {
+		_, found, err = h.sessions.Store.Find(token)
+	}
+	if err != nil {
+		return fmt.Errorf("check live session: %w", err)
+	}
+	if !found {
+		return errors.New("session ended or expired")
+	}
+	return nil
 }
 
 // RequireUser redirects anonymous requests to the login flow.
@@ -73,7 +132,7 @@ func RequireUser(next http.Handler) http.Handler {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
-			http.Redirect(w, r, login, http.StatusSeeOther)
+			publicid.Redirect(w, r, login, http.StatusSeeOther)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -83,7 +142,10 @@ func RequireUser(next http.Handler) http.Handler {
 // loginDestination preserves safe navigation, never a mutation. HTMX's
 // current document is preferable to returning to a fragment endpoint.
 func loginDestination(r *http.Request) string {
-	const login = "/auth/github/login"
+	login := "/auth/github/login"
+	if enabled, _ := r.Context().Value(googleLoginKey).(bool); enabled {
+		login = "/auth/login"
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return login
 	}
@@ -119,9 +181,16 @@ func (h *Handler) CSRF(next http.Handler) http.Handler {
 			provided := r.Header.Get("X-CSRF-Token")
 			if provided == "" {
 				r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-				if err := r.ParseForm(); err != nil {
+				if err := parseCSRFForm(r); err != nil {
 					h.fail(w, r, http.StatusBadRequest, "The form could not be read.")
 					return
+				}
+				if r.MultipartForm != nil {
+					defer func() {
+						if err := r.MultipartForm.RemoveAll(); err != nil {
+							h.logger.WarnContext(r.Context(), "remove multipart form files", "error", err)
+						}
+					}()
 				}
 				provided = r.PostForm.Get("csrf_token")
 			}
@@ -135,8 +204,29 @@ func (h *Handler) CSRF(next http.Handler) http.Handler {
 	})
 }
 
+func parseCSRFForm(r *http.Request) error {
+	kind, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err == nil && kind == "multipart/form-data" {
+		return r.ParseMultipartForm(1 << 20)
+	}
+	return r.ParseForm()
+}
+
 // UserIDs supplies scalar identity values to feature-owned authorization boundaries.
 func (h *Handler) UserIDs(ctx context.Context) (int64, int64, bool) {
 	u, ok := CurrentUser(ctx)
 	return u.ID, u.GitHubID, ok
+}
+
+// SelectedWorkspaceID remembers navigation in this session. Resource access is
+// always checked independently by the workspace feature.
+func (h *Handler) SelectedWorkspaceID(ctx context.Context) int64 {
+	return h.sessions.GetInt64(ctx, "active_workspace")
+}
+func (h *Handler) RememberWorkspace(ctx context.Context, id int64) {
+	if id <= 0 {
+		h.sessions.Remove(ctx, "active_workspace")
+		return
+	}
+	h.sessions.Put(ctx, "active_workspace", id)
 }

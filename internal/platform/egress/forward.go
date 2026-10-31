@@ -229,14 +229,12 @@ func (f *Forwarder) handle(ctx context.Context, conn net.Conn) {
 		return
 	}
 	defer f.release(network)
-	target, outcome := f.vet(ctx, dest)
+	targets, outcome := f.vet(ctx, dest)
 	if outcome != "" {
 		f.refuse(conn, outcome, dest.Host, port, network)
 		return
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
-	upstream, err := f.dialer.DialContext(dialCtx, "tcp", target)
-	cancel()
+	upstream, err := dialFirst(ctx, f.dialer, targets, addressTimeout)
 	if err != nil {
 		f.refuse(conn, OutcomeDialFailed, dest.Host, port, network)
 		return
@@ -302,21 +300,20 @@ func (f *Forwarder) lookup(network netip.Addr, port int) (Destination, bool) {
 	return Destination{}, false
 }
 
-// vet resolves the destination and returns the one public address to dial,
-// or the outcome that refuses it.
-func (f *Forwarder) vet(ctx context.Context, d Destination) (string, string) {
+// vet resolves the destination and returns its public addresses to dial, or
+// the outcome that refuses it.
+func (f *Forwarder) vet(ctx context.Context, d Destination) ([]string, string) {
 	lookupCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	addrs, err := f.resolver.LookupNetIP(lookupCtx, "ip", d.Host)
 	cancel()
 	if err != nil || len(addrs) == 0 {
-		return "", OutcomeUnresolved
+		return nil, OutcomeUnresolved
 	}
-	for _, a := range addrs {
-		if !PublicAddress(a) {
-			return "", OutcomeDenied
-		}
+	targets, err := vetted(addrs, strconv.Itoa(d.Port))
+	if err != nil {
+		return nil, OutcomeDenied
 	}
-	return net.JoinHostPort(addrs[0].Unmap().String(), strconv.Itoa(d.Port)), ""
+	return targets, ""
 }
 
 // relay copies both directions until either side ends, an idle timeout or

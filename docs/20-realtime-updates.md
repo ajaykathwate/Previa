@@ -87,6 +87,18 @@ ownership-scoped GET handlers.
 - Running several server instances is supported: each listens independently, and
   a cursor from another instance simply triggers one resync refresh.
 
+## Setup checks and reviews
+
+The repository Setup tab ([29](29-guided-onboarding.md), migration 0038) and pull
+request review pages ([30](30-reviews.md), migration 0039) reuse the repository
+topic: triggers on `repository_setup_checks` and `preview_opens`, and on
+`pr_review_instructions`, `preview_feedback_threads` and
+`preview_feedback_messages`, call `previa_notify_repository`. The review page
+subscribes through the repository's `/events` stream, which granted Reviewers may
+open (the stream rechecks read access before every frame), and refetches
+`#review-detail`. A refresh waits while someone types in a review form; unsent
+drafts are restored after the swap ([21](21-ui-architecture.md#review-page)).
+
 ## Extending it
 
 - **Another page or feature:** add a trigger (or call `previa_notify_repository`)

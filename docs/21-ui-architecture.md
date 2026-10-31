@@ -13,16 +13,27 @@ user's point of view is in the
 - **Works without JavaScript.** Links, GET forms, POST forms and native `<dialog>`
   confirmations all function with scripting off.
 - **Honest UI.** Only real saved state is shown: no invented metrics, activity,
-  health or URLs. A control that would apply but cannot work now (no worker that
-  can build, no GitHub access, conflicts, builds paused) is shown **disabled**, with
-  a notice beside it that says why and what fixes it, so owners can find the action
-  and learn how to enable it. A control that does not apply (building a closed PR)
-  is absent. The public home page describes only what works today, at the level
+  health or URLs. The public home page describes only what works today, at the level
   a user needs: no roadmap, no internal stack or hosting details.
+- **Only what a person can use.** Pages never offer a control, form or link the
+  person cannot use, and never show one disabled. What a role can never do is
+  absent: navigation, buttons and links included (a Reviewer sees Previews,
+  Members and help; a Developer without GitHub access to a repository is not
+  offered its builds, sync, teardown or logs). What cannot happen *now* (no worker
+  that can build, builds paused, conflicts, early-access approval pending, a limit
+  reached) is stated as a short status with the reason and the fix, linking only to
+  something the person can open. The one exception is feedback while a request is
+  on its way: a busy button reads **Starting…** until the response. Links that
+  lead people somewhere ("Open your dashboard") go where their work starts:
+  Overview, Previews for a Reviewer, or the workspace chooser without a workspace.
+  `TestPagesOfferOnlyWhatPeopleCanUse` (`internal/app`) crawls every page as eight
+  kinds of person and fails on any disabled control, refused form or bouncing link.
 - **Strict Content-Security-Policy.** Every page is served with a per-request nonce
   policy: the theme boot script carries the nonce (and passes it to the style it
   creates), `ui.js` gives it to the speculation rules it injects, and HTMX is
-  configured (`htmx-config` meta) not to inject styles or evaluate code. No inline
+  configured (`htmx-config` meta) not to inject styles or evaluate code, and not to
+  copy `style` attributes while settling a swap (a style an extension or tool left on
+  a field would otherwise be re-applied inline and refused). No inline
   event handlers, inline styles or `eval`. The browser suite runs under the same
   policy and fails on any violation ([23](23-observability-and-hardening.md)).
 - **Presentation never reaches into the backend.** Templates receive display data;
@@ -41,10 +52,13 @@ user's point of view is in the
 
 Dependencies point one way: feature handler → page package → layouts/components.
 Use import aliases (`authpages`, `dashboardpages`, `prpages`) where names collide.
-Ownership of routes: `internal/dashboard` (home, overview, session, tools, FAQ, Open Source Tests),
+Ownership of routes: `internal/dashboard` (home, overview, session, tools, FAQ, Open Source Tested),
 `internal/installations` (`/repositories`), `internal/pullrequests` (repository and
-PR pages, Builds, Previews, the event stream), `internal/secrets` (a
-repository's Secrets tab).
+PR pages, Builds, Previews, the event stream), `internal/onboarding` (a
+repository's Setup tab and the Open preview action), `internal/reviews` (a pull
+request's review page and its forms), `internal/secrets` (a repository's Secrets
+tab), `internal/sampledata` (a repository's Test data tab and its baseline refresh
+logs).
 
 ## Visual system: the "signal" theme
 
@@ -83,10 +97,12 @@ repository's Secrets tab).
   arrow. Pages under a repository open with a shared hero
   (`components.RepositoryHero`: owner, name, one line of context).
 - **Repository tabs.** `components.RepositoryTabs` switches a repository between
-  **Pull requests** (`/repositories/{id}`), **Secrets** (`/repositories/{id}/secrets`)
-  and **Outbound** (`/repositories/{id}/outbound`) as an underlined tab bar. Each is
-  a full page, so the switch works without JavaScript and view transitions keep it
-  smooth. PR detail pages do not show the tabs.
+  **Pull requests** (`/repositories/{id}`), **Setup** (`/repositories/{id}/setup`,
+  for people who can build), **Secrets** (`/repositories/{id}/secrets`) and
+  **Outbound** (`/repositories/{id}/outbound`) as an underlined tab bar; the last two
+  are for managers. Each is a full page, so the switch works without JavaScript and
+  view transitions keep it smooth. Below 760px the tabs keep one line and scroll
+  sideways; below 480px they drop their icons. PR detail pages do not show the tabs.
 - **Dedicated pages.** `/repositories`, `/repositories/{id}`,
   `/repositories/{id}/pull-requests/{number}` and its `/logs` page are separate,
   bookmarkable pages. PR detail and every Builds/Previews row link to the logs.
@@ -115,9 +131,18 @@ Making full-page navigation feel instant, without giving up MPA semantics:
 - Requests to one target share a replacement slot so older responses are discarded.
   Failed requests keep current content and show retry feedback.
 - Live refreshes come from the event stream ([20](20-realtime-updates.md)). A hidden
-  `[data-live-refresh]` element refetches `#repository-detail` with the current
-  URL's filters. While PR search is focused or the policy modal is open, a refresh
-  is deferred, then run when the user leaves the field or closes the modal.
+  `[data-live-refresh]` element refetches `#repository-detail` (or the Setup tab's
+  `#setup-detail`, a review's `#review-detail`, or the Test data tab's
+  `#test-data-detail`) with the current URL's filters. While PR search, a
+  `[data-live-pause]` form (a filter, the Test data tab's baseline branch) or a review
+  form (`[data-draft-form]`) has focus, a confirmation is open or a
+  `details[data-menu]` menu is open, a refresh is deferred (one that returns while a
+  menu inside its target is open, or while someone types in such a form inside it,
+  is not swapped in), then run when the user leaves the field, closes the modal or
+  closes the menu. In-place forms (`data-inline-form`) a refresh swaps in are bound
+  again. Menus are
+  looked up when an event happens, so menus a refresh replaced still close on an
+  outside click or Escape.
 - After a user-triggered results swap, the view scrolls back under the sticky
   toolbar if the results' top had scrolled out of sight.
 
@@ -135,12 +160,15 @@ while the reader is at the bottom, pauses in hidden tabs, marks error-looking
 lines), `initBuildProgress` (on a PR page whose build is in flight, follows the
 attempt's log stream to name the current step and its latest line; closes on
 swaps and hidden tabs; a stream that cannot open leaves the server's rendering),
-`initElapsed` (counts `time[data-elapsed]` up every second), `initRelativeTimes` (rewrites
+`initBusyForms` (a plain form marked `data-busy-form` submits once and shows its
+busy button's spinner and label until the next page), `initElapsed` (counts
+`time[data-elapsed]` up every second), `initRelativeTimes` (rewrites
 `time[data-relative]` as "3 minutes ago" every 30 s and after swaps, keeping the
 exact UTC time as the title), `initCopyButtons` (`data-copy` text or a log list's
-lines to the clipboard, confirmed for two seconds), `initSecretEditor` and
-`initBulkDelete` (the Secrets tab, below), `initStory` and `initFAQ` (the
-conversations, below), `initOverview` (the Overview, above). A `js-enabled` class on `<html>` scopes
+lines to the clipboard, confirmed for two seconds), `initEnvEditor` (the
+Secrets tab's file loader, size and removal modal, below), `initStory` and `initFAQ` (the
+conversations, below), `initOverview` (the Overview, above), `initReviews` (the
+review page, below). A `js-enabled` class on `<html>` scopes
 CSS that only makes sense with scripting. No third-party JavaScript besides HTMX.
 
 ## Confirmations
@@ -166,9 +194,11 @@ Build/Retry/Rebuild, Tear down or **Cancel build** when nothing is deployed, and
 **Build logs**, which reads **Follow the build log** while a build runs, and **App
 output** while the preview runs). Build
 buttons show a spinner and **Starting…** and are disabled while their request is
-on its way. When building is blocked, the build action is shown disabled
-(`aria-describedby` points at the notice) and the notice names the reason and the
-fix, for example a worker without `PREVIEW_BASE_DOMAIN`.
+on its way. When building is blocked, no build action is shown: the notice names
+the reason and the fix, for example a worker without `PREVIEW_BASE_DOMAIN`, and a
+running build reads as a status (*Building…*), not a button. **Sync Pull Requests**
+appears only when a sync would run; while one runs, the header's *Syncing* status
+says so. The Automatic and private-preview switches appear only when they can change.
 
 - **Step tracker** (`pages.Tracker`, `progress.go`): Queued → Get code → Build image →
   Start preview → Publish → Live, shown while a request is queued, running or
@@ -208,7 +238,11 @@ comes from `dashboardpages.Summary`; nothing is simulated.
   refresh link.
 - **Blocked notice** first when no running worker can build, with the fix and a link
   to the FAQ answer; then **setup steps** with a progress bar until every step is done,
-  the next step highlighted with its action.
+  the next step highlighted with its action. The steps follow the role: Owners and
+  Admins *Connect a repository*, Developers *Get access to a repository* (naming whom
+  to ask), then *Check a pull request's setup*, *Publish a preview* and *Open it from
+  Previa*, from workspace-wide records; the next step's action opens the Setup tab
+  of the repository where setup continues ([29](29-guided-onboarding.md)).
 - **Delivery pipeline:** open pull requests, waiting or queued, building and live
   previews as connected stages, each with its count, its share of open pull requests
   and a link; stages with work in progress are marked **Now**; a lane below names
@@ -235,7 +269,8 @@ comes from `dashboardpages.Summary`; nothing is simulated.
   table: pull request, commit (or the served commit), status and when (or expiry);
   failed requests name the failure in plain words (in red only while it needs
   attention; older and dismissed ones are grey, with why). Each row is a `<details>`
-  that expands to how it was requested, eligible, started and finished times and
+  that expands to how it was requested, when an Automatic build starts (a live
+  countdown, `components.Countdown`, `role="timer"`), started and finished times and
   duration, why it waits or failed with the first next step, links to the pull
   request and its build logs, and **Dismiss this failure** or **Undo dismiss**. Preview rows add publication, expiry and a lifetime
   bar, with **Open** and **Copy** beside the row. Below 760px the columns fold under
@@ -261,22 +296,20 @@ controls), **Why Previa** (reviewing before and with Previa, and who it helps), 
 does for a pull request, never how it is built or hosted; Previa is presented as a
 hosted service, free during early access.
 
-## Open Source Tests
+## Open Source Tested
 
-`/open-source-tests` (public; `web/pages/opensource`, linked from the site navigation,
-the footer and a home page section) presents the well-known open-source apps Previa
-is tested against: 19 repositories, ten of them the **core ten** that between them
-exercise nearly every capability. Each app is Go data (`Repos`, `Capabilities`) so the
-index, the coverage rows, the counts and the anchors (`#repo-<id>`) cannot drift. A
-card shows the stack, size, configuration effort, architecture and what the app
-proves; **How we test it** (a native `<details>`) holds the `.previewrc.yaml` used
+`/open-source-tests` (public; `web/pages/opensource`, named **Open Source Tested** in the
+site navigation, the footer and a home page section) presents the ten well-known
+open-source projects Previa is tested with; between them they exercise every
+capability listed. Each project is Go data (`Repos`, `Capabilities`) so the index,
+the coverage rows, the counts and the anchors (`#repo-<id>`) cannot drift. A card
+shows the stack, size, configuration effort, architecture and what the project
+covers; **Test it yourself** (a native `<details>`) holds the `.previewrc.yaml` used
 (with a copy button), the secrets set, any changes made to the project, the steps,
 **What must hold** and **Known limits**. Coverage is one row per capability in two
-balanced columns.
+balanced columns. The page shows no per-project test status (owner decision,
+2026-10-23); `TestPageRendersEveryProjectOnceWithoutStatuses` guards that.
 
-- **Keeping it true:** an app shows **In testing** until `Status.Verified` is set to the
-  date every expected result held on a live preview; the hero's verified count appears
-  only once at least one app is verified. Never mark an app verified without running it.
 - `internal/dashboard` tests serve the page signed in and out and parse every published
   `.previewrc.yaml` with `repoconfig.ParseFor` and the default service catalog, so the
   page can't show a configuration Previa would reject.
@@ -315,28 +348,119 @@ page. The building blocks are `components.PreviaAvatar`, `PersonAvatar`, `Previa
 - **Keeping it true:** the answers are static, user-level copy describing what works
   today. Change an answer in the same change that alters the behaviour it describes.
 
+## Setup tab
+
+`web/pages/onboarding` (styles in `web/styles/onboarding.css`): a checklist card
+beside **What the app needs**, like the Secrets layout (below 1100px the panel
+follows). The card's header has the progress (*n of 5 done*) and a pull request
+picker: a `details[data-menu]` of ordinary links (number, title, branch), so
+choosing works without JavaScript and the menu closes before navigating. Each step
+row has a state mark (number, check, spinner, warning), a title with its time, one
+sentence, findings as tinted rows (key in code, line number, detail), and its
+actions: one solid primary, the rest outlined; a blocked step shows its reason
+instead of an action. **Check setup** and **Build preview** are plain CSRF-protected forms
+(`data-busy-form`); Build posts to the PR's Build action with `return=setup`, so
+every outcome, refusals included, comes back to the checklist with a toast or a
+notice. **Open preview** links open a new tab through the recording `/open` route.
+Live updates replace `#setup-detail`, so a check, push, build or open shows up
+without reloading. See [29](29-guided-onboarding.md).
+
+## Test data tab
+
+`web/pages/sampledata` (styles in `web/styles/testdata.css`), next to **Setup** for
+people who can build. The main column has two cards:
+
+- **Repository baseline:** a status badge and **Refresh baseline**, then a compact
+  table of current baselines per database (branch and commit in monospace, build
+  time, size) and a note when the branch moved.
+- **Refreshes:** the five latest, each one row with its result badge, trigger,
+  commit, a safe failure or waiting reason, timing and a **Build log** link.
+
+The aside has two cards:
+
+- **Settings:** a field card whose switches (the Automatic builds switch style)
+  each post the whole settings form with one value flipped and the revision, and
+  return with a toast. The baseline branch is an in-place text field.
+- **How test data works.**
+
+Turning Test data on or off, Refresh baseline and Delete open confirmation modals
+over the page; only their submit navigates. Non-managers read each setting's value
+(*On*, *Off*, the branch) as text, without switches. Live updates replace
+`#test-data-detail` when a refresh starts, waits or finishes, or the settings
+change. A refresh's log page reuses the build log viewer (filters, search,
+download) without a live tail. See [32](32-persistent-test-data.md).
+
+## Review page
+
+`web/pages/reviews` (styles in `web/styles/reviews.css`): the pull request's header,
+then **How to test** and **Findings** beside a **Preview** card (the newest
+deployment, its state, its setup facts, Open preview, Open docs and Reset test
+data), a **Test access** card and the description **From GitHub**; below 1080px the
+side cards come first. People who can build see the
+**Preview | Review** switch (`components.PullRequestTabs`, also on the pull request
+page, with the open-findings count); Reviewers see only the review. Patterns:
+
+- **In-place edits.** Instructions and own messages render their edit form hidden
+  beside the text; `[data-edit-open]` shows it without navigating (Escape or Cancel
+  restores it). Without JavaScript the same links are `?edit=…` addresses that render
+  the form open.
+- **One removal modal.** Menu items carry `data-remove-action`, title, text and
+  whether moderation needs a reason; `initReviews` fills the single
+  `#review-remove` dialog. Without JavaScript `?remove=…` renders the same form as a
+  confirmation inside the page (`<noscript>`); a server-side refusal reopens it.
+- **Card links.** A finding's number link stretches over its header, so the header
+  opens the finding's own page; its page link and menu sit above and keep their jobs.
+- **Drafts and live updates.** Forms marked `data-draft-form` defer refreshes while
+  focused; before a refresh swaps `#review-detail`, unsent fields (`data-draft-key`,
+  including the hidden deployment, revision and request key) and open edit forms are
+  kept and restored, and a toast names a newly published deployment. Ctrl/⌘+Enter
+  sends; selects marked `data-auto-submit` apply filters on change.
+- **Forms** are plain CSRF-protected posts (`data-busy-form`) that redirect back to
+  the same list and anchor with a toast; problems re-render the page (422, 409, 429)
+  with the draft and field messages.
+- **Reset test data** is a `ConfirmationDialog` over the page whose form posts the
+  pull request's Build action with `return=review`; the server comes back to the
+  review with a toast or a notice.
+- **Reveal.** The test-access form (`data-reveal-form`, valued with the revision)
+  posts with `Accept: application/json`; `initReviews` shows the value in place for
+  two minutes, restores it after a live swap of `#review-detail` unless the revision
+  changed, and never stores it. The password field has no `data-draft-key`, so it
+  is never kept as a draft. Without JavaScript the response is the page itself,
+  `no-store`. Copy buttons in the card are icon-only, as in field rows.
+
+See [30](30-reviews.md) and [31](31-test-data.md).
+
 ## Secrets tab
 
-Write-only by design. The list and editor sit beside a **How secrets reach your
-previews** panel (below 1100px it follows them); the Outbound tab uses the same
-layout for **How outbound connections work**. The **Stored secrets** table lists names, build permissions and update times,
-each with Replace and Delete. **Allow** opens a modal explaining that trusted branch
-code can read the credential; **Stop** revokes build use. Values are runtime-only
-by default, while `REGISTRY_AUTH` is reserved for base image pulls. All permission
-changes are owner-only, CSRF-protected POSTs; forks receive none. Checkboxes and **Delete selected** remove several
-after one confirmation (the checkboxes belong to the dialog's form, so this works
-without JavaScript). The editor below adds or replaces several values at once, one
-name and value per line like a key-value table, plus a **Paste or import a .env
-file** section. With JavaScript, **Add another line** and × manage lines, pasting
-several `NAME=value` lines into a name splits them into lines, a chosen .env file is
-read in the browser (never uploaded on its own), **Move into lines above** turns
-pasted text into lines to review, names that exist say "Replaces the stored value",
-and duplicate, reserved or incomplete lines are flagged before submit. Without
-JavaScript the page renders spare lines and the server parses pasted text with the
-same rules (`secrets.ParseDotenv`). The server saves everything in one transaction
-(all or nothing; the limit counts new names only). A rejected save re-renders the
-names with the reason but never a value or the pasted text. See
-[07](07-repository-secrets.md).
+One `.env` file per repository (owner decision, 2026-10-23). The **.env** panel sits
+beside **How the .env file reaches your previews**, which takes the panel's height
+and scrolls (it is focusable, so the keyboard can scroll it); below 1100px the
+guidance follows the panels with a capped height. **Build access** follows the
+file. The Outbound tab keeps the earlier side panel for **How outbound connections
+work**.
+
+- **Masked view.** Comments, blank lines and order as written, each value shown as
+  `••••••••` and an empty name as *not set*. The header reads "Sets 2 variables ·
+  1.2 KiB of 64 KiB · saved … by …". The page holds no value.
+- **Show values and edit** (`?edit=1`) opens the whole file in a monospace editor
+  (sent with `no-store`); an empty file opens the editor straight away. Under it,
+  the size against the 64 KiB limit updates as you type and turns red when over.
+  **Load a file…** reads a file in the browser into the editor (nothing is sent
+  until **Save .env**). The form posts to `?edit=1`, so **Cancel** always leaves a
+  refused save.
+- **Saving** replaces the file and the repository's secrets in one transaction. A
+  line Previa cannot read is named ("Line 3: expected NAME=value. Nothing was
+  saved.") with the text kept to fix. A save that removes names returns with
+  **Remove … ?** as a modal over the editor (focus on **Keep editing**; **Remove
+  and save** resubmits the same form); without JavaScript the same confirmation
+  appears inline. A save from an outdated editor reopens it with the typed text and
+  says someone else saved first.
+- **Build access** lists the names with values: **Allow** opens a modal explaining
+  that trusted branch code can read the credential; **Stop** revokes build use.
+  `REGISTRY_AUTH` is reserved for base image pulls.
+
+Only Owners and Admins reach the tab; every change is a CSRF-protected POST and
+forks receive nothing. See [07](07-repository-secrets.md).
 
 ## Build log page
 
@@ -399,8 +523,9 @@ view only beside the choices and never slides over the guidance.
 
 - **Choices.** Stacks are a row of chips (monogram and name) with the chosen stack's
   kind and language under them. Services and extras are switch rows: PostgreSQL,
-  Redis and MySQL with their version as a segmented control in the same row, migrations and a
-  background worker with ready-made commands or **My own command…**, and a docs link.
+  Redis and MySQL with their version as a segmented control in the same row, migrations, seed
+  data (only on empty databases; it needs PostgreSQL or MySQL) and a background worker
+  with ready-made commands or **My own command…**, and a docs link.
   **Advanced** holds the port, health check path, preview size and a stack detail
   (such as the Django project package).
 - **One form, swapped whole.** It is a plain GET form: every change sends it with
@@ -472,8 +597,8 @@ redirect to the last valid page. The PR list follows the same 10-row pattern.
 - **Tailwind CSS v4.1.18** standalone CLI, checksum-pinned. `make assets` compiles
   `web/styles/app.css` into `web/static/css/app.css` (ignored, embedded at build).
   `site.css` imports `base`, `home`, `conversation`, `workspace`, `overview`,
-  `command`, `repositories`, `logs`, `surfaces`, `confirmation` and `motion`
-  modules. `surfaces.css` holds the shared page pieces (header trail, heroes, tabs,
+  `command`, `repositories`, `logs`, `surfaces`, `confirmation`, `motion`, `teams`,
+  `onboarding` and `fields` modules. `surfaces.css` holds the shared page pieces (header trail, heroes, tabs,
   two-column sections, tracker, diagnosis, busy buttons, terminal panel, stat
   tiles, activity table).
 - **templUI v1.13.2** (MIT) supplies copied button, card, alert and input source;
@@ -490,7 +615,8 @@ real auth, session, CSRF and realtime stream code and fake GitHub/queue provider
 It covers responsive layout and overflow, navigation and the drawer, modal focus and
 dismissal, logout, CSRF, live search, pagination, Automatic confirmation, live
 updates without polling, the command palette, theme persistence, the repository
-Secrets tab (write-only saving, replacing, modal deletion), build logs (live append,
+Secrets tab (the masked `.env` file, editing, live size, the removal modal, loading
+a file, a refused line and the flow without JavaScript), build logs (live append,
 following, reset for a new attempt, inert script-looking output, paging without
 JavaScript, the tracker following progress lines), failed builds (plain title, next
 steps, collapsed technical details, Retry showing **Starting…** then the queued step),
@@ -504,6 +630,14 @@ palette, signed-out redirect), the Overview (empty and busy workspaces, pipeline
 shares, coverage, tabs with arrow keys and session memory, the activity table and
 its plain-language failures, expandable rows, preview
 lifetime, both lists without JavaScript), reduced motion and no-JavaScript flows. See [02](02-development-setup.md#browser-regression-checks-optional).
+A separate PostgreSQL-backed suite (`make test-setup-browser`) drives the Setup tab:
+a check, a push and a recheck, building, publishing and opening with live updates
+through real `LISTEN`/`NOTIFY`, the picker, the Developer and Reviewer views and the
+no-JavaScript path, in light, dark and phone layouts. Another (`make
+test-review-browser`) drives the review page: instructions in place, a finding's
+whole conversation, a live reply and a new deployment while a draft is unsent,
+moderation, setup facts, the Reset test data modal, test access saved, revealed and
+kept across a live refresh, and the no-JavaScript path.
 
 ## Decisions and trade-offs
 

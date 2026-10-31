@@ -1,7 +1,9 @@
 package pullrequests
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/ajaykathwatee/previa/internal/pullrequests/dbgen"
 	pages "github.com/ajaykathwatee/previa/web/pages/pullrequests"
@@ -9,6 +11,7 @@ import (
 )
 
 func TestHeadlineSaysWhatMattersMostFirst(t *testing.T) {
+	now := time.Date(2026, 10, 21, 15, 0, 0, 0, time.UTC)
 	open := func(edit func(*dbgen.OwnedPRRow, *pages.PR)) (dbgen.OwnedPRRow, pages.PR) {
 		row := dbgen.OwnedPRRow{Available: pgtype.Bool{Bool: true, Valid: true}, State: "open", BuildStatus: "open",
 			HeadSha: "head-commit", BuildState: "Not requested", EnvironmentStatus: "Not deployed"}
@@ -44,9 +47,13 @@ func TestHeadlineSaysWhatMattersMostFirst(t *testing.T) {
 		}, "Preview live on an earlier commit", "tone-warn"},
 		"conflicts": {func(r *dbgen.OwnedPRRow, _ *pages.PR) { r.BuildStatus = "conflicts" }, "Blocked by merge conflicts", "tone-warn"},
 		"removed":   {func(_ *dbgen.OwnedPRRow, p *pages.PR) { p.RemovedNote = "The owner tore this preview down." }, "Preview removed", "tone-neutral"},
+		"automatic deadline passed": {func(r *dbgen.OwnedPRRow, _ *pages.PR) {
+			r.RequestCurrent, r.BuildState, r.RequestSource, r.RequestedSha = true, "pending", "automatic", "head-commit"
+			r.AvailableAt = pgtype.Timestamptz{Time: now.Add(-time.Second), Valid: true}
+		}, "Starting the build of head-commit", "tone-info"},
 	} {
 		row, pr := open(c.edit)
-		if got := headline(pr, row); got.Title != c.title || got.Tone != c.tone {
+		if got := headline(pr, row, now); got.Title != c.title || got.Tone != c.tone {
 			t.Errorf("%s: headline %q (%s), want %q (%s)", name, got.Title, got.Tone, c.title, c.tone)
 		}
 	}
@@ -70,5 +77,32 @@ func TestBuildLabelNamesTheActionThatWouldApply(t *testing.T) {
 		if got := buildLabel(row); got != c.want {
 			t.Errorf("%v %s %s: %q, want %q", c.current, c.state, c.source, got, c.want)
 		}
+	}
+}
+
+// An Automatic build waiting out its quiet period counts down, says that
+// another push restarts the wait, that a live preview keeps serving, and that
+// Build now skips it.
+func TestHeadlineCountsDownTheQuietPeriod(t *testing.T) {
+	now := time.Date(2026, 10, 21, 15, 0, 0, 0, time.UTC)
+	deadline := now.Add(4*time.Minute + 32*time.Second)
+	row := dbgen.OwnedPRRow{Available: pgtype.Bool{Bool: true, Valid: true}, State: "open", BuildStatus: "open", HeadSha: "new-commit",
+		RequestCurrent: true, BuildState: "pending", RequestSource: "automatic", RequestedSha: "new-commit",
+		AvailableAt: pgtype.Timestamptz{Time: deadline, Valid: true}, DeployedSha: "old-commit", EnvironmentStatus: "running"}
+	pr := pages.PR{SHA: "new-commit", DeployedSHA: "old-commit", Environment: "running", OlderPreview: true, Actions: pages.Actions{BuildNow: true}}
+	got := headline(pr, row, now)
+	if got.Title != "New commit new-commit builds in" || got.Until != deadline.Format(time.RFC3339) ||
+		!strings.Contains(got.Detail, "another push restarts the wait") || !strings.Contains(got.Detail, "keeps serving old-commit") ||
+		!strings.Contains(got.Detail, "Build now starts it at once") {
+		t.Fatalf("live preview, new commit waiting: %+v", got)
+	}
+	row.DeployedSha, row.EnvironmentStatus, pr.DeployedSHA, pr.Environment, pr.Actions.BuildNow = "", "Not deployed", "", "Not deployed", false
+	got = headline(pr, row, now)
+	if got.Title != "Commit new-commit builds in" || strings.Contains(got.Detail, "keeps serving") || strings.Contains(got.Detail, "Build now") {
+		t.Fatalf("first build waiting: %+v", got)
+	}
+	row.RequestSource = "manual"
+	if got = headline(pr, row, now); got.Until != "" || got.Title != "Starting the build of new-commit" {
+		t.Fatalf("a manual request has no quiet period: %+v", got)
 	}
 }

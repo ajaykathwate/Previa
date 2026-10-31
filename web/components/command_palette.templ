@@ -12,24 +12,39 @@ templ CommandPalette() {
 		<div id="command-list" class="command-list" role="listbox" aria-label="Commands">
 			<div class="command-group" role="group" aria-label="Navigate">
 				<p class="command-group-label" aria-hidden="true">Navigate</p>
-				@CommandItem("cmd-overview", "/dashboard", "", "Overview", "Workspace summary", "home dashboard summary", OverviewIcon())
-				@CommandItem("cmd-repositories", "/repositories", "", "Repositories", "Connected sources", "repos sources github", RepositoryIcon())
-				@CommandItem("cmd-starter-kits", "/starter-kits", "", "Starter kits", "Dockerfile and .previewrc.yaml for your stack", "templates dockerfile previewrc yaml setup config generate", KitIcon())
-				@CommandItem("cmd-builds", "/builds", "", "Builds", "Current build requests", "build intents queue", BuildIcon())
-				@CommandItem("cmd-previews", "/previews", "", "Previews", "Live previews and their links", "environments deployments live links expiry", EnvironmentIcon())
-				@CommandItem("cmd-tools", "/developer-tools", "", "Developer tools", "Queue diagnostics", "ping river worker queue", TerminalIcon())
+				if CanOperate(ctx) {
+					@CommandItem("cmd-overview", "/dashboard", "", "Overview", "Workspace summary", "home dashboard summary", OverviewIcon())
+					@CommandItem("cmd-repositories", "/repositories", "", "Repositories", "Connected sources", "repos sources github", RepositoryIcon())
+					@CommandItem("cmd-starter-kits", "/starter-kits", "", "Starter kits", "Dockerfile and .previewrc.yaml for your stack", "templates dockerfile previewrc yaml setup config generate", KitIcon())
+					@CommandItem("cmd-builds", "/builds", "", "Builds", "Current build requests", "build intents queue", BuildIcon())
+					if CanManage(ctx) {
+						@CommandItem("cmd-tools", "/developer-tools", "", "Developer tools", "Queue diagnostics", "ping river worker queue", TerminalIcon())
+					}
+				}
+				if HasWorkspace(ctx) {
+					@CommandItem("cmd-previews", "/previews", "", "Previews", "Live previews and their links", "environments deployments live links expiry", EnvironmentIcon())
+				}
+				if Workspace(ctx).ID>0 {
+					@CommandItem("cmd-members", WorkspaceURL(Workspace(ctx).ID, "members"), "", "Members", "Workspace members and invitations", "people team invite roles access", TeamIcon())
+					if CanManage(ctx) {
+						@CommandItem("cmd-workspace-settings", WorkspaceURL(Workspace(ctx).ID, "settings"), "", "Workspace settings", "Name, logo and ownership", "workspace profile branding settings handover", WrenchIcon())
+					}
+				}
+				@CommandItem("cmd-workspaces", "/workspaces", "", "Workspaces", "Choose or create a workspace", "team workspace switch create", UserIcon())
 				@CommandItem("cmd-faq", "/faq", "", "FAQ", "Answers from Previa", "help questions answers support how", QuestionIcon())
 			</div>
-			<div class="command-group" role="group" aria-label="Repository filters">
-				<p class="command-group-label" aria-hidden="true">Repository filters</p>
-				@CommandItem("cmd-repos-available", "/repositories?access=available", "", "Available repositories", "Access granted", "filter accessible", RepositoryIcon())
-				@CommandItem("cmd-repos-unavailable", "/repositories?access=unavailable", "", "Unavailable repositories", "Access removed or suspended", "filter revoked suspended", RepositoryIcon())
-				@CommandItem("cmd-repos-all", "/repositories?access=all", "", "All repositories", "Every linked source", "filter everything", RepositoryIcon())
-			</div>
+			if CanOperate(ctx) {
+				<div class="command-group" role="group" aria-label="Repository filters">
+					<p class="command-group-label" aria-hidden="true">Repository filters</p>
+					@CommandItem("cmd-repos-available", "/repositories?access=available", "", "Available repositories", "Access granted", "filter accessible", RepositoryIcon())
+					@CommandItem("cmd-repos-unavailable", "/repositories?access=unavailable", "", "Unavailable repositories", "Access removed or suspended", "filter revoked suspended", RepositoryIcon())
+					@CommandItem("cmd-repos-all", "/repositories?access=all", "", "All repositories", "Every linked source", "filter everything", RepositoryIcon())
+				</div>
+			}
 			<div class="command-group" role="group" aria-label="Account">
 				<p class="command-group-label" aria-hidden="true">Account</p>
 				@CommandItem("cmd-theme", "", "theme", "Switch colour theme", "Light or dark", "dark light mode appearance", SunIcon())
-				@CommandItem("cmd-session", "/protected", "", "View session", "Your GitHub identity", "account profile", UserIcon())
+				@CommandItem("cmd-session", "/protected", "", "Your profile", "Your name, photo and connected GitHub account", "account profile photo session", UserIcon())
 				@CommandItem("cmd-home", "/", "", "Home page", "Public site", "landing marketing", HomeIcon())
 				@CommandItem("cmd-logout", "", "logout", "Log out…", "Confirm before ending", "sign out exit", LogoutIcon())
 			</div>
@@ -49,10 +64,10 @@ templ CommandItem(id, href, action, label, hint, keywords string, icon templ.Com
 		data-command-item
 		data-keywords={ label + " " + hint + " " + keywords }
 		if href != "" {
-			data-href={ href }
+			data-href={ PublicURL(ctx, href) }
 		}
 		if action != "" {
-			data-action={ action }
+			data-action={ PublicURL(ctx, action) }
 		}
 	>
 		<span class="command-item-icon">

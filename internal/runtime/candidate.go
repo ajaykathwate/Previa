@@ -26,7 +26,7 @@ const processSettle = 2 * time.Second
 // command succeeds, its processes run, and its app passes the readiness
 // check. Any failure removes every container of the candidate after
 // capturing the failing part's output.
-func (r *Runtime) startCandidate(ctx context.Context, id requestIdentity, t Target, image builds.Image, settings repoconfig.Config, env []string, plan backend, logs LogSink) (containerID string, err error) {
+func (r *Runtime) startCandidate(ctx context.Context, id requestIdentity, t Target, image builds.Image, settings repoconfig.Config, env []string, plan backend, start dataPlan, logs LogSink) (containerID string, err error) {
 	// Pinned service images are pulled first: a pull can take minutes and
 	// must not hold the admission lock.
 	volumes, err := r.serviceImages(ctx, plan.services, logs)
@@ -49,6 +49,7 @@ func (r *Runtime) startCandidate(ctx context.Context, id requestIdentity, t Targ
 	if err != nil {
 		return "", err
 	}
+	l.startPlan = start
 	defer func() {
 		if err != nil {
 			l.discard(ctx) // still under the admission lock if creation failed
@@ -88,6 +89,12 @@ type launch struct {
 	created   map[string]string // component -> container ID ("" is the app)
 	processes map[string]string // process name -> container ID
 	failed    string            // the component whose output explains a failure
+	setupTook time.Duration     // how long the setup command ran, once it finished
+	seedTook  time.Duration     // how long the seed command ran, when it ran
+
+	repoID    int64      // the Previa repository, for its test data
+	startPlan dataPlan   // where the databases may start (docs/32)
+	data      dataRecord // where they did start
 }
 
 // admitCandidate checks capacity and prepares what the candidate's
@@ -102,7 +109,7 @@ func (r *Runtime) admitCandidate(ctx context.Context, id requestIdentity, t Targ
 	if err != nil {
 		return nil, asRuntimeError(err, "The preview network could not be prepared.")
 	}
-	l := &launch{r: r, id: id, plan: plan, settings: settings, logs: logs, created: map[string]string{}, processes: map[string]string{}}
+	l := &launch{r: r, id: id, plan: plan, settings: settings, logs: logs, created: map[string]string{}, processes: map[string]string{}, repoID: t.RepoID}
 	if len(plan.services) > 0 {
 		if l.services, err = r.servicesNetwork(ctx, id, t); err != nil {
 			return nil, asRuntimeError(err, "The services network could not be prepared.")
@@ -161,6 +168,15 @@ func (l *launch) createContainers(ctx context.Context, volumes map[string][]stri
 			return err
 		}
 	}
+	// The seed command runs only on empty databases; its container exists
+	// from the start, so admission counts it.
+	if len(l.plan.seed) > 0 {
+		c, h, n := commandSpec(l.app, l.appHost, l.networking, l.plan.seed, "seed", container.RestartPolicy{Name: container.RestartPolicyDisabled},
+			componentLabels(l.labels, dockerx.KindSetup, "seed", app.CPUMillis, app.MemoryBytes), app.CPUMillis, app.MemoryBytes)
+		if err := l.create(ctx, "seed", l.plan.key+"-seed", c, h, n); err != nil {
+			return err
+		}
+	}
 	for _, p := range l.plan.processes {
 		c, h, n := commandSpec(l.app, l.appHost, l.networking, p.Command, "process-"+p.Name, container.RestartPolicy{Name: container.RestartPolicyOnFailure, MaximumRetryCount: maxRestarts},
 			componentLabels(l.labels, dockerx.KindProcess, p.Name, p.Resources.CPUMillis, p.Resources.MemoryBytes), p.Resources.CPUMillis, p.Resources.MemoryBytes)
@@ -186,7 +202,7 @@ func (l *launch) create(ctx context.Context, component, name string, config *con
 func (l *launch) start(ctx context.Context) error {
 	for _, step := range []func(context.Context) error{
 		l.startServices,       // 1. services answer their protocol
-		l.setUp,               // 2. setup runs once
+		l.prepareData,         // 2. starting data, setup, and seed on empty databases
 		l.startProcesses,      // 3. processes run
 		l.startApp,            // 4. the app passes its readiness check
 		l.confirmDependencies, // services and processes are still up
@@ -218,15 +234,32 @@ func (l *launch) startServices(ctx context.Context) error {
 	return nil
 }
 
-// setUp runs the setup command once; its container is gone afterwards.
+// setUp runs the setup command; its container is gone once it succeeds. A
+// fallback to other starting data runs it again.
 func (l *launch) setUp(ctx context.Context) error {
 	if len(l.plan.setup) == 0 {
 		return nil
 	}
-	if err := l.r.runSetup(ctx, l.created["setup"], l.plan.setup, l.logs); err != nil {
+	started := l.r.now()
+	if err := l.r.runOneOff(ctx, l.created["setup"], l.plan.setup, l.logs, "setup", CodeSetupFailed); err != nil {
+		l.failed = "setup"
 		return err
 	}
+	l.setupTook = l.r.now().Sub(started)
 	delete(l.created, "setup")
+	l.failed = ""
+	return nil
+}
+
+// seedData runs the seed command on the empty databases, after setup.
+func (l *launch) seedData(ctx context.Context) error {
+	started := l.r.now()
+	if err := l.r.runOneOff(ctx, l.created["seed"], l.plan.seed, l.logs, "seed", CodeSeedFailed); err != nil {
+		l.failed = "seed"
+		return err
+	}
+	l.seedTook = l.r.now().Sub(started)
+	delete(l.created, "seed")
 	return nil
 }
 
@@ -280,7 +313,10 @@ func (l *launch) recordComponents(ctx context.Context) error {
 	if l.r.components == nil {
 		return nil
 	}
-	if err := l.r.components.RecordComponents(ctx, l.plan.components(l.id, l.settings, l.outbound, l.withheld)); err != nil {
+	c := l.plan.components(l.id, l.settings, l.outbound, l.withheld)
+	c.SetupTook, c.SeedTook = l.setupTook, l.seedTook
+	c.DataSource, c.DataDetail = l.data.source, l.data.detail
+	if err := l.r.components.RecordComponents(ctx, c); err != nil {
 		return failure(CodeUnavailable, "The preview's components could not be recorded.", true, err)
 	}
 	return nil
@@ -348,8 +384,8 @@ func (b backend) componentTitle(component string) string {
 
 // components describes the ready candidate for the dashboard and reports.
 func (b backend) components(id requestIdentity, settings repoconfig.Config, outbound int, withheld bool) Components {
-	c := Components{PullRequestID: id.PullRequestID, Generation: id.Generation, Revision: id.Revision, Setup: len(b.setup) > 0,
-		DocsPath: settings.DocsPath, Outbound: outbound, OutboundWithheld: withheld}
+	c := Components{PullRequestID: id.PullRequestID, Generation: id.Generation, Revision: id.Revision, Setup: len(b.setup) > 0, Seed: len(b.seed) > 0,
+		DocsPath: settings.DocsPath, Outbound: outbound, OutboundWithheld: withheld, ConfigHash: b.configHash}
 	for _, s := range b.services {
 		c.Services = append(c.Services, ServiceComponent{Kind: s.Kind, Version: s.Version})
 	}

@@ -216,26 +216,35 @@ within seconds.
 
 1. The router puts Traefik's `forwardAuth` in front of each private preview: before
    every request it asks the server at `PREVIEW_ACCESS_URL` (`/previews/auth`), which
-   checks a cookie for that host. A valid cookie answers 200 and the request goes
+   checks a cookie and current PostgreSQL authorization for that host. A valid current grant answers 200 and the request goes
    through.
 2. Without one, the visitor is redirected to `/previews/access` on the dashboard. It
    signs them in (GitHub sign-in returns them there) and asks GitHub, with the App's
-   installation token, for their permission on the repository. The installation's
-   owner always gets in. Any role from `read` up does too.
+   installation token, for their permission on the repository only when they are
+   outsiders. Active workspace Owners/Admins and explicitly granted members get
+   preview access locally, including Reviewers without private-source permission.
+   Removed local members cannot fall back to outsider access.
 3. The visitor returns to `https://<host>/__previa/access?t=<token>`. The token is
    signed (HMAC with a key derived from `SESSION_SECRET`), names the host and the
    user, and is valid for one minute. The check turns it into the
-   `__Host-previa-access` cookie (host-only, Secure, HttpOnly, SameSite=Lax, 12 hours)
+   `__Host-previa-access` cookie (host-only, Secure, HttpOnly, SameSite=Lax, at most 12 hours)
    and redirects to the path they first asked for.
 
 Notes:
 
 - A cookie opens only the preview host it was issued for. Losing repository access
-  takes effect when the cookie expires (12 hours at most).
+  takes effect when the source-only outsider cookie expires (12 hours at most); local member/grant
+  revocation is checked on every request, including token redemption. Workspace
+  authorization revisions also invalidate existing cookies. F4 also checks the
+  user authorization epoch and a digest of the issuing dashboard session on every
+  request: logout, idle expiry, End other sessions and account deletion revoke
+  these grants. The raw dashboard session token is never sent to a preview.
 - On a public repository everyone signed in to GitHub can see it, so private
   previews mostly matter for private repositories.
-- Without the GitHub App on the server, only the installation's owner gets in.
-- The check sees only the host, the path and the cookie; it stores nothing.
+- Without the GitHub App on the server, only locally authorized workspace members
+  get in; outsider GitHub permission cannot be verified.
+- The check sees the host, path and signed cookie and reads current grants from
+  PostgreSQL; it stores no per-preview session.
 - Enabling private previews requires all live routing workers to advertise a
   configured `PREVIEW_ACCESS_URL` (migration 0029). The UI explains missing setup
   and disables enabling; POST enforces the same guard. Paused routing workers count,
@@ -334,3 +343,21 @@ router recreation. Both certificate files retained mode 600.
 | `internal/runtime/endpoint.go` | Pre-publication candidate check. |
 | `deploy/traefik/compose.yml` | Router deployment (staging CA default, secret file, loopback API). |
 | `db/migrations/0014_routes_and_teardown.sql` | Route rows, table counter, teardown requests, hostname check. |
+
+
+### Missed access-revocation deliveries (F5)
+
+App-authenticated installation reconciliation runs every five minutes and after
+a durable token-mint failure signal. Confirmed deletion/suspension/repository
+removal uses the existing transactional webhook revocation and cleanup path.
+Outages, wrong credentials, incomplete listings and circuits never authorize
+revocation. Polling never restores access or starts builds; verified same-workspace
+reinstall can recover missed deletion. See [35](35-installation-recovery-and-early-access.md).
+
+## Google reviewers (F7)
+
+When configured, private-preview authentication offers both login methods and
+returns to the requested host/path. Google reviewers use existing local workspace
+membership and repository grants, including session-bound cookie and removal
+checks. A Google-only outsider never receives the GitHub-reader fallback based on
+a display name or a URL. [36](36-google-sign-in-and-reviewer-invitations.md).

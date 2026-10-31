@@ -39,7 +39,8 @@ async function login() {
   await page.goto(origin);
   await page.getByRole('link', {name: 'Get started with GitHub', exact: true}).first().click();
   await page.waitForURL(`${origin}/dashboard`);
-  assert.match(await page.locator('.dashboard-heading').innerText(), /design-review/);
+  assert.match(await page.locator('.app-header .account-name').innerText(), /design-review/);
+  assert.equal(await page.locator('h1').innerText(), 'Overview');
 }
 
 test('signed-out PR build logs return to the same logs after GitHub login', async () => {
@@ -51,7 +52,7 @@ test('signed-out PR build logs return to the same logs after GitHub login', asyn
   assert.equal(new URL(page.url()).pathname, path);
 });
 
-test('automatic build disables its action live and refreshes after a confirmation closes', async () => {
+test('automatic build shows its progress live as status, not a dead button, and refreshes after a confirmation closes', async () => {
   const change = state => context.request.post(`${origin}/__fixture/build-state`, {form: {state}});
   await change('pending');
   try {
@@ -60,30 +61,38 @@ test('automatic build disables its action live and refreshes after a confirmatio
     assert(await page.getByRole('button', {name: 'Build now', exact: true}).isEnabled());
     await page.waitForFunction(() => document.documentElement.dataset.liveState === 'live');
     await change('queued');
-    const queued = page.getByRole('button', {name: 'Build queued', exact: true});
+    const queued = page.locator('.build-in-progress', {hasText: 'Build queued'});
     await queued.waitFor();
-    assert(await queued.isDisabled());
+    assert.equal(await page.getByRole('button', {name: 'Build queued'}).count(), 0, 'progress is a status, not a button');
     await change('running');
-    const running = page.getByRole('button', {name: 'Building preview', exact: true});
+    const running = page.locator('.build-in-progress', {hasText: 'Building preview'});
     await running.waitFor();
-    assert(await running.isDisabled());
+    assert.equal(await page.getByRole('button', {name: 'Building preview'}).count(), 0);
     await page.getByRole('button', {name: 'Cancel build', exact: true}).click();
     await page.waitForFunction(() => document.querySelector('#teardown-preview').matches(':modal'));
     await change('succeeded');
     // The live signal is deferred while this dialog is open.
     await page.waitForTimeout(200);
-    assert(await running.isDisabled());
+    assert(await running.isVisible());
     await page.keyboard.press('Escape');
     await page.getByRole('button', {name: 'Rebuild preview', exact: true}).waitFor();
   } finally { await change(''); }
 });
+// A live page refetches its panel once its event stream connects, and htmx
+// wires the swapped-in fields only after that swap settles: a value typed in
+// between sends no request. Wait until the stream is live and nothing is
+// requesting, swapping or settling before typing into a live page.
+async function liveIdle(target = page, options) {
+  await target.waitForFunction(() => document.documentElement.dataset.liveState === 'live' &&
+    !document.querySelector('.htmx-request, .htmx-swapping, .htmx-settling, .htmx-added'), null, options);
+}
 async function readyPanel(id) {
   await page.locator(`[data-selected-repo="${id}"]`).waitFor();
   await page.waitForFunction(()=>!document.getElementById('repository-detail').hasAttribute('aria-busy'));
 }
 async function openLogout() {
   // Real pointer clicks avoid automation scrolling sticky-header elements into view.
-  for (const locator of [page.locator('.account-menu summary'), page.getByRole('button', {name: 'Log out', exact: true})]) {
+  for (const locator of [page.locator('.account-menu summary'), page.locator('.account-menu').getByRole('button', {name: 'Log out', exact: true})]) {
     const box = await locator.boundingBox();
     assert(box, 'logout control must be visible');
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
@@ -152,7 +161,8 @@ test('Overview places open PRs along the pipeline and its activity tabs and rows
   await login();
   // An empty workspace: the blocked notice, setup steps and honest zeros.
   assert(await page.locator('.ov-alert').isVisible());
-  assert.match(await page.locator('.ov-setup-progress').innerText(), /1 of 5\s+done/);
+  assert.match(await page.locator('.ov-setup-progress').innerText(), /0 of 4\s+done/);
+  assert.match(await page.locator('.ov-step.is-next').innerText(), /Connect a repository/);
   assert.deepEqual(await page.locator('.ov-flow-count').allInnerTexts(), ['0', '0', '0', '0']);
   assert.match(await page.locator('.ov-status').innerText(), /No worker running/);
   // A busy workspace.
@@ -185,7 +195,8 @@ test('Overview places open PRs along the pipeline and its activity tabs and rows
   await preview.locator('summary').click();
   assert.match(await preview.locator('.ov-facts').innerText(), /newer commit .* is not live yet/);
   assert.equal(await preview.locator('[data-lifetime-text]').innerText(), '75% of its lifetime left');
-  assert.equal(await preview.locator('.ov-open').getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
+  // Open goes through Previa, which records the open for the Setup checklist.
+  assert.equal(await preview.locator('.ov-open').getAttribute('href'), '/repositories/1/pull-requests/3/open');
   await page.reload();
   assert.equal(await page.locator('#ov-tab-previews').getAttribute('aria-selected'), 'true');
   // A failed request says why and how long it took.
@@ -423,11 +434,11 @@ test('the FAQ answers as a conversation on the home page, from a link and in the
   await faq.getByRole('button', {name: /^All topics/}).click();
   await faq.locator('[data-faq-search]').fill('frameworks');
   assert.equal(await visible.count(), 1);
-  assert.equal(await faq.locator('[data-faq-status]').innerText(), '1 of 22 questions shown.');
+  assert.equal(await faq.locator('[data-faq-status]').innerText(), '1 of 24 questions shown.');
   await faq.locator('[data-faq-search]').fill('zzz-nothing');
   assert(await faq.locator('[data-faq-empty]').isVisible());
   await faq.getByRole('button', {name: 'show every question', exact: true}).click();
-  assert.equal(await visible.count(), 22);
+  assert.equal(await visible.count(), 24);
   // A shared #faq-… link opens its answer.
   await page.goto('about:blank');
   await page.goto(`${origin}/#faq-secrets`);
@@ -468,7 +479,7 @@ test('content and native confirmation remain usable without JavaScript', async (
     assert.equal(await nativePage.locator('[data-film-play]').isVisible(), false);
     assert.equal(await nativePage.locator('[data-film-video]').getAttribute('controls'), '');
     await nativePage.locator('#faq-secrets summary').click();
-    assert.match(await nativePage.locator('#faq-secrets .faq-answer').innerText(), /Encrypted as soon as you save them/);
+    assert.match(await nativePage.locator('#faq-secrets .faq-answer').innerText(), /one encrypted .env file per repository/);
     await nativePage.goto(`${origin}/auth/github/login`);
     await nativePage.waitForURL(`${origin}/dashboard`);
     await nativePage.goto(`${origin}/repositories?page=2`);
@@ -505,7 +516,7 @@ test('owner builds once and tears a preview down only after confirming in a moda
   const preview = page.locator('[data-preview-url]');
   assert.equal(await preview.getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
   assert.equal(await preview.getAttribute('target'), '_blank');
-  assert.equal(await page.getByRole('link', {name: 'Open preview', exact: true}).getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
+  assert.equal(await page.getByRole('link', {name: 'Open preview', exact: true}).getAttribute('href'), '/repositories/1/pull-requests/3/open', 'Open preview records the open; the address stays direct');
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin});
   const copy = page.getByRole('button', {name: 'Copy the preview address', exact: true});
   await copy.click();
@@ -538,6 +549,8 @@ test('owners approve outbound destinations and remove them only after confirming
   await page.goto(`${origin}/repositories/1/outbound`);
   assert.equal(await page.getByRole('link', {name: 'Outbound', exact: true}).getAttribute('aria-current'), 'page');
   assert.match(await page.locator('main').innerText(), /No destinations approved/);
+  assert.equal(await page.locator('#add-destination').evaluate(form => getComputedStyle(form).paddingTop), '18px', 'the form panel keeps its padding');
+  if(process.env.UI_BROWSER_SCREENSHOTS==='1') {await page.emulateMedia({reducedMotion:'reduce'});await page.screenshot({path:path.join(__dirname,'artifacts','outbound-form.png'),fullPage:true});}
   // Addresses are refused with the reason, next to the field.
   await page.getByLabel('Host').fill('10.0.0.1');
   await page.getByRole('button', {name: 'Approve', exact: true}).click();
@@ -566,27 +579,27 @@ test('owners approve outbound destinations and remove them only after confirming
   await page.locator('dialog[id^="remove-destination-"]').getByRole('button', {name: 'Remove destination', exact: true}).click();
   await page.waitForFunction(() => /Removed db\.example\.com:5432/.test(document.querySelector('main')?.innerText || ''));
   assert.equal(await page.locator('.outbound-table').count(), 0);
-  // A repository without GitHub access says why and cannot add.
+  // A repository without GitHub access says why and offers no add form.
   await page.goto(`${origin}/repositories/2/outbound`);
   assert.match(await page.locator('main').innerText(), /GitHub access to this repository was removed/);
-  assert.equal(await page.getByRole('button', {name: 'Approve', exact: true}).isDisabled(), true);
+  assert.equal(await page.getByRole('button', {name: 'Approve', exact: true}).count(), 0);
+  assert.equal(await page.locator('form.outbound-form').count(), 0);
 });
 
 test('unavailable repository PRs offer no actions and say why', async () => {
   await login();
   await page.goto(`${origin}/repositories/2/pull-requests/1`);
   assert.match(await page.locator('[data-build-unavailable]').innerText(), /GitHub access to this repository is unavailable[\s\S]*choose repositories on GitHub/);
-  assert(await page.getByRole('button', {name: 'Build latest commit', exact: true}).isDisabled(), 'the action is shown, disabled');
+  assert.equal(await page.getByRole('button', {name: 'Build latest commit', exact: true}).count(), 0, 'no dead Build button');
   assert.equal(await page.getByRole('button', {name: /Retry|Rebuild|Tear down|Cancel build/}).count(), 0);
   assert.equal(await page.locator('form[action$="/build"]').count(), 0, 'nothing can be submitted');
 });
 
-test('a blocked build stays visible, disabled, with the reason and the fix', async () => {
+test('a blocked build offers no dead button: it says the reason and the fix', async () => {
   await login();
   await page.goto(`${origin}/repositories/1/pull-requests/9`);
-  const blocked = page.getByRole('button', {name: 'Build latest commit', exact: true});
-  assert(await blocked.isDisabled());
-  assert.equal(await blocked.getAttribute('aria-describedby'), 'build-unavailable');
+  assert.equal(await page.getByRole('button', {name: 'Build latest commit', exact: true}).count(), 0);
+  assert.equal(await page.locator('main button[disabled]').count(), 0);
   assert.match(await page.locator('#build-unavailable').innerText(), /no preview domain[\s\S]*PREVIEW_BASE_DOMAIN/);
   assert.equal(await page.locator('form[action$="/build"]').count(), 0, 'nothing can be submitted');
   assert.match(await page.locator('[data-pr-status] h2').innerText(), /No preview yet/);
@@ -637,15 +650,27 @@ test('a running build follows its log to the current step, with a clock and the 
   await context.request.post(`${origin}/__fixture/logs/seed`);
   await login();
   await page.goto(`${origin}/repositories/1/pull-requests/6`);
-  const tracker = page.locator('[data-pr-status] .build-tracker');
+  await liveIdle();
+  // A live refresh swaps in the server's tracker (queue done, the rest working)
+  // until its log stream repaints it, so read each state in one snapshot.
+  const trackerAt = async stage => (await page.waitForFunction(at => {
+    const tracker = document.querySelector('[data-pr-status] .build-tracker');
+    const current = tracker?.querySelector('.is-current');
+    if (current?.dataset.stage !== at) return false;
+    return {
+      done: [...tracker.querySelectorAll('.is-done')].map(step => step.dataset.stage),
+      text: tracker.querySelector('[data-progress-text]')?.textContent || '',
+      status: current.querySelector('.sr-only')?.textContent || '',
+    };
+  }, stage)).jsonValue();
   // Output from the image build means the code is in and the image is building.
-  await page.waitForFunction(() => document.querySelector('.build-tracker .is-current')?.dataset.stage === 'image');
-  assert.deepEqual(await tracker.locator('.is-done').evaluateAll(steps => steps.map(step => step.dataset.stage)), ['queue', 'code']);
-  assert.equal(await tracker.locator('[data-progress-text]').innerText(), 'indented output');
+  const building = await trackerAt('image');
+  assert.deepEqual(building.done, ['queue', 'code']);
+  assert.equal(building.text, 'indented output');
   await context.request.post(`${origin}/__fixture/logs/append`, {form: {text: 'Pulling the postgres:17 image.', system: '1'}});
-  await page.waitForFunction(() => document.querySelector('.build-tracker .is-current')?.dataset.stage === 'start');
-  assert.equal(await tracker.locator('[data-progress-text]').innerText(), 'Pulling the postgres:17 image.');
-  assert.match(await tracker.locator('.is-current .sr-only').innerText(), /in progress/);
+  const starting = await trackerAt('start');
+  assert.equal(starting.text, 'Pulling the postgres:17 image.');
+  assert.match(starting.status, /in progress/);
   const clock = page.locator('time[data-elapsed]');
   const first = await clock.innerText();
   assert.match(first, /^\d+m \d+s$/);
@@ -705,9 +730,10 @@ test('Previews show what is live with its link, Builds show attempts, and teardo
   await page.waitForURL(url => url.pathname === '/previews' && url.searchParams.get('fixture') === 'rows');
   assert.equal(await page.locator('h1').innerText(), 'Previews');
   assert.equal(await page.locator('.app-sidebar a[href="/previews"]').getAttribute('aria-current'), 'page');
-  assert.match(await page.locator('.page-header-text p').innerText(), /What is live now/);
+  assert.match(await page.locator('.page-header-text [role=tooltip]').textContent(), /What is live now/);
+  assert.ok(await page.locator('.page-header-text [role=tooltip]').isHidden(), 'the description waits in its tooltip');
   const preview = page.getByRole('link', {name: 'Open the preview of fixture-owner/repository-1 #3 in a new tab'});
-  assert.equal(await preview.getAttribute('href'), 'https://pr-3-1-fixture.preview.example.com');
+  assert.equal(await preview.getAttribute('href'), '/repositories/1/pull-requests/3/open');
   assert.equal(await preview.getAttribute('target'), '_blank');
   // Status is what reviewers care about: live, even while a newer build failed.
   assert.deepEqual(await page.locator('.activity-table .pr-cell-state .badge').allInnerTexts(), ['Live', 'Live · update failed']);
@@ -728,7 +754,7 @@ test('Previews show what is live with its link, Builds show attempts, and teardo
   await page.locator('#teardown-1-3').getByRole('button', {name: 'Tear down preview', exact: true}).click();
   await page.waitForURL(url => url.pathname === '/previews' && url.searchParams.get('page') === '1');
   await page.goto(`${origin}/builds?fixture=rows`);
-  assert.match(await page.locator('.page-header-text p').innerText(), /latest attempt to build/);
+  assert.match(await page.locator('.page-header-text [role=tooltip]').textContent(), /latest attempt to build/);
   assert.match(await page.locator('.activity-table').innerText(), /Waiting for capacity/);
   // Row controls stay clickable above the row's whole-row link.
   await page.getByRole('link', {name: 'Build logs for fixture-owner/repository-1 #4'}).click();
@@ -802,6 +828,7 @@ test('PR workspace live search pagination modal and build control', async () => 
   await page.waitForURL(/page=2/);
   assert.match(await page.locator('.pr-table tbody tr').first().innerText(),/#11/);
   const search=page.locator('#pull-request-search');
+  await liveIdle();
   await search.fill('preview 25');
   await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
   await search.fill('');
@@ -872,12 +899,12 @@ test('Automatic confirms before enabling saves in place and live updates respect
  assert.equal(await page.locator('#build-policy').evaluate(e=>e.open),false);
  await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).click();
  await page.locator('.sync-state').filter({hasText:'Syncing'}).waitFor();await readyPanel('1');
- assert(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).isDisabled());
+ assert.equal(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).count(),0,'a running sync is a status, not a dead button');
  await mode.click();await page.waitForFunction(()=>document.querySelector('#build-policy').matches(':modal'));
  await page.waitForTimeout(3500);assert(await page.locator('#build-policy').evaluate(e=>e.matches(':modal')));assert.match(await page.locator('.pr-summary').innerText(),/Syncing/);
  const requestsBeforeEscape=policyRequests;await page.keyboard.press('Escape');assert.equal(policyRequests,requestsBeforeEscape);
  await page.waitForFunction(()=>!document.querySelector('.pr-summary').textContent.includes('Syncing'));
- assert(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).isEnabled());
+ await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).waitFor();
  assert.equal(await mode.getAttribute('aria-checked'),'false');
  assert.equal(await page.locator('#pull-request-search').inputValue(),'preview 25');assert.equal(await page.locator('.pr-table tbody tr').count(),1);
  assert(await page.evaluate(()=>document===window.originalDocument));
@@ -889,8 +916,8 @@ test('Automatic confirms before enabling saves in place and live updates respect
 test('unavailable repositories and empty PR states remain clear and cannot request mutations',async()=>{
  await login();await page.goto(`${origin}/repositories/2?access=all&pr_state=closed`);
  assert.match(await page.locator('.pr-summary').innerText(),/Repository unavailable/);
- assert(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).isDisabled());
- assert(await page.getByRole('switch',{name:'Automatic builds',exact:true}).isDisabled());
+ assert.equal(await page.getByRole('button',{name:'Sync Pull Requests',exact:true}).count(),0);
+ assert.equal(await page.getByRole('switch',{name:'Automatic builds',exact:true}).count(),0);
  assert.equal(await page.locator('.pr-table').count(),0);assert.match(await page.locator('#pull-request-results').innerText(),/No pull requests/);
  assert.equal(await page.locator('#repository-filters').count(),0);
 });
@@ -920,7 +947,10 @@ test('dedicated repository and PR pages preserve filters through breadcrumbs and
  assert.equal(await page.locator('[data-trail-parent]').innerText(),'Repositories','the header trail is the previous page and this one');
  const synced=page.locator('.pr-summary time');
  assert.equal(await synced.getAttribute('title'),'4 Oct 2026, 10:00 UTC');
+ // A live refresh can swap the summary in just before ui.js makes it relative again.
+ await page.waitForFunction(()=>{const t=document.querySelector('.pr-summary time');return t && t.textContent.trim()!==t.title;});
  assert.notEqual(await synced.innerText(),'4 Oct 2026, 10:00 UTC','shown relative, with the exact time as its title');
+ await liveIdle();
  await page.locator('#pull-request-search').fill('preview 25');await page.waitForFunction(()=>document.querySelectorAll('.pr-table tbody tr').length===1);
  await page.locator('.pr-table tbody .pr-cell-text a').click();await page.waitForURL(url=>url.pathname==='/repositories/25/pull-requests/25');
  assert.match(await page.locator('.app-breadcrumb-current').innerText(),/#25.*A careful change to preview 25/);
@@ -1003,7 +1033,7 @@ test('sync and automatic controls appear only on the PR list and breadcrumbs use
 test('private previews explain missing auth and preserve the owner public toggle',async()=>{
  await login();await page.goto(`${origin}/repositories/101`);
  const privacy=page.getByRole('switch',{name:'Private previews'});
- assert.equal(await privacy.isDisabled(),true);
+ assert.equal(await privacy.count(),0,'not offered until private previews can work');
  assert.match(await page.locator('#private-preview-setup').textContent(),/PREVIEW_ACCESS_URL/);
  assert.equal(await page.locator('#preview-access').count(),0);
  await page.goto(`${origin}/repositories/103`);
@@ -1103,28 +1133,23 @@ test('live updates push changes across tabs without polling',async()=>{
  } finally {await other.close();}
 });
 
-test('repository secrets editor saves several at once, never shows values, and deletes selected ones',async()=>{
+test('the Secrets tab is one .env file: values hidden until editing, comments kept, removals confirmed in a modal',async()=>{
  await login();await page.goto(`${origin}/repositories/1`);await readyPanel('1');
  await page.locator('.repo-tabs').getByRole('link',{name:'Secrets',exact:true}).click();
  await page.waitForURL(`${origin}/repositories/1/secrets`);
  assert.match(await page.locator('.app-breadcrumb').innerText(),/repository-1[\s\S]*Secrets/);
  assert.equal(await page.locator('.repo-tabs a[aria-current=page]').innerText(),'Secrets');
- const name=n=>page.getByRole('textbox',{name:`Name, line ${n}`,exact:true});
- const value=n=>page.getByRole('textbox',{name:`Value, line ${n}`,exact:true});
- // One line per secret; a duplicate name is refused before anything is sent.
- await name(1).fill('API_KEY');await value(1).fill('sk_test_never_shown_123');
- await page.getByRole('button',{name:'Add another line',exact:true}).click();
- await name(2).fill('API_KEY');await value(2).fill('duplicate');
- await page.locator('[data-secret-submit]').click();
- assert.match(await page.locator('[data-secret-row]').nth(1).innerText(),/appears more than once/);
- assert.equal(new URL(page.url()).search,'','a refused save stays on the page');
- await name(2).fill('WEBHOOK_SECRET');
- assert.equal(await page.locator('[data-secret-submit-label]').innerText(),'Save 2 secrets');
- await page.locator('[data-secret-submit]').click();
- await page.waitForURL(url=>url.searchParams.get('saved_count')==='2');
- assert.match(await page.locator('.connection-notice').innerText(),/Saved 2 secrets \(2 new, 0 replaced\)/);
- assert.match(await page.locator('.secrets-table').innerText(),/API_KEY[\s\S]*WEBHOOK_SECRET/);
- assert(!(await page.content()).includes('sk_test_never_shown_123'),'the value must never be rendered');
+ // An empty file has nothing to hide: the editor is open straight away.
+ const editor=page.locator('#env-text');
+ await editor.fill('# Payments sandbox\nAPI_KEY=sk_test_never_shown_123\nWEBHOOK_SECRET="whsec with spaces"\n\nUNSET_FOR_NOW=\n');
+ await page.getByRole('button',{name:'Save .env',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('saved')==='1'&&url.searchParams.get('added')==='2');
+ assert.match(await page.locator('.connection-notice').innerText(),/Saved the \.env file: 2 added\./);
+ const view=page.locator('.env-view');
+ assert.match(await view.innerText(),/# Payments sandbox[\s\S]*API_KEY=••••••••[\s\S]*WEBHOOK_SECRET=••••••••[\s\S]*UNSET_FOR_NOW=not set/);
+ assert(!(await page.content()).includes('sk_test_never_shown_123'),'values are hidden until editing');
+ assert.match(await page.locator('.env-file header').innerText(),/Sets 2 variables · 102 B of 64 KiB · saved/);
+ assert.equal(await page.locator('.secrets-table tbody tr').count(),2,'build access lists names with values only');
  // Build credentials require a modal opt-in and can be revoked in place.
  await page.getByRole('button',{name:'Let builds read API_KEY',exact:true}).click();
  const allow=page.locator('#allow-build-secret-0');
@@ -1138,50 +1163,103 @@ test('repository secrets editor saves several at once, never shows values, and d
  assert.match(await page.locator('.secrets-table tbody tr').first().innerText(),/Allowed/);
  await page.getByRole('button',{name:'Stop giving API_KEY to builds',exact:true}).click();
  await page.waitForURL(url=>url.searchParams.get('build_off')==='API_KEY');
- // Pasting NAME=value lines into a name splits them into lines.
- await name(1).evaluate(input=>{const data=new DataTransfer();data.setData('text/plain','API_KEY=replaced\nFEATURE_FLAG=on');input.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));});
- assert.equal(await name(2).inputValue(),'FEATURE_FLAG');
- assert.match(await page.locator('[data-secret-row]').first().innerText(),/Replaces the stored value/);
- await page.locator('[data-secret-submit]').click();
- await page.waitForURL(url=>url.searchParams.get('saved_count')==='2');
- assert.match(await page.locator('.connection-notice').innerText(),/1 new, 1 replaced/);
- // A row's Replace prefills its name and never its value.
- await page.getByRole('link',{name:'Replace API_KEY',exact:true}).click();
- await page.waitForURL(url=>url.searchParams.get('replace')==='API_KEY');
- assert.equal(await name(1).inputValue(),'API_KEY');assert.equal(await value(1).inputValue(),'');
- // A single delete confirms in its own modal; Escape changes nothing.
- const remove=page.getByRole('button',{name:'Delete API_KEY',exact:true});
- await remove.click();await page.waitForFunction(()=>document.querySelector('#delete-secret-0').matches(':modal'));
- assert.equal(await page.evaluate(()=>document.activeElement.textContent.trim()),'Cancel');
- await page.keyboard.press('Escape');
- assert.equal(await page.locator('#delete-secret-0').evaluate(e=>e.open),false);
- assert.equal(await page.locator('.secrets-table tbody tr').count(),3);
- // Selected secrets are deleted together after one confirmation.
- const bulk=page.locator('[data-bulk-delete]');
- assert(await bulk.isDisabled(),'nothing is selected yet');
- await page.getByRole('checkbox',{name:'Select all secrets'}).check();
- assert.match(await bulk.innerText(),/\(3\)/);
- await bulk.click();await page.waitForFunction(()=>document.querySelector('#delete-selected-secrets').matches(':modal'));
- assert.match(await page.locator('[data-bulk-delete-summary]').innerText(),/3 secrets: API_KEY, FEATURE_FLAG, WEBHOOK_SECRET/);
- await page.locator('#delete-selected-secrets').getByRole('button',{name:'Delete selected',exact:true}).click();
- await page.waitForURL(url=>url.searchParams.get('deleted_count')==='3');
- await page.getByText('No secrets yet').waitFor();
+ // Show values and edit opens the file exactly as saved.
+ await page.getByRole('link',{name:'Show values and edit',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('edit')==='1');
+ assert.equal(await editor.inputValue(),'# Payments sandbox\nAPI_KEY=sk_test_never_shown_123\nWEBHOOK_SECRET="whsec with spaces"\n\nUNSET_FOR_NOW=\n');
+ if(process.env.UI_BROWSER_SCREENSHOTS==='1') {await page.emulateMedia({reducedMotion:'reduce'});await page.waitForTimeout(500);await page.screenshot({path:path.join(__dirname,'artifacts','secrets-env-editor.png'),fullPage:true});}
+ // The editor counts the file's size against its limit as it changes.
+ const size=page.locator('[data-env-size]');
+ assert.equal(await size.innerText(),'102 B of 64 KiB');
+ await editor.fill('X='+'a'.repeat(2046));
+ assert.equal(await size.innerText(),'2.0 KiB of 64 KiB');
+ await editor.fill('X='+'a'.repeat(65535));
+ assert.equal(await size.innerText(),'64.0 KiB of 64 KiB');
+ assert.match(await size.getAttribute('class'),/is-over/,'one byte over the limit is flagged');
+ // A save that removes a name asks first, in a modal over the editor.
+ await editor.fill('# Payments sandbox\nAPI_KEY=sk_test_rotated_456\nUNSET_FOR_NOW=\n');
+ await page.getByRole('button',{name:'Save .env',exact:true}).click();
+ const confirm=page.locator('#confirm-env-removals');
+ await page.waitForFunction(()=>document.querySelector('#confirm-env-removals')?.matches(':modal'));
+ assert.match(await confirm.innerText(),/Remove WEBHOOK_SECRET\?[\s\S]*WEBHOOK_SECRET/);
+ if(process.env.UI_BROWSER_SCREENSHOTS==='1') {await page.emulateMedia({reducedMotion:'reduce'});await page.waitForTimeout(500);await page.screenshot({path:path.join(__dirname,'artifacts','secrets-env-removal.png')});}
+ await confirm.getByRole('button',{name:'Keep editing',exact:true}).click();
+ assert.equal(await confirm.evaluate(e=>e.open),false);
+ assert.equal(await editor.inputValue(),'# Payments sandbox\nAPI_KEY=sk_test_rotated_456\nUNSET_FOR_NOW=\n','the edited text is kept');
+ await page.getByRole('button',{name:'Save .env',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#confirm-env-removals')?.matches(':modal'));
+ await confirm.getByRole('button',{name:'Remove and save',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('changed')==='1'&&url.searchParams.get('removed')==='1');
+ assert.match(await page.locator('.connection-notice').innerText(),/1 changed, 1 removed/);
+ assert.doesNotMatch(await view.innerText(),/WEBHOOK_SECRET/);
+ // A file from disk replaces the editor's text; a line Previa cannot read
+ // is named, nothing is saved and the text stays to fix.
+ await page.getByRole('link',{name:'Show values and edit',exact:true}).click();
+ await page.locator('[data-env-file]').setInputFiles({name:'.env',mimeType:'text/plain',buffer:Buffer.from('# from disk\nAPI_KEY=sk_test_rotated_456\nNOT A LINE\n')});
+ await page.waitForFunction(()=>/Loaded \.env/.test(document.querySelector('[data-env-feedback]')?.textContent||''));
+ assert.match(await editor.inputValue(),/^# from disk/);
+ await page.getByRole('button',{name:'Save .env',exact:true}).click();
+ await page.locator('#env-error').waitFor();
+ assert.match(await page.locator('#env-error').innerText(),/Line 3: expected NAME=value\. Nothing was saved\./);
+ assert.match(await editor.inputValue(),/NOT A LINE/);
+ assert.equal(await editor.getAttribute('aria-invalid'),'true');
  for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
- await page.locator('.repo-tabs').getByRole('link',{name:'Pull requests',exact:true}).click();
- await page.waitForURL(`${origin}/repositories/1`);
+ await page.getByRole('link',{name:'Cancel',exact:true}).click();
+ await page.waitForURL(url=>!url.searchParams.has('edit'));
+ assert.match(await view.innerText(),/API_KEY=••••••••/);
 });
 
-test('the secrets editor works without JavaScript and pasted .env text is saved',async()=>{
+test('a large .env file scrolls inside its panels instead of stretching the page',async()=>{
+ await login();await page.goto(`${origin}/repositories/5/secrets`);
+ const lines=['# A large app'];
+ for(let i=0;i<300;i++) lines.push(`VAR_${String(i).padStart(3,'0')}=value-${i}`);
+ await page.locator('#env-text').fill(lines.join('\n')+'\n');
+ await page.getByRole('button',{name:'Save .env',exact:true}).click();
+ await page.waitForURL(url=>url.searchParams.get('added')==='300');
+ const scrolls=selector=>page.locator(selector).evaluate(e=>({client:e.clientHeight,scroll:e.scrollHeight}));
+ // The masked file and Build access scroll inside their panels.
+ const view=await scrolls('.env-view');
+ assert(view.client<=520&&view.scroll>view.client*3,`the masked file scrolls inside its panel (${view.client}/${view.scroll})`);
+ assert.equal(await page.locator('.env-view').getAttribute('tabindex'),'0','the keyboard can scroll it');
+ const [file,guide]=await Promise.all(['#env-file','.secrets-guidance'].map(selector=>page.locator(selector).evaluate(e=>Math.round(e.getBoundingClientRect().height))));
+ assert.equal(guide,file,'the guidance takes the file panel height');
+ const table=await scrolls('.secrets-list .repository-table-scroll');
+ assert(table.client<=440&&table.scroll>table.client,`Build access scrolls inside its panel (${table.client}/${table.scroll})`);
+ const headerStays=await page.locator('.secrets-list .repository-table-scroll').evaluate(e=>{e.scrollTop=e.scrollHeight;const header=e.querySelector('thead th').getBoundingClientRect().top;return Math.abs(header-e.getBoundingClientRect().top)<2;});
+ assert(headerStays,'the column headers stay in view while the names scroll');
+ const pageHeight=await page.evaluate(()=>(document.querySelector('.app-content')||document.documentElement).scrollHeight);
+ assert(pageHeight<2000,`the page stays about two screens tall (${pageHeight}px)`);
+ if(process.env.UI_BROWSER_SCREENSHOTS==='1') {
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.screenshot({path:path.join(__dirname,'artifacts','secrets-env-large.png')});
+  await page.evaluate(()=>{const scroller=document.querySelector('.app-content');scroller.scrollTop=scroller.scrollHeight;});
+  await page.screenshot({path:path.join(__dirname,'artifacts','secrets-env-large-bottom.png')});
+ }
+ // The editor keeps a bounded height and scrolls too.
+ await page.getByRole('link',{name:'Show values and edit',exact:true}).click();
+ const editor=await scrolls('#env-text');
+ assert(editor.client<=640&&editor.scroll>editor.client,`the editor scrolls (${editor.client}/${editor.scroll})`);
+ // Removing every name keeps the confirmation and its buttons on screen.
+ await page.locator('#env-text').fill('# nothing left\n');
+ await page.getByRole('button',{name:'Save .env',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#confirm-env-removals')?.matches(':modal'));
+ assert.match(await page.locator('#confirm-env-removals h2').innerText(),/Remove 300 secrets\?/);
+ const fits=await page.locator('#confirm-env-removals').evaluate(e=>e.getBoundingClientRect().bottom<=innerHeight);
+ assert(fits,'the confirmation fits the screen');
+ assert(await page.getByRole('button',{name:'Remove and save',exact:true}).isVisible());
+ for(const width of [320,390,768,1440]) {await page.setViewportSize({width,height:844});await assertNoOverflow();}
+});
+
+test('the .env file works without JavaScript, including the removal confirmation',async()=>{
  const noJS=await browser.newContext({javaScriptEnabled:false});
  try {
   const plain=await noJS.newPage();
   await plain.goto(`${origin}/auth/github/login`);await plain.waitForURL(`${origin}/dashboard`);
   await plain.goto(`${origin}/repositories/3/secrets`);
-  assert.equal(await plain.locator('[data-secret-row]').count(),4,'one line plus three spare lines');
-  await plain.locator('summary').filter({hasText:'Paste or import a .env file'}).click();
-  await plain.locator('#secret-dotenv').fill('# comment\nexport DB_URL=postgres://preview\nPRIVATE_KEY="-----BEGIN\nabc\n-----END"');
-  await plain.locator('[data-secret-submit]').click();
-  await plain.waitForURL(url=>url.searchParams.get('saved_count')==='2');
+  await plain.locator('#env-text').fill('# comment\nexport DB_URL=postgres://preview\nPRIVATE_KEY="-----BEGIN\nabc\n-----END"');
+  await plain.getByRole('button',{name:'Save .env',exact:true}).click();
+  await plain.waitForURL(url=>url.searchParams.get('added')==='2');
+  assert.match(await plain.locator('.env-view').innerText(),/# comment[\s\S]*DB_URL=••••••••[\s\S]*PRIVATE_KEY=••••••••/);
   assert.match(await plain.locator('.secrets-table').innerText(),/DB_URL[\s\S]*PRIVATE_KEY/);
   await plain.getByRole('button',{name:'Let builds read DB_URL',exact:true}).click();
   const allow=plain.locator('#allow-build-secret-0');
@@ -1190,11 +1268,14 @@ test('the secrets editor works without JavaScript and pasted .env text is saved'
   await plain.waitForURL(url=>url.searchParams.get('build_on')==='DB_URL');
   await plain.getByRole('button',{name:'Stop giving DB_URL to builds',exact:true}).click();
   await plain.waitForURL(url=>url.searchParams.get('build_off')==='DB_URL');
-  await plain.locator('summary').filter({hasText:'Paste or import a .env file'}).click();
-  await plain.locator('#secret-dotenv').fill('NOT A LINE');
-  await plain.locator('[data-secret-submit]').click();
-  assert.match(await plain.locator('#secret-dotenv-error').innerText(),/Line 1: expected NAME=value/);
-  assert.equal(await plain.locator('#secret-dotenv').inputValue(),'','pasted text is never rendered back');
+  await plain.getByRole('link',{name:'Show values and edit',exact:true}).click();
+  await plain.locator('#env-text').fill('DB_URL=postgres://preview');
+  await plain.getByRole('button',{name:'Save .env',exact:true}).click();
+  assert.match(await plain.locator('.env-removals-fallback').innerText(),/Remove PRIVATE_KEY\?/);
+  assert.equal(await plain.locator('#env-text').inputValue(),'DB_URL=postgres://preview','the edited text is kept while confirming');
+  await plain.locator('.env-removals-fallback').getByRole('button',{name:'Remove and save',exact:true}).click();
+  await plain.waitForURL(url=>url.searchParams.get('removed')==='1');
+  assert.doesNotMatch(await plain.locator('.env-view').innerText(),/PRIVATE_KEY/);
  } finally {await noJS.close();}
 });
 
@@ -1373,6 +1454,7 @@ const isSearch = (query) => url => url.pathname === '/repositories/1' && url.sea
 test('slow searches show progress, apply only the newest results and stay responsive', async () => {
   await login();
   await page.goto(`${origin}/repositories/1`);
+  await liveIdle();
   let searches = 0;
   await page.route(url => url.pathname === '/repositories/1' && url.searchParams.has('pr_q'), async route => {
     searches++;
@@ -1449,6 +1531,7 @@ test('refused, failed and offline requests explain themselves and leave the page
 test('a request that never answers times out with a message and can be retried', async () => {
   await login();
   await page.goto(`${origin}/repositories/1`);
+  await liveIdle();
   await page.route(isSearch('preview 9'), () => {}); // never answered
   await page.locator('#pull-request-search').fill('preview 9');
   await page.waitForFunction(() => /Could not update this view/.test(document.querySelector('#pull-request-filters [data-repository-feedback]')?.textContent || ''), null, {timeout: 15000});
@@ -1463,9 +1546,16 @@ test('a request that never answers times out with a message and can be retried',
 test('a forged CSRF token is refused and changes nothing', async () => {
   await login();
   await page.goto(`${origin}/repositories/1/pull-requests/11`);
-  await page.locator('form[action$="/pull-requests/11/build"] input[name="csrf_token"]').evaluate(input => { input.value = 'forged'; });
+  await liveIdle();
   const response = page.waitForResponse(r => r.url().endsWith('/pull-requests/11/build'));
-  await page.getByRole('button', {name: 'Build latest commit', exact: true}).click();
+  // Find, forge and submit the form in one step. A locator finds its element
+  // before its function runs, so a live refresh in between would hand it a
+  // form that is no longer on the page, and that submit is silently dropped.
+  await page.evaluate(() => {
+    const form = document.querySelector('form[action$="/pull-requests/11/build"]');
+    form.querySelector('input[name="csrf_token"]').value = 'forged';
+    form.requestSubmit(form.querySelector('button[type="submit"]'));
+  });
   assert.equal((await response).status(), 403);
   await page.waitForFunction(() => document.querySelector('[data-detail-feedback]')?.dataset.error === 'true');
   assert.match(await page.locator('[data-detail-feedback]').innerText(), /could not be verified/);
@@ -1487,6 +1577,7 @@ test('the workspace loads within its page weight and stays usable on a slow netw
     .reduce((sum, entry) => sum + (entry.transferSize || 0), 0));
   assert(bytes > 0 && bytes < 512 * 1024, `page weight ${bytes} bytes`);
   assert(loadMs < 15000, `slow-network load took ${loadMs} ms`);
+  await liveIdle(page, {timeout: 20000});
   await page.locator('#pull-request-search').fill('preview 25');
   await page.waitForFunction(() => document.querySelectorAll('.pr-table tbody tr').length === 1, null, {timeout: 15000});
   await page.locator('.pr-table tbody .pr-cell-text a').first().click();
@@ -1582,6 +1673,8 @@ test('starter kits write both files for the chosen stack as editable tabs, and e
  await page.waitForFunction(()=>/1 to fix/.test(document.querySelector('.kit-check').innerText));
  assert.match(await page.locator('.kit-problems').innerText(),/Port: Use a port/);
  assert.match(await file('previewrc').inputValue(),/^port: 8000/m);
+ // Wait until the page itself has refreshed for 70000 (the file check can answer first).
+ await page.waitForURL(url=>url.searchParams.get('port')==='70000');await kitIdle(page);
  await page.locator('#kit-port').fill('8001');
  await page.waitForFunction(()=>/^port: 8001/m.test(document.querySelector('#kit-code-previewrc').value));
  // Editing marks the tab, is checked by the server as you type, and survives a change of choices.
