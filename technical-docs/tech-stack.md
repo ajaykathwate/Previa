@@ -283,7 +283,7 @@ and [development setup](../docs/02-development-setup.md#f5f6-installation-recove
 ## Optional Google login and reviewer invitations (F7)
 
 `internal/auth` adds Google's authorization-code+PKCE+nonce flow and
-`github.com/coreos/go-oidc/v3` (v3.21.0; go-jose/v4 v4.1.4) for signed ID-token
+`github.com/coreos/go-oidc/v3` (v3.21.0; go-jose/v4 v4.1.7) for signed ID-token
 verification. The existing OAuth2 and SCS/CSRF stack remains. No Google tokens
 persist; no Google browser SDK or mail service is introduced. Roles remain local.
 

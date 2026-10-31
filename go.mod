@@ -13,7 +13,7 @@ require (
 	github.com/getsentry/sentry-go v0.49.0
 	github.com/getsentry/sentry-go/slog v0.49.0
 	github.com/go-chi/chi/v5 v5.3.2
-	github.com/go-jose/go-jose/v4 v4.1.4
+	github.com/go-jose/go-jose/v4 v4.1.7
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/goccy/go-yaml v1.19.2
 	github.com/golang-jwt/jwt/v4 v4.5.2

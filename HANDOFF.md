@@ -1,7 +1,17 @@
 # Project handoff
-Last updated: 2026-10-24
+Last updated: 2026-10-31
 
-## Latest task — owner requests after the regression (committed)
+## Latest task — master CI release scan failure (uncommitted)
+- PR #2 merged to master; CI "Release images build and scan" failed: Trivy found
+  CVE-2026-116587 (HIGH, go-jose DoS via crafted RSA JWKs) in go-jose/v4 v4.1.4,
+  pulled in by coreos/go-oidc (internal/auth). Not a code change; the DB updated.
+- Fix: go-jose/v4 v4.1.4 → v4.1.7 (go.mod/go.sum), technical-docs/tech-stack.md.
+  All cmd binaries embed v4.1.7 (go version -m); egress does not link it.
+- Verified locally: build, vet, make vuln 0 reachable, go test ./... (54 ok, DB
+  tests skipped: Docker/Postgres not running). Image scan not rerun locally (no
+  Docker in WSL); confirm the release job on the next CI run.
+
+## Previous task — owner requests after the regression (committed)
 - Branch mvp-complete, PR #2 into master. Commit only when the owner asks.
 - Open Source Tested (nav/footer/home/page title; URL /open-source-tests kept): ten
   projects (mermaid-live-editor, umami, miniflux, fastapi template, bakerydemo,
@@ -40,19 +50,9 @@ Last updated: 2026-10-24
   Do not edit technical-docs/inside-previa.md.
 
 ## Previous task — full regression (report test-docs/2026-10-22-full-regression-report.md)
-## Defects fixed (each with a test)
-- D-01 Go 1.26.10 (GO-2026-6809, reachable crypto/x509): go.mod, tools/go.mod,
-  Dockerfile GO_IMAGE digest (index digest fe3da92a…), docs/02, docs/23, tech docs.
-- D-02 production data race: tailwind-merge-go v0.2.0 shared LRU → v0.2.3;
-  web/components/utils/utils_test.go. Real class sets verified identical.
-- D-03 /workspaces/{id}/delete 503 → internal/app/accounts.go workspaceDeletion.
-- D-04 pending workspace Install GitHub bare 403 → earlyaccess Guard redirects forms
-  to /early-access; Repositories shows status, no button.
-- D-05 Reviewers no longer see/open Early access (sidebar + workspaces middleware).
-- D-06 missed pushes: pullrequests.Origin (Discovered/Confirmed/Pushed);
-  housekeeping uses ConfirmUpstream; SyncArgs.Confirm for Sync button. A new commit
-  on a tracked open PR schedules Automatic work (never forks; Manual records only;
-  connection discovery and pre-build VerifyUpstream never start work).
+- Defects D-01..D-06 fixed with tests (details in the report): Go 1.26.10 pin
+  (Dockerfile GO_IMAGE digest fe3da92a…), tailwind-merge-go v0.2.3 race, workspace
+  delete 503, early-access guards, missed pushes via pullrequests.Origin.
 
 ## Owner-requested product changes (docs updated)
 - "Only what a person can use" (docs/21): no disabled controls; role-based hiding;
