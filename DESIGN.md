@@ -1,6 +1,6 @@
 # PR Preview Environments: Design Document
 
-Companion to `README.md` (requirements and stack). This document covers every feature in depth: what it must do, how hard it is, which tools apply to it specifically, how it works step by step, and the design decisions and edge cases behind it. No code appears here except the Mermaid diagram at the end.
+Companion to `REQUIREMENTS.md` (requirements and stack). This document covers every feature in depth: what it must do, how hard it is, which tools apply to it specifically, how it works step by step, and the design decisions and edge cases behind it. No code appears here except the Mermaid diagram at the end.
 
 ## How to read this document
 
@@ -62,7 +62,7 @@ Medium. The tables are simple, but correctness under duplicate and out-of-order 
    only updates records observed while open. Store nullable GitHub mergeability
    plus derived `open`/`checking`/`conflicts` build status separately from lifecycle.
    Unresolved events poll briefly outside locks; all builds fail closed under the
-   generation/admission lock. See README Section 4.5 for the Phase 3 scope.
+   generation/admission lock. See REQUIREMENTS Section 4.5 for the Phase 3 scope.
 7. All multi-step state changes (for example "mark building and enqueue job") happen inside a single transaction.
 
 ### Design decisions and edge cases

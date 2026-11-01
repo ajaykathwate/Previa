@@ -154,9 +154,9 @@ start of each task. Do not rerun old phases or purge retained PR records.
 ## Shared instructions for every prompt
 
 Read AGENTS.md, HANDOFF.md and Git status first. Read the task-relevant sections of
-[README.md](../README.md) and [DESIGN.md](../DESIGN.md). Use DESIGN Section 20's
+[REQUIREMENTS.md](../REQUIREMENTS.md) and [DESIGN.md](../DESIGN.md). Use DESIGN Section 20's
 feature packages and existing stack; its feature layout takes precedence over
-README's older illustrative tree. Keep backend files flat within each feature,
+REQUIREMENTS.md's older illustrative tree. Keep backend files flat within each feature,
 presentation in web/, and construction in internal/app. Use small consumer-owned
 interfaces; do not create global handler/store layers or speculative frameworks.
 
@@ -196,7 +196,7 @@ an adapter, with explicit prerequisites and isolated, cleaned fixtures. Report
 skips/unavailable dependencies and packages without tests honestly.
 
 Stop at each prompt's acceptance boundary. Summarize changes, commands/results,
-remaining blockers and any README/DESIGN conflict before changing architecture.
+remaining blockers and any REQUIREMENTS/DESIGN conflict before changing architecture.
 Update HANDOFF.md under 100 lines. Preserve unrelated work; do not commit, push,
 publish or deploy unless that task/session authorizes it. External GitHub writes
 for live proofs require an explicitly authorized disposable repository.
@@ -363,7 +363,7 @@ infrastructure, and neither may weaken a release check that has already passed.
 
 ## Prompt 5 — Hardened Docker candidates and readiness
 
-> Implement DESIGN Section 10 and README Section 4.6 in internal/runtime.
+> Implement DESIGN Section 10 and REQUIREMENTS Section 4.6 in internal/runtime.
 > Compose source, builder and secrets behind the existing environments.Runtime
 > contract; keep lifecycle transactions in internal/environments. A successful
 > Build returns a healthy candidate with no public route.
@@ -424,7 +424,7 @@ infrastructure, and neither may weaken a release check that has already passed.
 > tests before real issuance, protected DNS credentials and persistent restrictive
 > ACME storage. Separate dashboard and untrusted preview origins/cookies; unknown/
 > expired hosts get the specified safe fallback. Expose no public admin API.
-> Reconcile Docker socket access with README's worker-only rule; flag any required
+> Reconcile Docker socket access with REQUIREMENTS.md's worker-only rule; flag any required
 > restricted discovery mechanism rather than mounting the raw socket everywhere.
 >
 > Test real HTTPS routing, stable URLs, successful/failed swaps with the old
@@ -601,7 +601,7 @@ infrastructure, and neither may weaken a release check that has already passed.
 
 ## Prompt 12 — Production packaging, CI, restore and release acceptance
 
-> Deliver the deployment path for the completed single-host MVP. Read README's
+> Deliver the deployment path for the completed single-host MVP. Read REQUIREMENTS.md's
 > accepted single VPS/Docker Compose stack, DESIGN Sections 10–11/15/18,
 > docs/02-development-setup.md and current deploy files. Prepare deployable artifacts
 > and validate them on disposable local/staging infrastructure. Publishing or
@@ -621,19 +621,19 @@ infrastructure, and neither may weaken a release check that has already passed.
 > permissions, matching webhook secret, encryption keys, migrations and startup
 > order. Keep secrets out of images/Git/CLI arguments; validate complete production
 > config before accepting builds. Use staged ACME testing before live issuance.
-> Provide the documented MVP host setup script allowed by README Section 4.9;
+> Provide the documented MVP host setup script allowed by REQUIREMENTS Section 4.9;
 > Terraform is optional. Keep current config names consistent with the loaders,
-> explaining differences from README's illustrative environment variable list.
+> explaining differences from REQUIREMENTS.md's illustrative environment variable list.
 >
 > Provide repeatable upgrade and rollback procedures, explicit migration
 > compatibility boundaries and backups of Postgres, encryption key versions and
 > essential TLS/controller state. Test restore into a fresh disposable database/
 > host and reconcile with actual Docker state before reopening admission.
 > Record restore time and data-loss window; a backup script alone is insufficient.
-> Schedule nightly pg_dump to protected object storage as required by README
+> Schedule nightly pg_dump to protected object storage as required by REQUIREMENTS
 > Section 4.9, with retention and failure alerts; never expose keys or dump contents.
 >
-> Use GitHub Actions and GoReleaser for versioned releases per README Section 4.9.
+> Use GitHub Actions and GoReleaser for versioned releases per REQUIREMENTS Section 4.9.
 > Add CI for generation consistency, build/tests/vet/lint, migrated Postgres
 > integration, browser regressions and image build/scan. Keep untrusted fork CI
 > away from deployment credentials and privileged production Docker.
@@ -661,10 +661,10 @@ resolver.
 > Make backend and API repositories as previewable as web frontends. Today a preview
 > is one container whose only outbound route is HTTP(S) on ports 80/443 through the
 > egress proxy. An app that needs PostgreSQL, Redis, migrations, seed data or a
-> background worker therefore cannot run. Read README Sections 2.3 and 2.5, DESIGN
+> background worker therefore cannot run. Read REQUIREMENTS Sections 2.3 and 2.5, DESIGN
 > Sections 5, 9–11 and 13–18, and docs/06, 10, 11, 12, 14 and 17 before designing.
-> This task narrows README 2.5's exclusion of multi-service apps. Flag that change,
-> then update README and DESIGN consistently in the same task. Arbitrary Compose
+> This task narrows REQUIREMENTS 2.5's exclusion of multi-service apps. Flag that change,
+> then update REQUIREMENTS and DESIGN consistently in the same task. Arbitrary Compose
 > files, images chosen in a PR, and buildpacks stay out of scope.
 >
 > Add platform-managed backing services that a commit declares in .previewrc.yaml.
@@ -767,7 +767,7 @@ current behavior, limits and the shared-workspace interpretation of ownership.
 >   installation and linking them returns `ErrForbidden`.
 >
 > Before designing, read:
-> - README Section 2.2;
+> - REQUIREMENTS Section 2.2;
 > - DESIGN Sections 4, 6, 14 and 15;
 > - docs/04, 05, 12, 14 and 23;
 > - `installations.ParseLifecycleEvent` and `ApplyEventTx`,

@@ -3035,7 +3035,7 @@ candidate.
 
 | Source | Behavior checked for this runbook |
 | --- | --- |
-| [README](../README.md), [DESIGN](../DESIGN.md) | Single-VPS architecture, PostgreSQL/River, runtime isolation and scope. |
+| [REQUIREMENTS](../REQUIREMENTS.md), [DESIGN](../DESIGN.md) | Single-VPS architecture, PostgreSQL/River, runtime isolation and scope. |
 | [Production Compose](../deploy/production/compose.yml) | Services, profiles, health dependencies, mounts, ports, resources and pinned images. |
 | [Production env template](../deploy/production/previa.env.example), [config loaders](../internal/platform/config/config.go) | Required/generated settings, defaults, file checks and production validation. |
 | [Setup script](../deploy/production/setup.sh) | Packages (Docker, Tailscale, pinned lazydocker), the SSH rule that stays on Tailscale, directory ownership, generated secrets, Docker group and backup timer. |

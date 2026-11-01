@@ -1,15 +1,19 @@
 # Project handoff
-Last updated: 2026-10-31
+Last updated: 2026-11-01
 
-## Latest task — master CI release scan failure (uncommitted)
-- PR #2 merged to master; CI "Release images build and scan" failed: Trivy found
-  CVE-2026-116587 (HIGH, go-jose DoS via crafted RSA JWKs) in go-jose/v4 v4.1.4,
-  pulled in by coreos/go-oidc (internal/auth). Not a code change; the DB updated.
-- Fix: go-jose/v4 v4.1.4 → v4.1.7 (go.mod/go.sum), technical-docs/tech-stack.md.
-  All cmd binaries embed v4.1.7 (go version -m); egress does not link it.
-- Verified locally: build, vet, make vuln 0 reachable, go test ./... (54 ok, DB
-  tests skipped: Docker/Postgres not running). Image scan not rerun locally (no
-  Docker in WSL); confirm the release job on the next CI run.
+## Latest task — product README (uncommitted)
+- README.md is now the product overview (features, roles, repo files, get started,
+  not available yet, docs table). The old requirements/design README moved verbatim
+  to REQUIREMENTS.md (git mv); AGENTS.md, DESIGN, MVP-TODO, the expansion plan and
+  docs 01/11/12/15/25/27 + docs index now cite REQUIREMENTS.md. test-docs untouched.
+- Open: FAQ says previews expire 48 h after publication (code default), but the
+  production env example sets ENV_TTL_HOURS=24; README avoids a number.
+
+## go-jose CVE fix (committed 820f213 on mvp-complete, not yet on master)
+- Master's release scan failed on CVE-2026-116587 (go-jose/v4 v4.1.4 via go-oidc);
+  bumped to v4.1.7. Needs a PR mvp-complete → master, then tag v0.1.0 (no tags yet).
+- Production host: OVH VPS-1 Singapore ordered (trial; minimum-host settings in
+  docs/25), pending OVH document verification. Sentry project created.
 
 ## Previous task — owner requests after the regression (committed)
 - Branch mvp-complete, PR #2 into master. Commit only when the owner asks.
@@ -18,10 +22,8 @@ Last updated: 2026-10-31
   saleor, sure, spring-petclinic, bookstack, docmost); no per-project status or Core
   tags (TestPageRendersEveryProjectOnceWithoutStatuses); each card's disclosure is
   "Test it yourself". Caveat for the owner: none of the ten has a recorded live run.
-- Logout → account switch: logout sets previa_signed_out (__Host- over HTTPS, 30
-  days); next GitHub login adds prompt=select_account until a sign-in completes;
-  connecting GitHub from the profile always does. Navbar Get started goes to
-  /auth/login when Google is configured (components.SignInURL). Docs 04, 36, DESIGN.
+- Logout sets previa_signed_out so the next GitHub login offers an account switch
+  (prompt=select_account); Get started goes to /auth/login when Google is configured.
 - Production refuses EARLY_ACCESS_ENABLED=true with empty SUPPORT_OPERATOR_GITHUB_IDS
   (server config + check-config); development logs a warning. prod smoke env sets
   operator 1. Docs 02, 25, 35, both env examples.
@@ -29,11 +31,8 @@ Last updated: 2026-10-31
 - .previewrc.yaml so Previa previews itself (server stage last in the Dockerfile;
   secrets SESSION_SECRET + previews GitHub OAuth App; APP_BASE_URL after the first
   build; docs/02 "Preview Previa on Previa"). Sign-in choices page redesigned.
-- CI fixes: go.mod tidy, tracker snapshot, deletion-journal.sh executable in Git,
-  access matrix waits for stream headers (no 300 ms deadline). Egress proxy and
-  forwarder now try every vetted address (IPv4 first, 4 s each): Docker DNS listed an
-  unreachable GitHub download address first, failing every self-preview build with 502.
-  Tailwind download retries and is cached in a BuildKit mount.
+- CI fixes (committed): egress proxy/forwarder try every vetted address (IPv4 first,
+  4 s each); Tailwind download retries and is cached in a BuildKit mount.
 - CI flakes (2026-10-24): routing stand-in app was a one-connection nc loop (Traefik
   500 on overlap), now `nc -lk -e`; forged-CSRF browser test submitted a form a live
   refresh had just replaced (locator lookup then evaluate), now liveIdle() + query in

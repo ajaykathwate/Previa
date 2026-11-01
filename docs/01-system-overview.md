@@ -3,7 +3,7 @@
 Previa is a self-hosted control plane that gives each GitHub pull request its own
 temporary preview environment. This document is the map: what exists today, how
 the pieces fit, the decisions behind them and the hard problems they solve.
-Requirements and the technology comparison live in [README.md](../README.md);
+Requirements and the technology comparison live in [REQUIREMENTS.md](../REQUIREMENTS.md);
 per-feature design lives in [DESIGN.md](../DESIGN.md).
 
 ## Status at a glance

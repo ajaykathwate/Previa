@@ -6,7 +6,7 @@ dates or deadlines.
 
 The product's source of truth stays
 [README-MVP-PRODUCT-EXPANSION.md](README-MVP-PRODUCT-EXPANSION.md) (cited below as
-"spec §…"), [README.md](README.md) and [DESIGN.md](DESIGN.md); deployment follows
+"spec §…"), [REQUIREMENTS.md](REQUIREMENTS.md) and [DESIGN.md](DESIGN.md); deployment follows
 [docs/25](docs/25-production-deployment.md) and [docs/22](docs/22-mvp-operations.md).
 If this file and those documents disagree, they win and this file is corrected.
 

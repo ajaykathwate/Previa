@@ -59,15 +59,15 @@ Complete scope does not mean every possible adjacent feature. General chat, visu
 
 ### 1.1 Changes to the existing source-of-truth boundaries
 
-The owner has authorized this document as the plan for a broader hosted team product. The existing [README](README.md) and [DESIGN](DESIGN.md) still describe the implemented baseline until their requirements are revised alongside implementation.
+The owner has authorized this document as the plan for a broader hosted team product. The existing [REQUIREMENTS](REQUIREMENTS.md) and [DESIGN](DESIGN.md) still describe the implemented baseline until their requirements are revised alongside implementation.
 
 | Existing boundary | Required change | What remains bounded |
 | --- | --- | --- |
-| Installation owner is the dashboard/account scope; team management is excluded in README §2.5 | Workspace membership and repository permissions become the customer authorization scope. | GitHub or optional Google human identity; explicit grants; no enterprise identity system. |
-| GitHub comments/checks are the review-facing channel in README §2.4 | Previa becomes the canonical application for preview review; GitHub displays summaries and links. | No bidirectional synchronization of all human GitHub discussions. |
-| One current build/environment per PR; no build archive in README §4.5 | Add bounded activity records and immutable references to reviewed deployments. | No historical containers, past-build browsing, or retained copies of every log. |
+| Installation owner is the dashboard/account scope; team management is excluded in REQUIREMENTS §2.5 | Workspace membership and repository permissions become the customer authorization scope. | GitHub or optional Google human identity; explicit grants; no enterprise identity system. |
+| GitHub comments/checks are the review-facing channel in REQUIREMENTS §2.4 | Previa becomes the canonical application for preview review; GitHub displays summaries and links. | No bidirectional synchronization of all human GitHub discussions. |
+| One current build/environment per PR; no build archive in REQUIREMENTS §4.5 | Add bounded activity records and immutable references to reviewed deployments. | No historical containers, past-build browsing, or retained copies of every log. |
 | Self-hosted control plane with operator/account limits | Hosted workspaces need visible entitlements, usage, billing state, and account lifecycle. | Existing server/worker architecture and host resource ceilings remain. |
-| Managed-service data never survives a rebuild (README §2.5, [backend previews](docs/11-backend-previews.md)); every build is a PR build | Feature 5B copies a repository baseline or the PR's own serving data into each new candidate, adds a `seed` key, and adds a baseline build of one branch that is not attached to a PR. | Every candidate keeps its own service containers, credentials, network and tmpfs. No shared live database, no production data, no data moving between PRs or from a PR into the baseline; Redis stays fresh. |
+| Managed-service data never survives a rebuild (REQUIREMENTS §2.5, [backend previews](docs/11-backend-previews.md)); every build is a PR build | Feature 5B copies a repository baseline or the PR's own serving data into each new candidate, adds a `seed` key, and adds a baseline build of one branch that is not attached to a PR. | Every candidate keeps its own service containers, credentials, network and tmpfs. No shared live database, no production data, no data moving between PRs or from a PR into the baseline; Redis stays fresh. |
 
 These are explicit product-scope changes, not incidental UI polish. Nothing here requires React, Kubernetes, another database, a separate service, or a replacement orchestration pipeline.
 
@@ -989,7 +989,7 @@ Features can reuse small interfaces from an earlier step, but visible functional
 
 ### 11.3 Documents and development operations during implementation
 
-For each actual implementation step, update the relevant README/DESIGN requirements, feature docs, user guide, and `HANDOFF.md`. Add SQL generation ownership in `sqlc.yaml` when new feature SQL is introduced. Preserve flat feature packages, theme, modal confirmations, CSRF, and source/request/publication fences.
+For each actual implementation step, update the relevant REQUIREMENTS/DESIGN requirements, feature docs, user guide, and `HANDOFF.md`. Add SQL generation ownership in `sqlc.yaml` when new feature SQL is introduced. Preserve flat feature packages, theme, modal confirmations, CSRF, and source/request/publication fences.
 
 When migrations, prerequisites, configuration, setup commands, startup behavior, or verification targets change, update [development setup](docs/02-development-setup.md) alongside `.env.example`, config loaders, Makefile, and Air. Describe automatic Make environment loading separately from manual exports needed by direct Go commands. All proposed settings in this specification are future design inputs, not settings accepted by today's executable.
 
@@ -1082,7 +1082,7 @@ The external references describe market patterns and integration contracts. They
 - GitHub projection contract: [Issue/PR comments API](https://docs.github.com/en/rest/issues/comments).
 - Subscription implementation contracts: [Stripe Checkout subscriptions](https://docs.stripe.com/payments/checkout/build-subscriptions), [Webhooks](https://docs.stripe.com/webhooks), [Subscription events](https://docs.stripe.com/billing/subscriptions/webhooks), [Cancellation](https://docs.stripe.com/billing/subscriptions/cancel), [Idempotency](https://docs.stripe.com/api/idempotent_requests).
 
-Primary project references: [README](README.md), [DESIGN](DESIGN.md), [development setup](docs/02-development-setup.md), [backend previews](docs/11-backend-previews.md), [GitHub reporting](docs/14-pr-feedback.md), [housekeeping/capacity](docs/15-housekeeping-and-capacity.md), [build policy](docs/16-build-policy-and-intents.md), [scheduling](docs/17-build-scheduling.md), [ordering](docs/19-generation-ordering.md), [realtime](docs/20-realtime-updates.md), and [UI architecture](docs/21-ui-architecture.md).
+Primary project references: [REQUIREMENTS](REQUIREMENTS.md), [DESIGN](DESIGN.md), [development setup](docs/02-development-setup.md), [backend previews](docs/11-backend-previews.md), [GitHub reporting](docs/14-pr-feedback.md), [housekeeping/capacity](docs/15-housekeeping-and-capacity.md), [build policy](docs/16-build-policy-and-intents.md), [scheduling](docs/17-build-scheduling.md), [ordering](docs/19-generation-ordering.md), [realtime](docs/20-realtime-updates.md), and [UI architecture](docs/21-ui-architecture.md).
 
 
 ## Final MVP addition: Google sign-in and reviewer email invitations (F7)

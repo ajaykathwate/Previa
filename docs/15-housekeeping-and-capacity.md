@@ -18,7 +18,7 @@ diagnostic.
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Expiry (owner decision) | `ENV_TTL_HOURS` (default 48) after the preview's **latest publication**. A rebuild that publishes restarts it; a failed attempt does not; teardown clears it; 0 disables expiry | Active PRs keep their preview; abandoned ones stop costing resources. The setting name is the one README §4.8 reserved. |
+| Expiry (owner decision) | `ENV_TTL_HOURS` (default 48) after the preview's **latest publication**. A rebuild that publishes restarts it; a failed attempt does not; teardown clears it; 0 disables expiry | Active PRs keep their preview; abandoned ones stop costing resources. The setting name is the one REQUIREMENTS §4.8 reserved. |
 | Deleting orphans (owner decision) | Delete, but only objects older than a **15-minute grace period**; every decision is logged; `HOUSEKEEPING_DRY_RUN=true` logs and deletes nothing | A just-created object is never mistaken for an orphan, and operators can watch before trusting it. |
 | PR reconciliation (owner decision) | Only PRs with **live work** (a preview or an unfinished build request), every 15 minutes, 10 per pass, each PR at most once per 15 minutes | Missed closes and new commits are caught without spending GitHub's rate limit on idle PRs. |
 | Capacity full (owner decision) | **Wait and retry**: the request keeps its place and says "Waiting for capacity"; its job is snoozed with backoff (30 s doubling to 5 min) and spends no attempt; cleanup keeps its own queue | A busy host delays previews instead of failing them, and freeing capacity is never stuck behind waiting builds. |

@@ -4,7 +4,7 @@ Backend and API repositories preview as well as web frontends: a commit can ask
 for platform-managed **PostgreSQL**, **Redis** and **MySQL**, a **setup command** (migrations,
 seed data), a few unrouted **processes** (a queue worker) and a **docs path**, and
 its owner can approve **outbound connections** to an external database or message
-broker. This narrows README §2.5's exclusion of multi-service apps: services come
+broker. This narrows REQUIREMENTS §2.5's exclusion of multi-service apps: services come
 only from the operator's pinned catalog, never from images chosen in a PR, and
 arbitrary Compose files, custom service images, buildpacks, data that survives a
 rebuild, copies of production databases and non-HTTP ingress stay out of scope.

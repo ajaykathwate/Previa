@@ -1,7 +1,7 @@
 # Agent instructions for this repository
 
 ## Source of truth
-- README.md: requirements and tech stack.
+- REQUIREMENTS.md: requirements and tech stack.
 - DESIGN.md: per-feature design (requirement, complexity, stack, implementation,
   edge cases) and the folder structure (Section 20).
 Follow these documents. Do not introduce architecture, libraries, or folder
@@ -59,12 +59,12 @@ unbuilt feature, stub it behind a minimal interface rather than building it.
   If tests don't exist yet for what you touched, say so rather than
   silently skipping.
 - Summarize what you created/changed and why, and flag any deviation
-  you made from README.md/DESIGN.md and why.
+  you made from REQUIREMENTS.md/DESIGN.md and why.
 
 ## Session continuity
 - At the start of a session, read `HANDOFF.md` and check `git status`.
 - Use the handoff to locate relevant files. Read only the code and the
-  README.md/DESIGN.md sections needed for the requested task.
+  REQUIREMENTS.md/DESIGN.md sections needed for the requested task.
 - Verify handoff details against the current files before acting; code and
   the project source-of-truth documents take precedence.
 - Before ending a task, update `HANDOFF.md` when project state, decisions,

@@ -137,7 +137,7 @@ Not guaranteed (stated plainly):
   activation, removed with the network at teardown) and dials the candidate by
   container name through Docker's DNS on that network. The control plane never joins
   preview networks.
-- Traefik has **no Docker socket and no Docker provider** (README's "only the worker
+- Traefik has **no Docker socket and no Docker provider** (REQUIREMENTS.md's "only the worker
   touches the socket" holds). The worker attaches networks and reads the API through
   the socket it already holds; no socket proxy is needed.
 - Previews can reach the router's public entry points on their network, and through

@@ -1,719 +1,219 @@
-# PR Preview Environments — Requirements & Design
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="web/static/brand/previa-logo-on-dark.png">
+    <img src="web/static/brand/previa-logo.png" alt="Previa" width="280">
+  </picture>
+</p>
 
-## 1. Overview
+<p align="center"><strong>A live preview for every pull request.</strong></p>
 
-A self-hosted service that builds and deploys isolated, publicly reachable preview
-environments for pull requests on connected GitHub repositories. Each repository
-defaults to **Manual**: a workspace Owner, Admin or granted Developer requests a
-build for a specific PR. Owners and Admins can
-enable **Automatic**, which builds the latest commit after a five-minute quiet
-period. Previews are torn down when the PR closes or merges.
+<p align="center">
+  <a href="https://previa.live">Website</a> ·
+  <a href="technical-docs/user-guide.md">User guide</a> ·
+  <a href="https://previa.live/#faq">FAQ</a> ·
+  <a href="docs/README.md">Documentation</a>
+</p>
 
-The full pipeline runs end to end as an operational **local/staging** MVP: the
-worker composes source fetching, isolated builds, hardened previews, fenced HTTPS
-routing, PR feedback, durable teardown and housekeeping from validated settings, and
-the dashboard's Build, Retry, Rebuild and Tear down controls drive it. It is
-observable (correlated, redacted logs; errors, uptime and backup checks reported
-to Sentry; private Prometheus metrics and readiness), hardened for production, and
-packaged with a production Compose file whose images the server builds from a
-release tag, host setup, encrypted backups with a rehearsed restore, and CI.
-Live proofs against hosted GitHub, real DNS and a real host remain before a public
-rollout. See [operating the MVP](docs/22-mvp-operations.md),
-[production deployment](docs/25-production-deployment.md), the
-[release report](docs/26-release-report.md) and the [roadmap](docs/27-roadmap.md). Start with the [documentation index](docs/README.md)
-for a guided reading order. Quick references: [tech stack](technical-docs/tech-stack.md),
-[user guide and manual tests](technical-docs/user-guide.md), and Mermaid
-[class](technical-docs/class-diagram.md) and [database](technical-docs/database-schema-diagram.md) diagrams.
+<p align="center">
+  <a href="https://github.com/ajaykathwate/Previa/actions/workflows/ci.yml"><img src="https://github.com/ajaykathwate/Previa/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI status"></a>
+</p>
 
-This document is written for the builder (me), not an end user — every step
-explains what happens internally at that stage, not just what the user sees.
+Previa turns every GitHub pull request into its own live preview: the exact
+commit, built from your own Dockerfile, running at a private HTTPS link that is
+posted right on the pull request. Reviewers click, try the change and leave
+feedback, without checking out a branch, installing dependencies or setting up a
+database.
 
----
+> **Early access.** Previa is free while it is in early access. New workspaces are
+> approved by hand.
 
-## 2. Requirements
+## Why Previa
 
-### 2.1 Actors
+Reviewing a pull request usually means reading a diff and imagining the result,
+or pulling the branch, installing everything and hoping it starts. A screenshot
+shows a moment; a preview is a place to explore. Previa puts the running change
+one click away from the review, so designers, QA, product managers, backend teams
+and maintainers all review what will actually ship.
 
-- **Repo Owner** — installs the app on their GitHub repo, configures it.
-- **Contributor / Reviewer** — opens PRs, reviews preview links, pushes commits.
-- **The System** — everything I'm building: webhook receiver, build orchestrator,
-  router, GitHub API client.
+## How it works
 
-### 2.2 Authentication — GitHub only, MVP scope
-
-Login for the MVP is **"login with GitHub" only**. No separate account system,
-no email/password. Here's exactly what that means and what happens at each step,
-because "login with GitHub" is actually two different GitHub integrations that
-get confused with each other if you don't separate them clearly:
-
-**A. GitHub OAuth App — for human login to *your* dashboard**
-This is what lets a Repo Owner log into your web dashboard (see 2.4) using their
-GitHub identity, the same way "Sign in with Google" works elsewhere.
-
-Steps:
-1. Repo Owner clicks "Login with GitHub" on your site.
-2. Your app redirects them to GitHub's OAuth authorize URL, with your registered
-   OAuth App's `client_id` and a `redirect_uri` pointing back to your server.
-3. GitHub shows the user a consent screen ("This app wants to know your GitHub
-   identity").
-4. User approves. GitHub redirects back to your `redirect_uri` with a temporary
-   `code` in the URL.
-5. Your backend exchanges that `code` (plus your `client_secret`) for an
-   **access token**, by calling GitHub's token endpoint server-to-server.
-6. Your backend uses that access token to call GitHub's `/user` API, gets the
-   user's GitHub username/ID/email, and creates or finds a matching user record
-   in your own database.
-7. Your backend creates its own session for this user (a signed cookie or a JWT)
-   — from this point on, the user is talking to *your* session system, not
-   GitHub, for every subsequent request to your dashboard.
-
-This step **only establishes identity**. It does NOT give you permission to read
-repos, receive webhooks, or create comments — that's a separate integration (B).
-
-**B. GitHub App — for repo access, webhooks, and posting comments/checks**
-This is the actual integration that does the work: receiving PR events and
-acting on repos. It is installed *per repository*, separately from the OAuth
-login above.
-
-Steps:
-1. You register a **GitHub App** (not an OAuth App) once, in your GitHub
-   developer settings. At registration you declare exactly what it needs:
-   - Permissions: Pull requests (read), Contents (read — to pull code),
-     Checks (write — to post status), Issues/PR comments (write).
-   - Events to subscribe to: `pull_request`.
-   - A webhook URL: `https://yourdomain.com/webhooks/github`.
-2. Repo Owner, from your dashboard (after logging in via A), clicks
-   "Install on GitHub" — this sends them to GitHub's App installation flow.
-3. GitHub asks the Repo Owner to pick which repo(s) to install it on, and shows
-   them exactly what permissions it's requesting.
-4. Repo Owner approves. GitHub creates an "installation" record and redirects
-   back to your app with an `installation_id`.
-5. Your backend stores that `installation_id` against the repo, in your
-   database, associated with the logged-in user's account.
-6. From now on, GitHub will send webhook events (signed with a shared secret you
-   configured) to your `/webhooks/github` endpoint whenever anything relevant
-   happens on that repo (a PR opened, updated, closed).
-7. Whenever your backend needs to *act* on that repo (clone code, post a
-   comment), it doesn't use the user's OAuth token from step A — it generates
-   a short-lived **installation access token** by authenticating as the GitHub
-   App itself (using a private key you hold) and requesting a token scoped to
-   that specific installation. This is the credential actually used to call
-   GitHub's API on the repo's behalf.
-
-**Why both are needed:** (A) proves "this human is who they say they are" so
-they can use your dashboard. (B) is what actually grants repo-level permissions
-and triggers webhooks — it's tied to the *repo*, not the person, and survives
-even if the person who installed it changes their password or leaves the team.
-
-### 2.3 Core user flow — end to end, every step explained
-
-**Step 0 — Setup (once per repo)**
-1. Repo Owner logs in (2.2-A).
-2. Repo Owner installs the GitHub App on their repo (2.2-B).
-3. Repo Owner adds `.previewrc.yaml` to the repository root. The file is required,
-   but individual settings have defaults: root `Dockerfile`, port `3000`, no env
-   entries, no HTTP health path, and the `standard` resource tier. Example:
-   ```yaml
-   dockerfile: ./Dockerfile
-   port: 3000
-   env:
-     - NODE_ENV=preview
-   health_check_path: /health # optional; include only if the app provides it
-   resource_tier: standard
-   ```
-4. The repository defaults to **Manual**. Its owner may enable **Automatic** in
-   the dashboard; this policy is stored by the platform, not in PR-controlled YAML.
-   Connecting a repository or enabling Automatic does not bulk-build existing PRs.
-5. Optionally, the repository's **Setup** tab checks one open pull request's
-   commit (configuration, Dockerfile and context, without building) and walks to
-   its first preview; see [guided onboarding](docs/29-guided-onboarding.md).
-6. Each pull request has a **review page**: Owners, Admins and Developers write
-   its testing instructions, and everyone with preview access (Reviewers included)
-   records findings against the deployment they tested, replies, edits, removes and
-   resolves them in Previa; GitHub's comment links to it. See
-   [native review and feedback](docs/30-reviews.md).
-7. Previews are ready to test: the repository's `setup` seeds synthetic data into
-   each deployment's own database, the review page shows how setup went, people who
-   can build **Reset test data** (a confirmed Rebuild that seeds again), and Owners
-   and Admins store a preview-only **test access** login, sealed, that members
-   reveal on request. See [ready-to-test sample data](docs/31-test-data.md).
-
-Backend and API repositories can also declare platform-managed PostgreSQL, Redis
-and MySQL (`services`), a setup command for migrations and seed data (`setup`), up to
-three unrouted processes such as a queue worker (`processes`) and a docs path
-(`docs_path`); see [backend previews](docs/11-backend-previews.md).
-
-`{}` is a valid minimal file if these defaults match the app. The port describes
-where the app already listens inside its container; it does not change the app's
-listening port. Named tiers are `small` (0.5 vCPU / 512 MiB), `standard` (1 vCPU /
-1 GiB, default), and `large` (2 vCPU / 2 GiB). Default platform ceilings are 2 vCPU
-and 2 GiB per preview; lower platform ceilings clamp the resolved limits with a
-notice. Numeric resource fields are not supported. These are runtime container
-limits, separate from build concurrency/timeouts. An omitted health path does not
-authorize publishing an unchecked container: the preview must still pass the
-runtime's readiness check before it is routed.
-
-Every build fetches and validates the exact commit's configuration first.
-See [repository configuration](docs/06-source-and-configuration.md) for strict validation,
-safe error categories, fixtures and effective config hashing. Build mode remains
-platform-owned and cannot be set through this YAML.
-
-Monorepos may set `context: apps/web`; the Dockerfile path is relative to that
-directory, while `.previewrc.yaml` stays at the repository root. The full archive
-still must fit the source limits (256 MiB download, 1 GiB unpacked, 100,000
-entries). Git submodule manifests and LFS pointers needed by the context are
-detected and refused with guidance; fetching them is not implemented.
-`build_timeout: 20m` bounds the image stage when the operator's `BUILD_TIMEOUT`
-allows it (12m overall by default, including source and startup). Linux images
-must match the worker's architecture; Windows and GPU workloads are unsupported.
-
-**Step 1 — PR opened**
-1. Contributor opens a PR on GitHub.
-2. GitHub sends a `pull_request` webhook event, type `opened`, to your
-   `/webhooks/github` endpoint. The payload includes the repo, PR number,
-   head branch name, and head commit SHA.
-3. Your webhook handler verifies the payload signature (using the shared
-   webhook secret) to confirm it really came from GitHub, not a spoofed request.
-4. Your handler checks the linked installation and records the latest PR state
-   and generation. In **Manual**, it creates no automatic build request. The owner
-   selects that PR in the dashboard and chooses **Build latest commit**.
-5. In **Automatic**, record durable scheduling intent for five minutes after the
-   latest relevant change. Further head commits reset that PR's deadline; comments
-   and reviews do not. Return promptly; config fetching/building happens later.
-   Manual requests bypass this delay. All requests enforce ownership, repository
-   access, PR state, capacity and generation checks before execution.
-6. Once eligible, a separate **worker process** picks up the build job. PR state,
-   authorized request and River wake-up are recorded transactionally; an observed
-   PR update alone must not authorize a build in Manual mode.
-7. The worker generates an installation access token (2.2-B step 7) and uses it
-   to clone/download the repo at the PR's head commit SHA.
-8. The worker reads `.previewrc.yaml`, runs `docker build` using the specified
-   Dockerfile, tagged uniquely per PR (e.g. `preview-repo123-pr42`).
-9. On successful build, the worker starts a container from that image, with
-   resource limits applied (CPU/memory caps) and the declared port exposed
-   internally (not directly to the internet).
-10. The worker registers this container with the **router** — a mapping of
-    the PR's stable hostname (for example `pr-42-k2j4ld-7xq9m2fa.yourpreviewdomain.com`)
-    → this container's internal address/port. Previa's route controller accepts the
-    mapping behind a generation fence and writes it to the router's configuration
-    ([docs/12-routing-and-https.md](docs/12-routing-and-https.md)).
-11. The worker calls the GitHub API (using the installation token) to post a
-    comment on the PR: "✅ Preview ready: https://pr-42-k2j4ld-7xq9m2fa.yourpreviewdomain.com".
-12. If any step from 7-9 fails, the worker instead posts a comment showing the
-    failure (and ideally build logs, or a link to them).
-
-**Step 2 — New commit pushed to the same PR**
-1. GitHub sends `pull_request` webhook, type `synchronize`, with the new head
-   SHA.
-2. Same verification/validation as Step 1.
-3. Record the latest SHA and increment the PR generation in either mode. Manual
-   waits for an explicit build request; Automatic resets the five-minute deadline.
-   Superseded results cannot publish, and the worker's successor handoff must obey
-   authorized intent and the deadline rather than build every newer observed SHA.
-   An existing preview keeps its environment identity and URL.
-4. Worker repeats steps 7-9 from above, using the new commit SHA, and replaces
-   the running container for that PR (build new one, swap the router's mapping
-   to it, then stop the old one — avoid a gap where the URL points to nothing).
-5. Worker **edits the existing PR comment** (using its stored comment ID from
-   Step 1) rather than posting a new one — keeps the PR thread clean.
-
-**Step 3 — PR closed or merged**
-1. GitHub sends `pull_request` webhook, type `closed`.
-2. Handler invalidates pending builds and records a **teardown job** immediately in
-   either mode, without a quiet period. Generation fencing defeats in-flight builds.
-3. Worker stops and removes the container, removes the router's mapping for
-   that PR's subdomain, and deletes the built image (or marks it for cleanup)
-   to reclaim disk space.
-
-**Step 4 — Housekeeping (runs independently, not triggered by webhooks)**
-1. A scheduled background job runs periodically (e.g. every hour).
-2. It checks all currently-running preview environments against their last
-   activity time (or simply their age).
-3. Any environment older than a configured threshold (e.g. 24-48 hours) with
-   an open PR gets torn down anyway, and a comment is posted noting it expired
-   and can be redeployed with **Build latest commit**. In Automatic mode, a later
-   relevant commit can also schedule a replacement after the quiet period.
-4. This exists specifically to prevent silently leaking compute if a PR is
-   opened and forgotten.
-
-### 2.4 Is a web dashboard needed?
-
-The dashboard supports login, installation linking and the accepted manual build
-workflow. Owners need repository mode controls and a way to select a PR and request
-its latest commit. Review feedback lives in Previa: each pull request's review page
-holds its testing instructions and findings, and the GitHub comment links to it
-while comments and checks keep reporting builds.
-
-Current pages are Overview, Repositories, Builds, Previews, Workspaces (members,
-invitations and settings), and Developer Tools, plus a review page per pull
-request. Reviewer navigation exposes only permitted previews, their review pages
-and team settings.
-The workspace uses a "signal" theme (graphite neutrals, a lime accent, light and
-dark modes that follow the OS with a manual toggle, system sans plus monospace for
-commits and branches). A grouped sidebar collapses to an icon rail on medium screens
-and a drawer on phones; unbuilt areas appear as labelled, non-link "Coming next"
-items. Ctrl/⌘ K opens a command palette over the same links. Same-origin page
-changes use cross-document view transitions, and workspace links are prefetched
-on hover where the browser supports speculation rules.
-Overview shows real installation/repository/access counts, a setup checklist
-derived from those counts, where open pull requests are in the delivery pipeline
-and the latest build requests and previews.
-Repositories shows a responsive repository card grid (up to three columns, one on
-phones) inside a 1240px content column. Cards show the repository name, owner,
-access state, open pull requests, live previews, build mode and last sync; search
-and access filters share a sticky toolbar.
-Pagination appears only when more than one page is needed.
-Selecting a source opens its dedicated repository page; selecting a PR opens its
-dedicated detail page. The header trail names the previous page (a link that
-preserves its list filters) and the current one. Search and filters share a row on desktop and stack on
-narrow screens. The PR list page shows **Sync Pull Requests** and an **Automatic
-builds** switch with a subtle background, plus each PR's preview link. These
-controls are absent from individual PR detail pages, which open with one status
-card (a headline, a live step tracker while a build runs, the preview address with
-Copy and every action; a failed build gets a plain-language cause, next steps and
-collapsible technical details) beside a details panel. The switch is off in Manual mode; enabling
-requires an owner-controlled, CSRF-protected confirmation modal. Search, sync
-progress and policy saves update in place through HTMX, and committed changes
-(sync progress, webhook and mergeability updates) are pushed to open repository
-pages over Server-Sent Events rather than polled. Each repository also has a
-**Secrets** tab where its Owners and Admins keep one encrypted `.env` file of
-runtime values (comments kept, values masked until they choose to edit, never
-given to fork PRs). Page URLs are shareable
-and navigation works without JavaScript.
-
-PR discovery, latest/requested/deployed commit views and the owner's Build,
-Build now, Retry, Rebuild and Tear down controls are implemented. Builds and
-Previews show actual saved state (queued and running work, failure reasons,
-preview URL, health and expiry) and link to each PR's **Build logs** page, which
-shows the current attempt's output live over Server-Sent Events (bounded, redacted,
-readable without JavaScript, with Copy and Download). On PR details, log links
-open the latest 300 events below the main card, with a link to the full page.
-Log viewers include copyable inline dates and Previa/application source filters
-(both shown by default), plus literal text search. When no worker that can build
-is running, no build action is offered: the page states the reason and the fix (for
-example a worker without a preview domain), and the endpoints refuse with 503
-instead of recording work.
-See the [user guide](technical-docs/user-guide.md) for the current browser workflow.
-
-- **Builds** describes current/latest execution work and its commit/logs, not a
-  permanent historical build archive (see 4.5).
-- **Previews** (formerly Environments) describes what is live: each preview's URL,
-  the commit it serves, health, expiry and teardown. A preview can serve an older
-  commit while a newer build runs. A build that never went live is not a preview:
-  it is on Builds only.
-- All lists/actions are scoped to the logged-in installation owner. Mutations
-  require CSRF protection; destructive confirmation uses a modal.
-
-**Your profile** shows the editable Previa profile (photo, first/last name, email,
-session) beside connected login methods and the read-only GitHub account when connected, with in-place edits confirmed by a
-small toast. Personal first/last names take precedence over GitHub usernames without
-changing the linked identity; uploaded photos are visible only to teammates. Shared access forms support searchable repository
-lists and keep invitation errors in the form. Previa resource links and form
-identifiers use persisted random UUIDs; GitHub PR numbers remain readable labels.
-See [shared workspaces](docs/28-shared-workspaces.md) and
-[sign-in/profile behavior](docs/04-github-sign-in-and-app.md).
-
-### 2.5 Explicit MVP boundaries (what's out of scope for v1)
-
-- Arbitrary multi-service apps (`docker-compose.yml` support). *Narrowed by
-  Prompt 13:* a Dockerfile app may add platform-managed PostgreSQL, Redis and MySQL from
-  the operator's pinned catalog, a setup command and a few processes from its own
-  image ([docs/11](docs/11-backend-previews.md)); Compose files, service images
-  chosen in a PR, data that survives a rebuild and non-HTTP ingress stay out.
-- Auto-detecting frameworks without a Dockerfile (buildpacks) — not in MVP.
-- Team/role management beyond "whoever installed the app" — no granular
-  permissions in MVP.
-- Custom domains per repo — subdomains on your own domain only.
-- Horizontal scaling of the build worker — single worker is fine for MVP.
-
----
-
-## 3. High-Level Design
-
-### 3.1 Components
-
-- **Webhook receiver** — a small HTTP endpoint. Verifies GitHub signatures,
-  deduplicates deliveries and records PR state plus policy-controlled intent.
-  Must respond fast; Manual events do not automatically enqueue builds.
-- **Job queue** — decouples webhook receipt from build execution (e.g. Redis-
-  backed queue). Needed so GitHub's webhook delivery never times out waiting
-  on a slow build.
-- **Build worker** — pulls jobs from the queue, does the clone → build →
-  run → register → comment sequence. Can run as one process for MVP.
-- **Router** — reverse proxy that maps `pr-N.yourdomain.com` → the correct
-  container's internal address. Updates its routing table as environments are
-  created/replaced/torn down.
-- **GitHub API client** — wraps GitHub App authentication (generating
-  installation tokens) and the calls to post/edit comments, create check runs.
-- **State store** — a database tracking: installations, repos, PRs, their
-  associated container/image names, comment IDs (for editing), and
-  created/last-active timestamps (for the housekeeping job).
-- **Web dashboard** — login, install flow, repository policy/manual build controls
-  and visibility into PRs, current builds and environments (2.4).
-- **Housekeeping scheduler** — periodic job for expiring stale environments.
-
-### 3.2 Data flow summary
-
-```
-GitHub PR event → Webhook receiver → durable PR state
-   → Manual: wait for an owner request
-   → Automatic: persist/reset five-minute deadline
-Owner selects a PR → Build latest commit (immediate intent)
-Eligible authorized intent
-   → Job queue (River/PostgreSQL)
-   → Build worker (clone → docker build → docker run → register with router)
-   → GitHub API (post/edit comment)
-
-Reviewer clicks preview link
-   → Router (subdomain → container)
-   → Running container serves the request directly
+```mermaid
+flowchart LR
+    open["Open a pull request"] --> build["Previa builds<br/>that exact commit"]
+    build --> live["Live preview at<br/>its own HTTPS link"]
+    live --> share["Link posted on<br/>the pull request"]
+    share --> review["The team tries it<br/>and leaves feedback"]
+    review --> done["Merge or close:<br/>the preview is removed"]
 ```
 
-### Shared team workspace requirement
+1. **Connect** a GitHub repository by installing the Previa GitHub App on it.
+2. **Describe your app** with a `Dockerfile` and a small `.previewrc.yaml`, or let
+   a starter kit write both.
+3. **Build** when someone clicks, or automatically five minutes after the last push.
+4. **Review**: open the link from the pull request, try the change and record what
+   you find.
+5. **Clean up** happens on its own: merging or closing the pull request removes its
+   preview.
 
-Workspace membership is authoritative for Previa access. Owner/Admin access spans
-that workspace; Developer and Reviewer access requires explicit repository grants.
-Source-sensitive actions and logs additionally verify current GitHub permission
-and numeric identity. Reviewer access intentionally includes granted private
-previews without source permission. Invitations expire and require consent from
-the addressed GitHub account. Ownership handover preserves connections, URLs and
-shared workspace quotas. Removal fences unfinished manual builds and revokes
-protected previews and live streams.
+## Features
 
-A workspace represents one team with multiple members and repositories; nested
-teams are not part of this model. A person can join multiple workspaces. Members
-and Workspace settings have separate direct sidebar destinations. Owners/Admins
-can edit the name, description and logo in Settings; previews stay on Previews.
-People open as member profiles with workspace-scoped recent activity; removed
-members stay on a Deactivated tab and can be re-invited with their previous
-access. Invitations also appear inside Previa for the invited GitHub account. A new
-workspace opens on a setup checklist, and a sole owner can delete a workspace that
-has no connected GitHub App installation.
+### A preview for every pull request
 
-The detailed contract and current user flows are in
-[Shared team workspaces](docs/28-shared-workspaces.md). References below to a
-GitHub repository owner describe the GitHub connection authority; they do not
-create a separate installer-only dashboard authorization path. Review feedback,
-billing and deletion remain the later features specified in
-[the team SaaS plan](README-MVP-PRODUCT-EXPANSION.md).
+- **The exact commit, running.** Each preview is built from the pull request's
+  latest commit with your own Dockerfile.
+- **One link per pull request**, the same across every push and rebuild.
+- **Almost any stack.** Anything that runs in a Docker container and answers HTTP:
+  Node.js, Python, Ruby, Go, Java, PHP, static sites and APIs.
+- **No broken links during updates.** A new version replaces the old one only once
+  it is running, and a failed rebuild never takes down a working preview.
+- **Only mergeable code.** Previa checks with GitHub right before building and
+  does not build a pull request that has conflicts.
 
-### Guided onboarding requirement
+### You decide when it builds
 
-A repository's Setup tab takes people who can build (Owner, Admin, Developer) from
-a connected repository to a preview opened from Previa, for one open pull request:
-connection, a bounded check of that exact commit's configuration (run by a worker
-from a few GitHub reads, never the archive), what the app declares it needs, an
-explicit build through the existing action, and opening it. Every step is derived
-from current records; only checks and opens are stored. Checks never build, never
-enable Automatic builds and are limited per commit and per workspace hour. The
-Overview's next steps follow the person's role, and accepted invitations land
-Reviewers on Previews. Details: [guided onboarding](docs/29-guided-onboarding.md).
+- **Manual**, the default: a preview builds when someone clicks **Build latest
+  commit**.
+- **Automatic**: five minutes after the last push, so a burst of pushes becomes one
+  build. The pull request counts down to it.
+- **Retry, Rebuild and Tear down** whenever you need them.
 
-### 3.3 Key design decisions worth being able to explain
+### Feedback where your team works
 
-- **Why a job queue instead of building inline in the webhook handler:**
-  GitHub expects webhook responses within seconds; builds take much longer.
-  Decoupling also lets you control concurrency (limit simultaneous builds) and
-  survive worker crashes without losing the event.
-- **Why Manual by default and a quiet period for Automatic:** avoids unnecessary
-  builds and coalesces rapid commits. Durable deadlines survive restarts. Tracking
-  a new PR state and authorizing compute are separate; successor jobs and retries
-  must respect that distinction. Manual bypasses delay, not capacity/safety limits.
-- **Why Docker's API rather than hand-rolled namespaces/cgroups:** the hard
-  problem in this project is orchestration and lifecycle correctness, not
-  container internals — using Docker keeps scope focused on that.
-- **Why edit comments instead of posting new ones per push:** keeps the PR
-  thread readable; requires storing the comment ID per PR in the state store.
-- **Why a separate housekeeping job instead of relying only on the `closed`
-  webhook:** webhooks can be missed (delivery failures, downtime) — a
-  reconciling background job is a standard resilience pattern for exactly
-  this kind of event-driven system.
+- **On GitHub:** one comment on the pull request that keeps itself up to date, and
+  a check for every build.
+- **In Previa:** every pull request has a review page. Developers write what to
+  test; reviewers record findings against the exact version they tested, discuss
+  them and mark them resolved.
 
----
+### Ready to test, not just to look at
 
-## 4. Tech Stack
+- **Backend and full-stack apps.** Ask for PostgreSQL, Redis or MySQL, run
+  migrations and seed data, keep up to three background processes running and link
+  your API docs. Every preview gets its own databases.
+- **Sample data.** Your seed fills each preview's database, and **Reset test data**
+  starts it over.
+- **Data that survives pushes.** With **Test data** on, previews start from a
+  snapshot of your default branch and keep testers' records across new commits.
+- **Test access.** Give reviewers a preview-only login through Previa.
+- **Outbound connections.** Approve the outside test services a preview may reach.
 
-This section was chosen purely on the project's technical needs: event-driven, I/O-heavy, drives Docker programmatically, talks to GitHub constantly, and must route traffic dynamically as containers come and go.
+### Quick to set up
 
-### 4.1 Comparisons
+- **Starter kits.** Pick your stack and what it uses, and Previa writes a checked
+  `Dockerfile` and `.previewrc.yaml` for you to copy.
+- **Setup check.** On a repository's **Setup** tab, Previa reads both files on a pull
+  request's latest commit and tells you what to fix before anything builds.
 
-**Backend language**
+### Built for teams
 
-| | Go | TypeScript (Node) | Rust | Java/Kotlin | Python |
-|---|---|---|---|---|---|
-| Docker SDK | Official (Docker is written in Go) | Community (dockerode) | Community (bollard) | Community (docker-java) | Official (docker-py) |
-| Many concurrent builds/jobs | Goroutines, very cheap | Fine for I/O, awkward for CPU work | Excellent, heavy to write | Strong (virtual threads) | GIL / asyncio friction |
-| GitHub App tooling | go-github + ghinstallation | Best in class (Octokit, Probot) | octocrab | Adequate | githubkit / PyGithub |
-| Deployment | One static binary | Runtime + node_modules | One static binary | JVM | Interpreter + venv |
-| Infra ecosystem | Traefik, Caddy, Docker, K8s, Nomad are Go; libraries embeddable | Weak | Growing | Moderate | Moderate |
+A **workspace** holds a team's repositories, members and previews, and one person
+can belong to several. Everyone sees only what their role allows:
 
-**Verdict: Go.** Node is the only real competitor (thanks to Probot), but Go wins on Docker integration, concurrency model and deployment simplicity.
+| Role | What they can do |
+| --- | --- |
+| **Owner** | Everything an Admin can, plus appoint Admins and hand over ownership |
+| **Admin** | Everything a Developer can on every repository, plus connect repositories; manage secrets, outbound connections, private previews and Automatic builds; invite Developers and Reviewers |
+| **Developer** | Build, rebuild and read the logs of the repositories they are given |
+| **Reviewer** | Open the previews they are given and leave feedback, without seeing code, logs or secrets |
 
-**Routing layer**
+Invite people by their GitHub username. Reviewers can also be invited by email and
+sign in with Google, no GitHub account needed. Ownership can be handed over without
+losing connections or preview links, and removing someone ends their access at once.
 
-| | Traefik | Caddy | Nginx | Custom Go proxy |
-|---|---|---|---|---|
-| Dynamic routes as containers churn | Automatic via Docker labels, no reloads | Admin API (you push config) | Config rewrite + reload | Full control, you build everything |
-| Wildcard TLS | Yes (DNS-01) | Yes (DNS-01, simplest config) | Manual (certbot) | You build it |
-| Gap risk on redeploy | Low | Low | Higher | Depends on your implementation |
+### Safe by default
 
-**Verdict: Traefik.** Routes come from its file provider, written by Previa's route
-controller rather than from container labels: labels are fixed at container creation
-and cannot be fenced by PR generation, and the Docker provider would need the Docker
-socket in Traefik. The controller materializes a fenced route table that only moves
-forward ([docs/12-routing-and-https.md](docs/12-routing-and-https.md)).
+- **Every pull request is treated as untrusted**, even your own team's.
+- **Forks** never build on their own: someone has to click **Build**. They never
+  receive your secrets or approved connections.
+- **Secrets** live in one encrypted `.env` file per repository. Values stay hidden
+  on the page, are masked in logs and are never given to forks.
+- **Isolated previews** cannot reach your private systems, each other or your
+  Previa account.
+- **Private previews.** By default anyone with a preview's unguessable link can open
+  it. Make a repository's previews private and visitors must sign in and have access
+  to that repository.
+- **Signing in does not give Previa your code.** Only the repositories where you
+  install the GitHub App are used, and only to build their previews.
 
-**Job queue**
+### Clear and tidy
 
-| | River (Postgres) | asynq (Redis) | NATS JetStream | RabbitMQ |
-|---|---|---|---|---|
-| Extra infrastructure | None (uses Postgres) | Redis | NATS server | RabbitMQ server |
-| Transactional enqueue with your state | Yes | No | No | No |
-| Retries, scheduling, uniqueness | Built in | Built in | Mostly manual | Mostly manual |
+- **See everything at a glance.** Overview, Builds and Previews show what is
+  waiting, building and live, and pages update as things change.
+- **Live build logs** in the browser, with secrets masked, kept for 14 days.
+- **Plain-language failures.** A failed build says what went wrong and what to do
+  next.
+- **Cleans up after itself.** Previews are removed when their pull request closes or
+  merges, when you tear them down, or when they have not been updated for a while.
+  Idle previews sleep and wake in seconds on the next visit.
+- **Usage at a glance.** Each workspace has a monthly allowance of build minutes and
+  live previews, shown on its **Usage** page.
 
-**Verdict: River.** Enqueueing a job inside the same DB transaction as the state change removes the "state saved but job lost" class of bugs.
+### Your account, your data
 
-**Runtime / orchestration**
+- **Account & connections:** connect GitHub and Google, sign out other sessions, and
+  delete your account or a workspace.
+- **Support & status:** contact support, check service status and read the privacy
+  policy and terms.
 
-| | Docker on one host | Kubernetes (namespace per PR) | Nomad | Firecracker microVMs |
-|---|---|---|---|---|
-| Complexity | Low | High | Medium | Very high |
-| Isolation for untrusted code | Container-level (hardenable with gVisor) | Container-level | Container-level | Strongest |
-| Fits MVP | Yes | Overkill | Overkill | Overkill |
+## What your repository needs
 
-**Verdict: Docker on one host**, behind a `Runtime` interface so Kubernetes can be added later without rewriting the worker.
+Two files at the repository root: a `Dockerfile` and a `.previewrc.yaml`. Every
+setting has a default, so `{}` is a valid configuration when your app listens on
+port 3000:
 
-**Frontend (thin dashboard: login, repo list, active previews, live build logs)**
-
-| | HTMX + templ | React + Vite | Next.js | SvelteKit |
-|---|---|---|---|---|
-| Separate build/deploy | No, ships inside the Go binary | Yes | Yes, plus a Node server | Yes |
-| Live logs / status | SSE, trivial | Works, more code | Works | Works |
-| Fit for a dashboard this small | Best | Good | Overkill | Good |
-
-**Verdict: HTMX + templ.** If the dashboard grows into a real product, React + Vite is the natural upgrade path.
-
-### 4.2 Recommended stack (summary)
-
-| Layer | Choice |
-|---|---|
-| Backend | Go 1.26 (1.26.9 or newer), `net/http` + `chi` |
-| Database | PostgreSQL |
-| Job queue | River (Postgres-backed) |
-| Routing / TLS | Traefik v3 + Let's Encrypt wildcard cert (DNS-01) |
-| Container runtime | Docker Engine, hardened, optionally gVisor |
-| Image builds | BuildKit |
-| Frontend | templ + HTMX + SSE + Tailwind |
-| Deployment | Single VPS (OVHcloud VPS-2), Docker Compose, images built on the server from a release tag; Cloudflare DNS and R2 backups; SSH over Tailscale |
-| Observability | `slog` logs and Sentry (errors, logs, uptime and backup monitors, email alerts); private Prometheus metrics (Prometheus + Grafana optional, + optional OpenTelemetry) |
-
-### 4.3 Libraries in detail
-
-**Backend**
-- HTTP routing and middleware: `github.com/go-chi/chi/v5`
-- Config: `github.com/knadh/koanf` (or `envconfig`); logging: stdlib `log/slog`
-- GitHub API + webhook payload validation: `github.com/google/go-github`
-- GitHub App installation tokens: `github.com/bradleyfalzon/ghinstallation`
-- OAuth login: `golang.org/x/oauth2` with the GitHub endpoint
-- Sessions: `github.com/alexedwards/scs` with its Postgres store
-- `.previewrc.yaml` parsing: `github.com/goccy/go-yaml`; validation: `github.com/go-playground/validator`
-- Docker: `github.com/docker/docker/client`
-- Image builds: `github.com/moby/buildkit` client (layer caching)
-- Jobs: `github.com/riverqueue/river` with the `riverpgxv5` driver
-- Encryption of stored secrets: stdlib `crypto/aes` + `crypto/cipher` (AES-GCM), or `filippo.io/age`
-
-**Database**
-- Driver: `github.com/jackc/pgx/v5`
-- Queries: `sqlc` (SQL in, type-safe Go out)
-- Migrations: `goose`
-
-**Frontend**
-- Templates: `github.com/a-h/templ`
-- Interactivity: HTMX (+ SSE extension for live build logs)
-- Styling: Tailwind CSS via the standalone CLI (no Node toolchain needed)
-
-**Observability**
-- Errors, logs and alerts: `github.com/getsentry/sentry-go` (and its `slog` integration), sending the already-redacted warnings and errors to Sentry
-- Metrics: `github.com/prometheus/client_golang`
-- Tracing (optional): OpenTelemetry Go SDK
-
-**Testing**
-- `testing` + `testify`
-- `testcontainers-go` for real Postgres and Docker in integration tests
-- Recorded GitHub webhook payloads as fixtures
-- A permanent sample repo with a Dockerfile as the end-to-end target
-- Local webhook development: `smee.io` or a Cloudflare Tunnel to your laptop
-
-### 4.4 Suggested repository layout
-
-```
-/cmd
-  /server        # HTTP server: webhooks, dashboard, OAuth
-  /worker        # River worker process: build/deploy/teardown jobs
-/internal
-  /github        # App auth, API client, webhook handling
-  /jobs          # River job definitions (build, rebuild, teardown, expire)
-  /runtime       # Runtime interface + Docker implementation
-  /routing       # route controller (Traefik file provider), subdomain allocation
-  /store         # sqlc-generated queries, migrations
-  /web           # templ components, handlers, SSE
-  /config        # config loading, .previewrc.yaml parsing
-/deploy          # docker-compose.yml, Traefik config, setup script
-/migrations
+```yaml
+# .previewrc.yaml
+port: 8080                  # where your app listens inside its container
+health_check_path: /health  # optional
+resource_tier: small        # small, standard or large
+services:                   # optional databases and caches, one set per preview
+  postgres: 17
+setup: ["npm", "run", "migrate"]   # optional: migrations and seed data
 ```
 
-Keeping `Runtime` as an interface in `/internal/runtime` is what lets you swap Docker for Kubernetes later.
+Don't have them yet? **Starter kits** write both for your stack. The
+[repository configuration](docs/06-source-and-configuration.md) and
+[backend previews](docs/11-backend-previews.md) references list every option.
 
-### 4.5 Data model sketch
+## Get started
 
-- `users` — id, github_id, username, created_at
-- `installations` — id, github_installation_id, owner_user_id
-- `repos` — id, installation_id, full_name, default_config_hash, build_mode (owner-controlled; Manual by default)
-- `pull_requests` — id, repo_id, number, head_sha, state (open / closed / merged),
-  mergeable (nullable boolean), mergeable_state, build_status (open / checking / conflicts), github_comment_id
-- `environments` — id, pull_request_id, container_id, image_tag, subdomain, status (building / running / failed / torn_down), created_at, last_active_at, expires_at
-- `build_logs` — id, environment_id, sequence, line, created_at
-- `env_secrets` — id, repo_id, key, encrypted_value
+1. Sign in at [previa.live](https://previa.live) with GitHub.
+2. Create a workspace. During early access it is approved by hand.
+3. Install the Previa GitHub App on the repositories you want previews for.
+4. Add a `Dockerfile` and `.previewrc.yaml`, or use **Starter kits**, and run the
+   check on the repository's **Setup** tab.
+5. Open a pull request and click **Build latest commit**, or turn on **Automatic**.
 
-**PR tracking scope:** connecting a repository automatically queues discovery of
-only its currently open PRs. Initial discovery and every later sync use
-`GET /repos/{owner}/{repo}/pulls?state=open&sort=created&direction=asc&per_page=100&page=N`.
-Closed/merged history is never backfilled. A PR becomes known while open through
-this discovery or a subsequent open/reopen/synchronize event. Closing or merging
-an already tracked PR updates its existing row in place; an unknown closed/merged
-PR creates no row. Tracked closed/merged records are retained. Missing PRs in an
-open-only list are never inferred to be closed; webhooks update their lifecycle.
+The [user guide](technical-docs/user-guide.md) walks through every screen.
 
-**Mergeability:** GitHub's nullable `mergeable` and `mergeable_state` are saved
-alongside lifecycle state. Open PRs display `Checking` until a resolved `true` or
-`clean` observation, `Conflicts` for `false` or `dirty`, and `Open` when buildable.
-Conflicting signals favor `Conflicts`. Initial open/synchronize/reopen events
-with unresolved status queue bounded background GET checks for that tracked PR;
-exhausted checks remain `Checking` until another event or sync. Each push replaces
-the old mergeability observation. Both manual authorization and scheduled dispatch
-check the saved status; the generation/admission lock repeats the check immediately
-before runtime execution. Conflicts and checking refuse builds with contributor
-feedback in the PR dashboard. The worker reads the PR from GitHub once more before
-admitting a build, outside database locks.
+## Not available yet
 
-`build_intents` now stores one current authorized request per PR: revision, captured
-generation/SHA, source, action, idempotency key, state and eligibility deadline.
-Migrations 6–7 and ownership-scoped coordination APIs are implemented. Durable
-five-minute wake-ups and intent-aware dispatch/handoff run in the production worker,
-and the server records requests with their wake-ups. Repeated Build requests coalesce; explicit Retry after
-failure or Rebuild after success creates a new revision without bumping PR
-generation. Switching to Manual cancels unstarted Automatic intent; running work
-may finish if still current. No historical builds archive is introduced. See
-[16-build-policy-and-intents.md](docs/16-build-policy-and-intents.md) for request semantics and
-[17-build-scheduling.md](docs/17-build-scheduling.md) for atomic admission, wake-up
-uniqueness, revision fencing, worker admission checks and interruption.
+- Git hosts other than GitHub, such as GitLab or Bitbucket.
+- Previews for branches without a pull request.
+- Docker Compose files and separately chosen service images. Managed PostgreSQL,
+  Redis and MySQL cover databases and caches.
+- Review requests, assignments and approval decisions inside Previa.
+- Custom domains for previews.
+- Windows containers, GPU workloads, and repositories that need Git submodules or
+  LFS files to build.
 
-A unique constraint on (repo_id, number) for `pull_requests` and on `subdomain` for `environments` prevents duplicate environments when webhooks arrive twice.
+## Documentation
 
-**Explicit scope decision:** once preview work is requested, a PR has one
-`environment` row reused for its lifetime. An observed PR with no build request
-does not need an environment row. Rebuilds update the same row and URL. There is
-no persisted history of past builds—no separate `builds` table or browsing build
-#1 after build #3 replaces it. A repo with N open PRs has at most N environments.
-`build_logs` hold the environment's current build only; earlier logs are cleared
-or truncated on rebuild rather than retained as an audit trail.
+| Read this | For |
+| --- | --- |
+| [User guide](technical-docs/user-guide.md) | Every screen and flow, from sign-in to a removed preview |
+| [Documentation index](docs/README.md) | How each part of Previa works, in reading order |
+| [Requirements](REQUIREMENTS.md) and [design](DESIGN.md) | Product requirements, design decisions and edge cases |
+| [Development setup](docs/02-development-setup.md) | Running Previa on your own machine |
+| [Production deployment](docs/25-production-deployment.md) | Running your own Previa server |
+| [Tech stack](technical-docs/tech-stack.md) | What Previa is built with |
 
-### 4.6 Container isolation (most important security section)
+## Contributing
 
-This system runs other people's code on your machine, so isolation is a core requirement, not a polish item.
+Start with the [development setup](docs/02-development-setup.md); the project's
+conventions are in [AGENTS.md](AGENTS.md). Changes reach `master` through pull
+requests, and CI must pass before they merge.
 
-- Per container: memory and CPU caps, `pids-limit`, read-only root filesystem where possible, `no-new-privileges`, all Linux capabilities dropped
-- Network: previews live on an isolated Docker network with no route to the host, your control plane, Postgres, or cloud metadata endpoints (169.254.169.254)
-- Runtime: gVisor (`runsc`) as the Docker runtime for a large isolation upgrade at low cost (optional `PREVIEW_OCI_RUNTIME`; Docker's runc by default)
-- Never run builds for fork PRs with secrets available. Implemented: forks get no secrets or outbound connections, and they never build automatically; they wait until the owner clicks **Build** (see [docs/16-build-policy-and-intents.md](docs/16-build-policy-and-intents.md#behaviour-rules))
-- Build traffic: every build's download and upload totals are logged and measured (with alerts on heavy uploads); `BUILD_EGRESS=registries` limits builds to package and image registries (see [docs/09-image-builds.md](docs/09-image-builds.md#build-traffic-and-the-registries-only-mode))
-- Private previews: an owner can require visitors to sign in with GitHub and be able to see the repository; the router checks every request with the server. Enabling requires all live routing workers to advertise a configured `PREVIEW_ACCESS_URL`; existing private previews deny access without it (see [docs/12-routing-and-https.md](docs/12-routing-and-https.md#private-previews)).
-- Current implementation: previews run as an unprivileged user with a read-only root, no capabilities and `no-new-privileges` on their own internal network; outbound traffic reaches public addresses only through the egress proxy; probes from a running preview confirm Postgres, the host, metadata and other previews are unreachable. They share the host kernel (see [docs/10-preview-runtime.md](docs/10-preview-runtime.md))
-- Docker socket: only the worker touches it; never mount it into a preview container. The router (Traefik) has no socket either: its routes come from the worker's file and the worker attaches it to preview networks
-- Managed services (PostgreSQL, Redis, MySQL): the operator's digest-pinned images as their own unprivileged user, read-only root with data on a size-capped tmpfs, no capabilities, on a per-PR services network with no egress and no route; owner-approved outbound connections go only through the egress proxy, which resolves names itself and refuses non-public addresses; forks get none (see [docs/11-backend-previews.md](docs/11-backend-previews.md))
-- Builds: each runs in a fresh rootless BuildKit container with CPU/memory/PID limits on a private network whose only exit is an egress proxy that reaches public addresses only (see [docs/09-image-builds.md](docs/09-image-builds.md))
+## License
 
-### 4.7 Secrets handling
-
-- Users' env vars for their previewed apps are stored encrypted (AES-GCM, key from server environment) in `env_secrets`, and injected at container start
-- They are never read from the repo's `.previewrc.yaml`; known values are redacted from logs. Owners may explicitly allow BuildKit secret mounts for trusted branch builds and registry logins for private base images. Forks receive none. `REGISTRY_AUTH` is pull-only; see [repository secrets](docs/07-repository-secrets.md).
-- GitHub App private key and webhook secret come from environment or a secrets file on the host, never committed
-
-### 4.8 Configuration (environment variables)
-
-The authoritative list of current settings, and which process needs each one, is
-in [docs/02-development-setup.md](docs/02-development-setup.md); which capability
-each one turns on, and what happens without it, is in
-[docs/22-mvp-operations.md](docs/22-mvp-operations.md).
-
-- `DATABASE_URL`
-- `SUPPORT_EMAIL`, `OPERATOR_NAME`, `SUPPORT_OPERATOR_GITHUB_IDS` (immutable numeric user IDs; empty denies operator access), support limits and deletion-journal bounds/retention configure [account exits and support](docs/34-accounts-support-and-deletion.md). `/account`, `/help`, `/status` and `/policies/*` expose real controls and information. The independent encrypted journal must be uploaded before deletion completes and replayed before a restore serves traffic.
-- `APP_ENV` (`development` or `production`), `LOG_LEVEL`, `SENTRY_DSN` (server and worker report warnings and errors to Sentry; the backup checks in with it), `INTERNAL_ADDR` / `WORKER_INTERNAL_ADDR` (internal health and metrics listeners), `TRUSTED_PROXIES`, `BACKUP_STATUS_FILE` (server), `BUILDS_PAUSED` (worker; the execution kill switch); see [docs/23-observability-and-hardening.md](docs/23-observability-and-hardening.md)
-- `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`
-- `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
-- `APP_BASE_URL` (server; also the worker once previews are routed: unknown preview hosts redirect to it)
-- `PREVIEW_BASE_DOMAIN` (e.g. `preview.yourdomain.com`; server and worker), `ROUTER_DYNAMIC_DIR`, `ROUTER_CONTAINER`, `ROUTER_ENTRYPOINT`, `ROUTER_API_ADDRESS`, `ROUTER_METRICS_ADDRESS` (preview request counts), `PREVIEW_ACCESS_URL` (private previews) (worker; route controller)
-- `SESSION_SECRET` (server); `SECRETS_ENCRYPTION_KEYS`, `SECRETS_ACTIVE_KEY_VERSION` (server and worker; versioned keyring for repository secrets, optional for the worker, which then fails repositories with secrets closed)
-- `MAX_CONCURRENT_BUILDS` (builds at once across all workers), `BUILDS_PER_ACCOUNT`, `BUILD_MINUTES_PER_ACCOUNT_DAY`, `PREVIEW_MAX_PER_ACCOUNT` (additional workspace safety ceilings; zero disables only the extra ceiling). Every workspace also has a finite free entitlement: 300 build minutes per UTC calendar month, one concurrent build and two preview slots; [Usage and the free plan](docs/33-usage-and-free-plan.md) describes accounting and cutover. `ENV_TTL_HOURS` (preview lifetime after its latest publication), `PREVIEW_IDLE_SLEEP` (idle previews sleep until the next visit), `HOUSEKEEPING_DRY_RUN`, `HOUSEKEEPING_GRACE`, `BUILD_CACHE_BUDGET` (worker; housekeeping and capacity, see [docs/15-housekeeping-and-capacity.md](docs/15-housekeeping-and-capacity.md)), `BUILD_LOG_RETENTION_DAYS` (server and worker; days finished build logs are kept)
-- `BUILD_TIMEOUT`, `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_PIDS`, `BUILD_DISK_BUDGET`, `BUILD_MAX_IMAGE_SIZE`, `BUILD_MIN_FREE_DISK`, `BUILD_EGRESS`, `BUILD_EGRESS_HOSTS`, `BUILDKIT_IMAGE`, `SOURCE_WORKSPACE_ROOT` (worker; isolated image builds and exact-commit source workspaces)
-- `EGRESS_IMAGE`, `PREVIEW_ALLOW_ROOT`, `PREVIEW_WRITABLE_ROOTFS`, `PREVIEW_TMPFS_SIZE`, `PREVIEW_PIDS`, `PREVIEW_STARTUP_TIMEOUT`, `PREVIEW_MEMORY_BUDGET`, `PREVIEW_CPU_BUDGET`, `PREVIEW_MAX_PER_REPOSITORY`, `PREVIEW_OCI_RUNTIME` (worker; hardened previews and the shared egress proxy)
-- `PREVIEW_SERVICE_CATALOG`, `PREVIEW_SETUP_TIMEOUT` (worker; managed services and the setup command), `PREVIEW_OUTBOUND_PORTS` (server and worker; owner-approved outbound connections), see [docs/11-backend-previews.md](docs/11-backend-previews.md)
-- `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_CREDENTIAL_VARIABLE`, `ACME_DNS_CREDENTIAL_FILE`, `ACME_CA_SERVER` (router; Traefik's wildcard certificate over DNS-01, staging by default, the DNS token read from a protected file instead of the originally planned `DNS_PROVIDER_API_TOKEN` variable); `ACME_STORAGE_FILE` selects certificate storage in the local/staging router's persistent volume when switching to trusted issuance (see [docs/12-routing-and-https.md](docs/12-routing-and-https.md#tls-and-dns)).
-
-### 4.9 Infrastructure and deployment
-
-- One VPS (OVHcloud VPS-2) running Docker; control plane (Go server, worker, Postgres, Traefik) via Docker Compose
-- DNS on Cloudflare: `previa.live` for the landing page and dashboard, and a wildcard A record (`*.preview.<preview domain>`) on a separate registrable domain, both pointing at the VPS
-- Provisioning: a documented setup script, no Terraform (one server)
-- CI/CD: GitHub Actions runs CI on pull requests into `master`; a version tag marks a release, and the operator checks it out on the server and builds the images there (GoReleaser and GHCR publishing stay available as a manual, optional workflow)
-- Backups: nightly `pg_dump` to object storage (Cloudflare R2)
-- Monitoring: Sentry's free plan (errors and logs from the server and worker, an uptime monitor, the backup's cron monitor, email alerts)
-- Access: SSH only over Tailscale (port 22 closed to the internet); lazydocker for containers and logs
-
-Implemented as [docs/25-production-deployment.md](docs/25-production-deployment.md)
-describes, at about €8 a month plus VAT: `deploy/production/compose.yml`
-(PostgreSQL, a migration step, server, worker, Traefik; Prometheus and Grafana as
-an optional profile production does not run), images built on the server from the
-`Dockerfile` of the checked-out tag, the setup script `deploy/production/setup.sh`
-(Docker, Tailscale, lazydocker, firewall, secrets, backup timer), GitHub Actions
-CI, error reporting in `internal/platform/errortracking`, and a nightly `pg_dump`
-encrypted with age before it is copied to R2 through rclone and checked in with
-Sentry, with a scripted, rehearsed restore.
-
-### 4.10 Operational limits to set on day one
-
-- Worker pool size in River caps simultaneous builds so ten PRs opening at once cannot take down the host
-- Automatic builds become eligible after a five-minute trailing quiet period;
-  manual requests bypass this delay but still wait for worker capacity.
-- Disk pruning job for old images and build cache (disk exhaustion is the most likely real-world failure)
-- Per-repo and workspace preview caps, finite workspace build allowances and concurrency, additional operator ceilings, and turns between workspaces
-- Build timeout and image size limit
-- Data retention: build logs 14 days (configurable to 90, deletable by the owner), webhook receipts and finished operations 30 days, closed pull requests 90 days; backups keep deleted data at most 30 more days
-
-### 4.11 Upgrade paths (post-MVP)
-
-- Dashboard grows: move the frontend to React + Vite
-- More capacity: run workers on multiple hosts, add a scheduler, or move to Kubernetes via the `Runtime` interface
-- Stronger isolation: Firecracker microVMs
-- Bigger logs: move build logs to S3/MinIO or Loki
-- Multi-service previews: more managed service kinds, or `docker-compose.yml` support beyond the managed PostgreSQL, Redis and MySQL of [docs/11](docs/11-backend-previews.md)
-
-
-### Installation recovery and early access
-
-[Installation recovery and workspace approval](docs/35-installation-recovery-and-early-access.md)
-adds App-authenticated missed-webhook recovery through the existing revocation
-path, and operator approval for new workspaces. Existing workspaces are preserved.
-`EARLY_ACCESS_ENABLED` defaults true; operators are numeric IDs configured in env.
-Approval gates connections and compute, while cleanup and account exits remain
-available. Migration 45 and matching server/worker configuration are required.
-
-### Google sign-in and reviewer invitations
-
-[Google sign-in](docs/36-google-sign-in-and-reviewer-invitations.md) extends human
-authentication without assigning roles by provider. Reviewers can join by a
-verified-email invitation and review shared previews without GitHub. Existing
-accounts explicitly connect the second method from Your profile; emails never
-automatically merge identities. Technical roles and workspace creation require
-a connected GitHub account, normal authorization and F6 approval. Optional
-`GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`, migration0046/schema46.
+Previa is licensed under the [Apache License 2.0](LICENSE).
